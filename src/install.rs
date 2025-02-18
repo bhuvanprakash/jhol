@@ -42,7 +42,7 @@ pub fn install_package(packages: &[&str]) {
         }
 
         println!("Fetching {}...", package);
-        println!("Package not found in Jhol. Trying NPM as fallback...");
+        println!("Package not found in Jhol (Tera package jhol main nhi hai). Trying NPM as fallback...");
 
         let mut attempts = 3;
         while attempts > 0 {

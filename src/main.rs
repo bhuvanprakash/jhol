@@ -2,6 +2,8 @@ use clap::{Command, Arg};
 use std::fs;
 use std::env;
 use std::path::Path;
+
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 mod install;
@@ -9,18 +11,29 @@ mod doctor;
 mod utils;
 
 fn install_globally() {
-    let install_path = "/usr/local/bin/jhol";
+    let install_path = if cfg!(target_os = "windows") {
+        format!(
+            "{}\\jhol.exe",
+            env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Program Files".to_string())
+        )
+    } else {
+        "/usr/local/bin/jhol".to_string()
+    };
 
-    if !Path::new(install_path).exists() {
+    if !Path::new(&install_path).exists() {
         let exe_path = env::current_exe().expect("Failed to get current executable path");
 
         println!("🔹 Installing Jhol globally at {}", install_path);
-        match fs::copy(&exe_path, install_path) {
+        match fs::copy(&exe_path, &install_path) {
             Ok(_) => {
                 println!("Jhol installed successfully!");
-                let mut perms = fs::metadata(install_path).unwrap().permissions();
-                perms.set_mode(0o755);
-                fs::set_permissions(install_path, perms).unwrap();
+
+                #[cfg(unix)]
+                {
+                    let mut perms = fs::metadata(&install_path).unwrap().permissions();
+                    perms.set_mode(0o755);
+                    fs::set_permissions(&install_path, perms).unwrap();
+                }
             }
             Err(e) => {
                 eprintln!("Failed to install Jhol globally: {}", e);
@@ -31,6 +44,7 @@ fn install_globally() {
 
 fn main() {
     install_globally();
+
     if let Err(e) = utils::init_cache() {
         eprintln!("Failed to initialize cache: {}", e);
         std::process::exit(1);
@@ -73,7 +87,7 @@ fn main() {
         }
         Some(("doctor", sub_m)) => {
             if sub_m.contains_id("fix") {
-                utils::log("🛠 Fixing dependencies...");
+                utils::log("Fixing dependencies...");
                 doctor::fix_dependencies();
             } else {
                 utils::log("Scanning dependencies...");
