@@ -1,0 +1,18 @@
+[package]
+name = "Jhol"
+version = "1.0.0"
+authors = ["Bhuvan Prakash <bhuvanstark6@gmail.com>"]
+edition = "2021"
+description = "A faster, package manager (Free Version)"
+license = "Apache-2.0 + Jhol-license 1.0"
+
+[dependencies]
+clap = { version = "4.5", features = ["cargo"] }
+serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.114"
+tokio = { version = "1.36", features = ["full"] }
+chrono = "0.4.34"
+
+[[bin]]
+name = "jhol"
+path = "src/main.rs"

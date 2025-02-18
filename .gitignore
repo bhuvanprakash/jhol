@@ -1,0 +1,28 @@
+# Rust build artifacts
+target/
+Cargo.lock
+
+# Node.js artifacts
+node_modules/
+package-lock.json
+package.json
+
+# Logs and cache
+logs.txt
+.jhol-cache/
+
+# Temporary & OS files
+.DS_Store
+Thumbs.db
+
+# Editor & IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Rust debug symbols
+debug/
+*.dSYM/
+*.rs.bk
+

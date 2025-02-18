@@ -1,3 +1,4 @@
+<<<<<<< HEAD
                                  Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -199,3 +200,50 @@
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+=======
+# Jhol License Version 1.0
+
+Copyright (c) 2025 Bhuvan Prakash
+
+## License Grant
+
+This software ("Jhol") is licensed for **personal and non-commercial use only**. You are granted a **limited, non-exclusive, non-transferable, and revocable** license to use, modify, and distribute this software **only for personal, educational, or non-commercial purposes** under the following terms and conditions:
+
+## **Terms and Conditions**
+
+1. **No Commercial Use**
+   - You may not sell, rent, lease, sublicense, or otherwise use this software for any commercial purpose.
+   - You may not include this software in any product or service that is sold, monetized, or distributed for profit.
+
+2. **No Redistribution**
+   - You may not redistribute, share, or repackage this software under any name, brand, or identity.
+   - Forks and modifications must retain the original name "Jhol" and credit the original author.
+
+3. **No Claim of Ownership or Authorship**
+   - You may not claim ownership, authorship, or falsely represent the work as your own.
+   - Any derivative work must clearly acknowledge the original author, "Bhuvan Prakash."
+
+4. **No Modification for Redistribution**
+   - Modifications are allowed **only for personal use**.
+   - Modified versions **may not be distributed** under any name, modified or original.
+
+5. **Contributions**
+   - Contributions to this project must adhere to the same licensing terms.
+   - Any contributions made to this software become part of this project and are subject to this license.
+
+6. **No Warranty or Liability**
+   - This software is provided "AS IS" without warranties of any kind, either express or implied.
+   - The author is not liable for any damages, loss of data, or issues arising from the use or misuse of this software.
+
+## **Enforcement & Legal Action**
+Failure to comply with this license will result in immediate termination of your rights under this license. Unauthorized commercial use, redistribution, or claims of ownership may lead to **legal action**.
+
+For permissions beyond this license, **explicit written approval** from the author is required.
+
+**Contact for Licensing Requests:** bhuvanstark6@gmail.com
+
+---
+
+By using this software, you agree to abide by these terms. If you do not agree, you must **cease use immediately**.
+
+>>>>>>> 010f804 (Initial commit for Jhol package manager)
