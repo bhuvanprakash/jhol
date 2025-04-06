@@ -1,4 +1,4 @@
-# Jhol Free - A Faster, Offline-Friendly Package Manager
+# Jhol Free - A Faster, decentralized, IPFS, Offline-Friendly Package Manager
 
 Jhol Free is a **fast, offline-friendly alternative to NPM & Yarn**.
 
@@ -19,8 +19,8 @@ With advanced caching mechanisms, it ensures rapid installations and improved re
 
 License & Usage
 This software is licensed under the JHOL FREE LICENSE (Proprietary, Non-Commercial).
-✅ Free for personal & educational use
-🚫 Not for commercial use, redistribution, or modification
+ Free for personal & educational use.
+ Not for commercial use, redistribution, or modification.
 
 For licensing inquiries, contact:
 bhuvanstark6@gmail.com
