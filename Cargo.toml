@@ -6,6 +6,7 @@ edition = "2021"
 description = "Fast, offline-friendly package manager with cache, doctor, and npm fallback"
 license-file = "LICENSE"
 repository = "https://github.com/bhuvanprakash/jhol"
+readme = "README.md"
 keywords = ["package-manager", "npm", "cache", "offline"]
 categories = ["command-line-utilities", "development-tools"]
 
