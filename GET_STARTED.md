@@ -1,124 +1,189 @@
-# **Enhanced Getting Started with Jhol**
+# Getting started with Jhol
 
-Welcome to **Jhol** – a fast, and offline-friendly package manager designed to provide a seamless experience for developers.
-
-Jhol offers:
-✅ **Faster Package Installation** – Uses caching to speed up repeated installations.  
-✅ **Offline Support** – Installs previously downloaded packages without an internet connection.  
-✅ **Dependency Management** – Detects and fixes broken dependencies automatically.  
-✅ **Simple & Intuitive CLI** – Just like `npm` and `yarn`, but optimized for speed and efficiency.  
+Jhol is a package manager that’s built for speed and works great offline. It uses your existing `package.json` and lockfile, and it prefers **Bun** when you have it installed—otherwise it falls back to npm. Here’s how to get going.
 
 ---
-## **🔹 Installation**
-### **Linux & macOS**
-To install Jhol, use the following command:
+
+## Install Jhol
+
+**Linux & macOS**
+
 ```sh
 cargo install --git https://github.com/bhuvanprakash/jhol
 ```
-This will download the latest version of Jhol and compile it from source.
 
-### **Windows**
-If you're on **Windows**, follow these steps:
-1. Install Rust: [https://rustup.rs](https://rustup.rs)
-2. Clone the repository and build:
+That pulls the repo and builds it. Once it’s done, you can run `jhol` from anywhere if it’s on your PATH. If not:
+
+```sh
+jhol global-install
+```
+
+**Windows**
+
+1. Install Rust from [rustup.rs](https://rustup.rs) if you don’t have it.
+2. Clone and build:
    ```powershell
    git clone https://github.com/bhuvanprakash/jhol.git
    cd jhol
    cargo build --release
    ```
-3. Move the compiled binary to a system-wide location:
-   ```powershell
-   mkdir "C:\Program Files\Jhol"
-   copy .\target\release\jhol.exe "C:\Program Files\Jhol\"
-   ```
-4. Add Jhol to your **Windows PATH**:
-   ```powershell
-   setx PATH "$env:PATH;C:\Program Files\Jhol\"
-   ```
-5. Restart your terminal and verify the installation:
-   ```powershell
-   jhol --version
-   ```
+3. Put the binary somewhere in your PATH (e.g. `C:\Program Files\Jhol\`) and add that folder to your system PATH.
+4. Or run `install_jhol.bat` as Administrator—it’s in the repo.
 
-Or run the batch file (as Administrator): `install_jhol.bat`
+Check that it worked:
 
-To install the binary to your PATH so you can run `jhol` from anywhere:
 ```sh
-jhol global-install
+jhol --version
 ```
 
 ---
-## **🔹 Usage**
-Jhol works like `npm` and `yarn`, but is optimized for better caching and offline support.
 
-### **Installing a Package**
-To install a package, use:
-```sh
-jhol install <package-name>
-```
-Example:
+## Using Jhol
+
+Think of it like npm or yarn, but cache-first and with a few extras.
+
+### Install packages
+
 ```sh
 jhol install axios
 ```
-This will:
-- Check if the package is cached.
-- If cached, install it **without downloading**.
-- If not, fetch it from **NPM** and cache it for future offline use.
 
-#### **Installing Specific Versions**
-You can install specific versions like this:
+Jhol will look in its cache first. If it finds the package there, it installs from there. If not, it fetches from the registry (via Bun or npm) and then caches it for next time.
+
+Want to install everything from your `package.json`? Just run:
+
 ```sh
-jhol install react@17.0.0 react@18.0.0
+jhol install
 ```
-Jhol will fetch and cache both versions.
 
----
-### **Checking and Fixing Dependencies**
-Jhol comes with an **intelligent dependency checker**.
+No package names needed—it reads your dependencies and lockfile and installs from that.
 
-#### **Check for Issues**
+You can pin versions too:
+
+```sh
+jhol install react@18.0.0 lodash@4.17.21
+```
+
+### Check and fix outdated dependencies
+
 ```sh
 jhol doctor
 ```
-This scans your project for missing or outdated dependencies.
 
-#### **Automatically Fix Issues**
+That lists what’s outdated. To actually update them:
+
 ```sh
 jhol doctor --fix
 ```
-This updates outdated packages and installs missing ones.
 
----
-## **🔹 How Does Jhol Work?**
-1. **Cache First** – If a package exists in Jhol’s cache, it installs instantly.
-2. **Fallback to NPM** – If not found, Jhol fetches the package from **NPM**.
-3. **Offline Mode** – If the network is offline, Jhol still installs from cache.
-4. **Dependency Fixing** – Detects outdated or broken dependencies and fixes them.
+### Security audit
 
----
-## **🔹 Advanced Features**
-### **Managing the Cache**
 ```sh
-jhol cache list    # List cached packages
-jhol cache clean   # Remove all cached tarballs (forces fresh fetch next time)
+jhol audit
 ```
-Or manually: `rm -rf ~/.jhol-cache` (Unix) / `rd /s /q %USERPROFILE%\.jhol-cache` (Windows).
 
-### **Logging**
-Jhol maintains logs of package installations in:
+Shows known vulnerabilities. To try to fix them automatically:
+
+```sh
+jhol audit --fix
 ```
-~/.jhol-cache/logs.txt
+
+### Generate an SBOM
+
+If you need a software bill of materials (e.g. for compliance or tooling):
+
+```sh
+jhol sbom
 ```
-You can check past installations and errors here.
+
+Prints CycloneDX-style JSON. To write it to a file:
+
+```sh
+jhol sbom -o sbom.json
+```
 
 ---
-## **🔹 Documentation**
-For more detailed documentation, please refer to:
-- **[README.md](README.md)**
-- **Jhol GitHub Repository**: [https://github.com/bhuvanprakash/jhol](https://github.com/bhuvanprakash/jhol)
+
+## How Jhol behaves
+
+1. **Cache first** – If the package (and version) is already in the cache, it installs from there. No network.
+2. **Then the registry** – If it’s not cached, it uses Bun (or npm) to fetch and install, then stores it in the cache.
+3. **Offline** – With `--offline` (or `JHOL_OFFLINE=1`), it *only* uses the cache. If something’s missing, it fails and tells you what’s missing. Handy for air-gapped or flaky networks.
+4. **Lockfile** – It respects `package-lock.json` and `bun.lock`. Use `--frozen` if you want it to refuse to run when the lockfile is out of sync with `package.json`.
 
 ---
-## **🔹 Conclusion**
-Jhol is a **faster, smarter, and offline-friendly package manager** that enhances the developer experience.
 
-🔧 **Start using Jhol today** and make package management faster & smoother!
+## Cache and bundles
+
+**See what’s cached**
+
+```sh
+jhol cache list
+jhol cache size
+```
+
+**Prune old stuff**
+
+```sh
+jhol cache prune
+```
+
+Keep only the 50 most recently used tarballs:
+
+```sh
+jhol cache prune --keep 50
+```
+
+**Export deps for another machine (e.g. offline)**
+
+From a project that already has its deps installed (or at least resolved):
+
+```sh
+jhol cache export ./jhol-bundle
+```
+
+That copies everything your project needs into `./jhol-bundle` (plus a small manifest). On the other machine:
+
+```sh
+jhol cache import ./jhol-bundle
+```
+
+Then you can run `jhol install --offline` there.
+
+**Nuke the cache**
+
+```sh
+jhol cache clean
+```
+
+---
+
+## Workspaces
+
+If your repo uses npm/Bun workspaces (the `workspaces` field in the root `package.json`), you can run install, doctor, or audit in all of them at once:
+
+```sh
+jhol install --all-workspaces
+jhol doctor --fix --all-workspaces
+jhol audit --all-workspaces
+```
+
+Jhol finds the workspace roots and runs the command in each. One command, whole monorepo.
+
+---
+
+## Config and env
+
+- **Cache location:** Set `JHOL_CACHE_DIR` if you don’t want the default (`~/.jhol-cache` or `%USERPROFILE%\.jhol-cache`).
+- **Quieter output:** `JHOL_LOG=quiet` or use `-q` / `--quiet` on the command.
+- **Optional config file:** Put a `.jholrc` (JSON) in your project root or home dir. You can set things like `"backend": "bun"`, `"cacheDir": "/path/to/cache"`, `"offline": false`, `"frozen": false`. CLI flags still override this.
+
+---
+
+## Where to go from here
+
+- **README.md** – Full command list and options.
+- **Documentation/main.md** – Longer guide with troubleshooting and FAQs.
+- **GitHub** – [github.com/bhuvanprakash/jhol](https://github.com/bhuvanprakash/jhol) for issues and contributions.
+
+Once you’re set up, `jhol install` and `jhol doctor --fix` will get you most of the way. The rest is there when you need it.

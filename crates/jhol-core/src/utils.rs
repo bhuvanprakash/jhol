@@ -85,6 +85,17 @@ pub fn format_cache_name(package: &str) -> String {
     package.replace('@', "-")
 }
 
+/// Convert stem like "lodash-4.17.21" or "@scope/pkg-1.0.0" to spec "lodash@4.17.21" / "@scope/pkg@1.0.0".
+fn stem_to_spec(stem: &str) -> String {
+    if let Some(pos) = stem.rfind('-') {
+        let suffix = &stem[pos + 1..];
+        if suffix.chars().any(|c| c.is_ascii_digit()) {
+            return format!("{}@{}", &stem[..pos], suffix);
+        }
+    }
+    stem.replace('-', "@")
+}
+
 fn cache_dir_path() -> PathBuf {
     PathBuf::from(get_cache_dir())
 }
@@ -131,6 +142,20 @@ pub fn content_hash(path: &Path) -> Result<String> {
         hasher.update(&buf[..n]);
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// SHA256 hash of lockfile content for CI cache key. Prefers bun.lock then package-lock.json.
+pub fn lockfile_content_hash(dir: &Path) -> Option<String> {
+    let bun = dir.join("bun.lock");
+    let npm = dir.join("package-lock.json");
+    let path = if bun.exists() {
+        bun
+    } else if npm.exists() {
+        npm
+    } else {
+        return None;
+    };
+    content_hash(&path).ok()
 }
 
 /// Returns the path to a cached tarball if present.
@@ -290,6 +315,182 @@ pub fn cache_clean() -> Result<usize> {
     }
     let _ = fs::remove_file(store_index_path());
     Ok(removed)
+}
+
+/// Return (total size in bytes, count of tarballs) for the cache (store + legacy .tgz in root).
+pub fn cache_size_bytes() -> Result<(u64, usize)> {
+    let cache_dir = cache_dir_path();
+    let mut total: u64 = 0;
+    let mut count = 0;
+    if cache_dir.exists() {
+        for e in fs::read_dir(&cache_dir)? {
+            let e = e?;
+            let path = e.path();
+            if path.extension().map(|x| x == "tgz").unwrap_or(false) {
+                if let Ok(m) = fs::metadata(&path) {
+                    total += m.len();
+                    count += 1;
+                }
+            }
+        }
+    }
+    let store = store_dir();
+    if store.exists() {
+        for e in fs::read_dir(&store)? {
+            let e = e?;
+            let path = e.path();
+            if path.extension().map(|x| x == "tgz").unwrap_or(false) {
+                if let Ok(m) = fs::metadata(&path) {
+                    total += m.len();
+                    count += 1;
+                }
+            }
+        }
+    }
+    Ok((total, count))
+}
+
+/// Prune cache: remove store tarballs not referenced by index. If keep_recent is Some(N), keep only N most recently used (by mtime).
+pub fn cache_prune(keep_recent: Option<usize>) -> Result<usize> {
+    let mut index = read_store_index();
+    let store = store_dir();
+    if !store.exists() {
+        return Ok(0);
+    }
+    let mut removed = 0;
+    let mut entries: Vec<(PathBuf, std::time::SystemTime, String)> = Vec::new();
+    for e in fs::read_dir(&store)? {
+        let e = e?;
+        let path = e.path();
+        if path.extension().map(|x| x == "tgz").unwrap_or(false) {
+            let hash = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+            let in_index = index.values().any(|v| v == &hash);
+            if !in_index {
+                if fs::remove_file(&path).is_ok() {
+                    removed += 1;
+                }
+            } else if let Ok(meta) = fs::metadata(&path) {
+                if let Ok(mtime) = meta.modified() {
+                    entries.push((path, mtime, hash));
+                }
+            }
+        }
+    }
+    if let Some(n) = keep_recent {
+        if entries.len() > n {
+            entries.sort_by(|a, b| b.1.cmp(&a.1));
+            let to_remove = entries.split_off(n);
+            let keep_hashes: std::collections::HashSet<String> = entries.into_iter().map(|(_, _, h)| h).collect();
+            index.retain(|_, hash| keep_hashes.contains(hash));
+            write_store_index(&index)?;
+            for (path, _, _) in to_remove {
+                if fs::remove_file(&path).is_ok() {
+                    removed += 1;
+                }
+            }
+        }
+    }
+    Ok(removed)
+}
+
+/// Export cache entries needed for current project (package.json + lockfile) into dir. Writes manifest.json for import. Returns number of files copied.
+pub fn cache_export(dir: &Path) -> Result<usize> {
+    let pj = Path::new("package.json");
+    if !pj.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "No package.json in current directory",
+        ));
+    }
+    let deps = crate::lockfile::read_package_json_deps(pj).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "Could not read package.json deps")
+    })?;
+    if deps.is_empty() {
+        return Ok(0);
+    }
+    let resolved = crate::lockfile::read_resolved_from_dir(Path::new("."));
+    let specs = crate::lockfile::resolve_deps_for_install(&deps, resolved.as_ref());
+    fs::create_dir_all(dir)?;
+    let mut count = 0;
+    let mut manifest: Vec<(String, String)> = Vec::new();
+    for spec in specs {
+        if let Some(path) = get_cached_tarball(&spec) {
+            let name = format!("{}.tgz", format_cache_name(&spec));
+            let dest = dir.join(&name);
+            fs::copy(&path, &dest)?;
+            manifest.push((spec, name));
+            count += 1;
+        }
+    }
+    let manifest_json: Vec<serde_json::Value> = manifest
+        .iter()
+        .map(|(spec, file)| {
+            serde_json::json!({ "spec": spec, "file": file })
+        })
+        .collect();
+    let manifest_path = dir.join("manifest.json");
+    let s = serde_json::to_string_pretty(&manifest_json)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    fs::write(manifest_path, s)?;
+    Ok(count)
+}
+
+/// Import tarballs from dir into cache. Expects manifest.json (from cache export) or .tgz files named pkg-version.tgz.
+/// Returns number of packages imported.
+pub fn cache_import(dir: &Path) -> Result<usize> {
+    if !dir.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Export directory does not exist",
+        ));
+    }
+    fs::create_dir_all(store_dir())?;
+    let mut index = read_store_index();
+    let mut count = 0;
+    let manifest_path = dir.join("manifest.json");
+    if manifest_path.exists() {
+        let s = fs::read_to_string(&manifest_path)?;
+        let entries: Vec<serde_json::Value> = serde_json::from_str(&s).unwrap_or_default();
+        for entry in entries {
+            let spec = entry.get("spec").and_then(|v| v.as_str()).unwrap_or("");
+            let file = entry.get("file").and_then(|v| v.as_str()).unwrap_or("");
+            if spec.is_empty() || file.is_empty() {
+                continue;
+            }
+            let path = dir.join(file);
+            if !path.exists() {
+                continue;
+            }
+            let hash = content_hash(&path)?;
+            let store_file = store_dir().join(format!("{}.tgz", hash));
+            if !store_file.exists() {
+                fs::copy(&path, &store_file)?;
+            }
+            index.insert(spec.to_string(), hash);
+            count += 1;
+        }
+    } else {
+        for e in fs::read_dir(dir)? {
+            let e = e?;
+            let path = e.path();
+            if path.extension().map(|x| x == "tgz").unwrap_or(false) {
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                if stem.is_empty() {
+                    continue;
+                }
+                let hash = content_hash(&path)?;
+                let store_file = store_dir().join(format!("{}.tgz", hash));
+                if !store_file.exists() {
+                    fs::copy(&path, &store_file)?;
+                }
+                let pkg_key = stem_to_spec(stem);
+                index.insert(pkg_key, hash);
+                count += 1;
+            }
+        }
+    }
+    write_store_index(&index)?;
+    Ok(count)
 }
 
 /// Run a command with a timeout. On timeout the process is killed and an error is returned.
