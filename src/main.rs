@@ -1,16 +1,122 @@
+//! Thin CLI layer: parse args, styled output, and call into jhol-core.
+//! Crash-proof: panic caught and reported; all errors return Result.
+
 use clap::{Arg, ArgAction, Command};
+use colored::Colorize;
+use indicatif::{ProgressBar, ProgressStyle};
 use std::env;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::Path;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-mod doctor;
-mod install;
-mod lockfile;
-mod registry;
-mod utils;
+// ---- UI helpers (no-op when stdout isn't a TTY) ----
+
+fn use_color() -> bool {
+    std::io::stdout().is_terminal()
+        && env::var("NO_COLOR").unwrap_or_default().is_empty()
+}
+
+fn success(msg: &str) {
+    if use_color() {
+        println!("{}", msg.green());
+    } else {
+        println!("{}", msg);
+    }
+}
+
+fn error(msg: &str) {
+    if use_color() {
+        eprintln!("{}", msg.red());
+    } else {
+        eprintln!("{}", msg);
+    }
+}
+
+#[allow(dead_code)]
+fn warning(msg: &str) {
+    if use_color() {
+        eprintln!("{}", msg.yellow());
+    } else {
+        eprintln!("{}", msg);
+    }
+}
+
+fn info(msg: &str) {
+    if use_color() {
+        println!("{}", msg.cyan());
+    } else {
+        println!("{}", msg);
+    }
+}
+
+fn dim(msg: &str) {
+    if use_color() {
+        println!("{}", msg.dimmed());
+    } else {
+        println!("{}", msg);
+    }
+}
+
+#[allow(dead_code)]
+fn dim_err(msg: &str) {
+    if use_color() {
+        eprintln!("{}", msg.dimmed());
+    } else {
+        eprintln!("{}", msg);
+    }
+}
+
+/// Run a long-running task; in quiet mode show a spinner until done.
+#[allow(dead_code)]
+fn run_with_spinner<F>(message: &str, quiet: bool, f: F) -> Result<(), String>
+where
+    F: FnOnce() -> Result<(), String> + Send + 'static,
+{
+    if !quiet {
+        return f();
+    }
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = f();
+        let _ = tx.send(result);
+    });
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_style(
+        ProgressStyle::default_spinner()
+            .tick_chars("⠁⠂⠄⠈⠐⠠⠰⠸⠹")
+            .template("{spinner:.dim} {msg}").unwrap(),
+    );
+    spinner.set_message(message.to_string());
+    let mut elapsed = Duration::ZERO;
+    let timeout = Duration::from_secs(600);
+    let tick = Duration::from_millis(80);
+    loop {
+        match rx.try_recv() {
+            Ok(res) => {
+                spinner.finish_and_clear();
+                return res;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                spinner.finish_and_clear();
+                return Err("Operation failed.".to_string());
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+        if elapsed >= timeout {
+            spinner.finish_and_clear();
+            return Err("Operation timed out.".to_string());
+        }
+        spinner.tick();
+        thread::sleep(tick);
+        elapsed += tick;
+    }
+}
 
 fn install_globally() -> Result<(), String> {
     let install_path = if cfg!(target_os = "windows") {
@@ -23,12 +129,12 @@ fn install_globally() -> Result<(), String> {
     };
 
     if Path::new(&install_path).exists() {
-        println!("Jhol is already installed at {}", install_path);
+        info(&format!("Jhol is already installed at {}", install_path));
         return Ok(());
     }
 
     let exe_path = env::current_exe().map_err(|e| e.to_string())?;
-    println!("Installing Jhol globally at {} ...", install_path);
+    info(&format!("Installing Jhol at {} …", install_path));
     fs::copy(&exe_path, &install_path).map_err(|e| e.to_string())?;
 
     #[cfg(unix)]
@@ -38,18 +144,26 @@ fn install_globally() -> Result<(), String> {
         fs::set_permissions(&install_path, perms).map_err(|e| e.to_string())?;
     }
 
-    println!("Jhol installed successfully. You can run `jhol` from anywhere.");
+    success("Jhol installed. You can run `jhol` from anywhere.");
     Ok(())
 }
 
-fn main() {
+fn run() -> Result<(), String> {
+    let backend_arg = Arg::new("backend")
+        .long("backend")
+        .value_parser(["bun", "npm"])
+        .help("Package manager backend (default: bun if available, else npm)");
+
     let matches = Command::new("jhol")
         .version("1.0.0")
         .author("Bhuvan Prakash <bhuvanstark6@gmail.com>")
-        .about("A fast, offline-friendly package manager (npm-compatible)")
+        .about("Fast, offline-friendly package manager — cache first, Bun/npm backend")
+        .after_help(
+            "Examples:\n  jhol install lodash\n  jhol install react react-dom\n  jhol install\n  jhol doctor --fix\n  jhol cache list",
+        )
         .subcommand(
             Command::new("install")
-                .about("Install one or more packages")
+                .about("Install packages (from args or package.json)")
                 .arg(
                     Arg::new("package")
                         .required(false)
@@ -67,141 +181,433 @@ fn main() {
                         .short('q')
                         .long("quiet")
                         .action(ArgAction::SetTrue)
-                        .help("Less output"),
+                        .help("Minimal output; show spinner when busy"),
+                )
+                .arg(backend_arg.clone())
+                .arg(
+                    Arg::new("lockfile-only")
+                        .long("lockfile-only")
+                        .action(ArgAction::SetTrue)
+                        .help("Only update lockfile, do not install to node_modules"),
+                )
+                .arg(
+                    Arg::new("offline")
+                        .long("offline")
+                        .action(ArgAction::SetTrue)
+                        .help("Only use cache; fail if any package is missing (or set JHOL_OFFLINE=1)"),
+                )
+                .arg(
+                    Arg::new("frozen")
+                        .long("frozen")
+                        .long("frozen-lockfile")
+                        .action(ArgAction::SetTrue)
+                        .help("Require lockfile and fail if out of sync with package.json"),
+                )
+                .arg(
+                    Arg::new("all-workspaces")
+                        .long("all-workspaces")
+                        .action(ArgAction::SetTrue)
+                        .help("Run in all workspace packages (from package.json workspaces)"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("Output machine-readable JSON result"),
                 ),
         )
         .subcommand(
             Command::new("doctor")
-                .about("Check and fix dependency issues")
+                .about("Check and fix outdated dependencies")
                 .arg(
                     Arg::new("fix")
                         .long("fix")
                         .action(ArgAction::SetTrue)
-                        .help("Update outdated dependencies"),
+                        .help("Update outdated packages"),
                 )
                 .arg(
                     Arg::new("quiet")
                         .short('q')
                         .long("quiet")
                         .action(ArgAction::SetTrue)
-                        .help("Less output"),
+                        .help("Minimal output"),
+                )
+                .arg(backend_arg.clone())
+                .arg(
+                    Arg::new("all-workspaces")
+                        .long("all-workspaces")
+                        .action(ArgAction::SetTrue)
+                        .help("Run in all workspace packages"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("Output machine-readable JSON"),
                 ),
         )
-        .subcommand(Command::new("global-install").about("Install jhol binary to PATH (e.g. /usr/local/bin)"))
+        .subcommand(
+            Command::new("global-install")
+                .about("Install jhol binary to PATH (e.g. /usr/local/bin)"),
+        )
         .subcommand(
             Command::new("cache")
                 .about("Manage local package cache")
                 .subcommand(Command::new("list").about("List cached packages"))
-                .subcommand(Command::new("clean").about("Remove all cached tarballs")),
+                .subcommand(Command::new("size").about("Show cache size and tarball count"))
+                .subcommand(
+                    Command::new("prune")
+                        .about("Remove unreferenced tarballs; optionally keep only N most recent")
+                        .arg(
+                            Arg::new("keep")
+                                .long("keep")
+                                .value_parser(clap::value_parser!(usize))
+                                .help("Keep only N most recently used tarballs"),
+                        ),
+                )
+                .subcommand(
+                    Command::new("export")
+                        .about("Export project deps from cache to directory (for offline)")
+                        .arg(Arg::new("dir").required(true).help("Output directory")),
+                )
+                .subcommand(
+                    Command::new("import")
+                        .about("Import tarballs from directory into cache")
+                        .arg(Arg::new("dir").required(true).help("Directory from jhol cache export")),
+                )
+                .subcommand(Command::new("clean").about("Remove all cached tarballs"))
+                .subcommand(
+                    Command::new("key")
+                        .about("Print lockfile hash for CI cache key (same lockfile => same key)"),
+                ),
+        )
+        .subcommand(
+            Command::new("audit")
+                .about("Check for known vulnerabilities")
+                .arg(
+                    Arg::new("fix")
+                        .long("fix")
+                        .action(ArgAction::SetTrue)
+                        .help("Apply fixes where possible"),
+                )
+                .arg(
+                    Arg::new("quiet")
+                        .short('q')
+                        .long("quiet")
+                        .action(ArgAction::SetTrue)
+                        .help("Minimal output"),
+                )
+                .arg(backend_arg.clone())
+                .arg(
+                    Arg::new("all-workspaces")
+                        .long("all-workspaces")
+                        .action(ArgAction::SetTrue)
+                        .help("Run in all workspace packages"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("Output raw audit JSON"),
+                ),
+        )
+        .subcommand(
+            Command::new("sbom")
+                .about("Generate Software Bill of Materials")
+                .arg(
+                    Arg::new("format")
+                        .long("format")
+                        .value_parser(["cyclonedx", "simple"])
+                        .default_value("cyclonedx")
+                        .help("SBOM format"),
+                )
+                .arg(
+                    Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .help("Write to file (default: stdout)"),
+                ),
         )
         .get_matches();
 
+    // global-install (no cache needed)
     if let Some(("global-install", _)) = matches.subcommand() {
-        if let Err(e) = install_globally() {
-            eprintln!("{}", e);
-            std::process::exit(1);
-        }
-        return;
+        install_globally().map_err(|e| e.to_string())?;
+        return Ok(());
     }
 
+    // cache list | size | prune | export | import | clean
     if let Some(("cache", sub)) = matches.subcommand() {
-        if let Err(e) = utils::init_cache() {
-            eprintln!("Failed to initialize cache: {}", e);
-            std::process::exit(1);
-        }
+        jhol_core::init_cache().map_err(|e| format!("Failed to initialize cache: {}", e))?;
         match sub.subcommand() {
             Some(("list", _)) => {
-                match utils::list_cached_packages() {
-                    Ok(list) => {
-                        if list.is_empty() {
-                            println!("No cached packages.");
-                        } else {
-                            println!("Cached packages ({}):", list.len());
-                            for name in list {
-                                println!("  {}", name);
-                            }
-                        }
+                let list = jhol_core::list_cached_packages()
+                    .map_err(|e| format!("Failed to list cache: {}", e))?;
+                let (bytes, _) = jhol_core::cache_size_bytes()
+                    .map_err(|e| format!("Failed to get cache size: {}", e))?;
+                if list.is_empty() {
+                    dim("No cached packages.");
+                } else {
+                    info(&format!("Cached packages ({})", list.len()));
+                    for name in list {
+                        println!("  {}", name);
                     }
-                    Err(e) => {
-                        eprintln!("Failed to list cache: {}", e);
-                        std::process::exit(1);
-                    }
+                    dim(&format!("Total size: {} MB", bytes / 1024 / 1024));
                 }
+            }
+            Some(("size", _)) => {
+                let (bytes, count) = jhol_core::cache_size_bytes()
+                    .map_err(|e| format!("Failed to get cache size: {}", e))?;
+                info(&format!("Cache: {} tarball(s), {} MB", count, bytes / 1024 / 1024));
+            }
+            Some(("prune", sub_prune)) => {
+                let keep = sub_prune.get_one::<usize>("keep").copied();
+                let n = jhol_core::cache_prune(keep)
+                    .map_err(|e| format!("Failed to prune cache: {}", e))?;
+                success(&format!("Pruned {} tarball(s).", n));
+            }
+            Some(("export", sub_exp)) => {
+                let dir = sub_exp.get_one::<String>("dir").map(|s| s.as_str()).unwrap();
+                let n = jhol_core::cache_export(std::path::Path::new(dir))
+                    .map_err(|e| format!("Export failed: {}", e))?;
+                success(&format!("Exported {} package(s) to {}.", n, dir));
+            }
+            Some(("import", sub_imp)) => {
+                let dir = sub_imp.get_one::<String>("dir").map(|s| s.as_str()).unwrap();
+                let n = jhol_core::cache_import(std::path::Path::new(dir))
+                    .map_err(|e| format!("Import failed: {}", e))?;
+                success(&format!("Imported {} package(s) from {}.", n, dir));
             }
             Some(("clean", _)) => {
-                match utils::cache_clean() {
-                    Ok(n) => println!("Removed {} cached package(s).", n),
-                    Err(e) => {
-                        eprintln!("Failed to clean cache: {}", e);
-                        std::process::exit(1);
-                    }
-                }
+                let n = jhol_core::cache_clean()
+                    .map_err(|e| format!("Failed to clean cache: {}", e))?;
+                success(&format!("Removed {} cached package(s).", n));
+            }
+            Some(("key", _)) => {
+                let hash = jhol_core::lockfile_content_hash(std::path::Path::new("."))
+                    .unwrap_or_else(|| "none".to_string());
+                println!("{}", hash);
             }
             _ => {
-                println!("Use `jhol cache list` or `jhol cache clean`.");
+                dim("Use `jhol cache list`, `jhol cache size`, `jhol cache prune`, `jhol cache export <dir>`, `jhol cache import <dir>`, `jhol cache clean`, or `jhol cache key`.");
             }
         }
-        return;
+        return Ok(());
     }
 
-    if let Err(e) = utils::init_cache() {
-        eprintln!("Failed to initialize cache: {}", e);
-        std::process::exit(1);
+    jhol_core::init_cache().map_err(|e| format!("Failed to initialize cache: {}", e))?;
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let config = jhol_core::load_config(&cwd);
+    if let Some(ref d) = config.cache_dir {
+        env::set_var("JHOL_CACHE_DIR", d);
     }
 
     match matches.subcommand() {
         Some(("install", sub_m)) => {
             let no_cache = sub_m.get_flag("no-cache");
             let quiet = sub_m.get_flag("quiet");
-            if quiet {
+            let lockfile_only = sub_m.get_flag("lockfile-only");
+            let offline = sub_m.get_flag("offline")
+                || env::var("JHOL_OFFLINE").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+            let strict_lockfile = sub_m.get_flag("frozen");
+            let all_workspaces = sub_m.get_flag("all-workspaces");
+            let backend = match sub_m.get_one::<String>("backend") {
+                Some(s) if s == "bun" => Some(jhol_core::Backend::Bun),
+                Some(s) if s == "npm" => Some(jhol_core::Backend::Npm),
+                _ => config.backend,
+            };
+            let backend = jhol_core::resolve_backend(backend);
+            let json_out = sub_m.get_flag("json");
+            if quiet || json_out {
                 env::set_var("JHOL_QUIET", "1");
             }
-            let opts = install::InstallOptions { no_cache, quiet };
-            let packages: Vec<&str> = sub_m
+            let packages: Vec<String> = sub_m
                 .get_many::<String>("package")
-                .map(|it| it.map(|s| s.as_str()).collect())
+                .map(|it| it.map(|s| s.clone()).collect())
                 .unwrap_or_default();
-            let specs: Vec<String> = if packages.is_empty() {
-                match install::resolve_install_from_package_json() {
-                    Ok(s) => s,
-                    Err(e) => {
-                        eprintln!("{}", e);
-                        std::process::exit(1);
-                    }
+            let roots: Vec<std::path::PathBuf> = if all_workspaces {
+                let r = jhol_core::list_workspace_roots(&cwd).unwrap_or_default();
+                if r.is_empty() {
+                    vec![cwd.clone()]
+                } else {
+                    r.into_iter().map(|p| cwd.join(p)).collect()
                 }
             } else {
-                packages.iter().map(|s| (*s).to_string()).collect()
+                vec![cwd.clone()]
             };
-            let spec_refs: Vec<&str> = specs.iter().map(|s| s.as_str()).collect();
-            utils::log(&format!("Installing: {:?}", spec_refs));
-            if let Err(e) = install::install_package(&spec_refs, &opts) {
-                eprintln!("{}", e);
-                std::process::exit(1);
+            for root in &roots {
+                std::env::set_current_dir(root).map_err(|e| format!("chdir {}: {}", root.display(), e))?;
+                if !quiet && roots.len() > 1 {
+                    info(&format!("Workspace: {}", root.display()));
+                }
+                if packages.is_empty() && lockfile_only {
+                    jhol_core::install_lockfile_only(backend)?;
+                    continue;
+                }
+                let specs: Vec<String> = if packages.is_empty() {
+                    jhol_core::resolve_install_from_package_json(strict_lockfile)?
+                } else {
+                    packages.iter().map(|s| s.clone()).collect()
+                };
+                if specs.is_empty() {
+                    if roots.len() == 1 {
+                        dim("No dependencies to install.");
+                    }
+                    continue;
+                }
+                let refs: Vec<&str> = specs.iter().map(|s| s.as_str()).collect();
+                let opts = jhol_core::InstallOptions {
+                    no_cache,
+                    quiet,
+                    backend,
+                    lockfile_only,
+                    offline,
+                    strict_lockfile,
+                };
+                jhol_core::log(&format!("Installing: {:?}", specs));
+                jhol_core::install_package(&refs, &opts)?;
+            }
+            std::env::set_current_dir(&cwd).ok();
+            if json_out {
+                println!("{{\"ok\":true}}");
+            } else if quiet {
+                success("Done.");
             }
         }
         Some(("doctor", sub_m)) => {
             let quiet = sub_m.get_flag("quiet");
-            if quiet {
+            let do_fix = sub_m.get_flag("fix");
+            let all_workspaces = sub_m.get_flag("all-workspaces");
+            let json_out = sub_m.get_flag("json");
+            let backend = match sub_m.get_one::<String>("backend") {
+                Some(s) if s == "bun" => Some(jhol_core::Backend::Bun),
+                Some(s) if s == "npm" => Some(jhol_core::Backend::Npm),
+                _ => config.backend,
+            };
+            let backend = jhol_core::resolve_backend(backend);
+            if quiet || json_out {
                 env::set_var("JHOL_QUIET", "1");
             }
-            if sub_m.get_flag("fix") {
-                utils::log("Running doctor --fix");
-                if let Err(e) = doctor::fix_dependencies(quiet) {
-                    eprintln!("{}", e);
-                    std::process::exit(1);
+            let roots: Vec<std::path::PathBuf> = if all_workspaces {
+                let r = jhol_core::list_workspace_roots(&cwd).unwrap_or_default();
+                if r.is_empty() {
+                    vec![cwd.clone()]
+                } else {
+                    r.into_iter().map(|p| cwd.join(p)).collect()
                 }
             } else {
-                utils::log("Running doctor (check only)");
-                if let Err(e) = doctor::check_dependencies(quiet) {
-                    eprintln!("{}", e);
-                    std::process::exit(1);
+                vec![cwd.clone()]
+            };
+            for root in &roots {
+                std::env::set_current_dir(root).map_err(|e| format!("chdir {}: {}", root.display(), e))?;
+                if !quiet && !json_out && roots.len() > 1 {
+                    info(&format!("Workspace: {}", root.display()));
                 }
+                if do_fix {
+                    jhol_core::log("Running doctor --fix");
+                    jhol_core::fix_dependencies(quiet, backend)?;
+                } else {
+                    jhol_core::log("Running doctor (check only)");
+                    jhol_core::check_dependencies(quiet, backend)?;
+                }
+            }
+            std::env::set_current_dir(&cwd).ok();
+            if json_out {
+                println!("{{\"ok\":true}}");
+            } else if quiet {
+                success("Done.");
+            }
+        }
+        Some(("audit", sub_m)) => {
+            let quiet = sub_m.get_flag("quiet");
+            let do_fix = sub_m.get_flag("fix");
+            let all_workspaces = sub_m.get_flag("all-workspaces");
+            let json_out = sub_m.get_flag("json");
+            let backend = match sub_m.get_one::<String>("backend") {
+                Some(s) if s == "bun" => Some(jhol_core::Backend::Bun),
+                Some(s) if s == "npm" => Some(jhol_core::Backend::Npm),
+                _ => config.backend,
+            };
+            let backend = jhol_core::resolve_backend(backend);
+            if quiet || json_out {
+                env::set_var("JHOL_QUIET", "1");
+            }
+            if json_out && !do_fix {
+                let json_bytes = jhol_core::run_audit_raw(backend).map_err(|e| e.to_string())?;
+                println!("{}", String::from_utf8_lossy(&json_bytes));
+            } else {
+                let roots: Vec<std::path::PathBuf> = if all_workspaces {
+                    let r = jhol_core::list_workspace_roots(&cwd).unwrap_or_default();
+                    if r.is_empty() {
+                        vec![cwd.clone()]
+                    } else {
+                        r.into_iter().map(|p| cwd.join(p)).collect()
+                    }
+                } else {
+                    vec![cwd.clone()]
+                };
+                for root in &roots {
+                    std::env::set_current_dir(root).map_err(|e| format!("chdir {}: {}", root.display(), e))?;
+                    if !quiet && !json_out && roots.len() > 1 {
+                        info(&format!("Workspace: {}", root.display()));
+                    }
+                    if do_fix {
+                        jhol_core::run_audit_fix(backend, quiet)?;
+                    } else {
+                        jhol_core::run_audit(backend, quiet)?;
+                    }
+                }
+                std::env::set_current_dir(&cwd).ok();
+                if json_out {
+                    println!("{{\"ok\":true}}");
+                } else if quiet {
+                    success("Done.");
+                }
+            }
+        }
+        Some(("sbom", sub_m)) => {
+            let format = match sub_m.get_one::<String>("format").map(|s| s.as_str()) {
+                Some("simple") => jhol_core::SbomFormat::Simple,
+                _ => jhol_core::SbomFormat::CycloneDx,
+            };
+            let json = jhol_core::generate_sbom(format).map_err(|e| e.to_string())?;
+            if let Some(out_path) = sub_m.get_one::<String>("output") {
+                fs::write(out_path, &json).map_err(|e| format!("Write failed: {}", e))?;
+                success(&format!("SBOM written to {}.", out_path));
+            } else {
+                println!("{}", json);
             }
         }
         _ => {
-            println!("Usage: jhol <command> [options]");
-            println!("Commands: install, doctor, cache, global-install");
-            println!("Run `jhol --help` for details.");
+            if use_color() {
+                println!("{}", "jhol".bright_cyan().bold());
+                dim("Fast, offline-friendly package manager — cache first, Bun/npm backend.");
+            } else {
+                println!("jhol — Fast, offline-friendly package manager");
+            }
+            dim("\nRun `jhol --help` for details.");
         }
     }
+
+    Ok(())
+}
+
+fn main() {
+    if !use_color() {
+        colored::control::set_override(false);
+    }
+
+    let code = match std::panic::catch_unwind(|| run()) {
+        Ok(Ok(())) => 0,
+        Ok(Err(e)) => {
+            error(&e);
+            1
+        }
+        Err(_) => {
+            error("An unexpected error occurred. Please report this issue.");
+            1
+        }
+    };
+    std::process::exit(code);
 }

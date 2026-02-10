@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use crate::backend::{self, Backend};
 use crate::lockfile;
 use crate::registry;
-use crate::utils::{self, NPM_INSTALL_TIMEOUT_SECS, NPM_SHOW_TIMEOUT_SECS};
+use crate::utils::{self, NPM_SHOW_TIMEOUT_SECS};
 
 /// Package name without version: lodash@4 -> lodash, @scope/pkg@1.0 -> @scope/pkg
 fn base_name(package: &str) -> &str {
@@ -32,16 +33,33 @@ fn read_installed_version(base: &str) -> Option<String> {
 pub struct InstallOptions {
     pub no_cache: bool,
     pub quiet: bool,
+    pub backend: Backend,
+    pub lockfile_only: bool,
+    pub offline: bool,
+    pub strict_lockfile: bool,
 }
 
 impl Default for InstallOptions {
     fn default() -> Self {
-        Self { no_cache: false, quiet: false }
+        Self {
+            no_cache: false,
+            quiet: false,
+            backend: backend::resolve_backend(None),
+            lockfile_only: false,
+            offline: false,
+            strict_lockfile: false,
+        }
     }
 }
 
-/// Install dependencies from package.json (and optional package-lock.json). Returns list of specs to install.
-pub fn resolve_install_from_package_json() -> Result<Vec<String>, String> {
+/// Only update lockfile (no node_modules). Uses backend's lockfile-only mode.
+pub fn install_lockfile_only(backend: Backend) -> Result<(), String> {
+    backend::backend_install_from_package_json(backend, true)
+}
+
+/// Install dependencies from package.json (and optional package-lock.json or bun.lock). Returns list of specs to install.
+/// If strict_lockfile is true, requires lockfile to exist and all deps to be in lockfile.
+pub fn resolve_install_from_package_json(strict_lockfile: bool) -> Result<Vec<String>, String> {
     let pj_path = Path::new("package.json");
     if !pj_path.exists() {
         return Err("No package.json found in current directory.".to_string());
@@ -51,18 +69,27 @@ pub fn resolve_install_from_package_json() -> Result<Vec<String>, String> {
     if deps.is_empty() {
         return Ok(Vec::new());
     }
-    let lock_path = Path::new("package-lock.json");
-    let resolved = lock_path.exists()
-        .then(|| lockfile::read_lockfile_resolved(lock_path))
-        .flatten();
+    let resolved = lockfile::read_resolved_from_dir(Path::new("."));
+    if strict_lockfile {
+        if resolved.is_none() {
+            return Err("Strict lockfile required but no package-lock.json or bun.lock found. Run install without --frozen first.".to_string());
+        }
+        let r = resolved.as_ref().unwrap();
+        for name in deps.keys() {
+            if !r.contains_key(name) {
+                return Err(format!("Strict lockfile: dependency {} not in lockfile. Run install without --frozen to update lockfile.", name));
+            }
+        }
+    }
     Ok(lockfile::resolve_deps_for_install(&deps, resolved.as_ref()))
 }
 
-/// Install packages. Uses parallel validation, cache (content-addressable), native registry with npm fallback.
+/// Install packages. Uses parallel validation, cache (content-addressable), native registry with backend fallback.
 pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<(), String> {
     let mut seen_packages = HashSet::new();
     let mut to_install_from_cache = Vec::new();
     let mut to_fetch = Vec::new();
+    let mut missing_for_offline = Vec::new();
 
     for package in packages {
         let base = base_name(package);
@@ -83,7 +110,18 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                 continue;
             }
         }
+        if options.offline {
+            missing_for_offline.push(package.to_string());
+            continue;
+        }
         to_fetch.push(package.to_string());
+    }
+
+    if !missing_for_offline.is_empty() {
+        return Err(format!(
+            "Offline mode: package(s) not in cache: {}. Run without --offline to fetch.",
+            missing_for_offline.join(", ")
+        ));
     }
 
     // Parallel validation for packages we need to fetch
@@ -95,28 +133,19 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         }
     }
 
-    // Install from cache: single npm install with all tarball paths
+    // Install from cache: use backend to install tarball paths
     if !to_install_from_cache.is_empty() {
-        let paths: Vec<String> = to_install_from_cache
+        let paths: Vec<std::path::PathBuf> = to_install_from_cache
             .iter()
-            .map(|(_, p)| p.to_string_lossy().into_owned())
+            .map(|(_, p)| p.clone())
             .collect();
-        let mut args: Vec<&str> = vec!["install"];
-        for p in &paths {
-            args.push(p.as_str());
-        }
-        let output = utils::run_command_timeout("npm", &args, NPM_INSTALL_TIMEOUT_SECS);
-        match output {
-            Ok(out) if out.status.success() => {
+        match backend::backend_install_tarballs(&paths, options.backend) {
+            Ok(()) => {
                 for (pkg, _) in &to_install_from_cache {
                     utils::log(&format!("Installed {} from cache.", pkg));
                 }
             }
-            Ok(out) => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                return Err(format!("Failed to install from cache: {}", stderr));
-            }
-            Err(e) => return Err(format!("Error installing from cache: {}", e)),
+            Err(e) => return Err(e),
         }
     }
 
@@ -146,37 +175,27 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         return Ok(());
     }
 
-    // Fallback: npm install for any that native failed
+    // Fallback: backend install for any that native failed
     let fetch_refs: Vec<&str> = npm_fallback.iter().map(|s| s.as_str()).collect();
     let mut attempts = 3;
     loop {
-        let output = utils::npm_install_timeout(&fetch_refs, NPM_INSTALL_TIMEOUT_SECS);
-        match output {
-            Ok(out) if out.status.success() => {
+        match backend::backend_install(&fetch_refs, options.backend, options.lockfile_only) {
+            Ok(()) => {
                 for pkg in &npm_fallback {
                     let base = base_name(pkg);
                     if let Some(version) = read_installed_version(base) {
                         let _ = utils::cache_package_tarball(base, &version);
                     }
-                    utils::log(&format!("Installed {} via NPM.", pkg));
+                    utils::log(&format!("Installed {} via backend.", pkg));
                 }
                 return Ok(());
             }
-            Ok(out) => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
+            Err(e) => {
                 if attempts <= 1 {
-                    return Err(format!("npm install failed: {}", stderr));
+                    return Err(e);
                 }
                 if !options.quiet {
                     eprintln!("Install failed, retrying in 2s...");
-                }
-            }
-            Err(e) => {
-                if attempts <= 1 {
-                    return Err(format!("Error: {}", e));
-                }
-                if !options.quiet {
-                    eprintln!("Error: {}, retrying in 2s...", e);
                 }
             }
         }
