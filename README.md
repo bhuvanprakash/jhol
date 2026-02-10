@@ -1,8 +1,11 @@
-# Jhol – Fast, Offline-Friendly Package Manager
+# Jhol
 
-A fast, offline-friendly npm alternative with local caching and doctor. Use your existing `package.json`; Jhol caches tarballs and falls back to the registry when needed.
+**Fast, offline-friendly package manager** with local caching and npm fallback. Use your existing `package.json`; Jhol caches tarballs and falls back to the registry when needed.
 
-### Why Jhol?
+---
+
+## Why Jhol?
+
 - **Fast installs** – Caches package tarballs so repeat installs skip the registry when possible.
 - **Offline-friendly** – Install previously cached packages without a network.
 - **npm-compatible** – Uses npm under the hood; works with existing `package.json` and lockfiles.
@@ -21,33 +24,50 @@ cargo install --git https://github.com/bhuvanprakash/jhol
 ```
 
 **Prebuilt binaries (Linux & Windows):**  
-Download `jhol-linux` or `jhol-windows.exe` from [Releases](https://github.com/bhuvanprakash/jhol/releases). Make the binary executable (Linux: `chmod +x jhol-linux`) and optionally move it to your PATH.
+Download `jhol-linux` or `jhol-windows.exe` from [Releases](https://github.com/bhuvanprakash/jhol/releases).  
+- Linux: `chmod +x jhol-linux` then move to your PATH if you like.  
+- Windows: run `jhol-windows.exe` or add it to your PATH.
 
-Optional: install the binary to your PATH (e.g. `/usr/local/bin`) so you can run `jhol` from anywhere:
-
+**Add to PATH (any install method):**
 ```sh
 jhol global-install
 ```
 
-## Usage
+## Quick start
 
 ```sh
-jhol install <package> [packages...]   # Install packages (uses cache when available)
-jhol install --no-cache <package>      # Ignore cache and fetch from registry
-jhol doctor                             # Check for outdated dependencies
-jhol doctor --fix                      # Update outdated dependencies
-jhol cache list                        # List cached packages
-jhol cache clean                       # Remove cached tarballs
-jhol global-install                    # Install jhol binary to PATH
+jhol install lodash          # Install one package (uses cache when available)
+jhol install react react-dom # Install multiple
+jhol doctor                  # Check outdated deps
+jhol doctor --fix            # Update outdated deps
 ```
+
+## Commands
+
+| Command | Description |
+|--------|-------------|
+| `jhol install <pkg> [pkgs...]` | Install packages; uses cache when available |
+| `jhol install --no-cache <pkg>` | Ignore cache and fetch from registry |
+| `jhol doctor` | List outdated dependencies |
+| `jhol doctor --fix` | Update outdated dependencies |
+| `jhol cache list` | List cached packages |
+| `jhol cache clean` | Remove cached tarballs |
+| `jhol global-install` | Install jhol binary to PATH |
+
+Use `-q` / `--quiet` for less output.
 
 ## Configuration
 
-- **Cache directory:** Set `JHOL_CACHE_DIR` to override the default (`~/.jhol-cache` on Unix, `%USERPROFILE%\.jhol-cache` on Windows).
-- **Quieter output:** Set `JHOL_LOG=quiet` or use `-q` / `--quiet` with `install` and `doctor`.
+| Env / flag | Effect |
+|------------|--------|
+| `JHOL_CACHE_DIR` | Override cache directory (default: `~/.jhol-cache` on Unix, `%USERPROFILE%\.jhol-cache` on Windows) |
+| `JHOL_LOG=quiet` or `-q` | Quieter logging |
+
+## Links
+
+- **Crate:** [crates.io/crates/jhol](https://crates.io/crates/jhol)
+- **Releases:** [GitHub Releases](https://github.com/bhuvanprakash/jhol/releases)
 
 ## License
 
-This software is licensed under the JHOL FREE LICENSE (Proprietary, Non-Commercial): free for personal and educational use; not for commercial use, redistribution, or modification.
-
-For licensing inquiries: bhuvanstark6@gmail.com
+Jhol is licensed under the [Jhol License](LICENSE) (personal and non-commercial use). For other use, contact bhuvanstark6@gmail.com.
