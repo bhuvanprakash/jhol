@@ -1,4 +1,4 @@
-use clap::{Arg, Command};
+use clap::{Arg, ArgAction, Command};
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -67,6 +67,7 @@ fn main() {
                 .arg(
                     Arg::new("fix")
                         .long("fix")
+                        .action(ArgAction::SetTrue)
                         .help("Update outdated dependencies"),
                 )
                 .arg(Arg::new("quiet").short('q').long("quiet").help("Less output")),
