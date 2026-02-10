@@ -17,6 +17,19 @@ This document adds **out-of-the-box** ideas so Jhol can eventually **replace npm
 
 ---
 
+## Path to outsmart npm / bun / yarn / pnpm (priority order)
+
+| Priority | What | Impact |
+|----------|------|--------|
+| **1. Speed (now)** | Parallel `npm show` + parallel fetch for multi-package installs | Noticeably faster installs without changing architecture |
+| **2. Native registry** | HTTP to registry.npmjs.org; download tarballs; extract with `tar` crate | No npm subprocess → **biggest speed and independence win** |
+| **3. Polish** | `-q` suppresses logs; exit code 1 on failure; `jhol install` (no args) = install from package.json | Scripts and CI; matches user expectations |
+| **4. Lockfile** | Read/write package-lock.json (or jhol.lock) for deterministic installs | Reproducible builds; no drift from npm |
+| **5. Content-addressable cache** | Cache by tarball hash; symlink into node_modules (pnpm-style) | Less disk, faster repeat installs |
+| **6. Later** | Workspaces, audit, config file, optional PnP | Full parity and differentiators |
+
+---
+
 ## Quick Wins (Reliability & Polish)
 
 | Item | What | Why |

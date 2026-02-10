@@ -11,12 +11,11 @@ fn get_outdated_json() -> Option<serde_json::Value> {
 }
 
 /// Scans dependencies using `npm outdated` and reports which are outdated
-pub fn check_dependencies(quiet: bool) {
+pub fn check_dependencies(quiet: bool) -> Result<(), String> {
     utils::log("Starting dependency check...");
 
     if !std::path::Path::new("package.json").exists() {
-        eprintln!("No package.json found in current directory.");
-        return;
+        return Err("No package.json found in current directory.".to_string());
     }
 
     if !quiet {
@@ -29,7 +28,7 @@ pub fn check_dependencies(quiet: bool) {
             if !quiet {
                 println!("All dependencies are up-to-date (or npm outdated could not run).");
             }
-            return;
+            return Ok(());
         }
     };
 
@@ -39,7 +38,7 @@ pub fn check_dependencies(quiet: bool) {
             if !quiet {
                 println!("All dependencies are up-to-date!");
             }
-            return;
+            return Ok(());
         }
     };
 
@@ -47,7 +46,7 @@ pub fn check_dependencies(quiet: bool) {
         if !quiet {
             println!("All dependencies are up-to-date!");
         }
-        return;
+        return Ok(());
     }
 
     let mut list: Vec<(String, String, String)> = Vec::new();
@@ -66,15 +65,15 @@ pub fn check_dependencies(quiet: bool) {
     }
 
     utils::log(&format!("Outdated: {:?}", list.iter().map(|(p, _, _)| p).collect::<Vec<_>>()));
+    Ok(())
 }
 
 /// Fix outdated dependencies by installing latest versions
-pub fn fix_dependencies(quiet: bool) {
+pub fn fix_dependencies(quiet: bool) -> Result<(), String> {
     utils::log("Starting dependency fixes...");
 
     if !std::path::Path::new("package.json").exists() {
-        eprintln!("No package.json found in current directory.");
-        return;
+        return Err("No package.json found in current directory.".to_string());
     }
 
     let outdated = match get_outdated_json() {
@@ -83,7 +82,7 @@ pub fn fix_dependencies(quiet: bool) {
             if !quiet {
                 println!("No outdated packages (or npm outdated could not run).");
             }
-            return;
+            return Ok(());
         }
     };
 
@@ -93,7 +92,7 @@ pub fn fix_dependencies(quiet: bool) {
             if !quiet {
                 println!("No fixes needed.");
             }
-            return;
+            return Ok(());
         }
     };
 
@@ -101,7 +100,7 @@ pub fn fix_dependencies(quiet: bool) {
         if !quiet {
             println!("No fixes needed - all dependencies are up-to-date!");
         }
-        return;
+        return Ok(());
     }
 
     let packages: Vec<String> = obj.keys().cloned().collect();
@@ -114,30 +113,39 @@ pub fn fix_dependencies(quiet: bool) {
     if !quiet {
         println!("Fixes applied.");
     }
+    Ok(())
 }
 
 fn apply_fixes(packages: &[String], quiet: bool) {
-    // Install each at latest: npm install pkg@latest
-    for pkg in packages {
-        if !quiet {
-            println!("Updating {}...", pkg);
-        }
-        let spec = format!("{}@latest", pkg);
-        let output = run_command_timeout("npm", &["install", &spec], NPM_INSTALL_TIMEOUT_SECS);
+    if packages.is_empty() {
+        return;
+    }
+    // Single npm install with all packages@latest (faster than one-by-one)
+    let specs: Vec<String> = packages.iter().map(|p| format!("{}@latest", p)).collect();
+    let args: Vec<&str> = specs.iter().map(String::as_str).collect();
+    let mut npm_args = vec!["install"];
+    npm_args.extend(args.iter().copied());
 
-        match output {
-            Ok(out) if out.status.success() => {
-                utils::log(&format!("Updated: {}", pkg));
+    if !quiet {
+        println!("Updating {} package(s) in one go...", packages.len());
+    }
+    let output = run_command_timeout("npm", &npm_args, NPM_INSTALL_TIMEOUT_SECS);
+
+    match output {
+        Ok(out) if out.status.success() => {
+            utils::log("All updates applied.");
+            if !quiet {
+                println!("Done. All {} package(s) updated.", packages.len());
             }
-            Ok(out) => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                utils::log_error(&format!("Failed to update {}: {}", pkg, stderr));
-                eprintln!("Failed to update {}", pkg);
-            }
-            Err(e) => {
-                utils::log_error(&format!("Error updating {}: {}", pkg, e));
-                eprintln!("Error: {}", e);
-            }
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            utils::log_error(&format!("npm install failed: {}", stderr));
+            eprintln!("Update failed. You can try updating packages one by one.");
+        }
+        Err(e) => {
+            utils::log_error(&format!("Error: {}", e));
+            eprintln!("Error: {}", e);
         }
     }
 }

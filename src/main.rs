@@ -8,6 +8,8 @@ use std::os::unix::fs::PermissionsExt;
 
 mod doctor;
 mod install;
+mod lockfile;
+mod registry;
 mod utils;
 
 fn install_globally() -> Result<(), String> {
@@ -50,16 +52,23 @@ fn main() {
                 .about("Install one or more packages")
                 .arg(
                     Arg::new("package")
-                        .required(true)
-                        .num_args(1..)
-                        .help("Package(s) to install (e.g. lodash, react@18)"),
+                        .required(false)
+                        .num_args(0..)
+                        .help("Package(s) to install; omit to install from package.json"),
                 )
                 .arg(
                     Arg::new("no-cache")
                         .long("no-cache")
+                        .action(ArgAction::SetTrue)
                         .help("Ignore cache and fetch from registry"),
                 )
-                .arg(Arg::new("quiet").short('q').long("quiet").help("Less output")),
+                .arg(
+                    Arg::new("quiet")
+                        .short('q')
+                        .long("quiet")
+                        .action(ArgAction::SetTrue)
+                        .help("Less output"),
+                ),
         )
         .subcommand(
             Command::new("doctor")
@@ -70,7 +79,13 @@ fn main() {
                         .action(ArgAction::SetTrue)
                         .help("Update outdated dependencies"),
                 )
-                .arg(Arg::new("quiet").short('q').long("quiet").help("Less output")),
+                .arg(
+                    Arg::new("quiet")
+                        .short('q')
+                        .long("quiet")
+                        .action(ArgAction::SetTrue)
+                        .help("Less output"),
+                ),
         )
         .subcommand(Command::new("global-install").about("Install jhol binary to PATH (e.g. /usr/local/bin)"))
         .subcommand(
@@ -136,34 +151,51 @@ fn main() {
 
     match matches.subcommand() {
         Some(("install", sub_m)) => {
-            let packages: Vec<&str> = sub_m
-                .get_many::<String>("package")
-                .map(|it| it.map(|s| s.as_str()).collect())
-                .unwrap_or_default();
-            if packages.is_empty() {
-                eprintln!("Usage: jhol install <package> [packages...]");
-                std::process::exit(1);
-            }
-            let no_cache = sub_m.contains_id("no-cache");
-            let quiet = sub_m.contains_id("quiet");
+            let no_cache = sub_m.get_flag("no-cache");
+            let quiet = sub_m.get_flag("quiet");
             if quiet {
                 env::set_var("JHOL_QUIET", "1");
             }
             let opts = install::InstallOptions { no_cache, quiet };
-            utils::log(&format!("Installing: {:?}", packages));
-            install::install_package(&packages, &opts);
+            let packages: Vec<&str> = sub_m
+                .get_many::<String>("package")
+                .map(|it| it.map(|s| s.as_str()).collect())
+                .unwrap_or_default();
+            let specs: Vec<String> = if packages.is_empty() {
+                match install::resolve_install_from_package_json() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                packages.iter().map(|s| (*s).to_string()).collect()
+            };
+            let spec_refs: Vec<&str> = specs.iter().map(|s| s.as_str()).collect();
+            utils::log(&format!("Installing: {:?}", spec_refs));
+            if let Err(e) = install::install_package(&spec_refs, &opts) {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
         }
         Some(("doctor", sub_m)) => {
-            let quiet = sub_m.contains_id("quiet");
+            let quiet = sub_m.get_flag("quiet");
             if quiet {
                 env::set_var("JHOL_QUIET", "1");
             }
-            if sub_m.contains_id("fix") {
+            if sub_m.get_flag("fix") {
                 utils::log("Running doctor --fix");
-                doctor::fix_dependencies(quiet);
+                if let Err(e) = doctor::fix_dependencies(quiet) {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
             } else {
                 utils::log("Running doctor (check only)");
-                doctor::check_dependencies(quiet);
+                if let Err(e) = doctor::check_dependencies(quiet) {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
             }
         }
         _ => {
