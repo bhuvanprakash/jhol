@@ -1,15 +1,15 @@
-# 🚀 Contributing to Jhol
+# Contributing to Jhol
 
 Thank you for considering contributing to Jhol Here’s how you can help:
 
-## 🛠 Setup Instructions
+## Setup Instructions
 1. **Fork the Repo**
 ```sh
 git clone https://github.com/bhuvanprakash/jhol.git
 cd jhol
 ```
 
-## 📝 Contributing Guidelines
+## Contributing Guidelines
 1. **Create a Branch**
    - Create a new branch for your feature or bugfix.
    ```sh
