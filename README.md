@@ -1,8 +1,8 @@
 # Jhol – Fast, Offline-Friendly Package Manager
 
-Jhol is a **fast, offline-friendly alternative to npm and Yarn** with local caching and npm fallback.
+A fast, offline-friendly npm alternative with local caching and doctor. Use your existing `package.json`; Jhol caches tarballs and falls back to the registry when needed.
 
-### Why use Jhol?
+### Why Jhol?
 - **Fast installs** – Caches package tarballs so repeat installs skip the registry when possible.
 - **Offline-friendly** – Install previously cached packages without a network.
 - **npm-compatible** – Uses npm under the hood; works with existing `package.json` and lockfiles.
@@ -10,13 +10,18 @@ Jhol is a **fast, offline-friendly alternative to npm and Yarn** with local cach
 
 ## Installation
 
-**From source (requires Rust):**
+**From crates.io (recommended):**
+```sh
+cargo install jhol
+```
+
+**From source:**
 ```sh
 cargo install --git https://github.com/bhuvanprakash/jhol
 ```
 
 **Prebuilt binaries (Linux & Windows):**  
-Download `jhol-linux` or `jhol-windows.exe` from the [Releases](https://github.com/bhuvanprakash/jhol/releases) page. Make the binary executable (Linux: `chmod +x jhol-linux`) and optionally move it to your PATH.
+Download `jhol-linux` or `jhol-windows.exe` from [Releases](https://github.com/bhuvanprakash/jhol/releases). Make the binary executable (Linux: `chmod +x jhol-linux`) and optionally move it to your PATH.
 
 Optional: install the binary to your PATH (e.g. `/usr/local/bin`) so you can run `jhol` from anywhere:
 
