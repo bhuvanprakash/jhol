@@ -1,0 +1,65 @@
+# Build jhol for Linux and Windows and attach binaries to GitHub Release.
+name: Release build (Linux + Windows)
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux
+            artifact: jhol-linux
+          - os: windows-latest
+            name: windows
+            artifact: jhol-windows.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build (release)
+        run: cargo build --release
+
+      - name: Set binary path
+        id: bin
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            echo "path=target/release/jhol.exe" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=target/release/jhol" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ steps.bin.outputs.path }}
+
+  upload-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Prepare release assets
+        run: |
+          mv jhol-linux/jhol jhol-linux
+          mv jhol-windows.exe/jhol.exe jhol-windows.exe
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            jhol-linux
+            jhol-windows.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
