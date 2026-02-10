@@ -1,10 +1,13 @@
 [package]
-name = "Jhol"
+name = "jhol"
 version = "1.0.0"
 authors = ["Bhuvan Prakash <bhuvanstark6@gmail.com>"]
 edition = "2021"
-description = "A faster, package manager (Free Version)"
-license = "Apache-2.0 + Jhol-license 1.0"
+description = "Fast, offline-friendly package manager with cache, doctor, and npm fallback"
+license-file = "LICENSE"
+repository = "https://github.com/bhuvanprakash/jhol"
+keywords = ["package-manager", "npm", "cache", "offline"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 clap = { version = "4.5", features = ["cargo"] }
