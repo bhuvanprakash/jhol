@@ -106,6 +106,31 @@ The repo is a Cargo workspace: the **jhol** binary lives at the root and talks t
 
 ---
 
+## Performance benchmarking
+
+Jhol includes a simple benchmark harness at `scripts/benchmark.py` to measure install performance.
+
+### What it measures
+- `jhol_cold_install`: empty cache + install
+- `jhol_warm_install`: cached install
+- `jhol_offline_install`: cached install in `--offline` mode
+- Optional: `npm_cold_install` / `npm_warm_install` with `--compare-npm`
+
+### Run it
+```sh
+cargo build --release
+python3 scripts/benchmark.py --repeats 3 --json-out benchmark-results.json
+```
+
+Optional npm comparison:
+```sh
+python3 scripts/benchmark.py --repeats 3 --compare-npm --json-out benchmark-results.json
+```
+
+Tip: use exact versions in `--packages` for stable and repeatable results.
+
+---
+
 ## Links
 
 - **Crate:** [crates.io/crates/jhol](https://crates.io/crates/jhol)
