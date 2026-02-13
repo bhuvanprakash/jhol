@@ -22,8 +22,17 @@ jobs:
         run: |
           python3 scripts/benchmark.py --repeats 2 --json-out benchmark-results.json
 
+      - name: Check benchmark regression (25% threshold)
+        run: |
+          python3 scripts/check_benchmark_regression.py \
+            --baseline benchmarks/baseline.json \
+            --results benchmark-results.json \
+            --threshold 0.25
+
       - name: Upload benchmark artifact
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
-          path: benchmark-results.json
+          path: |
+            benchmark-results.json
+            benchmarks/baseline.json
