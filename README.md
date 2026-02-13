@@ -131,6 +131,23 @@ Tip: use exact versions in `--packages` for stable and repeatable results.
 
 ---
 
+## Compatibility & current limitations
+
+### What is stable today
+- Native install flow with npm registry metadata + tarball extraction
+- Cache-first and offline workflows (`prefetch`, `install --offline`)
+- Lockfile-aware deterministic installs (`--frozen`)
+- Workspace traversal for install/doctor/audit/run
+
+### Known limitations (to improve next)
+- Dependency resolution is currently a greedy strategy (single version preference) and may differ from npm behavior on complex trees.
+- Some advanced npm ecosystem edge cases (complex peer dependency graphs, rare postinstall assumptions) are not fully parity-tested yet.
+- Benchmarking is available and automated in CI, but regression threshold gating is not enabled yet.
+
+If you hit an issue, please open one with the failing package graph and lockfile for fastest debugging.
+
+---
+
 ## Links
 
 - **Crate:** [crates.io/crates/jhol](https://crates.io/crates/jhol)
