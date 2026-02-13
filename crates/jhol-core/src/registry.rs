@@ -267,6 +267,27 @@ pub fn get_version_dependencies(meta: &serde_json::Value, version: &str) -> std:
     out
 }
 
+/// Get peer dependencies of a specific version from packument.
+pub fn get_version_peer_dependencies(meta: &serde_json::Value, version: &str) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let versions = match meta.get("versions").and_then(|v| v.as_object()) {
+        Some(v) => v,
+        None => return out,
+    };
+    let ver_obj = match versions.get(version).and_then(|v| v.as_object()) {
+        Some(v) => v,
+        None => return out,
+    };
+    if let Some(deps) = ver_obj.get("peerDependencies").and_then(|d| d.as_object()) {
+        for (k, v) in deps {
+            if let Some(s) = v.as_str() {
+                out.insert(k.clone(), s.to_string());
+            }
+        }
+    }
+    out
+}
+
 /// Download tarball from URL to a file; returns path (uses bounded HTTP client).
 pub fn download_tarball(url: &str, dest: &Path) -> Result<PathBuf, String> {
     crate::http_client::get_to_file(url, dest)?;

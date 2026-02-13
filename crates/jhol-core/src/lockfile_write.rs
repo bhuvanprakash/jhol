@@ -16,9 +16,21 @@ pub struct ResolvedPackage {
     pub dependencies: HashMap<String, String>,
 }
 
-/// Resolve the full dependency tree from package.json (greedy: one version per name).
-/// Prefetches direct deps in parallel, then uses cached packuments for the rest. Diamond conflicts are reported.
-/// TODO Phase 6: optional backtracking to try an older version when conflict is detected.
+#[derive(Clone, Debug)]
+struct PeerRequirement {
+    requester: String,
+    spec: String,
+}
+
+#[derive(Clone, Debug)]
+struct Requirement {
+    requester: String,
+    spec: String,
+}
+
+/// Resolve the full dependency tree from package.json with deterministic conflict handling.
+/// Prefetches direct deps in parallel, then uses cached packuments for the rest.
+/// For conflicts, prefers the highest version that satisfies the combined specs; errors if none match.
 pub fn resolve_full_tree(package_json_path: &Path) -> Result<HashMap<String, ResolvedPackage>, String> {
     let deps = lockfile::read_package_json_deps(package_json_path)
         .ok_or("Could not read package.json dependencies.")?;
@@ -37,31 +49,69 @@ pub fn resolve_full_tree(package_json_path: &Path) -> Result<HashMap<String, Res
 
     let mut tree: HashMap<String, ResolvedPackage> = HashMap::new();
     let mut seen: HashSet<(String, String)> = HashSet::new();
-    let mut queue: Vec<(String, String, String)> = deps
+    let mut requirements: HashMap<String, Vec<Requirement>> = HashMap::new();
+    let mut peer_requirements: HashMap<String, Vec<PeerRequirement>> = HashMap::new();
+
+    let mut queue: Vec<(String, String, String, String)> = deps
         .iter()
-        .map(|(name, spec)| (format!("node_modules/{}", name), name.clone(), spec.clone()))
+        .map(|(name, spec)| {
+            requirements
+                .entry(name.clone())
+                .or_default()
+                .push(Requirement {
+                    requester: "root".to_string(),
+                    spec: spec.clone(),
+                });
+            (
+                format!("node_modules/{}", name),
+                name.clone(),
+                spec.clone(),
+                "root".to_string(),
+            )
+        })
         .collect();
 
     let mut conflicts: Vec<String> = Vec::new();
-    while let Some((key, name, spec)) = queue.pop() {
+    while let Some((key, name, spec, requester)) = queue.pop() {
         let meta = {
             let mut cache = cache_arc.lock().unwrap();
             registry::fetch_metadata_cached(&name, &mut *cache)?
         };
+
+        requirements
+            .entry(name.clone())
+            .or_default()
+            .push(Requirement { requester, spec });
+
+        let combined_specs = requirements
+            .get(&name)
+            .map(|reqs| reqs.iter().map(|r| r.spec.clone()).collect::<Vec<_>>())
+            .unwrap_or_default();
+
+        let version = resolve_highest_satisfying(&meta, &combined_specs).ok_or_else(|| {
+            let refs = requirements
+                .get(&name)
+                .map(|reqs| {
+                    reqs.iter()
+                        .map(|r| format!("{} -> {}", r.requester, r.spec))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            format!("Dependency conflict for {} (no version satisfies all): {}", name, refs)
+        })?;
+
         if let Some(existing) = tree.get(&key) {
-            let new_version = registry::resolve_version(&meta, &spec);
-            if let Some(ref v) = new_version {
-                if *v != existing.version {
-                    if registry::version_satisfies(&spec, &existing.version) {
-                        continue;
-                    }
-                    conflicts.push(format!("{}: {} vs {} (spec: {})", name, existing.version, v, spec));
-                }
+            if existing.version == version {
+                continue;
             }
+            let combined_specs_str = combined_specs.join(", ");
+            conflicts.push(format!(
+                "{}: existing {} vs {} (specs: {})",
+                name, existing.version, version, combined_specs_str
+            ));
             continue;
         }
-        let version = registry::resolve_version(&meta, &spec)
-            .ok_or_else(|| format!("Could not resolve version {} for {}", spec, name))?;
         if seen.contains(&(name.clone(), version.clone())) {
             continue;
         }
@@ -72,6 +122,7 @@ pub fn resolve_full_tree(package_json_path: &Path) -> Result<HashMap<String, Res
         let integrity = registry::get_integrity_for_version(&meta, &version);
 
         let version_deps = registry::get_version_dependencies(&meta, &version);
+        let peer_deps = registry::get_version_peer_dependencies(&meta, &version);
         let mut resolved_deps = HashMap::new();
         for (dep_name, dep_spec) in &version_deps {
             let dep_meta = {
@@ -81,13 +132,30 @@ pub fn resolve_full_tree(package_json_path: &Path) -> Result<HashMap<String, Res
                     Err(_) => continue,
                 }
             };
-            if let Some(dep_version) = registry::resolve_version(&dep_meta, dep_spec) {
+            requirements
+                .entry(dep_name.clone())
+                .or_default()
+                .push(Requirement {
+                    requester: name.clone(),
+                    spec: dep_spec.clone(),
+                });
+            if let Some(dep_version) = resolve_highest_satisfying(&dep_meta, &[dep_spec.clone()]) {
                 resolved_deps.insert(dep_name.clone(), dep_version.clone());
                 let dep_key = format!("node_modules/{}", dep_name);
                 if !seen.contains(&(dep_name.clone(), dep_version)) {
-                    queue.push((dep_key, dep_name.clone(), dep_spec.clone()));
+                    queue.push((dep_key, dep_name.clone(), dep_spec.clone(), name.clone()));
                 }
             }
+        }
+
+        for (peer_name, peer_spec) in &peer_deps {
+            peer_requirements
+                .entry(peer_name.clone())
+                .or_default()
+                .push(PeerRequirement {
+                    requester: name.clone(),
+                    spec: peer_spec.clone(),
+                });
         }
 
         tree.insert(
@@ -101,13 +169,57 @@ pub fn resolve_full_tree(package_json_path: &Path) -> Result<HashMap<String, Res
         );
     }
 
-    if !conflicts.is_empty() {
+    let mut peer_conflicts: Vec<String> = Vec::new();
+    for (peer_name, reqs) in &peer_requirements {
+        let resolved_version = tree
+            .get(&format!("node_modules/{}", peer_name))
+            .map(|p| p.version.clone());
+        if let Some(resolved) = resolved_version {
+            for req in reqs {
+                if !registry::version_satisfies(&req.spec, &resolved) {
+                    peer_conflicts.push(format!(
+                        "peer {} required by {} but resolved {} (spec {})",
+                        peer_name, req.requester, resolved, req.spec
+                    ));
+                }
+            }
+        } else {
+            let req_list = reqs
+                .iter()
+                .map(|r| format!("{} -> {}", r.requester, r.spec))
+                .collect::<Vec<_>>()
+                .join(", ");
+            peer_conflicts.push(format!("peer {} missing (requirements: {})", peer_name, req_list));
+        }
+    }
+
+    if !conflicts.is_empty() || !peer_conflicts.is_empty() {
+        let mut all = Vec::new();
+        all.extend(conflicts);
+        all.extend(peer_conflicts);
         return Err(format!(
-            "Dependency conflict (same package, different versions): {}. Consider updating dependencies or using a single version.",
-            conflicts.join("; ")
+            "Dependency conflict: {}. Consider updating dependencies or using a single version.",
+            all.join("; ")
         ));
     }
     Ok(tree)
+}
+
+fn resolve_highest_satisfying(meta: &serde_json::Value, specs: &[String]) -> Option<String> {
+    let versions = meta.get("versions")?.as_object()?;
+    let mut parsed: Vec<semver::Version> = versions
+        .keys()
+        .filter_map(|v| semver::Version::parse(v).ok())
+        .collect();
+    parsed.sort();
+    parsed.reverse();
+    for ver in parsed {
+        let ver_str = ver.to_string();
+        if specs.iter().all(|s| registry::version_satisfies(s, &ver_str)) {
+            return Some(ver_str);
+        }
+    }
+    None
 }
 
 /// Read root package name and version from package.json.

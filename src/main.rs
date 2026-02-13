@@ -198,8 +198,8 @@ fn run() -> Result<(), String> {
                 )
                 .arg(
                     Arg::new("frozen")
-                        .long("frozen")
                         .long("frozen-lockfile")
+                        .visible_alias("frozen")
                         .action(ArgAction::SetTrue)
                         .help("Require lockfile and fail if out of sync with package.json"),
                 )
@@ -380,6 +380,38 @@ fn run() -> Result<(), String> {
                 ),
         )
         .subcommand(
+            Command::new("uninstall")
+                .about("Remove a package (optionally from package.json)")
+                .arg(Arg::new("package").required(true).help("Package name to remove"))
+                .arg(
+                    Arg::new("save")
+                        .long("save")
+                        .action(ArgAction::SetTrue)
+                        .help("Remove from package.json dependencies"),
+                ),
+        )
+        .subcommand(
+            Command::new("update")
+                .about("Update packages to latest and refresh lockfile")
+                .arg(
+                    Arg::new("package")
+                        .required(false)
+                        .num_args(0..)
+                        .help("Package(s) to update; omit for full lockfile refresh"),
+                )
+                .arg(
+                    Arg::new("save")
+                        .long("save")
+                        .action(ArgAction::SetTrue)
+                        .help("Write updated versions back to package.json"),
+                ),
+        )
+        .subcommand(
+            Command::new("why")
+                .about("Explain why a package is installed (dependency path)")
+                .arg(Arg::new("package").required(true).help("Package name")),
+        )
+        .subcommand(
             Command::new("sbom")
                 .about("Generate Software Bill of Materials")
                 .arg(
@@ -519,6 +551,40 @@ fn run() -> Result<(), String> {
         let status = jhol_core::exec_binary(&bin_path, &args, &cwd)
             .map_err(|e| e.to_string())?;
         std::process::exit(status.code().unwrap_or(1));
+    }
+
+    if let Some(("uninstall", sub_m)) = matches.subcommand() {
+        let package = sub_m.get_one::<String>("package").unwrap();
+        let save = sub_m.get_flag("save");
+        jhol_core::uninstall(package, save).map_err(|e| e.to_string())?;
+        success(&format!("Removed {}", package));
+        return Ok(());
+    }
+
+    if let Some(("update", sub_m)) = matches.subcommand() {
+        let save = sub_m.get_flag("save");
+        let packages: Vec<String> = sub_m
+            .get_many::<String>("package")
+            .map(|it| it.map(|s| s.clone()).collect())
+            .unwrap_or_default();
+        if save {
+            jhol_core::update_packages(&packages).map_err(|e| e.to_string())?;
+        } else if packages.is_empty() {
+            jhol_core::update_packages(&packages).map_err(|e| e.to_string())?;
+        } else {
+            return Err("Use --save to update package.json when updating specific packages".to_string());
+        }
+        success("Update complete.");
+        return Ok(());
+    }
+
+    if let Some(("why", sub_m)) = matches.subcommand() {
+        let package = sub_m.get_one::<String>("package").unwrap();
+        let paths = jhol_core::why_package(package).map_err(|e| e.to_string())?;
+        for path in paths {
+            println!("{}", path);
+        }
+        return Ok(());
     }
 
     jhol_core::init_cache().map_err(|e| format!("Failed to initialize cache: {}", e))?;
