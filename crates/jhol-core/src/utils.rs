@@ -12,6 +12,8 @@ use sha2::{Sha256, Digest};
 pub const LOG_FILE: &str = "logs.txt";
 pub const NPM_SHOW_TIMEOUT_SECS: u64 = 15;
 pub const NPM_INSTALL_TIMEOUT_SECS: u64 = 120;
+pub const CACHE_MANIFEST_NAME: &str = "manifest.json";
+pub const CACHE_MANIFEST_SIG: &str = "manifest.sig";
 
 /// Returns the path to the cache directory. Uses JHOL_CACHE_DIR if set;
 /// otherwise Windows: %USERPROFILE%\.jhol-cache, Unix: $HOME/.jhol-cache
@@ -177,6 +179,21 @@ pub fn write_store_index(map: &HashMap<String, String>) -> Result<()> {
     let s = serde_json::to_string_pretty(map).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     fs::write(path, s)?;
     Ok(())
+}
+
+pub fn manifest_signature(manifest_json: &str) -> Result<String> {
+    let key = env::var("JHOL_CACHE_SIGNING_KEY").map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::Other, "JHOL_CACHE_SIGNING_KEY not set")
+    })?;
+    let mut hasher = Sha256::new();
+    hasher.update(key.as_bytes());
+    hasher.update(manifest_json.as_bytes());
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+pub fn verify_manifest_signature(manifest_json: &str, signature: &str) -> Result<bool> {
+    let expected = manifest_signature(manifest_json)?;
+    Ok(expected == signature.trim())
 }
 
 /// Verify file against SRI string (e.g. "sha512-<base64>"). Returns true if match.
@@ -511,8 +528,8 @@ pub fn cache_export(dir: &Path) -> Result<usize> {
     if deps.is_empty() {
         return Ok(0);
     }
-    let resolved = crate::lockfile::read_resolved_from_dir(Path::new("."));
-    let specs = crate::lockfile::resolve_deps_for_install(&deps, resolved.as_ref());
+    let specs = crate::lockfile::read_all_resolved_specs_from_dir(Path::new("."))
+        .unwrap_or_else(|| crate::lockfile::resolve_deps_for_install(&deps, None));
     fs::create_dir_all(dir)?;
     let mut count = 0;
     let mut manifest: Vec<(String, String)> = Vec::new();
@@ -531,10 +548,14 @@ pub fn cache_export(dir: &Path) -> Result<usize> {
             serde_json::json!({ "spec": spec, "file": file })
         })
         .collect();
-    let manifest_path = dir.join("manifest.json");
+    let manifest_path = dir.join(CACHE_MANIFEST_NAME);
     let s = serde_json::to_string_pretty(&manifest_json)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     fs::write(manifest_path, s)?;
+    if let Ok(sig) = manifest_signature(&serde_json::to_string(&manifest_json).unwrap_or_default()) {
+        let sig_path = dir.join(CACHE_MANIFEST_SIG);
+        fs::write(sig_path, sig)?;
+    }
     Ok(count)
 }
 
@@ -550,9 +571,22 @@ pub fn cache_import(dir: &Path) -> Result<usize> {
     fs::create_dir_all(store_dir())?;
     let mut index = read_store_index();
     let mut count = 0;
-    let manifest_path = dir.join("manifest.json");
+    let manifest_path = dir.join(CACHE_MANIFEST_NAME);
     if manifest_path.exists() {
         let s = fs::read_to_string(&manifest_path)?;
+        if let Ok(sig) = fs::read_to_string(dir.join(CACHE_MANIFEST_SIG)) {
+            if !verify_manifest_signature(&s, &sig).unwrap_or(false) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Manifest signature verification failed",
+                ));
+            }
+        } else if env::var("JHOL_CACHE_SIGNING_KEY").is_ok() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Manifest signature missing",
+            ));
+        }
         let entries: Vec<serde_json::Value> = serde_json::from_str(&s).unwrap_or_default();
         for entry in entries {
             let spec = entry.get("spec").and_then(|v| v.as_str()).unwrap_or("");
@@ -568,6 +602,14 @@ pub fn cache_import(dir: &Path) -> Result<usize> {
             let store_file = store_dir().join(format!("{}.tgz", hash));
             if !store_file.exists() {
                 fs::copy(&path, &store_file)?;
+            }
+            // Verify hash matches content.
+            let content_hash = content_hash(&store_file)?;
+            if content_hash != hash {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Cache import hash mismatch for {}", spec),
+                ));
             }
             index.insert(spec.to_string(), hash);
             count += 1;

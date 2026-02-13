@@ -8,18 +8,14 @@ use crate::utils::{self, NPM_SHOW_TIMEOUT_SECS};
 
 /// Package name without version: lodash@4 -> lodash, @scope/pkg@1.0 -> @scope/pkg
 fn base_name(package: &str) -> &str {
-    if package.starts_with('@') {
-        if let Some(idx) = package.rfind('@') {
-            if idx > 0 {
-                return &package[..idx];
-            }
+    if let Some(idx) = package.rfind('@') {
+        // "@scope/pkg" (no version) or paths containing scoped names have '/' after '@'.
+        // A version suffix never contains '/'.
+        if idx > 0 && !package[idx + 1..].contains('/') {
+            return &package[..idx];
         }
-        package
-    } else if let Some(idx) = package.find('@') {
-        &package[..idx]
-    } else {
-        package
     }
+    package
 }
 
 /// Read version from node_modules/<base>/package.json (base may be @scope/pkg)
@@ -87,6 +83,9 @@ pub fn resolve_install_from_package_json(strict_lockfile: bool) -> Result<Vec<St
         if resolved.is_none() {
             return Err("Strict lockfile required but no package-lock.json or bun.lock found. Run install without --frozen first.".to_string());
         }
+        if !lockfile::lockfile_integrity_complete(Path::new(".")) {
+            return Err("Strict lockfile: integrity entries missing. Run install without --frozen to regenerate lockfile with integrity.".to_string());
+        }
         let r = resolved.as_ref().unwrap();
         for name in deps.keys() {
             if !r.contains_key(name) {
@@ -94,6 +93,17 @@ pub fn resolve_install_from_package_json(strict_lockfile: bool) -> Result<Vec<St
             }
         }
     }
+
+    // When lockfile URLs are available, prefer full resolved spec list (top-level + transitive)
+    // so native lockfile/offline installs can be deterministic and complete.
+    if let Some(mut specs) = lockfile::read_all_resolved_specs_from_dir(Path::new(".")) {
+        if !specs.is_empty() {
+            specs.sort();
+            specs.dedup();
+            return Ok(specs);
+        }
+    }
+
     Ok(lockfile::resolve_deps_for_install(&deps, resolved.as_ref()))
 }
 

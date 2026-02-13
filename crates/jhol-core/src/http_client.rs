@@ -8,13 +8,33 @@ use std::sync::{Condvar, Mutex};
 const REQUEST_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_CONCURRENCY: usize = 16;
 const MAX_CONCURRENCY_CAP: usize = 32;
+const DEFAULT_RETRY_COUNT: usize = 2;
+const DEFAULT_RETRY_BACKOFF_MS: u64 = 250;
 
 fn concurrency_from_env() -> usize {
     std::env::var("JHOL_NETWORK_CONCURRENCY")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .map(|n| n.clamp(1, MAX_CONCURRENCY_CAP))
-        .unwrap_or(DEFAULT_CONCURRENCY)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| (n.get() * 2).clamp(4, MAX_CONCURRENCY_CAP))
+                .unwrap_or(DEFAULT_CONCURRENCY)
+        })
+}
+
+fn retry_count_from_env() -> usize {
+    std::env::var("JHOL_HTTP_RETRIES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_RETRY_COUNT)
+}
+
+fn retry_backoff_ms_from_env() -> u64 {
+    std::env::var("JHOL_HTTP_RETRY_BACKOFF_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_RETRY_BACKOFF_MS)
 }
 
 /// Semaphore-style limit: wait until a slot is free, then hold until guard is dropped.
@@ -78,15 +98,13 @@ impl HttpClient {
     /// GET url with optional Accept header (e.g. for abbreviated packument).
     pub fn get_with_accept(&self, url: &str, accept: Option<&str>) -> Result<Vec<u8>, String> {
         let _guard = self.limit.acquire();
-        let req = self.agent.get(url);
-        let resp = match accept {
-            Some(h) => req.set("Accept", h).call(),
-            None => req.call(),
-        }
-            .map_err(|e| e.to_string())?;
-        if resp.status() != 200 {
-            return Err(format!("HTTP {}", resp.status()));
-        }
+        let resp = self.send_with_retry(|| {
+            let req = self.agent.get(url);
+            match accept {
+                Some(h) => req.set("Accept", h).call(),
+                None => req.call(),
+            }
+        })?;
         let mut buf = Vec::new();
         resp.into_reader()
             .read_to_end(&mut buf)
@@ -97,15 +115,12 @@ impl HttpClient {
     /// POST body to url (e.g. JSON). Content-Type: application/json.
     pub fn post_json(&self, url: &str, body: &[u8]) -> Result<Vec<u8>, String> {
         let _guard = self.limit.acquire();
-        let resp = self
-            .agent
-            .post(url)
-            .set("Content-Type", "application/json")
-            .send_bytes(body)
-            .map_err(|e| e.to_string())?;
-        if resp.status() != 200 {
-            return Err(format!("HTTP {}", resp.status()));
-        }
+        let resp = self.send_with_retry(|| {
+            self.agent
+                .post(url)
+                .set("Content-Type", "application/json")
+                .send_bytes(body)
+        })?;
         let mut buf = Vec::new();
         resp.into_reader()
             .read_to_end(&mut buf)
@@ -116,19 +131,54 @@ impl HttpClient {
     /// GET url and write body to file (for tarballs).
     pub fn get_to_file(&self, url: &str, dest: &Path) -> Result<(), String> {
         let _guard = self.limit.acquire();
-        let resp = self
-            .agent
-            .get(url)
-            .call()
-            .map_err(|e| e.to_string())?;
-        if resp.status() != 200 {
-            return Err(format!("HTTP {}", resp.status()));
-        }
+        let resp = self.send_with_retry(|| self.agent.get(url).call())?;
         let mut out = File::create(dest).map_err(|e| e.to_string())?;
         let mut reader = resp.into_reader();
         std::io::copy(&mut reader, &mut out).map_err(|e| e.to_string())?;
         out.flush().map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    fn send_with_retry<F>(&self, mut send: F) -> Result<ureq::Response, String>
+    where
+        F: FnMut() -> Result<ureq::Response, ureq::Error>,
+    {
+        let retries = retry_count_from_env();
+        let mut attempt = 0usize;
+        let mut backoff = retry_backoff_ms_from_env();
+        loop {
+            attempt += 1;
+            match send() {
+                Ok(resp) => {
+                    if resp.status() == 200 {
+                        return Ok(resp);
+                    }
+                    let status = resp.status();
+                    if attempt <= retries && (status >= 500 || status == 429) {
+                        std::thread::sleep(std::time::Duration::from_millis(backoff));
+                        backoff = backoff.saturating_mul(2).min(5_000);
+                        continue;
+                    }
+                    return Err(format!("HTTP {}", status));
+                }
+                Err(ureq::Error::Status(code, _resp)) => {
+                    if attempt <= retries && (code >= 500 || code == 429) {
+                        std::thread::sleep(std::time::Duration::from_millis(backoff));
+                        backoff = backoff.saturating_mul(2).min(5_000);
+                        continue;
+                    }
+                    return Err(format!("HTTP {}", code));
+                }
+                Err(e) => {
+                    if attempt <= retries {
+                        std::thread::sleep(std::time::Duration::from_millis(backoff));
+                        backoff = backoff.saturating_mul(2).min(5_000);
+                        continue;
+                    }
+                    return Err(e.to_string());
+                }
+            }
+        }
     }
 }
 

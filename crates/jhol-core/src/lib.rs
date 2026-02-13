@@ -16,6 +16,7 @@ pub mod prefetch;
 pub mod registry;
 pub mod run;
 pub mod utils;
+pub mod ux;
 pub mod workspaces;
 
 // Re-export main API for CLI
@@ -27,7 +28,7 @@ pub use install::{
     install_lockfile_only, install_package, resolve_install_from_package_json, InstallOptions,
 };
 pub use prefetch::prefetch_from_lockfile;
-pub use lockfile::{detect_lockfile, read_resolved_from_dir, LockfileKind};
+pub use lockfile::{detect_lockfile, lockfile_integrity_complete, read_resolved_from_dir, LockfileKind};
 pub use run::{get_script_command, run_script};
 pub use exec::{exec_binary, find_binary_in_node_modules};
 pub use cdn::{esm_sh_url, fetch_esm_to_file};
@@ -36,3 +37,4 @@ pub use utils::{
     cache_clean, cache_export, cache_import, cache_prune, cache_size_bytes, get_cache_dir,
     init_cache, list_cached_packages, lockfile_content_hash, log, log_error,
 };
+pub use ux::{uninstall, update_packages, why_package};

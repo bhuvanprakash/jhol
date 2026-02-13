@@ -8,18 +8,12 @@ use crate::utils;
 
 /// Package name without version (for URL construction when missing from map).
 fn base_name(package: &str) -> &str {
-    if package.starts_with('@') {
-        if let Some(idx) = package.rfind('@') {
-            if idx > 0 {
-                return &package[..idx];
-            }
+    if let Some(idx) = package.rfind('@') {
+        if idx > 0 && !package[idx + 1..].contains('/') {
+            return &package[..idx];
         }
-        package
-    } else if let Some(idx) = package.find('@') {
-        &package[..idx]
-    } else {
-        package
     }
+    package
 }
 
 /// Prefetch all lockfile dependencies into the store. Requires package.json and lockfile.

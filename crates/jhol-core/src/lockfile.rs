@@ -195,3 +195,59 @@ pub fn read_resolved_urls_and_integrity_from_dir(
     }
     None
 }
+
+/// Check whether all resolved lockfile entries include integrity strings (package-lock.json only).
+pub fn lockfile_integrity_complete(dir: &Path) -> bool {
+    let npm_lock = dir.join("package-lock.json");
+    if !npm_lock.exists() {
+        return true;
+    }
+    let Ok(s) = std::fs::read_to_string(&npm_lock) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) else {
+        return false;
+    };
+    let Some(packages) = v.get("packages").and_then(|p| p.as_object()) else {
+        return false;
+    };
+    for (key, val) in packages {
+        let name = key.trim_start_matches("node_modules/");
+        if name.is_empty() {
+            continue;
+        }
+        if val.get("integrity").and_then(|i| i.as_str()).is_none() {
+            return false;
+        }
+    }
+    true
+}
+
+/// Read all resolved specs (name@version) from lockfile in dir.
+/// For package-lock.json: uses `packages` entries with `version`.
+/// For bun.lock: uses parsed resolved name/version pairs.
+pub fn read_all_resolved_specs_from_dir(dir: &Path) -> Option<Vec<String>> {
+    let npm_lock = dir.join("package-lock.json");
+    let bun_lock = dir.join("bun.lock");
+    if npm_lock.exists() {
+        let resolved = read_lockfile_resolved(&npm_lock)?;
+        let mut specs: Vec<String> = resolved
+            .into_iter()
+            .map(|(name, version)| format!("{}@{}", name, version))
+            .collect();
+        specs.sort();
+        specs.dedup();
+        return Some(specs);
+    }
+    if bun_lock.exists() {
+        let resolved = read_bun_lock_resolved(&bun_lock)?;
+        let mut specs: Vec<String> = resolved
+            .into_iter()
+            .map(|(name, version)| format!("{}@{}", name, version))
+            .collect();
+        specs.sort();
+        specs.dedup();
+        return Some(specs);
+    }
+    None
+}
