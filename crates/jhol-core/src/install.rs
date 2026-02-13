@@ -37,6 +37,10 @@ pub struct InstallOptions {
     pub lockfile_only: bool,
     pub offline: bool,
     pub strict_lockfile: bool,
+    /// When true, specs came from lockfile; skip npm show and use tarball URLs only (no packument).
+    pub from_lockfile: bool,
+    /// When true, never call Bun/npm; fail with clear error if native install fails.
+    pub native_only: bool,
 }
 
 impl Default for InstallOptions {
@@ -48,13 +52,22 @@ impl Default for InstallOptions {
             lockfile_only: false,
             offline: false,
             strict_lockfile: false,
+            from_lockfile: false,
+            native_only: true,
         }
     }
 }
 
-/// Only update lockfile (no node_modules). Uses backend's lockfile-only mode.
-pub fn install_lockfile_only(backend: Backend) -> Result<(), String> {
-    backend::backend_install_from_package_json(backend, true)
+/// Only update lockfile (no node_modules). Uses native resolver and lockfile writer.
+pub fn install_lockfile_only(_backend: Backend) -> Result<(), String> {
+    let pj = Path::new("package.json");
+    if !pj.exists() {
+        return Err("No package.json found in current directory.".to_string());
+    }
+    let tree = crate::lockfile_write::resolve_full_tree(pj)?;
+    let lock_path = Path::new("package-lock.json");
+    crate::lockfile_write::write_package_lock(lock_path, pj, &tree)?;
+    Ok(())
 }
 
 /// Install dependencies from package.json (and optional package-lock.json or bun.lock). Returns list of specs to install.
@@ -124,28 +137,53 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         ));
     }
 
-    // Parallel validation for packages we need to fetch
-    if !to_fetch.is_empty() {
-        let results = utils::parallel_validate_packages(&to_fetch, NPM_SHOW_TIMEOUT_SECS);
+    // Skip npm show when we trust the lockfile or frozen (zero packument)
+    if !to_fetch.is_empty() && !options.from_lockfile && !options.strict_lockfile {
+        let results = registry::parallel_validate_packages(&to_fetch, NPM_SHOW_TIMEOUT_SECS);
         let invalid: Vec<String> = results.iter().filter(|(_, ok)| !*ok).map(|(p, _)| p.clone()).collect();
         if !invalid.is_empty() {
             return Err(format!("Package(s) not found or invalid: {}", invalid.join(", ")));
         }
     }
 
-    // Install from cache: use backend to install tarball paths
+    // Install from cache: link from unpacked store, or fall back to backend/copy
     if !to_install_from_cache.is_empty() {
-        let paths: Vec<std::path::PathBuf> = to_install_from_cache
-            .iter()
-            .map(|(_, p)| p.clone())
-            .collect();
-        match backend::backend_install_tarballs(&paths, options.backend) {
-            Ok(()) => {
-                for (pkg, _) in &to_install_from_cache {
-                    utils::log(&format!("Installed {} from cache.", pkg));
+        let cache_dir = std::path::PathBuf::from(utils::get_cache_dir());
+        let node_modules = Path::new("node_modules");
+        std::fs::create_dir_all(node_modules).map_err(|e| e.to_string())?;
+        let mut fallback_tarballs = Vec::new();
+        for (pkg, tarball_path) in &to_install_from_cache {
+            let base = base_name(pkg);
+            match registry::ensure_unpacked_in_store(tarball_path, &cache_dir) {
+                Ok(unpacked) => {
+                    if utils::link_package_from_store(&unpacked, node_modules, base).is_ok() {
+                        utils::log(&format!("Installed {} from cache (link).", pkg));
+                    } else if registry::extract_tarball(tarball_path, node_modules, base).is_ok() {
+                        utils::log(&format!("Installed {} from cache (copy).", pkg));
+                    } else {
+                        fallback_tarballs.push((pkg.clone(), tarball_path.clone()));
+                    }
                 }
+                Err(_) => fallback_tarballs.push((pkg.clone(), tarball_path.clone())),
             }
-            Err(e) => return Err(e),
+        }
+        if !fallback_tarballs.is_empty() {
+            if options.native_only {
+                let pkgs: Vec<String> = fallback_tarballs.iter().map(|(p, _)| p.clone()).collect();
+                return Err(format!(
+                    "Native-only: could not link or extract from cache for: {}. Try JHOL_LINK=0 or run without --native-only.",
+                    pkgs.join(", ")
+                ));
+            }
+            let paths: Vec<std::path::PathBuf> = fallback_tarballs.iter().map(|(_, p)| p.clone()).collect();
+            match backend::backend_install_tarballs(&paths, options.backend) {
+                Ok(()) => {
+                    for (pkg, _) in &fallback_tarballs {
+                        utils::log(&format!("Installed {} from cache (backend).", pkg));
+                    }
+                }
+                Err(e) => return Err(e),
+            }
         }
     }
 
@@ -158,15 +196,98 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     std::fs::create_dir_all(node_modules).map_err(|e| e.to_string())?;
 
     let mut npm_fallback = Vec::new();
-    for pkg in &to_fetch {
-        if options.no_cache {
-            npm_fallback.push(pkg.clone());
-            continue;
-        }
-        match registry::install_package_native(pkg, node_modules, &cache_dir, options) {
-            Ok(()) => {}
-            Err(_) => {
+    let mut index_batch: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    if options.from_lockfile {
+        // Zero packument: use lockfile URLs and integrity when present, parallel download, then extract
+        let (resolved_urls, resolved_integrity) = match lockfile::read_resolved_urls_and_integrity_from_dir(Path::new(".")) {
+            Some((u, i)) => (u, i),
+            None => (std::collections::HashMap::new(), std::collections::HashMap::new()),
+        };
+        let mut work: Vec<(String, String, Option<String>)> = Vec::new();
+        for pkg in &to_fetch {
+            if options.no_cache {
                 npm_fallback.push(pkg.clone());
+                continue;
+            }
+            let url = resolved_urls
+                .get(pkg)
+                .cloned()
+                .or_else(|| {
+                    let base = base_name(pkg);
+                    let version = pkg.rfind('@').map(|i| &pkg[i + 1..]).unwrap_or("latest");
+                    Some(lockfile::tarball_url_from_registry(base, version))
+                });
+            match url {
+                Some(u) => {
+                    let integrity = resolved_integrity.get(pkg).cloned();
+                    work.push((pkg.clone(), u, integrity));
+                }
+                None => npm_fallback.push(pkg.clone()),
+            }
+        }
+        const DL_CONCURRENCY: usize = 8;
+        let mut download_results: Vec<(String, Result<String, String>)> = Vec::with_capacity(work.len());
+        for chunk in work.chunks(DL_CONCURRENCY) {
+            use std::sync::mpsc;
+            use std::thread;
+            let (tx, rx) = mpsc::channel();
+            for (pkg, url, integrity) in chunk {
+                let pkg = pkg.clone();
+                let url = url.clone();
+                let integrity = integrity.clone();
+                let cache_dir = cache_dir.clone();
+                let tx = tx.clone();
+                thread::spawn(move || {
+                    let res = registry::download_tarball_to_store_hash_only(
+                        &url,
+                        &cache_dir,
+                        &pkg,
+                        integrity.as_deref(),
+                    );
+                    let _ = tx.send((pkg, res));
+                });
+            }
+            drop(tx);
+            for (pkg, res) in rx {
+                download_results.push((pkg, res));
+            }
+        }
+        for (pkg, res) in download_results {
+            match res {
+                Ok(hash) => {
+                    index_batch.insert(pkg.clone(), hash.clone());
+                    let store_path = cache_dir.join("store").join(format!("{}.tgz", hash));
+                    let base = base_name(&pkg);
+                    if let Err(e) = registry::extract_tarball(&store_path, node_modules, base) {
+                        let msg = format!("Extract failed for {}: {}", pkg, e);
+                        utils::log(&msg);
+                        npm_fallback.push(pkg);
+                        continue;
+                    }
+                    if !options.quiet {
+                        let version = pkg.rfind('@').map(|i| &pkg[i + 1..]).unwrap_or("");
+                        println!("Installed {}@{} (native)", base, version);
+                    }
+                }
+                Err(_) => npm_fallback.push(pkg),
+            }
+        }
+        if !index_batch.is_empty() {
+            let mut index = utils::read_store_index();
+            index.extend(index_batch);
+            utils::write_store_index(&index).map_err(|e| e.to_string())?;
+        }
+    } else {
+        for pkg in &to_fetch {
+            if options.no_cache {
+                npm_fallback.push(pkg.clone());
+                continue;
+            }
+            match registry::install_package_native(pkg, node_modules, &cache_dir, options) {
+                Ok(()) => {}
+                Err(_) => {
+                    npm_fallback.push(pkg.clone());
+                }
             }
         }
     }
@@ -175,16 +296,24 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         return Ok(());
     }
 
+    if options.native_only {
+        return Err(format!(
+            "Native-only: install failed for: {}. Run without --native-only to use Bun/npm fallback.",
+            npm_fallback.join(", ")
+        ));
+    }
+
     // Fallback: backend install for any that native failed
     let fetch_refs: Vec<&str> = npm_fallback.iter().map(|s| s.as_str()).collect();
     let mut attempts = 3;
     loop {
         match backend::backend_install(&fetch_refs, options.backend, options.lockfile_only) {
             Ok(()) => {
+                let cache_dir = std::path::PathBuf::from(utils::get_cache_dir());
                 for pkg in &npm_fallback {
                     let base = base_name(pkg);
                     if let Some(version) = read_installed_version(base) {
-                        let _ = utils::cache_package_tarball(base, &version);
+                        let _ = registry::fill_store_from_registry(base, &version, &cache_dir);
                     }
                     utils::log(&format!("Installed {} via backend.", pkg));
                 }

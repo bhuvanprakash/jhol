@@ -1,14 +1,15 @@
 # Jhol
 
-A fast, offline-friendly package manager that plays nice with your existing `package.json`. It caches everything it can and uses **Bun** (or npm) under the hood so you get quick installs and the option to work offline.
+A fast, offline-friendly package manager that plays nice with your existing `package.json`. It caches everything it can and runs **without Node, Bun, or npm** for install, doctor, and audit by default.
 
 ---
 
 ## Why use Jhol?
 
+- **No Node/Bun/npm required** – Install, lockfile-only, doctor, and audit use the npm registry and OSV API directly. Use `--fallback-backend` to fall back to Bun/npm if needed.
 - **Fast installs** – Once a package is in the cache, repeat installs skip the network. Same lockfile? You’re basically done.
 - **Offline-friendly** – No internet? No problem. If it’s cached, you can install it.
-- **Bun first, npm fallback** – Prefers Bun when it’s installed (it’s quick and well maintained). No Bun? It uses npm. You can force either with `--backend bun` or `--backend npm`.
+- **Fallback optional** – Pass `--fallback-backend` to use Bun or npm when native install fails.
 - **Doctor** – `jhol doctor` shows what’s outdated; `jhol doctor --fix` updates those packages.
 - **Audit & SBOM** – `jhol audit` checks for known vulnerabilities; `jhol sbom` spits out a software bill of materials for your project.
 - **Workspaces** – Use `--all-workspaces` and it’ll run install, doctor, or audit across all your workspace packages in one go.
@@ -62,6 +63,7 @@ jhol audit --fix                # Try to fix them
 | Only update the lockfile | `jhol install --lockfile-only` |
 | Offline only (fail if not cached) | `jhol install --offline` or set `JHOL_OFFLINE=1` |
 | Strict lockfile (fail if out of sync) | `jhol install --frozen` |
+| Use Bun/npm when native fails | `jhol install --fallback-backend` |
 | Check outdated deps | `jhol doctor` |
 | Update outdated deps | `jhol doctor --fix` |
 | Run in all workspaces | `jhol install --all-workspaces`, `jhol doctor --all-workspaces`, `jhol audit --all-workspaces` |
@@ -74,6 +76,7 @@ jhol audit --fix                # Try to fix them
 | Import from bundle | `jhol cache import ./my-bundle` |
 | Wipe cache | `jhol cache clean` |
 | Lockfile hash (for CI cache key) | `jhol cache key` |
+| Prefetch deps into cache (no node_modules) | `jhol prefetch` then `jhol install --offline` |
 | Install the binary to PATH | `jhol global-install` |
 
 Use `-q` or `--quiet` when you want less noise. Use `--json` on install, doctor, or audit if you need machine-readable output.
@@ -90,6 +93,10 @@ Use `-q` or `--quiet` when you want less noise. Use `--json` on install, doctor,
 | `.jholrc` (JSON in project or home) | Optional: set `backend` (`"bun"` or `"npm"`), `cacheDir`, `offline`, `frozen` so you don’t have to pass flags every time |
 
 **CI tip:** Run `jhol cache key` to get a hash of your lockfile (`bun.lock` or `package-lock.json`). Same lockfile → same key. Use that as your CI cache key so you can reuse the Jhol store between runs.
+
+### Deterministic installs (CI)
+
+With a lockfile and `jhol install --frozen`, Jhol does **no resolution** and **no packument** requests: it only downloads missing tarballs (from lockfile URLs) and links or extracts from the store. Recommended for CI. Use `jhol cache key` as your cache key so the same lockfile reuses the same store.
 
 ---
 

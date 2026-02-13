@@ -1,39 +1,179 @@
 //! Native npm registry client: fetch metadata and tarballs via HTTP.
 
+use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use semver::{Version, VersionReq};
 
 const REGISTRY_URL: &str = "https://registry.npmjs.org";
-const REQUEST_TIMEOUT_MS: u64 = 30_000;
 
 fn registry_get(path: &str) -> Result<Vec<u8>, String> {
     let url = format!("{}/{}", REGISTRY_URL.trim_end_matches('/'), path.trim_start_matches('/'));
-    let resp = ureq::get(&url)
-        .timeout(std::time::Duration::from_millis(REQUEST_TIMEOUT_MS))
-        .call()
-        .map_err(|e| e.to_string())?;
-    if resp.status() != 200 {
-        return Err(format!("registry returned {}", resp.status()));
-    }
-    let mut buf = Vec::new();
-    resp.into_reader().read_to_end(&mut buf).map_err(|e| e.to_string())?;
-    Ok(buf)
+    crate::http_client::get(&url)
 }
 
-/// Fetch package metadata from registry. Scoped: @scope/pkg -> @scope%2Fpkg
+/// npm registry may return smaller "abbreviated" packument with Accept: application/vnd.npm.install-v1+json (RFC 0035).
+fn registry_get_abbreviated(path: &str) -> Result<Vec<u8>, String> {
+    let url = format!("{}/{}", REGISTRY_URL.trim_end_matches('/'), path.trim_start_matches('/'));
+    crate::http_client::get_with_accept(&url, Some("application/vnd.npm.install-v1+json"))
+}
+
+/// Fetch package metadata from registry. Scoped: @scope/pkg -> @scope%2Fpkg.
+/// Tries abbreviated packument (Accept: application/vnd.npm.install-v1+json) first; falls back to full if unsupported or incomplete.
 pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
     let path = if package.starts_with('@') {
         format!("{}", package.replace('/', "%2F"))
     } else {
         package.to_string()
     };
-    let body = registry_get(&path)?;
+    let body = match registry_get_abbreviated(&path) {
+        Ok(b) => b,
+        Err(_) => registry_get(&path)?,
+    };
     let v: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+    if v.get("versions").and_then(|v| v.as_object()).map(|o| o.is_empty()).unwrap_or(true) {
+        let body = registry_get(&path)?;
+        let v: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+        return Ok(v);
+    }
     Ok(v)
 }
 
-/// Resolve version to a concrete semver (e.g. "latest" -> "1.2.3")
+/// Fetch package metadata, using an in-memory cache to avoid duplicate requests during a resolve.
+pub fn fetch_metadata_cached(
+    package: &str,
+    cache: &mut HashMap<String, serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    if let Some(cached) = cache.get(package) {
+        return Ok(cached.clone());
+    }
+    let meta = fetch_metadata(package)?;
+    cache.insert(package.to_string(), meta.clone());
+    Ok(meta)
+}
+
+const PACKUMENT_CONCURRENCY: usize = 8;
+
+/// Fetch packuments for multiple packages in parallel. Uses shared cache to avoid duplicate fetches. Returns (name, Result) for each name.
+pub fn parallel_fetch_metadata(
+    names: &[String],
+    cache: &std::sync::Arc<std::sync::Mutex<HashMap<String, serde_json::Value>>>,
+) -> Vec<(String, Result<serde_json::Value, String>)> {
+    use std::sync::mpsc;
+    use std::thread;
+    let mut results = Vec::with_capacity(names.len());
+    for chunk in names.chunks(PACKUMENT_CONCURRENCY) {
+        let (tx, rx) = mpsc::channel();
+        for name in chunk {
+            let name = name.clone();
+            let tx = tx.clone();
+            let cache = std::sync::Arc::clone(cache);
+            thread::spawn(move || {
+                {
+                    let guard = cache.lock().unwrap();
+                    if let Some(cached) = guard.get(&name) {
+                        let _ = tx.send((name, Ok(cached.clone())));
+                        return;
+                    }
+                }
+                let res = fetch_metadata(&name);
+                if let Ok(ref meta) = res {
+                    let mut guard = cache.lock().unwrap();
+                    guard.insert(name.clone(), meta.clone());
+                }
+                let _ = tx.send((name, res));
+            });
+        }
+        drop(tx);
+        for (name, res) in rx {
+            results.push((name, res));
+        }
+    }
+    results
+}
+
+/// Validate that a package exists on the registry (no npm subprocess). Uses packument GET.
+pub fn validate_package_exists(package: &str) -> Result<bool, String> {
+    match fetch_metadata(package) {
+        Ok(meta) => {
+            let has_versions = meta
+                .get("versions")
+                .and_then(|v| v.as_object())
+                .map(|o| !o.is_empty())
+                .unwrap_or(false);
+            let has_name = meta.get("name").is_some();
+            Ok(has_versions || has_name)
+        }
+        Err(e) => {
+            if e.contains("404") || e.to_lowercase().contains("not found") {
+                Ok(false)
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+/// Run validate_package_exists for multiple packages in parallel. Returns (package, is_valid).
+pub fn parallel_validate_packages(packages: &[String], _timeout_secs: u64) -> Vec<(String, bool)> {
+    use std::sync::mpsc;
+    use std::thread;
+    const CONCURRENCY: usize = 8;
+    let (tx, rx) = mpsc::channel();
+    for chunk in packages.chunks(CONCURRENCY) {
+        let chunk: Vec<String> = chunk.to_vec();
+        let tx = tx.clone();
+        thread::spawn(move || {
+            for pkg in chunk {
+                let ok = validate_package_exists(&pkg).unwrap_or(false);
+                let _ = tx.send((pkg, ok));
+            }
+        });
+    }
+    drop(tx);
+    rx.into_iter().collect()
+}
+
+/// Check if a concrete version satisfies a semver range/spec (e.g. "^1.0" and "1.2.3" -> true).
+pub fn version_satisfies(spec: &str, version: &str) -> bool {
+    let spec = spec.trim();
+    if spec.is_empty() || spec == "*" {
+        return Version::parse(version).is_ok();
+    }
+    let req = match VersionReq::parse(spec) {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+    let v = match Version::parse(version) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    req.matches(&v)
+}
+
+/// Resolve a semver range to the maximum satisfying version from a list of version strings.
+pub fn resolve_range(version_strings: &[String], range: &str) -> Option<String> {
+    let range = range.trim();
+    if range.is_empty() || range == "*" {
+        let mut parsed: Vec<Version> = version_strings
+            .iter()
+            .filter_map(|s| Version::parse(s).ok())
+            .collect();
+        parsed.sort();
+        return parsed.last().map(|v| v.to_string());
+    }
+    let req = VersionReq::parse(range).ok()?;
+    let mut satisfying: Vec<Version> = version_strings
+        .iter()
+        .filter_map(|s| Version::parse(s).ok())
+        .filter(|v| req.matches(v))
+        .collect();
+    satisfying.sort();
+    satisfying.last().map(|v| v.to_string())
+}
+
+/// Resolve version to a concrete semver (e.g. "latest" -> "1.2.3", "^1.0" -> "1.2.3")
 pub fn resolve_version(meta: &serde_json::Value, version: &str) -> Option<String> {
     let version = version.trim();
     if version.is_empty() || version == "latest" {
@@ -44,12 +184,27 @@ pub fn resolve_version(meta: &serde_json::Value, version: &str) -> Option<String
     if versions.contains_key(version) {
         return Some(version.to_string());
     }
-    // Try as tag
-    let dist_tags = meta.get("dist-tags")?.as_object()?;
-    if let Some(tag) = dist_tags.get(version) {
-        return tag.as_str().map(String::from);
+    // Try as dist-tag
+    let dist_tags = meta.get("dist-tags").and_then(|t| t.as_object());
+    if let Some(tags) = dist_tags {
+        if let Some(tag) = tags.get(version) {
+            if let Some(s) = tag.as_str() {
+                return Some(s.to_string());
+            }
+        }
     }
-    // TODO: semver range resolution (e.g. "^1.0" -> "1.2.3")
+    // Semver range: ^1.0, ~2.0, >=1.0.0 <2.0.0, etc.
+    let looks_like_range = version.starts_with('^')
+        || version.starts_with('~')
+        || version.starts_with('>')
+        || version.starts_with('<')
+        || version.starts_with('=')
+        || version.contains(' ')
+        || version == "*";
+    if looks_like_range {
+        let version_list: Vec<String> = versions.keys().map(String::clone).collect();
+        return resolve_range(&version_list, version);
+    }
     None
 }
 
@@ -61,23 +216,131 @@ pub fn get_tarball_url(meta: &serde_json::Value, version: &str) -> Option<String
     dist.get("tarball")?.as_str().map(String::from)
 }
 
-/// Download tarball from URL to a file; returns path
-pub fn download_tarball(url: &str, dest: &Path) -> Result<PathBuf, String> {
-    let resp = ureq::get(url)
-        .timeout(std::time::Duration::from_millis(REQUEST_TIMEOUT_MS))
-        .call()
-        .map_err(|e| e.to_string())?;
-    if resp.status() != 200 {
-        return Err(format!("download returned {}", resp.status()));
+/// Get integrity (SRI) for a specific version from packument, if present.
+pub fn get_integrity_for_version(meta: &serde_json::Value, version: &str) -> Option<String> {
+    meta.get("versions")
+        .and_then(|v| v.as_object())
+        .and_then(|o| o.get(version))
+        .and_then(|v| v.as_object())
+        .and_then(|o| o.get("dist"))
+        .and_then(|d| d.as_object())
+        .and_then(|d| d.get("integrity"))
+        .and_then(|i| i.as_str())
+        .map(String::from)
+}
+
+/// Fill the content-addressable store from the registry for a package@version (no npm pack).
+/// Fetches packument, gets tarball URL and integrity, downloads and verifies.
+pub fn fill_store_from_registry(
+    package: &str,
+    version: &str,
+    cache_dir: &Path,
+) -> Result<PathBuf, String> {
+    let meta = fetch_metadata(package)?;
+    let url = get_tarball_url(&meta, version)
+        .ok_or_else(|| format!("No tarball URL for {}@{}", package, version))?;
+    let pkg_key = format!("{}@{}", package, version);
+    let integrity = get_integrity_for_version(&meta, version);
+    download_tarball_to_store(&url, cache_dir, &pkg_key, None, integrity.as_deref())
+}
+
+/// Get dependencies of a specific version from packument (dependencies + optionalDependencies).
+pub fn get_version_dependencies(meta: &serde_json::Value, version: &str) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let versions = match meta.get("versions").and_then(|v| v.as_object()) {
+        Some(v) => v,
+        None => return out,
+    };
+    let ver_obj = match versions.get(version).and_then(|v| v.as_object()) {
+        Some(v) => v,
+        None => return out,
+    };
+    for (key, obj) in [("dependencies", ver_obj), ("optionalDependencies", ver_obj)] {
+        if let Some(deps) = obj.get(key).and_then(|d| d.as_object()) {
+            for (k, v) in deps {
+                if let Some(s) = v.as_str() {
+                    out.insert(k.clone(), s.to_string());
+                }
+            }
+        }
     }
-    let mut out = File::create(dest).map_err(|e| e.to_string())?;
-    let mut reader = resp.into_reader();
-    std::io::copy(&mut reader, &mut out).map_err(|e| e.to_string())?;
+    out
+}
+
+/// Download tarball from URL to a file; returns path (uses bounded HTTP client).
+pub fn download_tarball(url: &str, dest: &Path) -> Result<PathBuf, String> {
+    crate::http_client::get_to_file(url, dest)?;
     Ok(dest.to_path_buf())
 }
 
-/// Extract .tgz to node_modules/<package_name>. Strips one top-level directory from tarball.
-pub fn extract_tarball(tarball_path: &Path, node_modules_dir: &Path, package_name: &str) -> Result<(), String> {
+/// Download tarball from URL into the content-addressable store. No packument fetch.
+/// If index_batch is Some, adds pkg_key->hash to it and does not write the index; caller must flush.
+/// If expected_integrity is Some (SRI string, e.g. "sha512-..."), verifies after download.
+pub fn download_tarball_to_store(
+    url: &str,
+    cache_dir: &Path,
+    pkg_key: &str,
+    index_batch: Option<&mut std::collections::HashMap<String, String>>,
+    expected_integrity: Option<&str>,
+) -> Result<PathBuf, String> {
+    let hash = download_tarball_to_store_hash_only(url, cache_dir, pkg_key, expected_integrity)?;
+    let store_file = cache_dir.join("store").join(format!("{}.tgz", hash));
+    if let Some(batch) = index_batch {
+        batch.insert(pkg_key.to_string(), hash);
+    } else {
+        let mut index = crate::utils::read_store_index();
+        index.insert(pkg_key.to_string(), hash);
+        crate::utils::write_store_index(&index).map_err(|e| e.to_string())?;
+    }
+    Ok(store_file)
+}
+
+static TMP_DOWNLOAD_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Download tarball to store and return hash. Does not update the store index (for parallel use).
+pub fn download_tarball_to_store_hash_only(
+    url: &str,
+    cache_dir: &Path,
+    pkg_key: &str,
+    expected_integrity: Option<&str>,
+) -> Result<String, String> {
+    let store_dir = cache_dir.join("store");
+    std::fs::create_dir_all(&store_dir).map_err(|e| e.to_string())?;
+    let n = TMP_DOWNLOAD_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = cache_dir.join(format!("tmp-{}-{}.tgz", std::process::id(), n));
+    download_tarball(url, &tmp).map_err(|e| format!("download: {}", e))?;
+    if let Some(sri) = expected_integrity {
+        if !crate::utils::verify_sri(&tmp, sri) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("Integrity check failed for {}", pkg_key));
+        }
+    }
+    let hash = crate::utils::content_hash(&tmp).map_err(|e| e.to_string())?;
+    let store_file = store_dir.join(format!("{}.tgz", hash));
+    std::fs::rename(&tmp, &store_file)
+        .or_else(|_| std::fs::copy(&tmp, &store_file).map(|_| ()))
+        .map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(&tmp);
+    Ok(hash)
+}
+
+/// Ensure the tarball is unpacked in store_unpacked/<hash>; return that path.
+pub fn ensure_unpacked_in_store(tarball_path: &Path, cache_dir: &Path) -> Result<PathBuf, String> {
+    let hash = tarball_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| "invalid store path".to_string())?;
+    let store_unpacked_base = cache_dir.join("store_unpacked");
+    let unpacked = store_unpacked_base.join(hash);
+    if !unpacked.exists() {
+        std::fs::create_dir_all(&unpacked).map_err(|e| e.to_string())?;
+        extract_tarball_to_dir(tarball_path, &unpacked)?;
+    }
+    Ok(unpacked)
+}
+
+/// Extract .tgz into dest_dir, stripping one top-level directory from tarball (for unpacked store).
+pub fn extract_tarball_to_dir(tarball_path: &Path, dest_dir: &Path) -> Result<(), String> {
     use flate2::read::GzDecoder;
     use tar::Archive;
 
@@ -85,14 +348,12 @@ pub fn extract_tarball(tarball_path: &Path, node_modules_dir: &Path, package_nam
     let dec = GzDecoder::new(BufReader::new(f));
     let mut archive = Archive::new(dec);
 
-    let dest = node_modules_dir.join(package_name);
-    std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
 
     for entry in archive.entries().map_err(|e| e.to_string())? {
         let mut entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path().map_err(|e| e.to_string())?;
         let path_str = path.to_string_lossy();
-        // Tarballs are usually <name>/package.json etc.; strip first component
         let parts: Vec<&str> = path_str.split('/').filter(|s| !s.is_empty()).collect();
         if parts.is_empty() {
             continue;
@@ -101,7 +362,7 @@ pub fn extract_tarball(tarball_path: &Path, node_modules_dir: &Path, package_nam
         if rel.is_empty() {
             continue;
         }
-        let out_path = dest.join(&rel);
+        let out_path = dest_dir.join(&rel);
         if entry.header().entry_type().is_dir() {
             std::fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
         } else {
@@ -112,6 +373,13 @@ pub fn extract_tarball(tarball_path: &Path, node_modules_dir: &Path, package_nam
         }
     }
     Ok(())
+}
+
+/// Extract .tgz to node_modules/<package_name>. Strips one top-level directory from tarball.
+pub fn extract_tarball(tarball_path: &Path, node_modules_dir: &Path, package_name: &str) -> Result<(), String> {
+    let dest = node_modules_dir.join(package_name);
+    std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+    extract_tarball_to_dir(tarball_path, &dest)
 }
 
 /// Install a single package via native registry (fetch metadata, download tarball, extract).
