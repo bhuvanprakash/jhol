@@ -129,6 +129,18 @@ python3 scripts/benchmark.py --repeats 3 --compare-npm --json-out benchmark-resu
 
 Tip: use exact versions in `--packages` for stable and repeatable results.
 
+### Regression check against baseline
+Use the baseline in `benchmarks/baseline.json` and fail if a metric regresses beyond threshold:
+
+```sh
+python3 scripts/check_benchmark_regression.py \
+  --baseline benchmarks/baseline.json \
+  --results benchmark-results.json \
+  --threshold 0.25
+```
+
+`--threshold 0.25` means up to 25% slowdown is allowed before failing.
+
 ---
 
 ## Compatibility & current limitations
@@ -142,7 +154,7 @@ Tip: use exact versions in `--packages` for stable and repeatable results.
 ### Known limitations (to improve next)
 - Dependency resolution is currently a greedy strategy (single version preference) and may differ from npm behavior on complex trees.
 - Some advanced npm ecosystem edge cases (complex peer dependency graphs, rare postinstall assumptions) are not fully parity-tested yet.
-- Benchmarking is available and automated in CI, but regression threshold gating is not enabled yet.
+- Benchmarking is available and automated in CI with a threshold gate, but baseline tuning per environment/project profile is still evolving.
 
 If you hit an issue, please open one with the failing package graph and lockfile for fastest debugging.
 
