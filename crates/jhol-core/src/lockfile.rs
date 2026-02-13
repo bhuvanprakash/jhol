@@ -114,3 +114,84 @@ pub fn read_resolved_from_dir(dir: &Path) -> Option<HashMap<String, String>> {
         None
     }
 }
+
+/// Read package-lock.json and return map name@version -> resolved tarball URL (for zero-packument install).
+pub fn read_lockfile_resolved_urls(path: &Path) -> Option<HashMap<String, String>> {
+    read_lockfile_resolved_urls_with_integrity(path).map(|(urls, _)| urls)
+}
+
+/// Read package-lock.json and return (urls, integrity) maps. Integrity key is name@version -> SRI string.
+pub fn read_lockfile_resolved_urls_with_integrity(
+    path: &Path,
+) -> Option<(HashMap<String, String>, HashMap<String, String>)> {
+    let s = std::fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&s).ok()?;
+    let packages = v.get("packages")?.as_object()?;
+    let mut urls = HashMap::new();
+    let mut integrity = HashMap::new();
+    for (key, val) in packages {
+        let name = key.trim_start_matches("node_modules/");
+        if name.is_empty() {
+            continue;
+        }
+        let version = val.get("version")?.as_str()?;
+        let resolved = val.get("resolved")?.as_str()?;
+        if resolved.ends_with(".tgz") {
+            let pkg_key = format!("{}@{}", name, version);
+            urls.insert(pkg_key.clone(), resolved.to_string());
+            if let Some(sri) = val.get("integrity").and_then(|i| i.as_str()) {
+                integrity.insert(pkg_key, sri.to_string());
+            }
+        }
+    }
+    Some((urls, integrity))
+}
+
+/// Build npm registry tarball URL for a package version (no packument needed).
+/// Scoped: @scope/pkg -> https://registry.npmjs.org/@scope%2Fpkg/-/pkg-1.0.0.tgz
+pub fn tarball_url_from_registry(name: &str, version: &str) -> String {
+    const REGISTRY: &str = "https://registry.npmjs.org";
+    let encoded = if name.starts_with('@') {
+        name.replace('/', "%2F")
+    } else {
+        name.to_string()
+    };
+    let tarball_name = if name.starts_with('@') {
+        name.split('/').last().unwrap_or(name).to_string()
+    } else {
+        name.to_string()
+    };
+    format!(
+        "{}/{}/-/{}-{}.tgz",
+        REGISTRY.trim_end_matches('/'),
+        encoded,
+        tarball_name,
+        version
+    )
+}
+
+/// Read resolved tarball URLs from dir: package-lock has "resolved"; bun.lock we build via tarball_url_from_registry.
+pub fn read_resolved_urls_from_dir(dir: &Path) -> Option<HashMap<String, String>> {
+    read_resolved_urls_and_integrity_from_dir(dir).map(|(urls, _)| urls)
+}
+
+/// Read resolved URLs and integrity (when available, e.g. package-lock.json). For bun.lock, integrity is empty.
+pub fn read_resolved_urls_and_integrity_from_dir(
+    dir: &Path,
+) -> Option<(HashMap<String, String>, HashMap<String, String>)> {
+    let npm_lock = dir.join("package-lock.json");
+    let bun_lock = dir.join("bun.lock");
+    if npm_lock.exists() {
+        return read_lockfile_resolved_urls_with_integrity(&npm_lock);
+    }
+    if bun_lock.exists() {
+        let resolved = read_bun_lock_resolved(&bun_lock)?;
+        let mut urls = HashMap::new();
+        for (name, version) in resolved {
+            let spec = format!("{}@{}", name, version);
+            urls.insert(spec, tarball_url_from_registry(&name, &version));
+        }
+        return Some((urls, HashMap::new()));
+    }
+    None
+}

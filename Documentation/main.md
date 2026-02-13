@@ -23,12 +23,13 @@
 
 ## Introduction
 
-Jhol is a package manager that sits on top of your existing Node/JS workflow. It’s built to be **fast** (cache-first) and **offline-friendly**, and it uses **Bun** when you have it, otherwise **npm**. You keep using the same `package.json` and lockfiles; Jhol just tries to make installs quicker and to let you work without a network when possible.
+Jhol is a package manager that sits on top of your existing Node/JS workflow. It’s built to be **fast** (cache-first) and **offline-friendly**. **Install, doctor, and audit run natively** (registry + OSV API); Node, Bun, and npm are not required. Use `--fallback-backend` to fall back to Bun/npm when native install fails.
 
 ### What you get
 
+- **Native by default** – Install, lockfile-only, doctor, and audit use the registry and OSV directly. No Bun/npm needed.
 - **Local caching** – Tarballs are stored so the next install of the same thing can skip the registry.
-- **Bun or npm** – Prefers Bun if it’s on your PATH; otherwise npm. You can force one with `--backend bun` or `--backend npm`.
+- **Optional fallback** – Pass `jhol install --fallback-backend` to use Bun or npm when native install fails.
 - **Doctor** – Figures out what’s outdated and can update it with `jhol doctor --fix`.
 - **Audit** – Runs a security check (`jhol audit`) and can try to fix issues (`jhol audit --fix`).
 - **SBOM** – Generates a software bill of materials for your project.
@@ -152,6 +153,8 @@ Use `--frozen` when you want the lockfile to be the source of truth. If there’
 jhol install --frozen
 ```
 
+With a lockfile and `--frozen`, Jhol does **no resolution** and **no packument** requests: it only downloads missing tarballs (from lockfile URLs) and links or extracts from the store. Recommended for CI. Use `jhol cache key` as your cache key so the same lockfile reuses the same store.
+
 ### Lockfile only
 
 To only update the lockfile (no `node_modules`):
@@ -209,6 +212,23 @@ jhol cache import ./jhol-bundle
 
 Then `jhol install --offline` can use that cache.
 
+### Fast clone / air-gapped (Zero-Installs-style)
+
+You can get a ready project after clone without hitting the registry at install time:
+
+1. Where you have network: run `jhol prefetch` to fill the store from the lockfile (no `node_modules` yet), then `jhol cache export ./bundled-deps` (or commit the cache dir).
+2. After clone (or on an air-gapped machine): run `jhol cache import ./bundled-deps` (if you exported), then `jhol install --offline`.
+
+Same idea as Zero-Installs: commit or ship the dependency bundle so install is instant and offline.
+
+### Prefetch
+
+```sh
+jhol prefetch
+```
+
+Downloads all lockfile dependencies into the cache without creating `node_modules`. Requires `package.json` and a lockfile. Use before `jhol install --offline` when you want to populate the cache first (e.g. in CI with network, then a later step without).
+
 ### Prune and CI cache key
 
 - **Prune** – Remove tarballs that aren’t in the index, or keep only the N most recent:
@@ -229,6 +249,8 @@ Jhol uses a cache directory (default: `~/.jhol-cache` on Unix, `%USERPROFILE%\.j
 | `JHOL_CACHE_DIR` | Override the cache directory |
 | `JHOL_LOG=quiet` | Less log output |
 | `JHOL_OFFLINE=1` | Behave like `--offline` |
+| `JHOL_NETWORK_CONCURRENCY` | Max concurrent HTTP requests (default 16, cap 32). Registry traffic uses a single connection pool (HTTP/1.1); HTTP/2 may be supported later via an optional env. |
+| `JHOL_LINK=0` | Disable symlinks/junctions; copy from store into node_modules |
 | `.jholrc` (JSON) | Optional: `backend`, `cacheDir`, `offline`, `frozen` |
 
 Example `.jholrc` in project root or home:

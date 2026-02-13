@@ -214,6 +214,18 @@ fn run() -> Result<(), String> {
                         .long("json")
                         .action(ArgAction::SetTrue)
                         .help("Output machine-readable JSON result"),
+                )
+                .arg(
+                    Arg::new("native-only")
+                        .long("native-only")
+                        .action(ArgAction::SetTrue)
+                        .help("Never use Bun/npm; fail if native install fails (default)"),
+                )
+                .arg(
+                    Arg::new("fallback-backend")
+                        .long("fallback-backend")
+                        .action(ArgAction::SetTrue)
+                        .help("On failure, fall back to Bun/npm for install"),
                 ),
         )
         .subcommand(
@@ -312,6 +324,62 @@ fn run() -> Result<(), String> {
                 ),
         )
         .subcommand(
+            Command::new("prefetch")
+                .about("Download lockfile dependencies into cache (no node_modules). Use before install --offline.")
+                .arg(
+                    Arg::new("quiet")
+                        .short('q')
+                        .long("quiet")
+                        .action(ArgAction::SetTrue)
+                        .help("Minimal output"),
+                ),
+        )
+        .subcommand(
+            Command::new("run")
+                .about("Run a script from package.json (no npm/Bun)")
+                .arg(
+                    Arg::new("script")
+                        .required(true)
+                        .help("Script name from package.json scripts"),
+                )
+                .arg(
+                    Arg::new("all-workspaces")
+                        .long("all-workspaces")
+                        .action(ArgAction::SetTrue)
+                        .help("Run in all workspace packages"),
+                ),
+        )
+        .subcommand(
+            Command::new("exec")
+                .visible_alias("x")
+                .about("Run a binary from node_modules/.bin (no npx)")
+                .arg(
+                    Arg::new("binary")
+                        .required(true)
+                        .help("Binary name (e.g. eslint, tsc)"),
+                )
+                .arg(
+                    Arg::new("args")
+                        .num_args(0..)
+                        .help("Arguments to pass to the binary"),
+                ),
+        )
+        .subcommand(
+            Command::new("cdn")
+                .about("Print esm.sh URL for a package (optional: fetch to file)")
+                .arg(
+                    Arg::new("package")
+                        .required(true)
+                        .help("Package spec (e.g. lodash@4 or lodash)"),
+                )
+                .arg(
+                    Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .help("Fetch ESM bundle to this file"),
+                ),
+        )
+        .subcommand(
             Command::new("sbom")
                 .about("Generate Software Bill of Materials")
                 .arg(
@@ -395,6 +463,64 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    if let Some(("run", sub_m)) = matches.subcommand() {
+        let script_name = sub_m.get_one::<String>("script").unwrap().as_str();
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let roots: Vec<std::path::PathBuf> = if sub_m.get_flag("all-workspaces") {
+            let r = jhol_core::list_workspace_roots(&cwd).unwrap_or_default();
+            if r.is_empty() {
+                vec![cwd]
+            } else {
+                r.into_iter().map(|p| cwd.join(p)).collect()
+            }
+        } else {
+            vec![cwd]
+        };
+        let mut last_code = 0i32;
+        for root in &roots {
+            let status = jhol_core::run_script(script_name, root, None)
+                .map_err(|e| e.to_string())?;
+            last_code = status.code().unwrap_or(1);
+        }
+        std::process::exit(last_code);
+    }
+
+    if let Some(("cdn", sub_m)) = matches.subcommand() {
+        let spec = sub_m.get_one::<String>("package").unwrap().as_str();
+        let (name, version) = if let Some(at) = spec.rfind('@') {
+            if at > 0 {
+                (&spec[..at], Some(&spec[at + 1..]))
+            } else {
+                (spec, None)
+            }
+        } else {
+            (spec, None)
+        };
+        let url = jhol_core::esm_sh_url(name, version);
+        println!("{}", url);
+        if let Some(out_path) = sub_m.get_one::<String>("output") {
+            if let Err(e) = jhol_core::fetch_esm_to_file(&url, std::path::Path::new(out_path)) {
+                eprintln!("Fetch failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
+    if let Some(("exec", sub_m)) = matches.subcommand() {
+        let binary = sub_m.get_one::<String>("binary").unwrap().as_str();
+        let args: Vec<String> = sub_m
+            .get_many::<String>("args")
+            .map(|it| it.map(String::clone).collect())
+            .unwrap_or_default();
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let bin_path = jhol_core::find_binary_in_node_modules(binary, &cwd)
+            .ok_or_else(|| format!("Binary \"{}\" not found in node_modules/.bin. Run jhol install first.", binary))?;
+        let status = jhol_core::exec_binary(&bin_path, &args, &cwd)
+            .map_err(|e| e.to_string())?;
+        std::process::exit(status.code().unwrap_or(1));
+    }
+
     jhol_core::init_cache().map_err(|e| format!("Failed to initialize cache: {}", e))?;
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -411,6 +537,7 @@ fn run() -> Result<(), String> {
             let offline = sub_m.get_flag("offline")
                 || env::var("JHOL_OFFLINE").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
             let strict_lockfile = sub_m.get_flag("frozen");
+            let native_only = sub_m.get_flag("native-only") || !sub_m.get_flag("fallback-backend");
             let all_workspaces = sub_m.get_flag("all-workspaces");
             let backend = match sub_m.get_one::<String>("backend") {
                 Some(s) if s == "bun" => Some(jhol_core::Backend::Bun),
@@ -457,6 +584,8 @@ fn run() -> Result<(), String> {
                     continue;
                 }
                 let refs: Vec<&str> = specs.iter().map(|s| s.as_str()).collect();
+                let from_lockfile = packages.is_empty()
+                    && jhol_core::read_resolved_from_dir(std::path::Path::new(".")).is_some();
                 let opts = jhol_core::InstallOptions {
                     no_cache,
                     quiet,
@@ -464,6 +593,8 @@ fn run() -> Result<(), String> {
                     lockfile_only,
                     offline,
                     strict_lockfile,
+                    from_lockfile,
+                    native_only,
                 };
                 jhol_core::log(&format!("Installing: {:?}", specs));
                 jhol_core::install_package(&refs, &opts)?;
@@ -564,6 +695,13 @@ fn run() -> Result<(), String> {
                 } else if quiet {
                     success("Done.");
                 }
+            }
+        }
+        Some(("prefetch", sub_m)) => {
+            let quiet = sub_m.get_flag("quiet");
+            jhol_core::prefetch_from_lockfile(quiet).map_err(|e| e.to_string())?;
+            if !quiet {
+                success("Prefetch done. Run `jhol install --offline` to install from cache.");
             }
         }
         Some(("sbom", sub_m)) => {

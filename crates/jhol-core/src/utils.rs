@@ -105,6 +105,56 @@ fn store_dir() -> PathBuf {
     cache_dir_path().join("store")
 }
 
+/// Unpacked store dir: cache_dir/store_unpacked/<hash>/ (one dir per tarball hash).
+pub fn store_unpacked_dir() -> PathBuf {
+    cache_dir_path().join("store_unpacked")
+}
+
+/// Whether to use symlinks/junctions when installing from store (JHOL_LINK=0 to disable).
+fn use_link() -> bool {
+    env::var("JHOL_LINK")
+        .map(|v| v != "0" && !v.is_empty())
+        .unwrap_or(true)
+}
+
+/// Create node_modules/<package_name> as a symlink (Unix) or directory junction (Windows) to store path.
+/// For scoped packages, creates node_modules/@scope/ and links pkg there.
+/// Returns Err if JHOL_LINK=0 or link creation fails (caller should fall back to copy).
+pub fn link_package_from_store(
+    store_unpacked_path: &Path,
+    node_modules: &Path,
+    package_name: &str,
+) -> std::result::Result<(), String> {
+    if !use_link() {
+        return Err("JHOL_LINK=0".to_string());
+    }
+    let link_path = if package_name.starts_with('@') {
+        // node_modules/@scope/pkg
+        let scope_and_name = package_name.splitn(2, '/').collect::<Vec<_>>();
+        if scope_and_name.len() != 2 {
+            return Err(format!("invalid scoped package name: {}", package_name));
+        }
+        node_modules.join(scope_and_name[0]).join(scope_and_name[1])
+    } else {
+        node_modules.join(package_name)
+    };
+    if link_path.exists() {
+        fs::remove_dir_all(&link_path).or_else(|_| fs::remove_file(&link_path)).ok();
+    }
+    if let Some(parent) = link_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(store_unpacked_path, &link_path).map_err(|e| e.to_string())?;
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_dir(store_unpacked_path, &link_path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Index path: cache_dir/store_index.json (pkg@version -> hash)
 fn store_index_path() -> PathBuf {
     cache_dir_path().join("store_index.json")
@@ -127,6 +177,54 @@ pub fn write_store_index(map: &HashMap<String, String>) -> Result<()> {
     let s = serde_json::to_string_pretty(map).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     fs::write(path, s)?;
     Ok(())
+}
+
+/// Verify file against SRI string (e.g. "sha512-<base64>"). Returns true if match.
+pub fn verify_sri(path: &Path, sri: &str) -> bool {
+    let sri = sri.trim();
+    let Some((algo, rest)) = sri.split_once('-') else { return false };
+    let digest_b64 = rest.split_once('?').map(|(d, _)| d).unwrap_or(rest);
+    use base64::Engine;
+    let expected = match base64::engine::general_purpose::STANDARD.decode(digest_b64.as_bytes()) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    let mut f = match File::open(path) {
+        Ok(x) => x,
+        Err(_) => return false,
+    };
+    let mut buf = [0u8; 8192];
+    match algo.to_lowercase().as_str() {
+        "sha512" => {
+            use sha2::{Digest, Sha512};
+            let mut hasher = Sha512::new();
+            loop {
+                let n = match f.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(_) => return false,
+                };
+                hasher.update(&buf[..n]);
+            }
+            let got = hasher.finalize();
+            got.as_slice() == expected.as_slice()
+        }
+        "sha384" => {
+            use sha2::{Digest, Sha384};
+            let mut hasher = Sha384::new();
+            loop {
+                let n = match f.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(_) => return false,
+                };
+                hasher.update(&buf[..n]);
+            }
+            let got = hasher.finalize();
+            got.as_slice() == expected.as_slice()
+        }
+        _ => false,
+    }
 }
 
 /// SHA256 hash of file (hex)
@@ -221,6 +319,11 @@ pub fn is_package_cached(package: &str) -> bool {
 }
 
 /// Store a package in the cache (content-addressable + legacy path).
+/// Prefer `registry::fill_store_from_registry` (no npm subprocess). Kept for legacy callers.
+#[deprecated(
+    since = "0.1.0",
+    note = "Use registry::fill_store_from_registry to populate store without npm pack"
+)]
 pub fn cache_package_tarball(base_name: &str, version: &str) -> Result<PathBuf> {
     let cache_dir = cache_dir_path();
     fs::create_dir_all(&cache_dir)?;
@@ -517,36 +620,6 @@ pub fn run_command_timeout(program: &str, args: &[&str], timeout_secs: u64) -> R
     let out = child.wait_with_output();
     let _ = kill_handle.join();
     out
-}
-
-/// Run npm show with timeout (for package validation)
-pub fn npm_show_timeout(package: &str, timeout_secs: u64) -> Result<Output> {
-    run_command_timeout("npm", &["show", package, "name"], timeout_secs)
-}
-
-/// Max concurrency for parallel npm show / cache checks
-const PARALLEL_CONCURRENCY: usize = 8;
-
-/// Run npm show for multiple packages in parallel. Returns vec of (package, is_valid).
-pub fn parallel_validate_packages(packages: &[String], timeout_secs: u64) -> Vec<(String, bool)> {
-    use std::sync::mpsc;
-    use std::thread;
-
-    let (tx, rx) = mpsc::channel();
-    for chunk in packages.chunks(PARALLEL_CONCURRENCY) {
-        let chunk: Vec<String> = chunk.to_vec();
-        let tx = tx.clone();
-        thread::spawn(move || {
-            for pkg in chunk {
-                let ok = npm_show_timeout(&pkg, timeout_secs)
-                    .map(|out| out.status.success() && !String::from_utf8_lossy(&out.stdout).trim().is_empty())
-                    .unwrap_or(false);
-                let _ = tx.send((pkg, ok));
-            }
-        });
-    }
-    drop(tx);
-    rx.into_iter().collect()
 }
 
 /// Run npm install with timeout

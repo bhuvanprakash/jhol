@@ -1,4 +1,5 @@
-//! Backend abstraction: Bun (primary) or npm for install, outdated, and fix.
+//! Backend abstraction: Bun or npm. Install, doctor, and audit are now native by default.
+//! Backend is only used when the user passes --fallback-backend (install) or similar opt-in.
 
 use std::process::Command;
 

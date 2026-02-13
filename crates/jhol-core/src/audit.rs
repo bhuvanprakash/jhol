@@ -2,61 +2,90 @@
 
 use std::path::Path;
 
-use crate::backend::{self, Backend};
 use crate::lockfile;
+use crate::osv;
 use crate::utils;
 
-/// Run audit and return raw JSON bytes (for --json output).
-pub fn run_audit_raw(backend: Backend) -> Result<Vec<u8>, String> {
-    backend::backend_audit(backend)
+/// Run native audit via OSV and return vulnerability list.
+pub fn native_audit() -> Result<Vec<osv::VulnRecord>, String> {
+    let resolved = lockfile::read_resolved_from_dir(Path::new("."))
+        .ok_or("No package-lock.json or bun.lock found. Run install first.")?;
+    let mut all = Vec::new();
+    for (name, version) in &resolved {
+        match osv::query_vulnerabilities(name, version) {
+            Ok(vulns) => all.extend(vulns),
+            Err(_) => continue,
+        }
+    }
+    Ok(all)
 }
 
-/// Run audit and print summary. Returns Ok(()) on success (no error running audit); vulns may still be present.
-pub fn run_audit(backend: Backend, quiet: bool) -> Result<(), String> {
+/// Run audit and return raw JSON bytes (for --json output). Uses native OSV.
+pub fn run_audit_raw(_backend: crate::backend::Backend) -> Result<Vec<u8>, String> {
+    let vulns = native_audit()?;
+    let arr: Vec<serde_json::Value> = vulns
+        .into_iter()
+        .map(|v| {
+            serde_json::json!({
+                "id": v.id,
+                "summary": v.summary,
+                "severity": v.severity,
+                "package": v.package_name,
+                "version": v.package_version,
+            })
+        })
+        .collect();
+    let out = serde_json::json!({ "vulnerabilities": arr });
+    serde_json::to_vec(&out).map_err(|e| e.to_string())
+}
+
+/// Run audit and print summary. Uses native OSV.
+pub fn run_audit(_backend: crate::backend::Backend, quiet: bool) -> Result<(), String> {
     if !Path::new("package.json").exists() {
         return Err("No package.json found in current directory.".to_string());
     }
     utils::log("Running audit...");
-    let json_bytes = backend::backend_audit(backend)?;
-    let s = String::from_utf8_lossy(&json_bytes);
-    let v: serde_json::Value = serde_json::from_str(&s).unwrap_or(serde_json::Value::Null);
+    let vulns = native_audit()?;
     if quiet {
-        let total = v.get("vulnerabilities")
-            .and_then(|x| x.as_object())
-            .map(|o| o.len())
-            .unwrap_or_else(|| v.get("metadata").and_then(|m| m.get("vulnerabilities")).and_then(|x| x.as_object()).map(|o| o.len()).unwrap_or(0));
-        if total > 0 {
-            return Err(format!("{} vulnerability(ies) found.", total));
+        if !vulns.is_empty() {
+            return Err(format!("{} vulnerability(ies) found.", vulns.len()));
         }
         return Ok(());
     }
-    let vulns = v.get("vulnerabilities").or(v.get("metadata").and_then(|m| m.get("vulnerabilities")));
-    if let Some(obj) = vulns.and_then(|x| x.as_object()) {
-        if obj.is_empty() {
-            println!("No vulnerabilities found.");
-            return Ok(());
-        }
-        println!("Found {} vulnerability(ies):", obj.len());
-        for (pkg, info) in obj {
-            let severity = info.get("severity").and_then(|s| s.as_str()).unwrap_or("unknown");
-            let title = info.get("title").and_then(|s| s.as_str()).unwrap_or("");
-            println!("  {} ({}): {}", pkg, severity, title);
-        }
-    } else {
-        println!("{}", s.trim());
+    if vulns.is_empty() {
+        println!("No vulnerabilities found.");
+        return Ok(());
+    }
+    println!("Found {} vulnerability(ies):", vulns.len());
+    for v in &vulns {
+        let sev = v.severity.as_deref().unwrap_or("unknown");
+        println!("  {}@{} ({}): {} - {}", v.package_name, v.package_version, sev, v.id, v.summary);
     }
     Ok(())
 }
 
-/// Run audit fix.
-pub fn run_audit_fix(backend: Backend, quiet: bool) -> Result<(), String> {
+/// Run audit fix: print upgrade suggestions (no backend). No automatic fix.
+pub fn run_audit_fix(_backend: crate::backend::Backend, quiet: bool) -> Result<(), String> {
     if !Path::new("package.json").exists() {
         return Err("No package.json found in current directory.".to_string());
     }
     utils::log("Running audit fix...");
-    backend::backend_audit_fix(backend)?;
+    let vulns = native_audit()?;
+    if vulns.is_empty() {
+        if !quiet {
+            println!("No vulnerabilities to fix.");
+        }
+        return Ok(());
+    }
     if !quiet {
-        println!("Audit fix completed.");
+        println!("Vulnerable packages (update manually or run jhol install <pkg>@latest):");
+        let mut seen = std::collections::HashSet::new();
+        for v in &vulns {
+            let key = (v.package_name.as_str(), v.package_version.as_str());
+            if seen.insert(key) {
+                println!("  {}@{} - {}", v.package_name, v.package_version, v.id);
+            }
+        }
     }
     Ok(())
 }
