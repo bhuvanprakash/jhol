@@ -151,6 +151,86 @@ python3 scripts/check_benchmark_regression.py \
 
 `--threshold 0.25` means up to 25% slowdown is allowed before failing.
 
+### Week-1 KPI baseline + guardrails
+
+To track trust-foundation metrics (benchmark snapshot, fixture compatibility, fallback telemetry) in one artifact:
+
+```sh
+python3 scripts/collect_week1_baseline.py \
+  --benchmark-json benchmark-results.json \
+  --fixtures-dir tests/fixtures \
+  --out week1-baseline-report.json
+```
+
+Then enforce guardrails from `benchmarks/week1_guardrails.json`:
+
+```sh
+python3 scripts/check_week1_guardrails.py \
+  --report week1-baseline-report.json \
+  --config benchmarks/week1_guardrails.json
+```
+
+This is wired into `.github/workflows/benchmark.yml` so regressions fail CI early.
+
+### Resolver fixture parity report (Week-2 track)
+
+Generate resolver fixture pass-rate + edge-coverage report:
+
+```sh
+python3 scripts/resolver_fixture_report.py \
+  --fixtures-dir tests/fixtures \
+  --snapshots-dir tests/resolver-snapshots \
+  --config benchmarks/resolver_parity_guardrails.json \
+  --out resolver-parity-report.json
+```
+
+This report is also produced in CI and uploaded as an artifact (`resolver-parity-report.json`).
+
+**Semantic snapshot diff**
+
+The resolver fixture report now includes a semantic graph diff for each fixture:
+- `expectedGraph` in snapshot files defines the expected dependency graph.
+- `actualGraph` is derived from the fixture's package.json.
+- `semanticDiff` shows mismatches (missing/extra edges, overrides, workspaces).
+- `semantic.matchRate` is the ratio of fixtures with matching graphs.
+
+Guardrails can enforce a minimum `semanticMatchRate` (e.g., 1.0) to ensure resolver parity.
+
+### Framework compatibility matrix (Week-3 track)
+
+Generate framework compatibility report (React / Next / Nuxt / Nest / Turbo / Expo fixtures):
+
+```sh
+python3 scripts/framework_compat_report.py \
+  --fixtures-dir tests/fixtures \
+  --matrix benchmarks/framework_matrix.json \
+  --config benchmarks/framework_guardrails.json \
+  --out framework-compat-report.json
+```
+
+### Fallback trend guardrails (Week-4 track)
+
+Check fallback regressions against a baseline KPI report:
+
+```sh
+python3 scripts/check_fallback_trend.py \
+  --current-report week1-baseline-report.json \
+  --baseline-report week1-baseline-report.json \
+  --config benchmarks/fallback_trend_guardrails.json
+```
+
+### Enterprise `.npmrc` matrix report (Week-5 track)
+
+Validate enterprise config scenarios (scoped registry, token, proxy, strict-ssl, cafile):
+
+```sh
+python3 scripts/enterprise_npmrc_report.py \
+  --config benchmarks/enterprise_guardrails.json \
+  --out enterprise-npmrc-report.json
+```
+
+All three reports are wired into `.github/workflows/benchmark.yml` and uploaded as artifacts.
+
 ---
 
 ## Compatibility & current limitations
