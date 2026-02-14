@@ -32,7 +32,7 @@ pub fn prefetch_from_lockfile(quiet: bool) -> Result<(), String> {
     let store_dir = cache_dir.join("store");
     std::fs::create_dir_all(&store_dir).map_err(|e| e.to_string())?;
 
-    let mut fetched = 0;
+    let mut work: Vec<(String, String, Option<String>)> = Vec::new();
     for spec in &specs {
         if utils::get_cached_tarball(spec).is_some() {
             continue;
@@ -42,17 +42,52 @@ pub fn prefetch_from_lockfile(quiet: bool) -> Result<(), String> {
             let version = spec.rfind('@').map(|i| &spec[i + 1..]).unwrap_or("latest");
             Some(lockfile::tarball_url_from_registry(base, version))
         });
-        let url = match url {
-            Some(u) => u,
-            None => continue,
-        };
-        let integrity = resolved_integrity.get(spec).cloned();
-        if !quiet {
-            println!("Prefetching {}...", spec);
+        if let Some(url) = url {
+            let integrity = resolved_integrity.get(spec).cloned();
+            work.push((spec.clone(), url, integrity));
         }
-        registry::download_tarball_to_store(&url, &cache_dir, spec, None, integrity.as_deref())?;
-        fetched += 1;
     }
+
+    const PREFETCH_CONCURRENCY: usize = 8;
+    let mut fetched = 0usize;
+    let mut index_batch: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for chunk in work.chunks(PREFETCH_CONCURRENCY) {
+        use std::sync::mpsc;
+        use std::thread;
+        let (tx, rx) = mpsc::channel();
+        for (spec, url, integrity) in chunk {
+            let spec = spec.clone();
+            let url = url.clone();
+            let integrity = integrity.clone();
+            let cache_dir = cache_dir.clone();
+            let tx = tx.clone();
+            if !quiet {
+                println!("Prefetching {}...", spec);
+            }
+            thread::spawn(move || {
+                let res = registry::download_tarball_to_store_hash_only(
+                    &url,
+                    &cache_dir,
+                    &spec,
+                    integrity.as_deref(),
+                );
+                let _ = tx.send((spec, res));
+            });
+        }
+        drop(tx);
+        for (spec, res) in rx {
+            let hash = res?;
+            index_batch.insert(spec, hash);
+            fetched += 1;
+        }
+    }
+
+    if !index_batch.is_empty() {
+        let mut index = utils::read_store_index();
+        index.extend(index_batch);
+        utils::write_store_index(&index).map_err(|e| e.to_string())?;
+    }
+
     if !quiet && fetched > 0 {
         println!("Prefetched {} package(s).", fetched);
     }

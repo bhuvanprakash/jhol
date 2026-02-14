@@ -47,7 +47,12 @@ pub fn resolve_backend(explicit: Option<Backend>) -> Backend {
 }
 
 /// Install packages via backend. specs are e.g. ["lodash@4.17.21", "react@18"].
-pub fn backend_install(specs: &[&str], backend: Backend, lockfile_only: bool) -> Result<(), String> {
+pub fn backend_install(
+    specs: &[&str],
+    backend: Backend,
+    lockfile_only: bool,
+    no_scripts: bool,
+) -> Result<(), String> {
     if specs.is_empty() {
         return Ok(());
     }
@@ -56,6 +61,9 @@ pub fn backend_install(specs: &[&str], backend: Backend, lockfile_only: bool) ->
             let mut args = vec!["add"];
             if lockfile_only {
                 args.push("--lockfile-only");
+            }
+            if no_scripts {
+                args.push("--ignore-scripts");
             }
             for s in specs {
                 args.push(s);
@@ -72,6 +80,9 @@ pub fn backend_install(specs: &[&str], backend: Backend, lockfile_only: bool) ->
             let mut args = vec!["install"];
             if lockfile_only {
                 args.push("--package-lock-only");
+            }
+            if no_scripts {
+                args.push("--ignore-scripts");
             }
             for s in specs {
                 args.push(s);
@@ -91,12 +102,16 @@ pub fn backend_install(specs: &[&str], backend: Backend, lockfile_only: bool) ->
 pub fn backend_install_from_package_json(
     backend: Backend,
     lockfile_only: bool,
+    no_scripts: bool,
 ) -> Result<(), String> {
     match backend {
         Backend::Bun => {
             let mut args = vec!["install"];
             if lockfile_only {
                 args.push("--lockfile-only");
+            }
+            if no_scripts {
+                args.push("--ignore-scripts");
             }
             let out = run_command_timeout("bun", &args, NPM_INSTALL_TIMEOUT_SECS)
                 .map_err(|e| format!("bun install: {}", e))?;
@@ -110,6 +125,9 @@ pub fn backend_install_from_package_json(
             let mut args = vec!["install"];
             if lockfile_only {
                 args.push("--package-lock-only");
+            }
+            if no_scripts {
+                args.push("--ignore-scripts");
             }
             let out = run_command_timeout("npm", &args, NPM_INSTALL_TIMEOUT_SECS)
                 .map_err(|e| format!("npm install: {}", e))?;
@@ -151,7 +169,7 @@ pub fn backend_fix_packages(packages: &[String], backend: Backend, quiet: bool) 
     if !quiet {
         println!("Updating {} package(s) via {}...", packages.len(), backend_name(backend));
     }
-    backend_install(&refs, backend, false)
+    backend_install(&refs, backend, false, true)
 }
 
 fn backend_name(b: Backend) -> &'static str {
@@ -205,7 +223,11 @@ pub fn backend_audit_fix(backend: Backend) -> Result<(), String> {
 }
 
 /// Install from cache (tarball paths) using backend. Both bun and npm accept local paths.
-pub fn backend_install_tarballs(paths: &[std::path::PathBuf], backend: Backend) -> Result<(), String> {
+pub fn backend_install_tarballs(
+    paths: &[std::path::PathBuf],
+    backend: Backend,
+    no_scripts: bool,
+) -> Result<(), String> {
     if paths.is_empty() {
         return Ok(());
     }
@@ -217,6 +239,9 @@ pub fn backend_install_tarballs(paths: &[std::path::PathBuf], backend: Backend) 
     match backend {
         Backend::Bun => {
             let mut args = vec!["add"];
+            if no_scripts {
+                args.push("--ignore-scripts");
+            }
             args.extend(refs);
             let out = run_command_timeout("bun", &args, NPM_INSTALL_TIMEOUT_SECS)
                 .map_err(|e| format!("bun add (cache): {}", e))?;
@@ -228,6 +253,9 @@ pub fn backend_install_tarballs(paths: &[std::path::PathBuf], backend: Backend) 
         }
         Backend::Npm => {
             let mut args = vec!["install"];
+            if no_scripts {
+                args.push("--ignore-scripts");
+            }
             args.extend(refs);
             let out = run_command_timeout("npm", &args, NPM_INSTALL_TIMEOUT_SECS)
                 .map_err(|e| format!("npm install (cache): {}", e))?;
