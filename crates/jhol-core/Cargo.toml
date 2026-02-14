@@ -1,8 +1,10 @@
 [package]
 name = "jhol-core"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 description = "Core logic for Jhol: cache, install, doctor, registry, lockfile"
+license-file = "../../LICENSE"
+repository = "https://github.com/bhuvanprakash/jhol"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
