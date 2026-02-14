@@ -1,41 +1,86 @@
 # Jhol
 
-A fast, offline-friendly package manager that plays nice with your existing `package.json`. It caches everything it can and runs **without Node, Bun, or npm** for install, doctor, and audit by default.
+<div align="left">
 
-See also: [CHANGELOG.md](./CHANGELOG.md) for latest release notes.
+<a href="https://crates.io/crates/jhol"><img alt="Crates.io" src="https://img.shields.io/crates/v/jhol?style=flat-square" /></a>
+<a href="https://github.com/bhuvanprakash/jhol/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/bhuvanprakash/jhol?style=flat-square" /></a>
+<img alt="Rust" src="https://img.shields.io/badge/Rust-stable-informational?style=flat-square" />
+<img alt="Platform" src="https://img.shields.io/badge/platform-Linux%20%7C%20Windows-blue?style=flat-square" />
+
+</div>
+
+Jhol is a fast, offline-friendly package manager for JavaScript projects. It works with existing `package.json` files and lockfiles, uses a cache-first architecture, and provides native install, doctor, and audit workflows.
+
+For compatibility edge cases, Jhol can delegate install execution to Bun or npm with `--fallback-backend`.
+
+See [CHANGELOG.md](./CHANGELOG.md) for release notes.
 
 ---
 
-## Why use Jhol?
+## At a glance
 
-- **No Node/Bun/npm required** – Install, lockfile-only, doctor, and audit use the npm registry and OSV API directly. Use `--fallback-backend` to fall back to Bun/npm if needed.
-- **Fast installs** – Once a package is in the cache, repeat installs skip the network. Same lockfile? You’re basically done.
-- **Offline-friendly** – No internet? No problem. If it’s cached, you can install it.
-- **Fallback optional** – Pass `--fallback-backend` to use Bun or npm when native install fails.
-- **Doctor** – `jhol doctor` shows what’s outdated; `jhol doctor --fix` updates those packages.
-- **Audit & SBOM** – `jhol audit` checks for known vulnerabilities; `jhol sbom` spits out a software bill of materials for your project.
-- **Workspaces** – Use `--all-workspaces` and it’ll run install, doctor, or audit across all your workspace packages in one go.
+| What you get | Why it matters |
+|---|---|
+| Native install, doctor, and audit | Core workflows without requiring npm/Bun at runtime |
+| Cache-first architecture | Faster repeat installs and reduced network overhead |
+| Offline mode (`--offline`) | Reliable installs in constrained or disconnected environments |
+| Deterministic mode (`--frozen` / `ci`) | Reproducible installs for CI and team environments |
+| Fallback backend (`--fallback-backend`) | Compatibility path for complex real-world cases |
+
+---
+
+## Table of contents
+
+- [Why Jhol](#why-jhol)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Command reference](#command-reference)
+- [Configuration](#configuration)
+- [CI and deterministic installs](#ci-and-deterministic-installs)
+- [Architecture](#architecture)
+- [Benchmarking and reports](#benchmarking-and-reports)
+- [Compatibility and limitations](#compatibility-and-limitations)
+- [Links](#links)
+- [License](#license)
+
+---
+
+## Why Jhol
+
+- **Native by default**: install, lockfile-only, doctor, and audit do not require Node/Bun/npm.
+- **Fast repeat installs**: cached dependencies reduce repeated network work.
+- **Offline-ready**: install directly from cache with `--offline`.
+- **Practical fallback**: use `--fallback-backend` when compatibility requires it.
+- **Maintenance built in**: doctor, audit, SBOM, and workspace support are part of the CLI.
 
 ---
 
 ## Installation
 
-**From crates.io:**
+### From crates.io
+
 ```sh
 cargo install jhol
 ```
 
-**From source:**
+### From source repository
+
 ```sh
 cargo install --git https://github.com/bhuvanprakash/jhol
 ```
 
-**Prebuilt binaries (Linux & Windows):**  
-Grab `jhol-linux` or `jhol-windows.exe` from [Releases](https://github.com/bhuvanprakash/jhol/releases).  
-On Linux: `chmod +x jhol-linux` and optionally move it into your PATH.  
-On Windows: run it or add its folder to your PATH.
+### Prebuilt binaries (Linux and Windows)
 
-**Put `jhol` on your PATH (any install method):**
+Download `jhol-linux` or `jhol-windows.exe` from [GitHub Releases](https://github.com/bhuvanprakash/jhol/releases).
+
+- Linux:
+  ```sh
+  chmod +x jhol-linux
+  ```
+- Windows: run the executable directly or add its folder to PATH.
+
+### Install `jhol` to PATH
+
 ```sh
 jhol global-install
 ```
@@ -45,102 +90,124 @@ jhol global-install
 ## Quick start
 
 ```sh
-jhol install lodash              # Install one package (cache when possible)
-jhol install react react-dom     # Install several at once
-jhol install                    # No args = install from package.json (and lockfile)
-jhol ci                         # Strict lockfile install (npm ci-style)
-jhol doctor                     # See what’s outdated
-jhol doctor --fix               # Update those packages
-jhol audit                      # Check for vulnerabilities
-jhol audit --fix                # Try to fix them
-jhol audit --gate               # CI gate: fail if vulnerabilities exist
+# Install
+jhol install lodash
+jhol install react react-dom
+jhol install
+jhol ci
+
+# Maintenance
+jhol doctor
+jhol doctor --fix
+
+# Security
+jhol audit
+jhol audit --fix
+jhol audit --gate
 ```
+
+Quick links: [`GET_STARTED.md`](./GET_STARTED.md) · [`Documentation/main.md`](./Documentation/main.md) · [`for-windows.md`](./for-windows.md)
 
 ---
 
-## Commands (the important ones)
+## Command reference
 
-| What you want | Command |
-|---------------|--------|
-| Install packages | `jhol install <pkg> [pkgs...]` or just `jhol install` (from package.json) |
-| Ignore cache and fetch fresh | `jhol install --no-cache <pkg>` |
-| Only update the lockfile | `jhol install --lockfile-only` |
-| Offline only (fail if not cached) | `jhol install --offline` or set `JHOL_OFFLINE=1` |
-| Strict lockfile (fail if out of sync) | `jhol install --frozen` |
-| CI strict install | `jhol ci` |
-| Use Bun/npm when native fails | `jhol install --fallback-backend` |
-| Script policy for fallback backend | `jhol install --no-scripts` (default) or `jhol install --scripts` |
-| Check outdated deps | `jhol doctor` |
-| Update outdated deps | `jhol doctor --fix` |
-| Run in all workspaces | `jhol install --all-workspaces`, `jhol doctor --all-workspaces`, `jhol audit --all-workspaces` |
-| Security audit | `jhol audit` / `jhol audit --fix` |
+### Install and lockfile
+
+| Goal | Command |
+|---|---|
+| Install from `package.json` | `jhol install` |
+| Install specific packages | `jhol install <pkg> [pkgs...]` |
+| Force fresh fetch | `jhol install --no-cache <pkg>` |
+| Lockfile-only update | `jhol install --lockfile-only` |
+| Offline install | `jhol install --offline` or `JHOL_OFFLINE=1` |
+| Strict lockfile install | `jhol install --frozen` or `jhol ci` |
+| Enable fallback backend | `jhol install --fallback-backend` |
+| Script policy in fallback | `--no-scripts` (default) / `--scripts` |
+
+### Dependency health and security
+
+| Goal | Command |
+|---|---|
+| Check outdated dependencies | `jhol doctor` |
+| Update outdated dependencies | `jhol doctor --fix` |
+| Audit vulnerabilities | `jhol audit` |
+| Audit and attempt fixes | `jhol audit --fix` |
 | CI vulnerability gate | `jhol audit --gate` |
-| Generate SBOM | `jhol sbom` or `jhol sbom -o sbom.json` |
-| List cache | `jhol cache list` |
-| Cache size | `jhol cache size` |
-| Prune old cache | `jhol cache prune` or `jhol cache prune --keep 50` |
-| Export deps for offline | `jhol cache export ./my-bundle` |
-| Import from bundle | `jhol cache import ./my-bundle` |
-| Wipe cache | `jhol cache clean` |
-| Lockfile hash (for CI cache key) | `jhol cache key` |
-| Prefetch deps into cache (no node_modules) | `jhol prefetch` then `jhol install --offline` |
-| Install the binary to PATH | `jhol global-install` |
+| Generate SBOM | `jhol sbom` / `jhol sbom -o sbom.json` |
 
-Use `-q` or `--quiet` when you want less noise. Use `--json` on install, doctor, or audit if you need machine-readable output.
+### Workspaces and cache
+
+| Goal | Command |
+|---|---|
+| Run install in all workspaces | `jhol install --all-workspaces` |
+| Run doctor in all workspaces | `jhol doctor --all-workspaces` |
+| Run audit in all workspaces | `jhol audit --all-workspaces` |
+| Cache operations | `jhol cache list/size/prune/export/import/clean/key` |
+
+Use `-q` / `--quiet` for lower-noise output. Use `--json` for machine-readable output on install, doctor, audit, and ci.
 
 ---
 
 ## Configuration
 
-| Env / file | What it does |
-|------------|--------------|
-| `JHOL_CACHE_DIR` | Where to put the cache (default: `~/.jhol-cache` on Unix, `%USERPROFILE%\.jhol-cache` on Windows) |
-| `JHOL_LOG=quiet` or `-q` | Less logging |
-| `JHOL_OFFLINE=1` or `--offline` | Only use cache; fail if something isn’t there |
-| `JHOL_SCRIPT_ALLOWLIST=a,b,c` | If `--scripts` is used, only allow scripts for these packages |
-| `.jholrc` (JSON in project or home) | Optional: set `backend` (`"bun"` or `"npm"`), `cacheDir`, `offline`, `frozen` so you don’t have to pass flags every time |
-
-**CI tip:** Run `jhol cache key` to get a hash of your lockfile (`bun.lock` or `package-lock.json`). Same lockfile → same key. Use that as your CI cache key so you can reuse the Jhol store between runs.
-
-### Deterministic installs (CI)
-
-With a lockfile and `jhol install --frozen` (or `jhol ci`), Jhol does **no resolution** and **no packument** requests: it only downloads missing tarballs (from lockfile URLs) and links or extracts from the store. Recommended for CI. Use `jhol cache key` as your cache key so the same lockfile reuses the same store.
-
-`--json` responses for `install`, `doctor`, `audit`, and `ci` now include a stable shape with `schemaVersion`, `command`, and `status`.
+| Env / file | Description |
+|---|---|
+| `JHOL_CACHE_DIR` | Override cache directory |
+| `JHOL_LOG=quiet` | Reduce log output |
+| `JHOL_OFFLINE=1` | Force offline mode |
+| `JHOL_SCRIPT_ALLOWLIST=a,b,c` | Restrict script execution to specific packages |
+| `.jholrc` (JSON) | Optional defaults for `backend`, `cacheDir`, `offline`, and `frozen` |
 
 ---
 
-## How it fits together
+## CI and deterministic installs
 
-The repo is a Cargo workspace: the **jhol** binary lives at the root and talks to **jhol-core** in `crates/jhol-core`. The core does the real work (cache, install, doctor, registry, lockfile, audit, workspaces); the CLI just parses args and calls in. You can depend on `jhol-core` from other tools (e.g. a script or a future LSP) without pulling in the CLI.
+- Use `jhol cache key` as a CI cache key derived from lockfile content.
+- With `jhol install --frozen` (or `jhol ci`), Jhol skips dependency resolution and packument requests.
+- In frozen mode, Jhol only fetches missing tarballs from lockfile URLs and links/extracts from cache.
 
 ---
 
-## Performance benchmarking
+## Architecture
 
-Jhol includes a simple benchmark harness at `scripts/benchmark.py` to measure install performance.
+The repository is a Cargo workspace:
 
-### What it measures
-- `jhol_cold_install`: empty cache + install
-- `jhol_warm_install`: cached install
-- `jhol_offline_install`: cached install in `--offline` mode
-- Optional: `npm_cold_install` / `npm_warm_install` with `--compare-npm`
+- CLI entrypoint: `src/main.rs`
+- Core implementation: `crates/jhol-core`
 
-### Run it
+`jhol-core` handles caching, install logic, doctor/audit flows, registry communication, lockfile handling, and workspace traversal.
+
+### Project layout
+
+| Path | Purpose |
+|---|---|
+| `src/main.rs` | CLI entrypoint and command wiring |
+| `crates/jhol-core/src/` | Install, lockfile, cache, audit, doctor, workspace internals |
+| `scripts/` | Benchmark, compatibility, and guardrail automation |
+| `tests/fixtures/` | Fixture applications used for resolver and compatibility checks |
+| `tests/resolver-snapshots/` | Expected resolver outputs used for parity verification |
+
+---
+
+## Benchmarking and reports
+
+Jhol includes benchmarking and guardrail scripts in `scripts/`.
+
+### Benchmark
+
 ```sh
 cargo build --release
 python3 scripts/benchmark.py --repeats 3 --json-out benchmark-results.json
 ```
 
 Optional npm comparison:
+
 ```sh
 python3 scripts/benchmark.py --repeats 3 --compare-npm --json-out benchmark-results.json
 ```
 
-Tip: use exact versions in `--packages` for stable and repeatable results.
-
-### Regression check against baseline
-Use the baseline in `benchmarks/baseline.json` and fail if a metric regresses beyond threshold:
+### Regression check
 
 ```sh
 python3 scripts/check_benchmark_regression.py \
@@ -149,32 +216,20 @@ python3 scripts/check_benchmark_regression.py \
   --threshold 0.25
 ```
 
-`--threshold 0.25` means up to 25% slowdown is allowed before failing.
-
-### Week-1 KPI baseline + guardrails
-
-To track trust-foundation metrics (benchmark snapshot, fixture compatibility, fallback telemetry) in one artifact:
+### KPI baseline + guardrails
 
 ```sh
-python3 scripts/collect_week1_baseline.py \
+python3 scripts/collect_baseline.py \
   --benchmark-json benchmark-results.json \
   --fixtures-dir tests/fixtures \
   --out week1-baseline-report.json
-```
 
-Then enforce guardrails from `benchmarks/week1_guardrails.json`:
-
-```sh
-python3 scripts/check_week1_guardrails.py \
+python3 scripts/check_guardrails.py \
   --report week1-baseline-report.json \
   --config benchmarks/week1_guardrails.json
 ```
 
-This is wired into `.github/workflows/benchmark.yml` so regressions fail CI early.
-
-### Resolver fixture parity report (Week-2 track)
-
-Generate resolver fixture pass-rate + edge-coverage report:
+### Resolver parity report
 
 ```sh
 python3 scripts/resolver_fixture_report.py \
@@ -184,21 +239,7 @@ python3 scripts/resolver_fixture_report.py \
   --out resolver-parity-report.json
 ```
 
-This report is also produced in CI and uploaded as an artifact (`resolver-parity-report.json`).
-
-**Semantic snapshot diff**
-
-The resolver fixture report now includes a semantic graph diff for each fixture:
-- `expectedGraph` in snapshot files defines the expected dependency graph.
-- `actualGraph` is derived from the fixture's package.json.
-- `semanticDiff` shows mismatches (missing/extra edges, overrides, workspaces).
-- `semantic.matchRate` is the ratio of fixtures with matching graphs.
-
-Guardrails can enforce a minimum `semanticMatchRate` (e.g., 1.0) to ensure resolver parity.
-
-### Framework compatibility matrix (Week-3 track)
-
-Generate framework compatibility report (React / Next / Nuxt / Nest / Turbo / Expo fixtures):
+### Framework compatibility report
 
 ```sh
 python3 scripts/framework_compat_report.py \
@@ -208,9 +249,7 @@ python3 scripts/framework_compat_report.py \
   --out framework-compat-report.json
 ```
 
-### Fallback trend guardrails (Week-4 track)
-
-Check fallback regressions against a baseline KPI report:
+### Fallback trend report
 
 ```sh
 python3 scripts/check_fallback_trend.py \
@@ -219,9 +258,7 @@ python3 scripts/check_fallback_trend.py \
   --config benchmarks/fallback_trend_guardrails.json
 ```
 
-### Enterprise `.npmrc` matrix report (Week-5 track)
-
-Validate enterprise config scenarios (scoped registry, token, proxy, strict-ssl, cafile):
+### Enterprise `.npmrc` report
 
 ```sh
 python3 scripts/enterprise_npmrc_report.py \
@@ -229,32 +266,34 @@ python3 scripts/enterprise_npmrc_report.py \
   --out enterprise-npmrc-report.json
 ```
 
-All three reports are wired into `.github/workflows/benchmark.yml` and uploaded as artifacts.
-
 ---
 
-## Compatibility & current limitations
+## Compatibility and limitations
 
-### What is stable today
-- Native install flow with npm registry metadata + tarball extraction
+### Stable today
+
+- Native install using npm registry metadata and tarball extraction
 - Cache-first and offline workflows (`prefetch`, `install --offline`)
 - Lockfile-aware deterministic installs (`--frozen`)
-- Workspace traversal for install/doctor/audit/run
+- Workspace-aware install, doctor, and audit
 
-### Known limitations (to improve next)
-- Dependency resolution is currently a greedy strategy (single version preference) and may differ from npm behavior on complex trees.
-- Some advanced npm ecosystem edge cases (complex peer dependency graphs, rare postinstall assumptions) are not fully parity-tested yet.
-- Benchmarking is available and automated in CI with a threshold gate, but baseline tuning per environment/project profile is still evolving.
+### Current limitations
 
-If you hit an issue, please open one with the failing package graph and lockfile for fastest debugging.
+- Dependency resolution currently uses a greedy strategy and may diverge from npm in complex graphs.
+- Some advanced peer dependency cases are still being expanded in parity testing.
+- Benchmark baselines are CI-automated, but environment-specific tuning is still evolving.
+
+If you hit an issue, open a GitHub issue with the failing dependency graph and lockfile.
 
 ---
 
 ## Links
 
-- **Crate:** [crates.io/crates/jhol](https://crates.io/crates/jhol)
-- **Releases:** [GitHub Releases](https://github.com/bhuvanprakash/jhol/releases)
+- Crate: https://crates.io/crates/jhol
+- Releases: https://github.com/bhuvanprakash/jhol/releases
+- Documentation entry: [`Documentation/main.md`](./Documentation/main.md)
 
 ## License
 
-Jhol is licensed under the [Jhol License](LICENSE) (personal and non-commercial use). For other use, contact bhuvanstark6@gmail.com.
+Jhol is licensed under the [Jhol License](LICENSE) (personal and non-commercial use).
+For commercial or other usage, contact: bhuvanstark6@gmail.com.
