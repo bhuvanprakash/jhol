@@ -14,6 +14,7 @@ pub const NPM_SHOW_TIMEOUT_SECS: u64 = 15;
 pub const NPM_INSTALL_TIMEOUT_SECS: u64 = 120;
 pub const CACHE_MANIFEST_NAME: &str = "manifest.json";
 pub const CACHE_MANIFEST_SIG: &str = "manifest.sig";
+pub const FALLBACK_TELEMETRY_NAME: &str = "fallback_telemetry.json";
 
 /// Returns the path to the cache directory. Uses JHOL_CACHE_DIR if set;
 /// otherwise Windows: %USERPROFILE%\.jhol-cache, Unix: $HOME/.jhol-cache
@@ -160,6 +161,72 @@ pub fn link_package_from_store(
 /// Index path: cache_dir/store_index.json (pkg@version -> hash)
 fn store_index_path() -> PathBuf {
     cache_dir_path().join("store_index.json")
+}
+
+fn fallback_telemetry_path() -> PathBuf {
+    cache_dir_path().join(FALLBACK_TELEMETRY_NAME)
+}
+
+/// Record native->backend fallback reasons for local diagnostics.
+pub fn record_fallback_reason(reason: &str, packages: &[String]) {
+    let path = fallback_telemetry_path();
+    let mut root = read_fallback_telemetry();
+    if !root.is_object() {
+        root = serde_json::json!({});
+    }
+    let obj = root.as_object_mut().unwrap();
+
+    let total = obj
+        .get("totalFallbacks")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0)
+        + 1;
+    obj.insert("totalFallbacks".to_string(), serde_json::json!(total));
+
+    {
+        let reasons = obj
+            .entry("reasons")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .unwrap();
+        let reason_count = reasons.get(reason).and_then(|v| v.as_u64()).unwrap_or(0) + 1;
+        reasons.insert(reason.to_string(), serde_json::json!(reason_count));
+    }
+
+    {
+        let by_package = obj
+            .entry("byPackage")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .unwrap();
+        for pkg in packages {
+            let c = by_package.get(pkg).and_then(|v| v.as_u64()).unwrap_or(0) + 1;
+            by_package.insert(pkg.clone(), serde_json::json!(c));
+        }
+    }
+
+    if let Ok(s) = serde_json::to_string_pretty(&root) {
+        let _ = fs::write(path, s);
+    }
+}
+
+/// Read fallback telemetry JSON.
+pub fn read_fallback_telemetry() -> serde_json::Value {
+    let path = fallback_telemetry_path();
+    let Ok(s) = fs::read_to_string(path) else {
+        return serde_json::json!({
+            "totalFallbacks": 0,
+            "reasons": {},
+            "byPackage": {}
+        });
+    };
+    serde_json::from_str(&s).unwrap_or_else(|_| {
+        serde_json::json!({
+            "totalFallbacks": 0,
+            "reasons": {},
+            "byPackage": {}
+        })
+    })
 }
 
 pub fn read_store_index() -> HashMap<String, String> {

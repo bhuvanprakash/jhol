@@ -133,6 +133,11 @@ def main() -> int:
         default="",
         help="Write raw benchmark results to JSON file",
     )
+    parser.add_argument(
+        "--markdown-out",
+        default="",
+        help="Write a markdown benchmark summary table",
+    )
     args = parser.parse_args()
 
     jhol_bin = Path(args.jhol_bin).expanduser().resolve()
@@ -258,6 +263,21 @@ def main() -> int:
         }
         Path(args.json_out).write_text(json.dumps(out, indent=2) + "\n")
         print(f"\nSaved JSON report: {args.json_out}")
+
+    if args.markdown_out:
+        lines = []
+        lines.append("# Jhol benchmark summary")
+        lines.append("")
+        lines.append(f"Packages: `{', '.join(args.packages)}`")
+        lines.append("")
+        lines.append("| Metric | Average (s) | Runs |")
+        lines.append("|---|---:|---|")
+        for key, vals in all_results.items():
+            lines.append(
+                f"| {key} | {avg(vals):.3f} | {', '.join(f'{v:.3f}' for v in vals)} |"
+            )
+        Path(args.markdown_out).write_text("\n".join(lines) + "\n")
+        print(f"Saved markdown summary: {args.markdown_out}")
 
     return 0
 

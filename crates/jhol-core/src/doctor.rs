@@ -146,3 +146,48 @@ pub fn fix_dependencies(quiet: bool, _backend: crate::backend::Backend) -> Resul
     }
     Ok(())
 }
+
+/// Explain project health and compatibility diagnostics in a compact report.
+pub fn explain_project_health() -> Result<String, String> {
+    let cwd = Path::new(".");
+    let lock_kind = lockfile::detect_lockfile(cwd);
+    let lock_name = match lock_kind {
+        lockfile::LockfileKind::Npm => "package-lock.json",
+        lockfile::LockfileKind::Bun => "bun.lock",
+        lockfile::LockfileKind::None => "none",
+    };
+    let deps = lockfile::read_package_json_deps(Path::new("package.json")).unwrap_or_default();
+    let telemetry = utils::read_fallback_telemetry();
+    let total_fallbacks = telemetry
+        .get("totalFallbacks")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let integrity_ok = lockfile::lockfile_integrity_complete(cwd);
+    let workspace_count = crate::workspaces::list_workspace_roots(cwd)
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let registry = crate::config::effective_registry_url(cwd);
+
+    let mut out = String::new();
+    out.push_str("Jhol doctor --explain\n");
+    out.push_str("=====================\n");
+    out.push_str(&format!("Lockfile: {}\n", lock_name));
+    out.push_str(&format!("Dependencies in package.json: {}\n", deps.len()));
+    out.push_str(&format!("Workspace packages detected: {}\n", workspace_count));
+    out.push_str(&format!("Registry: {}\n", registry));
+    out.push_str(&format!(
+        "Lockfile integrity complete: {}\n",
+        if integrity_ok { "yes" } else { "no" }
+    ));
+    out.push_str(&format!("Native fallback count (local telemetry): {}\n", total_fallbacks));
+    if !integrity_ok {
+        out.push_str("Hint: run `jhol install` once to regenerate lockfile integrity entries.\n");
+    }
+    if total_fallbacks > 0 {
+        out.push_str("Hint: run `jhol cache telemetry` for fallback breakdown by reason/package.\n");
+    }
+    if matches!(lock_kind, lockfile::LockfileKind::Bun) {
+        out.push_str("Hint: run `jhol import-lock --from bun` to generate package-lock.json for npm-compatible workflows.\n");
+    }
+    Ok(out)
+}

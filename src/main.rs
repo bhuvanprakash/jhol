@@ -156,7 +156,7 @@ fn run() -> Result<(), String> {
         .help("Package manager backend (default: bun if available, else npm)");
 
     let matches = Command::new("jhol")
-        .version("1.0.0")
+        .version(env!("CARGO_PKG_VERSION"))
         .author("Bhuvan Prakash <bhuvanstark6@gmail.com>")
         .about("Fast, offline-friendly package manager — cache first, Bun/npm backend")
         .after_help(
@@ -274,6 +274,12 @@ fn run() -> Result<(), String> {
                         .help("Update outdated packages"),
                 )
                 .arg(
+                    Arg::new("explain")
+                        .long("explain")
+                        .action(ArgAction::SetTrue)
+                        .help("Explain lockfile/health/fallback diagnostics for this project"),
+                )
+                .arg(
                     Arg::new("quiet")
                         .short('q')
                         .long("quiet")
@@ -292,6 +298,17 @@ fn run() -> Result<(), String> {
                         .long("json")
                         .action(ArgAction::SetTrue)
                         .help("Output machine-readable JSON"),
+                ),
+        )
+        .subcommand(
+            Command::new("import-lock")
+                .about("Import/convert lockfile formats (initially bun.lock -> package-lock.json)")
+                .arg(
+                    Arg::new("from")
+                        .long("from")
+                        .value_parser(["auto", "bun", "npm"])
+                        .default_value("auto")
+                        .help("Source lockfile format"),
                 ),
         )
         .subcommand(
@@ -324,6 +341,9 @@ fn run() -> Result<(), String> {
                         .arg(Arg::new("dir").required(true).help("Directory from jhol cache export")),
                 )
                 .subcommand(Command::new("clean").about("Remove all cached tarballs"))
+                .subcommand(
+                    Command::new("telemetry").about("Show native fallback telemetry summary"),
+                )
                 .subcommand(
                     Command::new("key")
                         .about("Print lockfile hash for CI cache key (same lockfile => same key)"),
@@ -525,15 +545,29 @@ fn run() -> Result<(), String> {
                     .map_err(|e| format!("Failed to clean cache: {}", e))?;
                 success(&format!("Removed {} cached package(s).", n));
             }
+            Some(("telemetry", _)) => {
+                let v = jhol_core::read_fallback_telemetry();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&v).unwrap_or_else(|_| "{}".to_string())
+                );
+            }
             Some(("key", _)) => {
                 let hash = jhol_core::lockfile_content_hash(std::path::Path::new("."))
                     .unwrap_or_else(|| "none".to_string());
                 println!("{}", hash);
             }
             _ => {
-                dim("Use `jhol cache list`, `jhol cache size`, `jhol cache prune`, `jhol cache export <dir>`, `jhol cache import <dir>`, `jhol cache clean`, or `jhol cache key`.");
+                dim("Use `jhol cache list`, `jhol cache size`, `jhol cache prune`, `jhol cache export <dir>`, `jhol cache import <dir>`, `jhol cache clean`, `jhol cache telemetry`, or `jhol cache key`.");
             }
         }
+        return Ok(());
+    }
+
+    if let Some(("import-lock", sub_m)) = matches.subcommand() {
+        let from = sub_m.get_one::<String>("from").map(|s| s.as_str()).unwrap_or("auto");
+        let msg = jhol_core::import_lockfile(from).map_err(|e| e.to_string())?;
+        success(&msg);
         return Ok(());
     }
 
@@ -778,6 +812,7 @@ fn run() -> Result<(), String> {
         Some(("doctor", sub_m)) => {
             let quiet = sub_m.get_flag("quiet");
             let do_fix = sub_m.get_flag("fix");
+            let explain = sub_m.get_flag("explain");
             let all_workspaces = sub_m.get_flag("all-workspaces");
             let json_out = sub_m.get_flag("json");
             let backend = match sub_m.get_one::<String>("backend") {
@@ -788,6 +823,11 @@ fn run() -> Result<(), String> {
             let backend = jhol_core::resolve_backend(backend);
             if quiet || json_out {
                 env::set_var("JHOL_QUIET", "1");
+            }
+            if explain {
+                let report = jhol_core::explain_project_health()?;
+                println!("{}", report);
+                return Ok(());
             }
             let roots: Vec<std::path::PathBuf> = if all_workspaces {
                 let r = jhol_core::list_workspace_roots(&cwd).unwrap_or_default();

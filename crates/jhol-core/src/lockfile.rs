@@ -150,7 +150,7 @@ pub fn read_lockfile_resolved_urls_with_integrity(
 /// Build npm registry tarball URL for a package version (no packument needed).
 /// Scoped: @scope/pkg -> https://registry.npmjs.org/@scope%2Fpkg/-/pkg-1.0.0.tgz
 pub fn tarball_url_from_registry(name: &str, version: &str) -> String {
-    const REGISTRY: &str = "https://registry.npmjs.org";
+    let registry = crate::config::effective_registry_url(Path::new("."));
     let encoded = if name.starts_with('@') {
         name.replace('/', "%2F")
     } else {
@@ -163,7 +163,7 @@ pub fn tarball_url_from_registry(name: &str, version: &str) -> String {
     };
     format!(
         "{}/{}/-/{}-{}.tgz",
-        REGISTRY.trim_end_matches('/'),
+        registry.trim_end_matches('/'),
         encoded,
         tarball_name,
         version
