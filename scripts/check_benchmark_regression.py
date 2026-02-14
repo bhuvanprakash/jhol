@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""Simple benchmark regression checker.
-
-Compares benchmark JSON output from scripts/benchmark.py against a baseline.
-Fails if any metric exceeds baseline by threshold percent.
-"""
-
 from __future__ import annotations
 
 import argparse

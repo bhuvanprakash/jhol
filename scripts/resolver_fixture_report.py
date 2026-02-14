@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""Generate an initial resolver parity fixture report.
-
-Week-2 implementation target:
-- track fixture corpus growth
-- verify edge-case coverage categories exist
-- ensure each fixture has a snapshot descriptor
-- emit machine-readable pass-rate report
-"""
-
 from __future__ import annotations
 
 import argparse

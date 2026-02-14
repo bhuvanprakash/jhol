@@ -1,18 +1,4 @@
 #!/usr/bin/env python3
-"""
-Simple benchmark harness for Jhol install performance.
-
-Scenarios:
-- cold_install: empty cache + install
-- warm_install: reuse cache + reinstall
-- offline_install: reuse cache + install --offline
-
-Optional:
-- compare npm cold/warm with --compare-npm
-
-This script creates and cleans temporary benchmark directories automatically.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -89,13 +75,6 @@ def write_package_json(project_dir: Path, packages: List[str]) -> None:
 
 
 def package_name_only(spec: str) -> str:
-    """Convert package spec to package name for CLI args.
-
-    Examples:
-    - lodash@4.17.21 -> lodash
-    - @scope/pkg@1.2.3 -> @scope/pkg
-    - react -> react
-    """
     if spec.startswith("@"):
         idx = spec.rfind("@")
         return spec[:idx] if idx > 0 else spec
@@ -165,7 +144,6 @@ def main() -> int:
         env["JHOL_CACHE_DIR"] = str(cache_dir)
         env["JHOL_QUIET"] = "1"
 
-        # Cold
         all_results["jhol_cold_install"] = []
         for _ in range(args.repeats):
             if (project_dir / "node_modules").exists():
@@ -177,12 +155,9 @@ def main() -> int:
             )
             ensure_ok(res, "jhol cold install")
             all_results["jhol_cold_install"].append(res.seconds)
-            # Reset cache for each cold run
             if cache_dir.exists():
                 shutil.rmtree(cache_dir)
             cache_dir.mkdir(parents=True, exist_ok=True)
-
-        # Prime cache once for warm/offline
         if (project_dir / "node_modules").exists():
             shutil.rmtree(project_dir / "node_modules")
         res_prime = run_cmd(
@@ -191,8 +166,6 @@ def main() -> int:
             env,
         )
         ensure_ok(res_prime, "jhol prime cache")
-
-        # Warm
         all_results["jhol_warm_install"] = []
         for _ in range(args.repeats):
             if (project_dir / "node_modules").exists():
@@ -204,8 +177,6 @@ def main() -> int:
             )
             ensure_ok(res, "jhol warm install")
             all_results["jhol_warm_install"].append(res.seconds)
-
-        # Offline
         all_results["jhol_offline_install"] = []
         for _ in range(args.repeats):
             if (project_dir / "node_modules").exists():
