@@ -1,0 +1,21 @@
+{
+  "fixture": "nuxt-app",
+  "expectedStatus": "pass",
+  "notes": "framework matrix fixture for Nuxt",
+  "expectedGraph": {
+    "root": {
+      "name": "jhol-fixture-nuxt-app",
+      "version": "1.0.0"
+    },
+    "edges": [
+      {
+        "from": "$root",
+        "to": "nuxt",
+        "spec": "3.12.4",
+        "type": "dependencies"
+      }
+    ],
+    "overrides": {},
+    "workspaces": []
+  }
+}

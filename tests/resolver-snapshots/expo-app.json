@@ -1,0 +1,33 @@
+{
+  "fixture": "expo-app",
+  "expectedStatus": "pass",
+  "notes": "framework matrix fixture for Expo",
+  "expectedGraph": {
+    "root": {
+      "name": "jhol-fixture-expo-app",
+      "version": "1.0.0"
+    },
+    "edges": [
+      {
+        "from": "$root",
+        "to": "expo",
+        "spec": "51.0.22",
+        "type": "dependencies"
+      },
+      {
+        "from": "$root",
+        "to": "react",
+        "spec": "18.2.0",
+        "type": "dependencies"
+      },
+      {
+        "from": "$root",
+        "to": "react-native",
+        "spec": "0.74.5",
+        "type": "dependencies"
+      }
+    ],
+    "overrides": {},
+    "workspaces": []
+  }
+}

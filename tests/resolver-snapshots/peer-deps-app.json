@@ -1,0 +1,27 @@
+{
+  "fixture": "peer-deps-app",
+  "expectedStatus": "pass",
+  "notes": "covers peerDependencies edge",
+  "expectedGraph": {
+    "root": {
+      "name": "jhol-fixture-peer-deps-app",
+      "version": "1.0.0"
+    },
+    "edges": [
+      {
+        "from": "$root",
+        "to": "react",
+        "spec": "18.2.0",
+        "type": "dependencies"
+      },
+      {
+        "from": "$root",
+        "to": "react-dom",
+        "spec": "^18.0.0",
+        "type": "peerDependencies"
+      }
+    ],
+    "overrides": {},
+    "workspaces": []
+  }
+}

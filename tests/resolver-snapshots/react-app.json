@@ -1,0 +1,33 @@
+{
+  "fixture": "react-app",
+  "expectedStatus": "pass",
+  "notes": "baseline react + react-dom graph",
+  "expectedGraph": {
+    "root": {
+      "name": "jhol-fixture-react-app",
+      "version": "1.0.0"
+    },
+    "edges": [
+      {
+        "from": "$root",
+        "to": "react",
+        "spec": "18.2.0",
+        "type": "dependencies"
+      },
+      {
+        "from": "$root",
+        "to": "react-dom",
+        "spec": "18.2.0",
+        "type": "dependencies"
+      },
+      {
+        "from": "$root",
+        "to": "vite",
+        "spec": "5.0.0",
+        "type": "devDependencies"
+      }
+    ],
+    "overrides": {},
+    "workspaces": []
+  }
+}

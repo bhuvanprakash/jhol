@@ -1,0 +1,33 @@
+{
+  "fixture": "next-app",
+  "expectedStatus": "pass",
+  "notes": "framework matrix fixture for Next.js",
+  "expectedGraph": {
+    "root": {
+      "name": "jhol-fixture-next-app",
+      "version": "1.0.0"
+    },
+    "edges": [
+      {
+        "from": "$root",
+        "to": "next",
+        "spec": "14.2.5",
+        "type": "dependencies"
+      },
+      {
+        "from": "$root",
+        "to": "react",
+        "spec": "18.2.0",
+        "type": "dependencies"
+      },
+      {
+        "from": "$root",
+        "to": "react-dom",
+        "spec": "18.2.0",
+        "type": "dependencies"
+      }
+    ],
+    "overrides": {},
+    "workspaces": []
+  }
+}
