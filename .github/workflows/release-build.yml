@@ -53,19 +53,13 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
 
-      - name: Prepare release assets
-        run: |
-          mv jhol-macos/jhol jhol-macos
-          mv jhol-linux/jhol jhol-linux
-          mv jhol-windows.exe/jhol.exe jhol-windows.exe
-
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.release.tag_name || inputs.tag }}
           files: |
-            jhol-macos
-            jhol-linux
-            jhol-windows.exe
+            jhol-macos/jhol
+            jhol-linux/jhol
+            jhol-windows.exe/jhol.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
