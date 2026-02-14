@@ -1,17 +1,42 @@
-# Jhol
+# Jhol ⚡
 
-<div align="left">
+<p align="center">
+  <strong>Fast, cache-first package manager for JavaScript projects.</strong><br/>
+  Native workflows • Offline reliability • Deterministic installs
+</p>
 
-<a href="https://crates.io/crates/jhol"><img alt="Crates.io" src="https://img.shields.io/crates/v/jhol?style=flat-square" /></a>
-<a href="https://github.com/bhuvanprakash/jhol/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/bhuvanprakash/jhol?style=flat-square" /></a>
-<img alt="Rust" src="https://img.shields.io/badge/Rust-stable-informational?style=flat-square" />
-<img alt="Platform" src="https://img.shields.io/badge/platform-Linux%20%7C%20Windows-blue?style=flat-square" />
+<p align="center">
+  <a href="https://crates.io/crates/jhol"><img alt="Crates.io" src="https://img.shields.io/crates/v/jhol?style=for-the-badge" /></a>
+  <a href="https://github.com/bhuvanprakash/jhol/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/bhuvanprakash/jhol?style=for-the-badge" /></a>
+  <img alt="Rust" src="https://img.shields.io/badge/Rust-stable-informational?style=for-the-badge" />
+  <img alt="License" src="https://img.shields.io/badge/license-Jhol%20License-5b3cc4?style=for-the-badge" />
+</p>
 
-</div>
+<p align="center">
+  <a href="./GET_STARTED.md"><strong>Get Started</strong></a> •
+  <a href="./Documentation/main.md"><strong>Documentation</strong></a> •
+  <a href="./CHANGELOG.md"><strong>Changelog</strong></a>
+</p>
 
-Jhol is a fast, offline-friendly package manager for JavaScript projects. It works with existing `package.json` files and lockfiles, uses a cache-first architecture, and provides native install, doctor, and audit workflows.
+---
 
-For compatibility edge cases, Jhol can delegate install execution to Bun or npm with `--fallback-backend`.
+## Why teams pick Jhol
+
+- ⚙️ **Native by default**: install, doctor, and audit without requiring npm/Bun at runtime.
+- 📦 **Cache-first architecture**: significantly faster repeat installs with reduced network usage.
+- 🛜 **Offline-ready mode**: run installs from cache using `--offline`.
+- 🔒 **Deterministic CI support**: reproducible installs with `--frozen` or `jhol ci`.
+- 🧩 **Practical fallback**: delegate to Bun/npm for hard edge cases via `--fallback-backend`.
+
+### Quick install
+
+```sh
+cargo install jhol
+```
+
+Works with existing `package.json` and lockfiles.
+
+For compatibility edge cases, Jhol can delegate install execution to Bun or npm using `--fallback-backend`.
 
 See [CHANGELOG.md](./CHANGELOG.md) for release notes.
 
