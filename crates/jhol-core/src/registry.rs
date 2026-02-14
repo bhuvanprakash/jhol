@@ -8,7 +8,13 @@ use std::path::{Path, PathBuf};
 use semver::{Version, VersionReq};
 use sha2::{Digest, Sha256};
 
-const REGISTRY_URL: &str = "https://registry.npmjs.org";
+fn registry_url() -> String {
+    crate::config::effective_registry_url(Path::new("."))
+}
+
+fn registry_auth_token() -> Option<String> {
+    crate::config::registry_auth_token(Path::new("."))
+}
 
 fn packument_cache_dir() -> PathBuf {
     PathBuf::from(crate::utils::get_cache_dir()).join("packuments")
@@ -57,13 +63,20 @@ fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>
     } else {
         package.to_string()
     };
-    let url = format!("{}/{}", REGISTRY_URL.trim_end_matches('/'), path.trim_start_matches('/'));
+    let base = registry_url();
+    let url = format!("{}/{}", base.trim_end_matches('/'), path.trim_start_matches('/'));
+    let auth_token = registry_auth_token();
     let (cached_body_raw, cached_etag) = read_packument_cache(package, abbreviated);
     let cached_body = cached_body_raw.filter(|b| !b.is_empty());
 
     let mut req = ureq::get(&url);
     if abbreviated {
         req = req.set("Accept", "application/vnd.npm.install-v1+json");
+    }
+    if let Some(token) = auth_token.as_deref() {
+        if !token.is_empty() {
+            req = req.set("Authorization", &format!("Bearer {}", token));
+        }
     }
     if let Some(ref etag) = cached_etag {
         if !etag.is_empty() {
@@ -108,6 +121,11 @@ fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>
             let mut retry = ureq::get(&url);
             if abbreviated {
                 retry = retry.set("Accept", "application/vnd.npm.install-v1+json");
+            }
+            if let Some(token) = auth_token.as_deref() {
+                if !token.is_empty() {
+                    retry = retry.set("Authorization", &format!("Bearer {}", token));
+                }
             }
             let resp = retry.call().map_err(|e| e.to_string())?;
             let etag = resp.header("ETag").map(|s| s.to_string());
@@ -420,7 +438,8 @@ pub fn get_version_peer_dependencies_meta(
 
 /// Download tarball from URL to a file; returns path (uses bounded HTTP client).
 pub fn download_tarball(url: &str, dest: &Path) -> Result<PathBuf, String> {
-    crate::http_client::get_to_file(url, dest)?;
+    let token = registry_auth_token();
+    crate::http_client::get_to_file_with_bearer(url, dest, token.as_deref())?;
     Ok(dest.to_path_buf())
 }
 

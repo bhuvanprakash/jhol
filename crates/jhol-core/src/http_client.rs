@@ -139,6 +139,30 @@ impl HttpClient {
         Ok(())
     }
 
+    /// GET url with optional auth bearer token and write to file.
+    pub fn get_to_file_with_bearer(
+        &self,
+        url: &str,
+        dest: &Path,
+        bearer_token: Option<&str>,
+    ) -> Result<(), String> {
+        let _guard = self.limit.acquire();
+        let resp = self.send_with_retry(|| {
+            let req = self.agent.get(url);
+            match bearer_token {
+                Some(token) if !token.is_empty() => req
+                    .set("Authorization", &format!("Bearer {}", token))
+                    .call(),
+                _ => req.call(),
+            }
+        })?;
+        let mut out = File::create(dest).map_err(|e| e.to_string())?;
+        let mut reader = resp.into_reader();
+        std::io::copy(&mut reader, &mut out).map_err(|e| e.to_string())?;
+        out.flush().map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     fn send_with_retry<F>(&self, mut send: F) -> Result<ureq::Response, String>
     where
         F: FnMut() -> Result<ureq::Response, ureq::Error>,
@@ -201,6 +225,15 @@ pub fn get_with_accept(url: &str, accept: Option<&str>) -> Result<Vec<u8>, Strin
 /// GET url and write to file (uses global bounded client).
 pub fn get_to_file(url: &str, dest: &Path) -> Result<(), String> {
     get_global().get_to_file(url, dest)
+}
+
+/// GET url and write to file using optional bearer auth token.
+pub fn get_to_file_with_bearer(
+    url: &str,
+    dest: &Path,
+    bearer_token: Option<&str>,
+) -> Result<(), String> {
+    get_global().get_to_file_with_bearer(url, dest, bearer_token)
 }
 
 /// POST JSON body to url (uses global bounded client).

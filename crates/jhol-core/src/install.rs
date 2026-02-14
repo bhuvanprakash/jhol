@@ -204,11 +204,12 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
             }
         }
         if !fallback_tarballs.is_empty() {
+            let fallback_pkgs: Vec<String> = fallback_tarballs.iter().map(|(p, _)| p.clone()).collect();
+            crate::utils::record_fallback_reason("cache_link_or_extract_failed", &fallback_pkgs);
             if options.native_only {
-                let pkgs: Vec<String> = fallback_tarballs.iter().map(|(p, _)| p.clone()).collect();
                 return Err(format!(
                     "Native-only: could not link or extract from cache for: {}. Try JHOL_LINK=0 or run without --native-only.",
-                    pkgs.join(", ")
+                    fallback_pkgs.join(", ")
                 ));
             }
             if !options.no_scripts {
@@ -339,11 +340,14 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     }
 
     if options.native_only {
+        crate::utils::record_fallback_reason("native_install_failed", &npm_fallback);
         return Err(format!(
             "Native-only: install failed for: {}. Run without --native-only to use Bun/npm fallback.",
             npm_fallback.join(", ")
         ));
     }
+
+    crate::utils::record_fallback_reason("native_install_failed", &npm_fallback);
 
     if !options.no_scripts {
         if let Some(allowlist) = &options.script_allowlist {
