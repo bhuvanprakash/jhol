@@ -55,9 +55,13 @@ jobs:
 
       - name: Normalize release asset names
         run: |
-          cp jhol-macos/jhol jhol-macos
-          cp jhol-linux/jhol jhol-linux
-          cp jhol-windows.exe/jhol.exe jhol-windows.exe
+          mv jhol-macos _tmp-macos
+          mv jhol-linux _tmp-linux
+          mv jhol-windows.exe _tmp-windows
+
+          mv _tmp-macos/jhol jhol-macos
+          mv _tmp-linux/jhol jhol-linux
+          mv _tmp-windows/jhol.exe jhol-windows.exe
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
