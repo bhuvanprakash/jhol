@@ -1,5 +1,5 @@
-# Build jhol for Linux and Windows and attach binaries to GitHub Release.
-name: Release build (Linux + Windows)
+# Build jhol for macOS, Linux, and Windows and attach binaries to GitHub Release.
+name: Release build (macOS + Linux + Windows)
 on:
   release:
     types: [published]
@@ -10,6 +10,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - os: macos-latest
+            name: macos
+            artifact: jhol-macos
           - os: ubuntu-latest
             name: linux
             artifact: jhol-linux
@@ -52,6 +55,7 @@ jobs:
 
       - name: Prepare release assets
         run: |
+          mv jhol-macos/jhol jhol-macos
           mv jhol-linux/jhol jhol-linux
           mv jhol-windows.exe/jhol.exe jhol-windows.exe
 
@@ -59,6 +63,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            jhol-macos
             jhol-linux
             jhol-windows.exe
         env:

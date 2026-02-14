@@ -94,9 +94,14 @@ cargo install jhol
 cargo install --git https://github.com/bhuvanprakash/jhol
 ```
 
-### Prebuilt binaries (Linux and Windows)
+### Prebuilt binaries (macOS, Linux, and Windows)
 
-Download `jhol-linux` or `jhol-windows.exe` from [GitHub Releases](https://github.com/bhuvanprakash/jhol/releases).
+Download `jhol-macos`, `jhol-linux`, or `jhol-windows.exe` from [GitHub Releases](https://github.com/bhuvanprakash/jhol/releases).
+
+- macOS:
+  ```sh
+  chmod +x jhol-macos
+  ```
 
 - Linux:
   ```sh
