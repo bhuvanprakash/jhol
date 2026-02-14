@@ -3,37 +3,145 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use semver::{Version, VersionReq};
+use sha2::{Digest, Sha256};
 
 const REGISTRY_URL: &str = "https://registry.npmjs.org";
 
-fn registry_get(path: &str) -> Result<Vec<u8>, String> {
-    let url = format!("{}/{}", REGISTRY_URL.trim_end_matches('/'), path.trim_start_matches('/'));
-    crate::http_client::get(&url)
+fn packument_cache_dir() -> PathBuf {
+    PathBuf::from(crate::utils::get_cache_dir()).join("packuments")
 }
 
-/// npm registry may return smaller "abbreviated" packument with Accept: application/vnd.npm.install-v1+json (RFC 0035).
-fn registry_get_abbreviated(path: &str) -> Result<Vec<u8>, String> {
+fn packument_cache_key(package: &str, abbreviated: bool) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(package.as_bytes());
+    hasher.update(if abbreviated { b"abbr" } else { b"full" });
+    format!("{:x}", hasher.finalize())
+}
+
+fn packument_cache_paths(package: &str, abbreviated: bool) -> (PathBuf, PathBuf) {
+    let key = packument_cache_key(package, abbreviated);
+    let dir = packument_cache_dir();
+    (dir.join(format!("{}.json", key)), dir.join(format!("{}.etag", key)))
+}
+
+fn read_packument_cache(package: &str, abbreviated: bool) -> (Option<Vec<u8>>, Option<String>) {
+    let (body_path, etag_path) = packument_cache_paths(package, abbreviated);
+    let body = std::fs::read(&body_path).ok();
+    let etag = std::fs::read_to_string(&etag_path).ok().map(|s| s.trim().to_string());
+    (body, etag)
+}
+
+fn write_packument_cache(
+    package: &str,
+    abbreviated: bool,
+    body: &[u8],
+    etag: Option<&str>,
+) -> Result<(), String> {
+    let (body_path, etag_path) = packument_cache_paths(package, abbreviated);
+    if let Some(parent) = body_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&body_path, body).map_err(|e| e.to_string())?;
+    if let Some(etag) = etag {
+        std::fs::write(&etag_path, etag).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>, String> {
+    let path = if package.starts_with('@') {
+        package.replace('/', "%2F")
+    } else {
+        package.to_string()
+    };
     let url = format!("{}/{}", REGISTRY_URL.trim_end_matches('/'), path.trim_start_matches('/'));
-    crate::http_client::get_with_accept(&url, Some("application/vnd.npm.install-v1+json"))
+    let (cached_body_raw, cached_etag) = read_packument_cache(package, abbreviated);
+    let cached_body = cached_body_raw.filter(|b| !b.is_empty());
+
+    let mut req = ureq::get(&url);
+    if abbreviated {
+        req = req.set("Accept", "application/vnd.npm.install-v1+json");
+    }
+    if let Some(ref etag) = cached_etag {
+        if !etag.is_empty() {
+            req = req.set("If-None-Match", etag);
+        }
+    }
+
+    match req.call() {
+        Ok(resp) => {
+            let etag = resp.header("ETag").map(|s| s.to_string());
+            let mut body = Vec::new();
+            resp.into_reader()
+                .read_to_end(&mut body)
+                .map_err(|e| e.to_string())?;
+            if body.is_empty() {
+                if let Some(cached) = cached_body {
+                    if serde_json::from_slice::<serde_json::Value>(&cached).is_ok() {
+                        return Ok(cached);
+                    }
+                }
+                return Err(format!("Empty packument body for {}", package));
+            }
+            if serde_json::from_slice::<serde_json::Value>(&body).is_err() {
+                if let Some(cached) = cached_body {
+                    if serde_json::from_slice::<serde_json::Value>(&cached).is_ok() {
+                        return Ok(cached);
+                    }
+                }
+                return Err(format!("Invalid packument JSON for {}", package));
+            }
+            let _ = write_packument_cache(package, abbreviated, &body, etag.as_deref());
+            Ok(body)
+        }
+        Err(ureq::Error::Status(304, _)) => {
+            if let Some(body) = cached_body {
+                // Guard against corrupted cache blobs.
+                if serde_json::from_slice::<serde_json::Value>(&body).is_ok() {
+                    return Ok(body);
+                }
+            }
+            // Fallback: unconditional fetch when cache is missing/corrupt.
+            let mut retry = ureq::get(&url);
+            if abbreviated {
+                retry = retry.set("Accept", "application/vnd.npm.install-v1+json");
+            }
+            let resp = retry.call().map_err(|e| e.to_string())?;
+            let etag = resp.header("ETag").map(|s| s.to_string());
+            let mut body = Vec::new();
+            resp.into_reader()
+                .read_to_end(&mut body)
+                .map_err(|e| e.to_string())?;
+            if body.is_empty() {
+                return Err(format!("Empty packument body for {}", package));
+            }
+            let _ = write_packument_cache(package, abbreviated, &body, etag.as_deref());
+            Ok(body)
+        }
+        Err(e) => {
+            if let Some(body) = cached_body {
+                if serde_json::from_slice::<serde_json::Value>(&body).is_ok() {
+                    return Ok(body);
+                }
+            }
+            Err(e.to_string())
+        }
+    }
 }
 
 /// Fetch package metadata from registry. Scoped: @scope/pkg -> @scope%2Fpkg.
 /// Tries abbreviated packument (Accept: application/vnd.npm.install-v1+json) first; falls back to full if unsupported or incomplete.
 pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
-    let path = if package.starts_with('@') {
-        format!("{}", package.replace('/', "%2F"))
-    } else {
-        package.to_string()
-    };
-    let body = match registry_get_abbreviated(&path) {
+    let body = match fetch_packument_with_etag(package, true) {
         Ok(b) => b,
-        Err(_) => registry_get(&path)?,
+        Err(_) => fetch_packument_with_etag(package, false)?,
     };
     let v: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
     if v.get("versions").and_then(|v| v.as_object()).map(|o| o.is_empty()).unwrap_or(true) {
-        let body = registry_get(&path)?;
+        let body = fetch_packument_with_etag(package, false)?;
         let v: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
         return Ok(v);
     }
@@ -288,6 +396,28 @@ pub fn get_version_peer_dependencies(meta: &serde_json::Value, version: &str) ->
     out
 }
 
+/// Get peerDependenciesMeta of a version from packument.
+pub fn get_version_peer_dependencies_meta(
+    meta: &serde_json::Value,
+    version: &str,
+) -> std::collections::HashMap<String, serde_json::Value> {
+    let mut out = std::collections::HashMap::new();
+    let versions = match meta.get("versions").and_then(|v| v.as_object()) {
+        Some(v) => v,
+        None => return out,
+    };
+    let ver_obj = match versions.get(version).and_then(|v| v.as_object()) {
+        Some(v) => v,
+        None => return out,
+    };
+    if let Some(meta_obj) = ver_obj.get("peerDependenciesMeta").and_then(|d| d.as_object()) {
+        for (k, v) in meta_obj {
+            out.insert(k.clone(), v.clone());
+        }
+    }
+    out
+}
+
 /// Download tarball from URL to a file; returns path (uses bounded HTTP client).
 pub fn download_tarball(url: &str, dest: &Path) -> Result<PathBuf, String> {
     crate::http_client::get_to_file(url, dest)?;
@@ -390,6 +520,7 @@ pub fn extract_tarball_to_dir(tarball_path: &Path, dest_dir: &Path) -> Result<()
             if let Some(p) = out_path.parent() {
                 std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
             }
+            // Streaming extraction through tar reader; avoids loading archive into memory.
             entry.unpack(&out_path).map_err(|e| e.to_string())?;
         }
     }

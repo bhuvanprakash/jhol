@@ -37,6 +37,10 @@ pub struct InstallOptions {
     pub from_lockfile: bool,
     /// When true, never call Bun/npm; fail with clear error if native install fails.
     pub native_only: bool,
+    /// When true, skip lifecycle scripts in backend fallback paths.
+    pub no_scripts: bool,
+    /// Optional allowlist for packages allowed to run scripts in backend fallback mode.
+    pub script_allowlist: Option<std::collections::HashSet<String>>,
 }
 
 impl Default for InstallOptions {
@@ -50,6 +54,8 @@ impl Default for InstallOptions {
             strict_lockfile: false,
             from_lockfile: false,
             native_only: true,
+            no_scripts: true,
+            script_allowlist: None,
         }
     }
 }
@@ -64,6 +70,26 @@ pub fn install_lockfile_only(_backend: Backend) -> Result<(), String> {
     let lock_path = Path::new("package-lock.json");
     crate::lockfile_write::write_package_lock(lock_path, pj, &tree)?;
     Ok(())
+}
+
+fn check_script_allowlist(packages: &[String], allowlist: &std::collections::HashSet<String>) -> Result<(), String> {
+    let mut denied = Vec::new();
+    for p in packages {
+        let name = base_name(p).to_string();
+        if !allowlist.contains(&name) {
+            denied.push(name);
+        }
+    }
+    if denied.is_empty() {
+        Ok(())
+    } else {
+        denied.sort();
+        denied.dedup();
+        Err(format!(
+            "Scripts are only allowed for allowlisted packages. Denied: {}",
+            denied.join(", ")
+        ))
+    }
 }
 
 /// Install dependencies from package.json (and optional package-lock.json or bun.lock). Returns list of specs to install.
@@ -185,8 +211,14 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                     pkgs.join(", ")
                 ));
             }
+            if !options.no_scripts {
+                if let Some(allowlist) = &options.script_allowlist {
+                    let pkgs: Vec<String> = fallback_tarballs.iter().map(|(p, _)| p.clone()).collect();
+                    check_script_allowlist(&pkgs, allowlist)?;
+                }
+            }
             let paths: Vec<std::path::PathBuf> = fallback_tarballs.iter().map(|(_, p)| p.clone()).collect();
-            match backend::backend_install_tarballs(&paths, options.backend) {
+            match backend::backend_install_tarballs(&paths, options.backend, options.no_scripts) {
                 Ok(()) => {
                     for (pkg, _) in &fallback_tarballs {
                         utils::log(&format!("Installed {} from cache (backend).", pkg));
@@ -313,11 +345,22 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         ));
     }
 
+    if !options.no_scripts {
+        if let Some(allowlist) = &options.script_allowlist {
+            check_script_allowlist(&npm_fallback, allowlist)?;
+        }
+    }
+
     // Fallback: backend install for any that native failed
     let fetch_refs: Vec<&str> = npm_fallback.iter().map(|s| s.as_str()).collect();
     let mut attempts = 3;
     loop {
-        match backend::backend_install(&fetch_refs, options.backend, options.lockfile_only) {
+        match backend::backend_install(
+            &fetch_refs,
+            options.backend,
+            options.lockfile_only,
+            options.no_scripts,
+        ) {
             Ok(()) => {
                 let cache_dir = std::path::PathBuf::from(utils::get_cache_dir());
                 for pkg in &npm_fallback {

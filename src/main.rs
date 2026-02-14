@@ -11,6 +11,7 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+use std::collections::HashSet;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -226,7 +227,42 @@ fn run() -> Result<(), String> {
                         .long("fallback-backend")
                         .action(ArgAction::SetTrue)
                         .help("On failure, fall back to Bun/npm for install"),
+                )
+                .arg(
+                    Arg::new("no-scripts")
+                        .long("no-scripts")
+                        .action(ArgAction::SetTrue)
+                        .help("Do not run lifecycle scripts in fallback backend installs (default true)"),
+                )
+                .arg(
+                    Arg::new("scripts")
+                        .long("scripts")
+                        .action(ArgAction::SetTrue)
+                        .help("Allow lifecycle scripts in fallback backend installs"),
                 ),
+        )
+        .subcommand(
+            Command::new("ci")
+                .about("Clean, deterministic install (npm ci-style): requires lockfile")
+                .arg(
+                    Arg::new("offline")
+                        .long("offline")
+                        .action(ArgAction::SetTrue)
+                        .help("Only use cache; fail if any package is missing"),
+                )
+                .arg(
+                    Arg::new("all-workspaces")
+                        .long("all-workspaces")
+                        .action(ArgAction::SetTrue)
+                        .help("Run in all workspace packages"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("Output machine-readable JSON result"),
+                )
+                .arg(backend_arg.clone()),
         )
         .subcommand(
             Command::new("doctor")
@@ -321,6 +357,12 @@ fn run() -> Result<(), String> {
                         .long("json")
                         .action(ArgAction::SetTrue)
                         .help("Output raw audit JSON"),
+                )
+                .arg(
+                    Arg::new("gate")
+                        .long("gate")
+                        .action(ArgAction::SetTrue)
+                        .help("Fail with non-zero exit if vulnerabilities are found (CI gate)"),
                 ),
         )
         .subcommand(
@@ -587,6 +629,55 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    if let Some(("ci", sub_m)) = matches.subcommand() {
+        jhol_core::init_cache().map_err(|e| format!("Failed to initialize cache: {}", e))?;
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let config = jhol_core::load_config(&cwd);
+        if let Some(ref d) = config.cache_dir {
+            env::set_var("JHOL_CACHE_DIR", d);
+        }
+        let quiet = false;
+        let offline = sub_m.get_flag("offline")
+            || env::var("JHOL_OFFLINE").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+        let all_workspaces = sub_m.get_flag("all-workspaces");
+        let backend = match sub_m.get_one::<String>("backend") {
+            Some(s) if s == "bun" => Some(jhol_core::Backend::Bun),
+            Some(s) if s == "npm" => Some(jhol_core::Backend::Npm),
+            _ => config.backend,
+        };
+        let backend = jhol_core::resolve_backend(backend);
+        let json_out = sub_m.get_flag("json");
+        let roots: Vec<std::path::PathBuf> = if all_workspaces {
+            let r = jhol_core::list_workspace_roots(&cwd).unwrap_or_default();
+            if r.is_empty() { vec![cwd.clone()] } else { r.into_iter().map(|p| cwd.join(p)).collect() }
+        } else {
+            vec![cwd.clone()]
+        };
+        for root in &roots {
+            std::env::set_current_dir(root).map_err(|e| format!("chdir {}: {}", root.display(), e))?;
+            let specs = jhol_core::resolve_install_from_package_json(true)?;
+            let refs: Vec<&str> = specs.iter().map(|s| s.as_str()).collect();
+            let opts = jhol_core::InstallOptions {
+                no_cache: false,
+                quiet,
+                backend,
+                lockfile_only: false,
+                offline,
+                strict_lockfile: true,
+                from_lockfile: true,
+                native_only: true,
+                no_scripts: true,
+                script_allowlist: None,
+            };
+            jhol_core::install_package(&refs, &opts)?;
+        }
+        std::env::set_current_dir(&cwd).ok();
+        if json_out {
+            println!("{{\"schemaVersion\":\"1\",\"command\":\"ci\",\"status\":\"ok\",\"workspaces\":{}}}", roots.len());
+        }
+        return Ok(());
+    }
+
     jhol_core::init_cache().map_err(|e| format!("Failed to initialize cache: {}", e))?;
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -605,6 +696,16 @@ fn run() -> Result<(), String> {
             let strict_lockfile = sub_m.get_flag("frozen");
             let native_only = sub_m.get_flag("native-only") || !sub_m.get_flag("fallback-backend");
             let all_workspaces = sub_m.get_flag("all-workspaces");
+            let no_scripts = !sub_m.get_flag("scripts") || sub_m.get_flag("no-scripts");
+            let script_allowlist: Option<HashSet<String>> = env::var("JHOL_SCRIPT_ALLOWLIST")
+                .ok()
+                .map(|v| {
+                    v.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect::<HashSet<_>>()
+                })
+                .filter(|s| !s.is_empty());
             let backend = match sub_m.get_one::<String>("backend") {
                 Some(s) if s == "bun" => Some(jhol_core::Backend::Bun),
                 Some(s) if s == "npm" => Some(jhol_core::Backend::Npm),
@@ -661,13 +762,15 @@ fn run() -> Result<(), String> {
                     strict_lockfile,
                     from_lockfile,
                     native_only,
+                    no_scripts,
+                    script_allowlist: script_allowlist.clone(),
                 };
                 jhol_core::log(&format!("Installing: {:?}", specs));
                 jhol_core::install_package(&refs, &opts)?;
             }
             std::env::set_current_dir(&cwd).ok();
             if json_out {
-                println!("{{\"ok\":true}}");
+                println!("{{\"schemaVersion\":\"1\",\"command\":\"install\",\"status\":\"ok\",\"workspaces\":{}}}", roots.len());
             } else if quiet {
                 success("Done.");
             }
@@ -711,7 +814,7 @@ fn run() -> Result<(), String> {
             }
             std::env::set_current_dir(&cwd).ok();
             if json_out {
-                println!("{{\"ok\":true}}");
+                println!("{{\"schemaVersion\":\"1\",\"command\":\"doctor\",\"status\":\"ok\",\"workspaces\":{}}}", roots.len());
             } else if quiet {
                 success("Done.");
             }
@@ -719,6 +822,7 @@ fn run() -> Result<(), String> {
         Some(("audit", sub_m)) => {
             let quiet = sub_m.get_flag("quiet");
             let do_fix = sub_m.get_flag("fix");
+            let gate = sub_m.get_flag("gate");
             let all_workspaces = sub_m.get_flag("all-workspaces");
             let json_out = sub_m.get_flag("json");
             let backend = match sub_m.get_one::<String>("backend") {
@@ -730,7 +834,12 @@ fn run() -> Result<(), String> {
             if quiet || json_out {
                 env::set_var("JHOL_QUIET", "1");
             }
-            if json_out && !do_fix {
+            if gate {
+                jhol_core::run_audit_gate(backend)?;
+                if json_out {
+                    println!("{{\"schemaVersion\":\"1\",\"command\":\"audit\",\"status\":\"ok\",\"gate\":true}}");
+                }
+            } else if json_out && !do_fix {
                 let json_bytes = jhol_core::run_audit_raw(backend).map_err(|e| e.to_string())?;
                 println!("{}", String::from_utf8_lossy(&json_bytes));
             } else {
@@ -757,7 +866,7 @@ fn run() -> Result<(), String> {
                 }
                 std::env::set_current_dir(&cwd).ok();
                 if json_out {
-                    println!("{{\"ok\":true}}");
+                    println!("{{\"schemaVersion\":\"1\",\"command\":\"audit\",\"status\":\"ok\",\"workspaces\":{}}}", roots.len());
                 } else if quiet {
                     success("Done.");
                 }

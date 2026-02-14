@@ -90,6 +90,15 @@ pub fn run_audit_fix(_backend: crate::backend::Backend, quiet: bool) -> Result<(
     Ok(())
 }
 
+/// Run audit and fail if vulnerabilities are found. Useful for CI gating.
+pub fn run_audit_gate(_backend: crate::backend::Backend) -> Result<(), String> {
+    let vulns = native_audit()?;
+    if vulns.is_empty() {
+        return Ok(());
+    }
+    Err(format!("audit gate failed: {} vulnerability(ies) found", vulns.len()))
+}
+
 /// SBOM format.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SbomFormat {

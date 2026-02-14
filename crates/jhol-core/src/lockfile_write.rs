@@ -14,6 +14,8 @@ pub struct ResolvedPackage {
     pub resolved: String,
     pub integrity: Option<String>,
     pub dependencies: HashMap<String, String>,
+    pub peer_dependencies: HashMap<String, String>,
+    pub peer_dependencies_meta: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -123,6 +125,7 @@ pub fn resolve_full_tree(package_json_path: &Path) -> Result<HashMap<String, Res
 
         let version_deps = registry::get_version_dependencies(&meta, &version);
         let peer_deps = registry::get_version_peer_dependencies(&meta, &version);
+        let peer_deps_meta = registry::get_version_peer_dependencies_meta(&meta, &version);
         let mut resolved_deps = HashMap::new();
         for (dep_name, dep_spec) in &version_deps {
             let dep_meta = {
@@ -165,6 +168,8 @@ pub fn resolve_full_tree(package_json_path: &Path) -> Result<HashMap<String, Res
                 resolved: resolved_url,
                 integrity,
                 dependencies: resolved_deps,
+                peer_dependencies: peer_deps,
+                peer_dependencies_meta: peer_deps_meta,
             },
         );
     }
@@ -276,7 +281,24 @@ fn build_packages_json(
             .iter()
             .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
             .collect();
+        let peer_deps: serde_json::Map<String, serde_json::Value> = pkg
+            .peer_dependencies
+            .iter()
+            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+            .collect();
+        let peer_deps_meta: serde_json::Map<String, serde_json::Value> = pkg
+            .peer_dependencies_meta
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         entry.insert("dependencies".to_string(), serde_json::Value::Object(deps));
+        entry.insert("requires".to_string(), serde_json::Value::Bool(!pkg.dependencies.is_empty()));
+        if !peer_deps.is_empty() {
+            entry.insert("peerDependencies".to_string(), serde_json::Value::Object(peer_deps));
+        }
+        if !peer_deps_meta.is_empty() {
+            entry.insert("peerDependenciesMeta".to_string(), serde_json::Value::Object(peer_deps_meta));
+        }
         packages.insert(key.clone(), serde_json::Value::Object(entry));
     }
 

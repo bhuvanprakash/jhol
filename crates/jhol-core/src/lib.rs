@@ -20,7 +20,7 @@ pub mod ux;
 pub mod workspaces;
 
 // Re-export main API for CLI
-pub use audit::{generate_sbom, run_audit, run_audit_fix, run_audit_raw, SbomFormat};
+pub use audit::{generate_sbom, run_audit, run_audit_fix, run_audit_gate, run_audit_raw, SbomFormat};
 pub use backend::{bun_available, resolve_backend, Backend};
 pub use config::{load_config, Config};
 pub use doctor::{check_dependencies, fix_dependencies};
