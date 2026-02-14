@@ -1,11 +1,7 @@
-<p align="center">
-  <img src="https://capsule-render.vercel.app/api?type=waving&height=220&color=0:5b3cc4,100:1f1c2c&text=JHOL&reversal=false&section=header&textBg=false&fontColor=ffffff&fontSize=78&animation=fadeIn&fontAlignY=36&desc=Cache-first%20JavaScript%20Package%20Manager&descAlignY=60&descSize=18" alt="JHOL banner" />
-</p>
-
 <h1 align="center">JHOL</h1>
 
 <p align="center">
-  <strong>Fast, cache-first package manager for JavaScript projects</strong><br/>
+  <strong>Rust-powered, cache-first package manager</strong><br/>
   Native workflows • Offline reliability • Deterministic installs
 </p>
 
@@ -38,7 +34,7 @@
 cargo install jhol
 ```
 
-Works with existing `package.json` and lockfiles.
+Works with existing lockfiles and reproducible dependency workflows.
 
 For compatibility edge cases, Jhol can delegate install execution to Bun or npm using `--fallback-backend`.
 
