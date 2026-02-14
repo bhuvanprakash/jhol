@@ -2,6 +2,8 @@
 
 A fast, offline-friendly package manager that plays nice with your existing `package.json`. It caches everything it can and runs **without Node, Bun, or npm** for install, doctor, and audit by default.
 
+See also: [CHANGELOG.md](./CHANGELOG.md) for latest release notes.
+
 ---
 
 ## Why use Jhol?
@@ -46,10 +48,12 @@ jhol global-install
 jhol install lodash              # Install one package (cache when possible)
 jhol install react react-dom     # Install several at once
 jhol install                    # No args = install from package.json (and lockfile)
+jhol ci                         # Strict lockfile install (npm ci-style)
 jhol doctor                     # See what’s outdated
 jhol doctor --fix               # Update those packages
 jhol audit                      # Check for vulnerabilities
 jhol audit --fix                # Try to fix them
+jhol audit --gate               # CI gate: fail if vulnerabilities exist
 ```
 
 ---
@@ -63,11 +67,14 @@ jhol audit --fix                # Try to fix them
 | Only update the lockfile | `jhol install --lockfile-only` |
 | Offline only (fail if not cached) | `jhol install --offline` or set `JHOL_OFFLINE=1` |
 | Strict lockfile (fail if out of sync) | `jhol install --frozen` |
+| CI strict install | `jhol ci` |
 | Use Bun/npm when native fails | `jhol install --fallback-backend` |
+| Script policy for fallback backend | `jhol install --no-scripts` (default) or `jhol install --scripts` |
 | Check outdated deps | `jhol doctor` |
 | Update outdated deps | `jhol doctor --fix` |
 | Run in all workspaces | `jhol install --all-workspaces`, `jhol doctor --all-workspaces`, `jhol audit --all-workspaces` |
 | Security audit | `jhol audit` / `jhol audit --fix` |
+| CI vulnerability gate | `jhol audit --gate` |
 | Generate SBOM | `jhol sbom` or `jhol sbom -o sbom.json` |
 | List cache | `jhol cache list` |
 | Cache size | `jhol cache size` |
@@ -90,13 +97,16 @@ Use `-q` or `--quiet` when you want less noise. Use `--json` on install, doctor,
 | `JHOL_CACHE_DIR` | Where to put the cache (default: `~/.jhol-cache` on Unix, `%USERPROFILE%\.jhol-cache` on Windows) |
 | `JHOL_LOG=quiet` or `-q` | Less logging |
 | `JHOL_OFFLINE=1` or `--offline` | Only use cache; fail if something isn’t there |
+| `JHOL_SCRIPT_ALLOWLIST=a,b,c` | If `--scripts` is used, only allow scripts for these packages |
 | `.jholrc` (JSON in project or home) | Optional: set `backend` (`"bun"` or `"npm"`), `cacheDir`, `offline`, `frozen` so you don’t have to pass flags every time |
 
 **CI tip:** Run `jhol cache key` to get a hash of your lockfile (`bun.lock` or `package-lock.json`). Same lockfile → same key. Use that as your CI cache key so you can reuse the Jhol store between runs.
 
 ### Deterministic installs (CI)
 
-With a lockfile and `jhol install --frozen`, Jhol does **no resolution** and **no packument** requests: it only downloads missing tarballs (from lockfile URLs) and links or extracts from the store. Recommended for CI. Use `jhol cache key` as your cache key so the same lockfile reuses the same store.
+With a lockfile and `jhol install --frozen` (or `jhol ci`), Jhol does **no resolution** and **no packument** requests: it only downloads missing tarballs (from lockfile URLs) and links or extracts from the store. Recommended for CI. Use `jhol cache key` as your cache key so the same lockfile reuses the same store.
+
+`--json` responses for `install`, `doctor`, `audit`, and `ci` now include a stable shape with `schemaVersion`, `command`, and `status`.
 
 ---
 

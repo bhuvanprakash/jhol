@@ -22,6 +22,7 @@ pub struct ResolvedPackage {
 struct PeerRequirement {
     requester: String,
     spec: String,
+    optional: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -152,12 +153,18 @@ pub fn resolve_full_tree(package_json_path: &Path) -> Result<HashMap<String, Res
         }
 
         for (peer_name, peer_spec) in &peer_deps {
+            let optional = peer_deps_meta
+                .get(peer_name)
+                .and_then(|v| v.get("optional"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             peer_requirements
                 .entry(peer_name.clone())
                 .or_default()
                 .push(PeerRequirement {
                     requester: name.clone(),
                     spec: peer_spec.clone(),
+                    optional,
                 });
         }
 
@@ -189,7 +196,11 @@ pub fn resolve_full_tree(package_json_path: &Path) -> Result<HashMap<String, Res
                 }
             }
         } else {
-            let req_list = reqs
+            let required_reqs: Vec<&PeerRequirement> = reqs.iter().filter(|r| !r.optional).collect();
+            if required_reqs.is_empty() {
+                continue;
+            }
+            let req_list = required_reqs
                 .iter()
                 .map(|r| format!("{} -> {}", r.requester, r.spec))
                 .collect::<Vec<_>>()
