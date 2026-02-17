@@ -53,13 +53,18 @@ def main() -> int:
             f"fixture valid ratio {ratio:.2%} below min_fixture_valid_ratio {min_ratio:.2%}"
         )
 
-    averages = report.get("benchmark", {}).get("averages", {})
+    benchmark = report.get("benchmark", {})
+    metric_source = benchmark.get("metricSource", "averages")
+    metrics = benchmark.get("metrics", {})
+    if not isinstance(metrics, dict) or not metrics:
+        metrics = benchmark.get("averages", {})
+        metric_source = "averages"
     required_metrics = config.get(
         "required_benchmark_metrics",
         ["jhol_cold_install", "jhol_warm_install", "jhol_offline_install"],
     )
     for metric in required_metrics:
-        if metric not in averages:
+        if metric not in metrics:
             failures.append(f"missing benchmark metric: {metric}")
 
     print("Week-1 guardrail check")
@@ -68,6 +73,7 @@ def main() -> int:
     print(
         f"fixture_valid_ratio={ratio:.2%} (valid={valid_count}, total={fixture_count}, min={min_ratio:.2%})"
     )
+    print(f"benchmark_metric_source={metric_source}")
     print(f"required_metrics={required_metrics}")
 
     if failures:

@@ -252,11 +252,11 @@ python3 scripts/check_benchmark_regression.py \
 python3 scripts/collect_baseline.py \
   --benchmark-json benchmark-results.json \
   --fixtures-dir tests/fixtures \
-  --out week1-baseline-report.json
+  --out baseline-report.json
 
 python3 scripts/check_guardrails.py \
-  --report week1-baseline-report.json \
-  --config benchmarks/week1_guardrails.json
+  --report baseline-report.json \
+  --config benchmarks/guardrails.json
 ```
 
 ### Resolver parity report
@@ -283,8 +283,8 @@ python3 scripts/framework_compat_report.py \
 
 ```sh
 python3 scripts/check_fallback_trend.py \
-  --current-report week1-baseline-report.json \
-  --baseline-report week1-baseline-report.json \
+  --current-report baseline-report.json \
+  --baseline-report baseline-report.json \
   --config benchmarks/fallback_trend_guardrails.json
 ```
 

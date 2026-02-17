@@ -15,6 +15,7 @@ pub mod osv;
 pub mod prefetch;
 pub mod registry;
 pub mod run;
+pub mod sat_resolver;
 pub mod utils;
 pub mod ux;
 pub mod workspaces;
@@ -22,7 +23,13 @@ pub mod workspaces;
 // Re-export main API for CLI
 pub use audit::{generate_sbom, run_audit, run_audit_fix, run_audit_gate, run_audit_raw, SbomFormat};
 pub use backend::{bun_available, resolve_backend, Backend};
-pub use config::{load_config, Config};
+pub use config::{
+    apply_enterprise_network_env,
+    effective_registry_url_for_package,
+    load_config,
+    registry_auth_token_for_url,
+    Config,
+};
 pub use doctor::{check_dependencies, explain_project_health, fix_dependencies};
 pub use install::{
     install_lockfile_only, install_package, resolve_install_from_package_json, InstallOptions,

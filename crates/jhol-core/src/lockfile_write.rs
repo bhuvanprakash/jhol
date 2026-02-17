@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::lockfile;
 use crate::registry;
+use crate::sat_resolver::{PackageDomain, PackageVersion, SolveInput};
 
 /// One resolved package entry for the lockfile.
 #[derive(Clone, Debug)]
@@ -35,6 +36,212 @@ struct Requirement {
 /// Prefetches direct deps in parallel, then uses cached packuments for the rest.
 /// For conflicts, prefers the highest version that satisfies the combined specs; errors if none match.
 pub fn resolve_full_tree(package_json_path: &Path) -> Result<HashMap<String, ResolvedPackage>, String> {
+    // JAGR-1 is the default resolver strategy. Legacy greedy remains as fallback for safety.
+    let strict_jagr = std::env::var("JHOL_RESOLVER_STRICT")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "True"))
+        .unwrap_or(false);
+    if std::env::var("JHOL_RESOLVER")
+        .map(|v| v.eq_ignore_ascii_case("legacy"))
+        .unwrap_or(false)
+    {
+        return resolve_full_tree_legacy(package_json_path);
+    }
+    match resolve_full_tree_jagr(package_json_path) {
+        Ok(tree) => Ok(tree),
+        Err(jagr_err) => {
+            if strict_jagr {
+                return Err(jagr_err);
+            }
+            eprintln!("warning: JAGR resolver failed, falling back to legacy: {}", jagr_err);
+            resolve_full_tree_legacy(package_json_path)
+                .map_err(|legacy_err| format!("JAGR failed: {}; legacy failed: {}", jagr_err, legacy_err))
+        }
+    }
+}
+
+fn resolve_full_tree_jagr(package_json_path: &Path) -> Result<HashMap<String, ResolvedPackage>, String> {
+    let deps = lockfile::read_package_json_deps(package_json_path)
+        .ok_or("Could not read package.json dependencies.")?;
+    if deps.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let cache_arc = Arc::new(Mutex::new(HashMap::<String, serde_json::Value>::new()));
+    let mut input = SolveInput::default();
+    for (name, spec) in &deps {
+        input.root_requirements.insert(name.clone(), spec.clone());
+    }
+
+    const INITIAL_DOMAIN_VERSION_CAP: usize = 32;
+    const MAX_DOMAIN_VERSION_CAP: usize = 512;
+
+    let mut cap = INITIAL_DOMAIN_VERSION_CAP;
+    loop {
+        let (domains, truncated_any) = build_jagr_domains(&deps, &cache_arc, cap)?;
+        match crate::sat_resolver::solve_exact_with_stats(&input, &domains) {
+            Ok((solved, _stats)) => return build_tree_from_assignment(&solved.assignment, &cache_arc),
+            Err(e) => {
+                let unsat_msg = format!("JAGR-1 UNSAT: {:?}", e);
+                if truncated_any && cap < MAX_DOMAIN_VERSION_CAP {
+                    cap = (cap * 2).min(MAX_DOMAIN_VERSION_CAP);
+                    continue;
+                }
+                return Err(unsat_msg);
+            }
+        }
+    }
+}
+
+fn build_jagr_domains(
+    root_deps: &HashMap<String, String>,
+    cache_arc: &Arc<Mutex<HashMap<String, serde_json::Value>>>,
+    cap: usize,
+) -> Result<(HashMap<String, PackageDomain>, bool), String> {
+
+    let mut domains: HashMap<String, PackageDomain> = HashMap::new();
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut frontier: Vec<String> = root_deps.keys().cloned().collect();
+    let mut truncated_any = false;
+
+    while !frontier.is_empty() {
+        frontier.sort();
+        frontier.dedup();
+        let batch: Vec<String> = frontier
+            .iter()
+            .filter(|n| !visited.contains(*n))
+            .cloned()
+            .collect();
+        frontier.clear();
+        if batch.is_empty() {
+            break;
+        }
+
+        let mut results = registry::parallel_fetch_metadata(&batch, cache_arc);
+        results.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (name, meta_res) in results {
+            visited.insert(name.clone());
+            let meta = meta_res?;
+
+            let mut domain = PackageDomain::default();
+            let (versions, truncated) = candidate_versions_desc(&meta, cap);
+            truncated_any |= truncated;
+            for version in versions {
+                let deps = registry::get_version_required_dependencies(&meta, &version);
+                let optional_deps = registry::get_version_optional_dependencies(&meta, &version);
+                let peers = registry::get_version_peer_dependencies(&meta, &version);
+                let peer_meta = registry::get_version_peer_dependencies_meta(&meta, &version);
+                let optional_peers: HashSet<String> = peer_meta
+                    .iter()
+                    .filter_map(|(k, v)| {
+                        let opt = v
+                            .get("optional")
+                            .and_then(|b| b.as_bool())
+                            .unwrap_or(false);
+                        if opt { Some(k.clone()) } else { None }
+                    })
+                    .collect();
+
+                for dep_name in deps.keys() {
+                    if !visited.contains(dep_name) {
+                        frontier.push(dep_name.clone());
+                    }
+                }
+                for peer_name in peers.keys() {
+                    if !optional_peers.contains(peer_name) && !visited.contains(peer_name) {
+                        frontier.push(peer_name.clone());
+                    }
+                }
+
+                domain.versions.insert(
+                    version.clone(),
+                    PackageVersion {
+                        version,
+                        dependencies: deps,
+                        optional_dependencies: optional_deps,
+                        peer_dependencies: peers,
+                        optional_peers,
+                    },
+                );
+            }
+
+            if !domain.versions.is_empty() {
+                domains.insert(name, domain);
+            }
+        }
+    }
+
+    Ok((domains, truncated_any))
+}
+
+fn candidate_versions_desc(meta: &serde_json::Value, cap: usize) -> (Vec<String>, bool) {
+    let mut parsed: Vec<semver::Version> = meta
+        .get("versions")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.keys()
+                .filter_map(|s| semver::Version::parse(s).ok())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    parsed.sort();
+    parsed.reverse();
+    let truncated = parsed.len() > cap;
+    let versions = parsed.into_iter().take(cap).map(|v| v.to_string()).collect();
+    (versions, truncated)
+}
+
+fn build_tree_from_assignment(
+    assignment: &HashMap<String, String>,
+    cache_arc: &Arc<Mutex<HashMap<String, serde_json::Value>>>,
+) -> Result<HashMap<String, ResolvedPackage>, String> {
+    let mut tree: HashMap<String, ResolvedPackage> = HashMap::new();
+    let mut names: Vec<String> = assignment.keys().cloned().collect();
+    names.sort();
+
+    for name in names {
+        let version = assignment
+            .get(&name)
+            .cloned()
+            .ok_or_else(|| format!("Missing assignment for {}", name))?;
+        let meta = {
+            let mut cache = cache_arc.lock().unwrap();
+            registry::fetch_metadata_cached(&name, &mut *cache)?
+        };
+
+        let resolved_url = registry::get_tarball_url(&meta, &version)
+            .ok_or_else(|| format!("No tarball URL for {}@{}", name, version))?;
+        let integrity = registry::get_integrity_for_version(&meta, &version);
+        let version_deps = registry::get_version_required_dependencies(&meta, &version);
+        let peer_deps = registry::get_version_peer_dependencies(&meta, &version);
+        let peer_deps_meta = registry::get_version_peer_dependencies_meta(&meta, &version);
+
+        let mut resolved_deps = HashMap::new();
+        for (dep_name, dep_spec) in &version_deps {
+            if let Some(dep_version) = assignment.get(dep_name) {
+                if registry::version_satisfies(dep_spec, dep_version) {
+                    resolved_deps.insert(dep_name.clone(), dep_version.clone());
+                }
+            }
+        }
+
+        tree.insert(
+            format!("node_modules/{}", name),
+            ResolvedPackage {
+                version,
+                resolved: resolved_url,
+                integrity,
+                dependencies: resolved_deps,
+                peer_dependencies: peer_deps,
+                peer_dependencies_meta: peer_deps_meta,
+            },
+        );
+    }
+
+    Ok(tree)
+}
+
+fn resolve_full_tree_legacy(package_json_path: &Path) -> Result<HashMap<String, ResolvedPackage>, String> {
     let deps = lockfile::read_package_json_deps(package_json_path)
         .ok_or("Could not read package.json dependencies.")?;
     if deps.is_empty() {
@@ -124,7 +331,7 @@ pub fn resolve_full_tree(package_json_path: &Path) -> Result<HashMap<String, Res
             .ok_or_else(|| format!("No tarball URL for {}@{}", name, version))?;
         let integrity = registry::get_integrity_for_version(&meta, &version);
 
-        let version_deps = registry::get_version_dependencies(&meta, &version);
+        let version_deps = registry::get_version_required_dependencies(&meta, &version);
         let peer_deps = registry::get_version_peer_dependencies(&meta, &version);
         let peer_deps_meta = registry::get_version_peer_dependencies_meta(&meta, &version);
         let mut resolved_deps = HashMap::new();
@@ -338,4 +545,37 @@ pub fn write_package_lock(
     let pretty = serde_json::to_string_pretty(&lockfile_content).map_err(|e| e.to_string())?;
     std::fs::write(lock_path, pretty).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fake_meta(versions: &[&str]) -> serde_json::Value {
+        let mut m = serde_json::Map::new();
+        for v in versions {
+            m.insert((*v).to_string(), serde_json::json!({ "dist": { "tarball": format!("https://registry.npmjs.org/p/-/p-{}.tgz", v) } }));
+        }
+        serde_json::json!({
+            "name": "p",
+            "versions": m,
+            "dist-tags": { "latest": versions.last().copied().unwrap_or("0.0.0") }
+        })
+    }
+
+    #[test]
+    fn resolve_highest_satisfying_picks_max_common_version() {
+        let meta = fake_meta(&["1.0.0", "1.1.0", "1.2.0", "2.0.0"]);
+        let specs = vec!["^1.0.0".to_string(), ">=1.1.0 <2.0.0".to_string()];
+        let v = resolve_highest_satisfying(&meta, &specs);
+        assert_eq!(v.as_deref(), Some("1.2.0"));
+    }
+
+    #[test]
+    fn resolve_highest_satisfying_returns_none_on_conflict() {
+        let meta = fake_meta(&["1.0.0", "1.5.0", "2.0.0"]);
+        let specs = vec!["^1.0.0".to_string(), "^2.0.0".to_string()];
+        let v = resolve_highest_satisfying(&meta, &specs);
+        assert!(v.is_none());
+    }
 }
