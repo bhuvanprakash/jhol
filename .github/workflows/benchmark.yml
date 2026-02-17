@@ -20,13 +20,61 @@ jobs:
 
       - name: Run benchmark harness
         run: |
-          python3 scripts/benchmark.py --repeats 2 --json-out benchmark-results.json
+          python3 scripts/benchmark.py \
+            --suite small \
+            --repeats 5 \
+            --json-out benchmark-results.json \
+            --markdown-out benchmark-results.md
+
+      - name: Collect Week-1 baseline report
+        run: |
+          python3 scripts/collect_baseline.py \
+            --benchmark-json benchmark-results.json \
+            --fixtures-dir tests/fixtures \
+            --metric-source medians \
+            --out week1-baseline-report.json
+
+      - name: Check Week-1 KPI guardrails
+        run: |
+          python3 scripts/check_guardrails.py \
+            --report week1-baseline-report.json \
+            --config benchmarks/week1_guardrails.json
+
+      - name: Generate resolver fixture parity report
+        run: |
+          python3 scripts/resolver_fixture_report.py \
+            --fixtures-dir tests/fixtures \
+            --snapshots-dir tests/resolver-snapshots \
+            --config benchmarks/resolver_parity_guardrails.json \
+            --out resolver-parity-report.json
+
+      - name: Generate framework compatibility report
+        run: |
+          python3 scripts/framework_compat_report.py \
+            --fixtures-dir tests/fixtures \
+            --matrix benchmarks/framework_matrix.json \
+            --config benchmarks/framework_guardrails.json \
+            --out framework-compat-report.json
+
+      - name: Check fallback trend guardrails
+        run: |
+          python3 scripts/check_fallback_trend.py \
+            --current-report week1-baseline-report.json \
+            --baseline-report week1-baseline-report.json \
+            --config benchmarks/fallback_trend_guardrails.json
+
+      - name: Generate enterprise .npmrc matrix report
+        run: |
+          python3 scripts/enterprise_npmrc_report.py \
+            --config benchmarks/enterprise_guardrails.json \
+            --out enterprise-npmrc-report.json
 
       - name: Check benchmark regression (25% threshold)
         run: |
           python3 scripts/check_benchmark_regression.py \
             --baseline benchmarks/baseline.json \
             --results benchmark-results.json \
+            --metric-source medians \
             --threshold 0.25
 
       - name: Upload benchmark artifact
@@ -35,4 +83,15 @@ jobs:
           name: benchmark-results
           path: |
             benchmark-results.json
+            benchmark-results.md
+            week1-baseline-report.json
+            resolver-parity-report.json
+            framework-compat-report.json
+            enterprise-npmrc-report.json
             benchmarks/baseline.json
+            benchmarks/week1_guardrails.json
+            benchmarks/resolver_parity_guardrails.json
+            benchmarks/framework_matrix.json
+            benchmarks/framework_guardrails.json
+            benchmarks/fallback_trend_guardrails.json
+            benchmarks/enterprise_guardrails.json

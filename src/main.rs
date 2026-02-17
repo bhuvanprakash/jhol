@@ -715,6 +715,7 @@ fn run() -> Result<(), String> {
     jhol_core::init_cache().map_err(|e| format!("Failed to initialize cache: {}", e))?;
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    jhol_core::apply_enterprise_network_env(&cwd);
     let config = jhol_core::load_config(&cwd);
     if let Some(ref d) = config.cache_dir {
         env::set_var("JHOL_CACHE_DIR", d);

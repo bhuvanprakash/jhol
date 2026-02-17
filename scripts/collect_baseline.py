@@ -10,11 +10,40 @@ from pathlib import Path
 
 def read_json(path: Path):
     if not path.exists():
-        return None
+         return None
     try:
         return json.loads(path.read_text())
     except Exception:
         return None
+
+
+def select_benchmark_workload(benchmark: dict, workload: str) -> dict:
+    if not isinstance(benchmark, dict):
+        return {}
+
+    workloads = benchmark.get("workloads")
+    if isinstance(workloads, list) and workloads:
+        if workload:
+            for item in workloads:
+                if isinstance(item, dict) and item.get("name") == workload:
+                    return item
+            return {}
+        first = workloads[0]
+        return first if isinstance(first, dict) else {}
+
+    return benchmark
+
+
+def choose_metric_map(benchmark_entry: dict, metric_source: str) -> tuple[str, dict]:
+    if not isinstance(benchmark_entry, dict):
+        return metric_source, {}
+    data = benchmark_entry.get(metric_source)
+    if isinstance(data, dict):
+        return metric_source, data
+    fallback = benchmark_entry.get("averages")
+    if isinstance(fallback, dict):
+        return "averages", fallback
+    return metric_source, {}
 
 
 def collect_fixture_compatibility(fixtures_dir: Path) -> dict:
@@ -78,6 +107,17 @@ def main() -> int:
         default="week1-baseline-report.json",
         help="Output report JSON path",
     )
+    parser.add_argument(
+        "--workload",
+        default="",
+        help="Optional workload name for multi-workload benchmark JSON",
+    )
+    parser.add_argument(
+        "--metric-source",
+        choices=["medians", "averages"],
+        default="medians",
+        help="Benchmark metric map to surface into KPI report (default: medians)",
+    )
     args = parser.parse_args()
 
     benchmark_path = Path(args.benchmark_json)
@@ -85,6 +125,8 @@ def main() -> int:
     out_path = Path(args.out)
 
     benchmark_json = read_json(benchmark_path) or {}
+    benchmark_entry = select_benchmark_workload(benchmark_json, args.workload)
+    metric_source, metrics = choose_metric_map(benchmark_entry, args.metric_source)
     fallback_path = detect_cache_dir() / "fallback_telemetry.json"
     fallback_json = read_json(fallback_path) or {
         "totalFallbacks": 0,
@@ -107,9 +149,20 @@ def main() -> int:
         },
         "benchmark": {
             "source": str(benchmark_path),
-            "averages": benchmark_json.get("averages", {}),
-            "packages": benchmark_json.get("packages", []),
+            "suite": benchmark_json.get("suite"),
             "repeats": benchmark_json.get("repeats"),
+            "metricSource": metric_source,
+            "workload": benchmark_entry.get("name") or benchmark_json.get("workload"),
+            "workloadsAvailable": [
+                w.get("name")
+                for w in benchmark_json.get("workloads", [])
+                if isinstance(w, dict) and w.get("name")
+            ],
+            "metrics": metrics,
+            "averages": benchmark_entry.get("averages", benchmark_json.get("averages", {})),
+            "medians": benchmark_entry.get("medians", benchmark_json.get("medians", {})),
+            "stats": benchmark_entry.get("stats", benchmark_json.get("stats", {})),
+            "packages": benchmark_entry.get("packages", benchmark_json.get("packages", [])),
         },
         "compatibility": compatibility,
         "fallbackTelemetry": {

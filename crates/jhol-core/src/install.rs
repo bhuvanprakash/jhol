@@ -1,10 +1,266 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use crate::backend::{self, Backend};
 use crate::lockfile;
 use crate::registry;
 use crate::utils::{self, NPM_SHOW_TIMEOUT_SECS};
+
+fn download_concurrency() -> usize {
+    std::env::var("JHOL_DOWNLOAD_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|n| n.clamp(1, 64))
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| (n.get() * 2).clamp(8, 32))
+                .unwrap_or(8)
+        })
+}
+
+fn cache_install_concurrency() -> usize {
+    std::env::var("JHOL_CACHE_INSTALL_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|n| n.clamp(1, 32))
+        .unwrap_or(1)
+}
+
+fn worker_pool_sequential_threshold() -> usize {
+    std::env::var("JHOL_WORKER_POOL_SEQUENTIAL_THRESHOLD")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|n| n.clamp(1, 64))
+        .unwrap_or(1)
+}
+
+fn use_legacy_chunk_scheduler() -> bool {
+    std::env::var("JHOL_LEGACY_CHUNK_SCHEDULER")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+fn run_worker_pool<I, O, F>(
+    items: Vec<I>,
+    concurrency: usize,
+    sequential_threshold: usize,
+    job: F,
+) -> Vec<O>
+where
+    I: Send + 'static,
+    O: Send + 'static,
+    F: Fn(I) -> O + Send + Sync + 'static,
+{
+    if items.is_empty() {
+        return Vec::new();
+    }
+
+    // Fast path: for tiny batches, avoid thread spawn + lock/channel overhead.
+    // This materially helps warm/offline installs where worksets are often very small.
+    if concurrency <= 1 || items.len() <= sequential_threshold.clamp(1, 64) {
+        return items.into_iter().map(job).collect();
+    }
+
+    let worker_count = concurrency.clamp(1, 64).min(items.len());
+    let queue = Arc::new(Mutex::new(VecDeque::from(items)));
+    let job = Arc::new(job);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut handles = Vec::with_capacity(worker_count);
+
+    for _ in 0..worker_count {
+        let queue = Arc::clone(&queue);
+        let tx = tx.clone();
+        let job = Arc::clone(&job);
+        handles.push(std::thread::spawn(move || loop {
+            let next = match queue.lock() {
+                Ok(mut q) => q.pop_front(),
+                Err(_) => None,
+            };
+            let Some(item) = next else {
+                break;
+            };
+
+            let output = (job)(item);
+            if tx.send(output).is_err() {
+                break;
+            }
+        }));
+    }
+
+    drop(tx);
+
+    let mut outputs = Vec::with_capacity(worker_count);
+    for item in rx {
+        outputs.push(item);
+    }
+
+    for handle in handles {
+        let _ = handle.join();
+    }
+
+    outputs
+}
+
+fn install_profile_enabled() -> bool {
+    std::env::var("JHOL_PROFILE_INSTALL")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+struct InstallProfiler {
+    enabled: bool,
+    start: Instant,
+    last: Instant,
+}
+
+impl InstallProfiler {
+    fn new() -> Self {
+        let now = Instant::now();
+        Self {
+            enabled: install_profile_enabled(),
+            start: now,
+            last: now,
+        }
+    }
+
+    fn mark(&mut self, stage: &str) {
+        if !self.enabled {
+            return;
+        }
+        let now = Instant::now();
+        let delta = now.duration_since(self.last).as_millis();
+        let total = now.duration_since(self.start).as_millis();
+        eprintln!("[jhol-profile] stage={} delta_ms={} total_ms={}", stage, delta, total);
+        self.last = now;
+    }
+}
+
+#[derive(Clone)]
+struct ResolvedFetch {
+    pkg: String,
+    url: String,
+    integrity: Option<String>,
+    version: String,
+}
+
+trait ColdResolveStrategy {
+    fn resolve(
+        &self,
+        to_fetch: &[String],
+        npm_fallback: &mut Vec<String>,
+    ) -> Vec<ResolvedFetch>;
+}
+
+struct ManifestThenPackumentStrategy;
+
+impl ColdResolveStrategy for ManifestThenPackumentStrategy {
+    fn resolve(
+        &self,
+        to_fetch: &[String],
+        npm_fallback: &mut Vec<String>,
+    ) -> Vec<ResolvedFetch> {
+        let mut resolved_work = Vec::new();
+        let mut manifest_requests: Vec<(String, String, String)> = Vec::with_capacity(to_fetch.len());
+        let mut request_meta: std::collections::HashMap<String, (String, String, String)> =
+            std::collections::HashMap::with_capacity(to_fetch.len());
+
+        for (idx, pkg) in to_fetch.iter().enumerate() {
+            let base = base_name(pkg).to_string();
+            let version_req = if pkg.contains('@') && !pkg.starts_with('@') {
+                pkg.splitn(2, '@').nth(1).unwrap_or("latest").trim().to_string()
+            } else if pkg.starts_with('@') {
+                let idx = pkg.rfind('@').unwrap_or(0);
+                if idx > 0 {
+                    pkg[idx + 1..].trim().to_string()
+                } else {
+                    "latest".to_string()
+                }
+            } else {
+                "latest".to_string()
+            };
+
+            let req_id = idx.to_string();
+            manifest_requests.push((req_id.clone(), base.clone(), version_req.clone()));
+            request_meta.insert(req_id, (pkg.clone(), base, version_req));
+        }
+
+        let mut pending_packument: Vec<(String, String, String)> = Vec::new();
+        let mut manifest_results = registry::parallel_resolve_tarballs_via_manifest(&manifest_requests);
+        manifest_results.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (req_id, result) in manifest_results {
+            let Some((pkg, base, version_req)) = request_meta.remove(&req_id) else {
+                continue;
+            };
+
+            match result {
+                Ok(Some((version, url, integrity))) => {
+                    resolved_work.push(ResolvedFetch {
+                        pkg,
+                        url,
+                        integrity,
+                        version,
+                    });
+                }
+                Ok(None) | Err(_) => {
+                    pending_packument.push((pkg, base, version_req));
+                }
+            }
+        }
+
+        if !pending_packument.is_empty() {
+            let cache_arc = Arc::new(Mutex::new(std::collections::HashMap::<
+                String,
+                serde_json::Value,
+            >::new()));
+
+            let mut unique_names: Vec<String> = pending_packument
+                .iter()
+                .map(|(_, base, _)| base.clone())
+                .collect();
+            unique_names.sort();
+            unique_names.dedup();
+
+            let mut meta_results = registry::parallel_fetch_metadata(&unique_names, &cache_arc);
+            meta_results.sort_by(|a, b| a.0.cmp(&b.0));
+
+            let mut meta_map: std::collections::HashMap<String, serde_json::Value> =
+                std::collections::HashMap::new();
+            for (name, res) in meta_results {
+                if let Ok(meta) = res {
+                    meta_map.insert(name, meta);
+                }
+            }
+
+            for (pkg, base, version_req) in pending_packument {
+                let Some(meta) = meta_map.get(&base) else {
+                    npm_fallback.push(pkg);
+                    continue;
+                };
+
+                let Some(version) = registry::resolve_version(meta, &version_req) else {
+                    npm_fallback.push(pkg);
+                    continue;
+                };
+                let Some(url) = registry::get_tarball_url(meta, &version) else {
+                    npm_fallback.push(pkg);
+                    continue;
+                };
+                let integrity = registry::get_integrity_for_version(meta, &version);
+                resolved_work.push(ResolvedFetch {
+                    pkg,
+                    url,
+                    integrity,
+                    version,
+                });
+            }
+        }
+
+        resolved_work
+    }
+}
 
 /// Package name without version: lodash@4 -> lodash, @scope/pkg@1.0 -> @scope/pkg
 fn base_name(package: &str) -> &str {
@@ -24,6 +280,62 @@ fn read_installed_version(base: &str) -> Option<String> {
     let s = fs::read_to_string(path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&s).ok()?;
     v.get("version")?.as_str().map(String::from)
+}
+
+/// Faster cache lookup that reuses a preloaded store index (avoids repeated JSON parse per package).
+fn get_cached_tarball_fast(
+    package: &str,
+    cache_dir: &std::path::Path,
+    store_index: &HashMap<String, String>,
+) -> Option<std::path::PathBuf> {
+    if !cache_dir.exists() {
+        return None;
+    }
+
+    let store_dir = cache_dir.join("store");
+    if package.contains('@') {
+        if let Some(hash) = store_index.get(package) {
+            let store_file = store_dir.join(format!("{}.tgz", hash));
+            if store_file.exists() {
+                return Some(store_file);
+            }
+        }
+    } else {
+        // Backward-compatible fast path for older index entries keyed by bare package name.
+        if let Some(hash) = store_index.get(package) {
+            let store_file = store_dir.join(format!("{}.tgz", hash));
+            if store_file.exists() {
+                return Some(store_file);
+            }
+        }
+        for (k, hash) in store_index {
+            if k.starts_with(&format!("{}@", package)) {
+                let store_file = store_dir.join(format!("{}.tgz", hash));
+                if store_file.exists() {
+                    return Some(store_file);
+                }
+            }
+        }
+    }
+
+    // Legacy fallback: pkg-version.tgz files in cache root.
+    let legacy_exact = cache_dir.join(format!("{}.tgz", utils::format_cache_name(package)));
+    if legacy_exact.exists() {
+        return Some(legacy_exact);
+    }
+
+    if !package.contains('@') {
+        if let Ok(entries) = std::fs::read_dir(cache_dir) {
+            for e in entries.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.starts_with(&format!("{}-", package)) && name.ends_with(".tgz") && !name.contains("store") {
+                    return Some(e.path());
+                }
+            }
+        }
+    }
+
+    None
 }
 
 pub struct InstallOptions {
@@ -135,10 +447,22 @@ pub fn resolve_install_from_package_json(strict_lockfile: bool) -> Result<Vec<St
 
 /// Install packages. Uses parallel validation, cache (content-addressable), native registry with backend fallback.
 pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<(), String> {
+    let mut profiler = InstallProfiler::new();
+    let download_conc = download_concurrency();
+    let cache_install_conc = cache_install_concurrency();
+    let worker_pool_seq_threshold = worker_pool_sequential_threshold();
+    let legacy_chunk_scheduler = use_legacy_chunk_scheduler();
+
     let mut seen_packages = HashSet::new();
     let mut to_install_from_cache = Vec::new();
     let mut to_fetch = Vec::new();
     let mut missing_for_offline = Vec::new();
+    let cache_dir_for_lookup = std::path::PathBuf::from(utils::get_cache_dir());
+    let store_index = if options.no_cache {
+        HashMap::new()
+    } else {
+        utils::read_store_index()
+    };
 
     for package in packages {
         let base = base_name(package);
@@ -151,7 +475,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         utils::log(&format!("Installing package: {}", package));
 
         if !options.no_cache {
-            if let Some(tarball) = utils::get_cached_tarball(package) {
+            if let Some(tarball) = get_cached_tarball_fast(package, &cache_dir_for_lookup, &store_index) {
                 if !options.quiet {
                     println!("Installing {} from cache...", package);
                 }
@@ -172,9 +496,10 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
             missing_for_offline.join(", ")
         ));
     }
+    profiler.mark("classify_cache_vs_fetch");
 
     // Skip npm show when we trust the lockfile or frozen (zero packument)
-    if !to_fetch.is_empty() && !options.from_lockfile && !options.strict_lockfile {
+    if !to_fetch.is_empty() && !options.from_lockfile && !options.strict_lockfile && !options.native_only {
         let results = registry::parallel_validate_packages(&to_fetch, NPM_SHOW_TIMEOUT_SECS);
         let invalid: Vec<String> = results.iter().filter(|(_, ok)| !*ok).map(|(p, _)| p.clone()).collect();
         if !invalid.is_empty() {
@@ -188,19 +513,67 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         let node_modules = Path::new("node_modules");
         std::fs::create_dir_all(node_modules).map_err(|e| e.to_string())?;
         let mut fallback_tarballs = Vec::new();
-        for (pkg, tarball_path) in &to_install_from_cache {
-            let base = base_name(pkg);
-            match registry::ensure_unpacked_in_store(tarball_path, &cache_dir) {
-                Ok(unpacked) => {
-                    if utils::link_package_from_store(&unpacked, node_modules, base).is_ok() {
-                        utils::log(&format!("Installed {} from cache (link).", pkg));
-                    } else if registry::extract_tarball(tarball_path, node_modules, base).is_ok() {
-                        utils::log(&format!("Installed {} from cache (copy).", pkg));
-                    } else {
-                        fallback_tarballs.push((pkg.clone(), tarball_path.clone()));
-                    }
+        let cache_install_inputs: Vec<(String, std::path::PathBuf)> = to_install_from_cache
+            .iter()
+            .map(|(pkg, tarball_path)| (pkg.clone(), tarball_path.clone()))
+            .collect();
+        let mut install_results: Vec<(String, std::path::PathBuf, bool)> = if legacy_chunk_scheduler {
+            let mut outputs = Vec::with_capacity(cache_install_inputs.len());
+            for chunk in cache_install_inputs.chunks(cache_install_conc) {
+                use std::sync::mpsc;
+                use std::thread;
+                let (tx, rx) = mpsc::channel();
+                for (pkg, tarball_path) in chunk {
+                    let pkg = pkg.clone();
+                    let tarball_path = tarball_path.clone();
+                    let cache_dir = cache_dir.clone();
+                    let node_modules = node_modules.to_path_buf();
+                    let tx = tx.clone();
+                    thread::spawn(move || {
+                        let base = base_name(&pkg).to_string();
+                        let ok = match registry::ensure_unpacked_in_store(&tarball_path, &cache_dir) {
+                            Ok(unpacked) => {
+                                utils::link_package_from_store(&unpacked, &node_modules, &base).is_ok()
+                                    || registry::extract_tarball(&tarball_path, &node_modules, &base).is_ok()
+                            }
+                            Err(_) => false,
+                        };
+                        let _ = tx.send((pkg, tarball_path, ok));
+                    });
                 }
-                Err(_) => fallback_tarballs.push((pkg.clone(), tarball_path.clone())),
+                drop(tx);
+                for result in rx {
+                    outputs.push(result);
+                }
+            }
+            outputs
+        } else {
+            let cache_dir = cache_dir.clone();
+            let node_modules = node_modules.to_path_buf();
+            run_worker_pool(
+                cache_install_inputs,
+                cache_install_conc,
+                worker_pool_seq_threshold,
+                move |(pkg, tarball_path)| {
+                    let base = base_name(&pkg).to_string();
+                    let ok = match registry::ensure_unpacked_in_store(&tarball_path, &cache_dir) {
+                        Ok(unpacked) => {
+                            utils::link_package_from_store(&unpacked, &node_modules, &base).is_ok()
+                                || registry::extract_tarball(&tarball_path, &node_modules, &base).is_ok()
+                        }
+                        Err(_) => false,
+                    };
+                    (pkg, tarball_path, ok)
+                },
+            )
+        };
+
+        install_results.sort_by(|a, b| a.0.cmp(&b.0));
+        for (pkg, tarball_path, ok) in install_results {
+            if ok {
+                utils::log(&format!("Installed {} from cache (link/copy).", pkg));
+            } else {
+                fallback_tarballs.push((pkg, tarball_path));
             }
         }
         if !fallback_tarballs.is_empty() {
@@ -229,6 +602,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
             }
         }
     }
+    profiler.mark("install_from_cache");
 
     if to_fetch.is_empty() {
         return Ok(());
@@ -268,44 +642,72 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                 None => npm_fallback.push(pkg.clone()),
             }
         }
-        const DL_CONCURRENCY: usize = 8;
-        let mut download_results: Vec<(String, Result<String, String>)> = Vec::with_capacity(work.len());
-        for chunk in work.chunks(DL_CONCURRENCY) {
-            use std::sync::mpsc;
-            use std::thread;
-            let (tx, rx) = mpsc::channel();
-            for (pkg, url, integrity) in chunk {
-                let pkg = pkg.clone();
-                let url = url.clone();
-                let integrity = integrity.clone();
-                let cache_dir = cache_dir.clone();
-                let tx = tx.clone();
-                thread::spawn(move || {
-                    let res = registry::download_tarball_to_store_hash_only(
-                        &url,
-                        &cache_dir,
-                        &pkg,
-                        integrity.as_deref(),
-                    );
-                    let _ = tx.send((pkg, res));
+        let dl_inputs: Vec<(String, String, Option<String>)> = work;
+        let dl_concurrency = download_conc;
+        let mut download_results: Vec<(String, Result<(String, std::path::PathBuf), String>)> = if legacy_chunk_scheduler {
+            let mut outputs = Vec::with_capacity(dl_inputs.len());
+            for chunk in dl_inputs.chunks(dl_concurrency) {
+                use std::sync::mpsc;
+                use std::thread;
+                let (tx, rx) = mpsc::channel();
+                for (pkg, url, integrity) in chunk {
+                    let pkg = pkg.clone();
+                    let url = url.clone();
+                    let integrity = integrity.clone();
+                    let cache_dir = cache_dir.clone();
+                    let tx = tx.clone();
+                    thread::spawn(move || {
+                        let res = registry::download_tarball_to_store_hash_only(
+                            &url,
+                            &cache_dir,
+                            &pkg,
+                            integrity.as_deref(),
+                        )
+                        .and_then(|hash| {
+                            let store_path = cache_dir.join("store").join(format!("{}.tgz", hash));
+                            registry::ensure_unpacked_in_store(&store_path, &cache_dir)
+                                .map(|unpacked| (hash, unpacked))
+                        });
+                        let _ = tx.send((pkg, res));
+                    });
+                }
+                drop(tx);
+                for result in rx {
+                    outputs.push(result);
+                }
+            }
+            outputs
+        } else {
+            let cache_dir = cache_dir.clone();
+            run_worker_pool(dl_inputs, dl_concurrency, worker_pool_seq_threshold, move |(pkg, url, integrity)| {
+                let res = registry::download_tarball_to_store_hash_only(
+                    &url,
+                    &cache_dir,
+                    &pkg,
+                    integrity.as_deref(),
+                )
+                .and_then(|hash| {
+                    let store_path = cache_dir.join("store").join(format!("{}.tgz", hash));
+                    registry::ensure_unpacked_in_store(&store_path, &cache_dir)
+                        .map(|unpacked| (hash, unpacked))
                 });
-            }
-            drop(tx);
-            for (pkg, res) in rx {
-                download_results.push((pkg, res));
-            }
-        }
+                (pkg, res)
+            })
+        };
+        download_results.sort_by(|a, b| a.0.cmp(&b.0));
         for (pkg, res) in download_results {
             match res {
-                Ok(hash) => {
+                Ok((hash, unpacked)) => {
                     index_batch.insert(pkg.clone(), hash.clone());
                     let store_path = cache_dir.join("store").join(format!("{}.tgz", hash));
                     let base = base_name(&pkg);
-                    if let Err(e) = registry::extract_tarball(&store_path, node_modules, base) {
-                        let msg = format!("Extract failed for {}: {}", pkg, e);
-                        utils::log(&msg);
-                        npm_fallback.push(pkg);
-                        continue;
+                    if utils::link_package_from_store(&unpacked, node_modules, base).is_err() {
+                        if let Err(e) = registry::extract_tarball(&store_path, node_modules, base) {
+                            let msg = format!("Extract failed for {}: {}", pkg, e);
+                            utils::log(&msg);
+                            npm_fallback.push(pkg);
+                            continue;
+                        }
                     }
                     if !options.quiet {
                         let version = pkg.rfind('@').map(|i| &pkg[i + 1..]).unwrap_or("");
@@ -320,18 +722,101 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
             index.extend(index_batch);
             utils::write_store_index(&index).map_err(|e| e.to_string())?;
         }
+        profiler.mark("from_lockfile_resolve_download_install");
     } else {
-        for pkg in &to_fetch {
-            if options.no_cache {
-                npm_fallback.push(pkg.clone());
-                continue;
-            }
-            match registry::install_package_native(pkg, node_modules, &cache_dir, options) {
-                Ok(()) => {}
-                Err(_) => {
-                    npm_fallback.push(pkg.clone());
+        if options.no_cache {
+            npm_fallback.extend(to_fetch.clone());
+        } else {
+            let strategy = ManifestThenPackumentStrategy;
+            let work = strategy.resolve(&to_fetch, &mut npm_fallback);
+            profiler.mark("resolve_cold_specs");
+
+            let dl_inputs: Vec<ResolvedFetch> = work;
+            let dl_concurrency = download_conc;
+            let mut download_results: Vec<(String, Result<(String, String, std::path::PathBuf), String>)> = if legacy_chunk_scheduler {
+                let mut outputs = Vec::with_capacity(dl_inputs.len());
+                for chunk in dl_inputs.chunks(dl_concurrency) {
+                    use std::sync::mpsc;
+                    use std::thread;
+                    let (tx, rx) = mpsc::channel();
+                    for item in chunk {
+                        let pkg = item.pkg.clone();
+                        let url = item.url.clone();
+                        let integrity = item.integrity.clone();
+                        let version = item.version.clone();
+                        let cache_dir = cache_dir.clone();
+                        let tx = tx.clone();
+                        thread::spawn(move || {
+                            let res = registry::download_tarball_to_store_hash_only(
+                                &url,
+                                &cache_dir,
+                                &pkg,
+                                integrity.as_deref(),
+                            )
+                            .and_then(|hash| {
+                                let store_path = cache_dir.join("store").join(format!("{}.tgz", hash));
+                                registry::ensure_unpacked_in_store(&store_path, &cache_dir)
+                                    .map(|unpacked| (hash, version, unpacked))
+                            });
+                            let _ = tx.send((pkg, res));
+                        });
+                    }
+                    drop(tx);
+                    for result in rx {
+                        outputs.push(result);
+                    }
+                }
+                outputs
+            } else {
+                let cache_dir = cache_dir.clone();
+                run_worker_pool(dl_inputs, dl_concurrency, worker_pool_seq_threshold, move |item| {
+                    let pkg = item.pkg;
+                    let url = item.url;
+                    let integrity = item.integrity;
+                    let version = item.version;
+                    let res = registry::download_tarball_to_store_hash_only(
+                        &url,
+                        &cache_dir,
+                        &pkg,
+                        integrity.as_deref(),
+                    )
+                    .and_then(|hash| {
+                        let store_path = cache_dir.join("store").join(format!("{}.tgz", hash));
+                        registry::ensure_unpacked_in_store(&store_path, &cache_dir)
+                            .map(|unpacked| (hash, version, unpacked))
+                    });
+                    (pkg, res)
+                })
+            };
+
+            download_results.sort_by(|a, b| a.0.cmp(&b.0));
+            for (pkg, res) in download_results {
+                match res {
+                    Ok((hash, version, unpacked)) => {
+                        let index_key = format!("{}@{}", base_name(&pkg), version);
+                        index_batch.insert(index_key, hash.clone());
+                        let store_path = cache_dir.join("store").join(format!("{}.tgz", hash));
+                        let base = base_name(&pkg);
+                        if utils::link_package_from_store(&unpacked, node_modules, base).is_ok()
+                            || registry::extract_tarball(&store_path, node_modules, base).is_ok()
+                        {
+                            if !options.quiet {
+                                println!("Installed {}@{} (native)", base, version);
+                            }
+                        } else {
+                            npm_fallback.push(pkg);
+                        }
+                    }
+                    Err(_) => npm_fallback.push(pkg),
                 }
             }
+
+            if !index_batch.is_empty() {
+                let mut index = utils::read_store_index();
+                index.extend(index_batch);
+                utils::write_store_index(&index).map_err(|e| e.to_string())?;
+            }
+            profiler.mark("download_unpack_install_cold");
         }
     }
 

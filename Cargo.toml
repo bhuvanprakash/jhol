@@ -14,6 +14,10 @@ readme = "README.md"
 keywords = ["package-manager", "npm", "cache", "offline"]
 categories = ["command-line-utilities", "development-tools"]
 
+[features]
+default = []
+http-reqwest = ["jhol-core/http-reqwest"]
+
 [dependencies]
 jhol-core = { version = "1.0.1", path = "crates/jhol-core" }
 clap = { version = "4.5", features = ["cargo"] }

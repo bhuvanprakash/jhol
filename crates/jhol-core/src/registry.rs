@@ -150,6 +150,125 @@ fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>
     }
 }
 
+fn encoded_package_path(package: &str) -> String {
+    if package.starts_with('@') {
+        package.replace('/', "%2F")
+    } else {
+        package.to_string()
+    }
+}
+
+fn fetch_manifest(package: &str, selector: &str) -> Result<serde_json::Value, String> {
+    let path = encoded_package_path(package);
+    let base = registry_url();
+    let url = format!(
+        "{}/{}/{}",
+        base.trim_end_matches('/'),
+        path.trim_start_matches('/'),
+        selector.trim_start_matches('/')
+    );
+    let auth_token = registry_auth_token();
+    let mut req = ureq::get(&url);
+    if let Some(token) = auth_token.as_deref() {
+        if !token.is_empty() {
+            req = req.set("Authorization", &format!("Bearer {}", token));
+        }
+    }
+    let resp = req.call().map_err(|e| e.to_string())?;
+    let mut body = Vec::new();
+    resp.into_reader()
+        .read_to_end(&mut body)
+        .map_err(|e| e.to_string())?;
+    serde_json::from_slice(&body).map_err(|e| e.to_string())
+}
+
+/// Fast-path resolve for latest/exact specs using the manifest endpoint
+/// (`/<pkg>/latest` or `/<pkg>/<version>`), avoiding large packument downloads.
+/// Returns Some((resolved_version, tarball_url, integrity)).
+pub fn resolve_tarball_via_manifest(
+    package: &str,
+    version_req: &str,
+) -> Result<Option<(String, String, Option<String>)>, String> {
+    let selector = if version_req.trim().is_empty() || version_req.trim() == "latest" {
+        Some("latest".to_string())
+    } else if semver::Version::parse(version_req.trim()).is_ok() {
+        Some(version_req.trim().to_string())
+    } else {
+        None
+    };
+
+    let Some(selector) = selector else {
+        return Ok(None);
+    };
+
+    let manifest = fetch_manifest(package, &selector)?;
+    let resolved_version = manifest
+        .get("version")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("No version in manifest for {}@{}", package, selector))?
+        .to_string();
+    let tarball = manifest
+        .get("dist")
+        .and_then(|d| d.as_object())
+        .and_then(|d| d.get("tarball"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("No dist.tarball in manifest for {}@{}", package, selector))?
+        .to_string();
+    let integrity = manifest
+        .get("dist")
+        .and_then(|d| d.as_object())
+        .and_then(|d| d.get("integrity"))
+        .and_then(|i| i.as_str())
+        .map(String::from);
+
+    Ok(Some((resolved_version, tarball, integrity)))
+}
+
+fn packument_concurrency() -> usize {
+    std::env::var("JHOL_PACKUMENT_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|n| n.clamp(1, 64))
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| (n.get() * 2).clamp(8, 32))
+                .unwrap_or(8)
+        })
+}
+
+/// Parallel manifest fast-path resolve for multiple package requests.
+/// Input tuple: (request_id, package_name, version_req).
+/// Output tuple: (request_id, resolve_result).
+pub fn parallel_resolve_tarballs_via_manifest(
+    requests: &[(String, String, String)],
+) -> Vec<(String, Result<Option<(String, String, Option<String>)>, String>)> {
+    use std::sync::mpsc;
+    use std::thread;
+
+    let mut results = Vec::with_capacity(requests.len());
+    let concurrency = packument_concurrency();
+
+    for chunk in requests.chunks(concurrency) {
+        let (tx, rx) = mpsc::channel();
+        for (request_id, package, version_req) in chunk {
+            let request_id = request_id.clone();
+            let package = package.clone();
+            let version_req = version_req.clone();
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let res = resolve_tarball_via_manifest(&package, &version_req);
+                let _ = tx.send((request_id, res));
+            });
+        }
+        drop(tx);
+        for item in rx {
+            results.push(item);
+        }
+    }
+
+    results
+}
+
 /// Fetch package metadata from registry. Scoped: @scope/pkg -> @scope%2Fpkg.
 /// Tries abbreviated packument (Accept: application/vnd.npm.install-v1+json) first; falls back to full if unsupported or incomplete.
 pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
@@ -179,8 +298,6 @@ pub fn fetch_metadata_cached(
     Ok(meta)
 }
 
-const PACKUMENT_CONCURRENCY: usize = 8;
-
 /// Fetch packuments for multiple packages in parallel. Uses shared cache to avoid duplicate fetches. Returns (name, Result) for each name.
 pub fn parallel_fetch_metadata(
     names: &[String],
@@ -189,7 +306,8 @@ pub fn parallel_fetch_metadata(
     use std::sync::mpsc;
     use std::thread;
     let mut results = Vec::with_capacity(names.len());
-    for chunk in names.chunks(PACKUMENT_CONCURRENCY) {
+    let concurrency = packument_concurrency();
+    for chunk in names.chunks(concurrency) {
         let (tx, rx) = mpsc::channel();
         for name in chunk {
             let name = name.clone();
@@ -370,8 +488,11 @@ pub fn fill_store_from_registry(
     download_tarball_to_store(&url, cache_dir, &pkg_key, None, integrity.as_deref())
 }
 
-/// Get dependencies of a specific version from packument (dependencies + optionalDependencies).
-pub fn get_version_dependencies(meta: &serde_json::Value, version: &str) -> std::collections::HashMap<String, String> {
+/// Get required (non-optional) dependencies of a specific version from packument.
+pub fn get_version_required_dependencies(
+    meta: &serde_json::Value,
+    version: &str,
+) -> std::collections::HashMap<String, String> {
     let mut out = std::collections::HashMap::new();
     let versions = match meta.get("versions").and_then(|v| v.as_object()) {
         Some(v) => v,
@@ -381,15 +502,45 @@ pub fn get_version_dependencies(meta: &serde_json::Value, version: &str) -> std:
         Some(v) => v,
         None => return out,
     };
-    for (key, obj) in [("dependencies", ver_obj), ("optionalDependencies", ver_obj)] {
-        if let Some(deps) = obj.get(key).and_then(|d| d.as_object()) {
-            for (k, v) in deps {
-                if let Some(s) = v.as_str() {
-                    out.insert(k.clone(), s.to_string());
-                }
+    if let Some(deps) = ver_obj.get("dependencies").and_then(|d| d.as_object()) {
+        for (k, v) in deps {
+            if let Some(s) = v.as_str() {
+                out.insert(k.clone(), s.to_string());
             }
         }
     }
+    out
+}
+
+/// Get optional dependencies of a specific version from packument.
+pub fn get_version_optional_dependencies(
+    meta: &serde_json::Value,
+    version: &str,
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let versions = match meta.get("versions").and_then(|v| v.as_object()) {
+        Some(v) => v,
+        None => return out,
+    };
+    let ver_obj = match versions.get(version).and_then(|v| v.as_object()) {
+        Some(v) => v,
+        None => return out,
+    };
+    if let Some(deps) = ver_obj.get("optionalDependencies").and_then(|d| d.as_object()) {
+        for (k, v) in deps {
+            if let Some(s) = v.as_str() {
+                out.insert(k.clone(), s.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Get dependencies of a specific version from packument (dependencies + optionalDependencies).
+pub fn get_version_dependencies(meta: &serde_json::Value, version: &str) -> std::collections::HashMap<String, String> {
+    let mut out = get_version_required_dependencies(meta, version);
+    let optional = get_version_optional_dependencies(meta, version);
+    out.extend(optional);
     out
 }
 

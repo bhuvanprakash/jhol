@@ -228,11 +228,26 @@ fn test_fixture_package_jsons_parse() {
         "tests/fixtures/express-app/package.json",
         "tests/fixtures/typescript-app/package.json",
         "tests/fixtures/peer-conflict/package.json",
+        "tests/fixtures/optional-deps-app/package.json",
+        "tests/fixtures/peer-deps-app/package.json",
+        "tests/fixtures/overrides-app/package.json",
+        "tests/fixtures/workspace-app/package.json",
+        "tests/fixtures/next-app/package.json",
+        "tests/fixtures/nuxt-app/package.json",
+        "tests/fixtures/nest-app/package.json",
+        "tests/fixtures/turbo-app/package.json",
+        "tests/fixtures/expo-app/package.json",
     ];
     for fixture in fixtures {
         let data = std::fs::read_to_string(fixture).expect("fixture package.json missing");
         let v: serde_json::Value = serde_json::from_str(&data).expect("fixture json invalid");
-        assert!(v.get("dependencies").is_some(), "fixture missing dependencies: {}", fixture);
+        let has_deps = v.get("dependencies").is_some();
+        let has_dev_deps = v.get("devDependencies").is_some();
+        assert!(
+            has_deps || has_dev_deps,
+            "fixture missing dependencies/devDependencies: {}",
+            fixture
+        );
     }
 }
 

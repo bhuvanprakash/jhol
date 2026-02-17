@@ -1,0 +1,60 @@
+{
+  "frameworks": [
+    {
+      "name": "express",
+      "fixture": "express-app",
+      "requiredDependencies": [
+        "express"
+      ]
+    },
+    {
+      "name": "react",
+      "fixture": "react-app",
+      "requiredDependencies": [
+        "react",
+        "react-dom"
+      ]
+    },
+    {
+      "name": "next",
+      "fixture": "next-app",
+      "requiredDependencies": [
+        "next",
+        "react",
+        "react-dom"
+      ]
+    },
+    {
+      "name": "nuxt",
+      "fixture": "nuxt-app",
+      "requiredDependencies": [
+        "nuxt"
+      ]
+    },
+    {
+      "name": "nest",
+      "fixture": "nest-app",
+      "requiredDependencies": [
+        "@nestjs/common",
+        "@nestjs/core"
+      ]
+    },
+    {
+      "name": "turbo",
+      "fixture": "turbo-app",
+      "requiredDependencies": [
+        "turbo"
+      ],
+      "requiredWorkspaces": true
+    },
+    {
+      "name": "expo",
+      "fixture": "expo-app",
+      "requiredDependencies": [
+        "expo",
+        "react",
+        "react-native"
+      ]
+    }
+  ]
+}

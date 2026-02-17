@@ -1,0 +1,8 @@
+{
+  "maxTotalFallbacks": 0,
+  "maxIncreaseVsBaseline": 0,
+  "maxReasonCount": {
+    "native_install_failed": 0,
+    "cache_link_or_extract_failed": 0
+  }
+}

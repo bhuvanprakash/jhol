@@ -10,6 +10,11 @@ package.json
 # Logs and cache
 logs.txt
 .jhol-cache/
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
 
 # Temporary & OS files
 .DS_Store
@@ -28,3 +33,6 @@ debug/
 
 RELEASE_NOTES_v1.0.0.md
 benchmark-results.json
+
+# Generated reports
+*-report.json
