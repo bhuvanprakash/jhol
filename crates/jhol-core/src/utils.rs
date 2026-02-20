@@ -62,20 +62,10 @@ pub fn log(message: &str) {
     }
 
     let log_path = format!("{}/{}", get_cache_dir(), LOG_FILE);
-
-    let mut should_write = true;
-    if let Ok(contents) = fs::read_to_string(&log_path) {
-        if let Some(last_line) = contents.lines().last() {
-            if last_line == log_message {
-                should_write = false;
-            }
-        }
-    }
-
-    if should_write {
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
-            let _ = writeln!(file, "{}", log_message);
-        }
+    // Append-only: no read-back, no duplicate check — reading entire log on every call
+    // is O(n) per log and catastrophic when called from worker threads.
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
+        let _ = writeln!(file, "{}", log_message);
     }
 }
 

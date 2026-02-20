@@ -1,4 +1,5 @@
 //! Native npm registry client: fetch metadata and tarballs via HTTP.
+//! All HTTP calls go through `crate::http_client` (shared Agent = TCP connection pool).
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -57,6 +58,8 @@ fn write_packument_cache(
     Ok(())
 }
 
+/// Fetch packument bytes via the shared HTTP client (connection pooling).
+/// Supports ETags for conditional requests and abbreviated format.
 fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>, String> {
     let path = if package.starts_with('@') {
         package.replace('/', "%2F")
@@ -69,28 +72,55 @@ fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>
     let (cached_body_raw, cached_etag) = read_packument_cache(package, abbreviated);
     let cached_body = cached_body_raw.filter(|b| !b.is_empty());
 
-    let mut req = ureq::get(&url);
-    if abbreviated {
-        req = req.set("Accept", "application/vnd.npm.install-v1+json");
-    }
-    if let Some(token) = auth_token.as_deref() {
-        if !token.is_empty() {
-            req = req.set("Authorization", &format!("Bearer {}", token));
-        }
-    }
-    if let Some(ref etag) = cached_etag {
-        if !etag.is_empty() {
-            req = req.set("If-None-Match", etag);
-        }
-    }
+    // Build owned strings for header values — &str refs into these live long enough.
+    let auth_hdr: Option<String> = auth_token
+        .as_deref()
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("Bearer {}", t));
 
-    match req.call() {
-        Ok(resp) => {
-            let etag = resp.header("ETag").map(|s| s.to_string());
-            let mut body = Vec::new();
-            resp.into_reader()
-                .read_to_end(&mut body)
-                .map_err(|e| e.to_string())?;
+    /// Build the headers vec for a request (with or without If-None-Match).
+    let make_headers = |with_etag: bool| -> Vec<(String, String)> {
+        let mut h: Vec<(String, String)> = Vec::new();
+        if abbreviated {
+            h.push(("Accept".into(), "application/vnd.npm.install-v1+json".into()));
+        }
+        if let Some(ref v) = auth_hdr {
+            h.push(("Authorization".into(), v.clone()));
+        }
+        if with_etag {
+            if let Some(ref etag) = cached_etag {
+                if !etag.is_empty() {
+                    h.push(("If-None-Match".into(), etag.clone()));
+                }
+            }
+        }
+        h
+    };
+
+    let do_fetch = |with_etag: bool| -> Result<(u16, Vec<u8>, Option<String>), String> {
+        let owned = make_headers(with_etag);
+        let refs: Vec<(&str, &str)> = owned.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        crate::http_client::get_raw_with_headers(&url, &refs)
+    };
+
+    match do_fetch(true) {
+        Ok((304, _, _)) => {
+            // Server says "not modified" — use disk-cached body if valid.
+            if let Some(body) = cached_body {
+                if serde_json::from_slice::<serde_json::Value>(&body).is_ok() {
+                    return Ok(body);
+                }
+            }
+            // Cache missing/corrupt: unconditional refetch without If-None-Match.
+            match do_fetch(false) {
+                Ok((_, body, etag)) if !body.is_empty() => {
+                    let _ = write_packument_cache(package, abbreviated, &body, etag.as_deref());
+                    Ok(body)
+                }
+                _ => Err(format!("Empty packument body for {} after 304 retry", package)),
+            }
+        }
+        Ok((_, body, etag)) => {
             if body.is_empty() {
                 if let Some(cached) = cached_body {
                     if serde_json::from_slice::<serde_json::Value>(&cached).is_ok() {
@@ -110,42 +140,13 @@ fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>
             let _ = write_packument_cache(package, abbreviated, &body, etag.as_deref());
             Ok(body)
         }
-        Err(ureq::Error::Status(304, _)) => {
-            if let Some(body) = cached_body {
-                // Guard against corrupted cache blobs.
-                if serde_json::from_slice::<serde_json::Value>(&body).is_ok() {
-                    return Ok(body);
-                }
-            }
-            // Fallback: unconditional fetch when cache is missing/corrupt.
-            let mut retry = ureq::get(&url);
-            if abbreviated {
-                retry = retry.set("Accept", "application/vnd.npm.install-v1+json");
-            }
-            if let Some(token) = auth_token.as_deref() {
-                if !token.is_empty() {
-                    retry = retry.set("Authorization", &format!("Bearer {}", token));
-                }
-            }
-            let resp = retry.call().map_err(|e| e.to_string())?;
-            let etag = resp.header("ETag").map(|s| s.to_string());
-            let mut body = Vec::new();
-            resp.into_reader()
-                .read_to_end(&mut body)
-                .map_err(|e| e.to_string())?;
-            if body.is_empty() {
-                return Err(format!("Empty packument body for {}", package));
-            }
-            let _ = write_packument_cache(package, abbreviated, &body, etag.as_deref());
-            Ok(body)
-        }
         Err(e) => {
             if let Some(body) = cached_body {
                 if serde_json::from_slice::<serde_json::Value>(&body).is_ok() {
                     return Ok(body);
                 }
             }
-            Err(e.to_string())
+            Err(e)
         }
     }
 }
@@ -158,6 +159,8 @@ fn encoded_package_path(package: &str) -> String {
     }
 }
 
+/// Fetch a specific version manifest (/<pkg>/latest or /<pkg>/<version>).
+/// Routes through the global shared HTTP client — reuses existing TCP connection.
 fn fetch_manifest(package: &str, selector: &str) -> Result<serde_json::Value, String> {
     let path = encoded_package_path(package);
     let base = registry_url();
@@ -168,17 +171,8 @@ fn fetch_manifest(package: &str, selector: &str) -> Result<serde_json::Value, St
         selector.trim_start_matches('/')
     );
     let auth_token = registry_auth_token();
-    let mut req = ureq::get(&url);
-    if let Some(token) = auth_token.as_deref() {
-        if !token.is_empty() {
-            req = req.set("Authorization", &format!("Bearer {}", token));
-        }
-    }
-    let resp = req.call().map_err(|e| e.to_string())?;
-    let mut body = Vec::new();
-    resp.into_reader()
-        .read_to_end(&mut body)
-        .map_err(|e| e.to_string())?;
+    // Route through http_client (shared Agent) instead of raw ureq::get().
+    let body = crate::http_client::get_bytes_with_bearer(&url, auth_token.as_deref())?;
     serde_json::from_slice(&body).map_err(|e| e.to_string())
 }
 
@@ -270,7 +264,8 @@ pub fn parallel_resolve_tarballs_via_manifest(
 }
 
 /// Fetch package metadata from registry. Scoped: @scope/pkg -> @scope%2Fpkg.
-/// Tries abbreviated packument (Accept: application/vnd.npm.install-v1+json) first; falls back to full if unsupported or incomplete.
+/// Tries abbreviated packument (Accept: application/vnd.npm.install-v1+json) first;
+/// falls back to full if unsupported or incomplete.
 pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
     let body = match fetch_packument_with_etag(package, true) {
         Ok(b) => b,
@@ -298,7 +293,7 @@ pub fn fetch_metadata_cached(
     Ok(meta)
 }
 
-/// Fetch packuments for multiple packages in parallel. Uses shared cache to avoid duplicate fetches. Returns (name, Result) for each name.
+/// Fetch packuments for multiple packages in parallel. Uses shared cache to avoid duplicate fetches.
 pub fn parallel_fetch_metadata(
     names: &[String],
     cache: &std::sync::Arc<std::sync::Mutex<HashMap<String, serde_json::Value>>>,
@@ -337,7 +332,7 @@ pub fn parallel_fetch_metadata(
     results
 }
 
-/// Validate that a package exists on the registry (no npm subprocess). Uses packument GET.
+/// Validate that a package exists on the registry. Uses packument GET.
 pub fn validate_package_exists(package: &str) -> Result<bool, String> {
     match fetch_metadata(package) {
         Ok(meta) => {
@@ -359,7 +354,7 @@ pub fn validate_package_exists(package: &str) -> Result<bool, String> {
     }
 }
 
-/// Run validate_package_exists for multiple packages in parallel. Returns (package, is_valid).
+/// Run validate_package_exists for multiple packages in parallel.
 pub fn parallel_validate_packages(packages: &[String], _timeout_secs: u64) -> Vec<(String, bool)> {
     use std::sync::mpsc;
     use std::thread;
@@ -379,7 +374,7 @@ pub fn parallel_validate_packages(packages: &[String], _timeout_secs: u64) -> Ve
     rx.into_iter().collect()
 }
 
-/// Check if a concrete version satisfies a semver range/spec (e.g. "^1.0" and "1.2.3" -> true).
+/// Check if a concrete version satisfies a semver range/spec.
 pub fn version_satisfies(spec: &str, version: &str) -> bool {
     let spec = spec.trim();
     if spec.is_empty() || spec == "*" {
@@ -396,7 +391,7 @@ pub fn version_satisfies(spec: &str, version: &str) -> bool {
     req.matches(&v)
 }
 
-/// Resolve a semver range to the maximum satisfying version from a list of version strings.
+/// Resolve a semver range to the maximum satisfying version from a list.
 pub fn resolve_range(version_strings: &[String], range: &str) -> Option<String> {
     let range = range.trim();
     if range.is_empty() || range == "*" {
@@ -428,7 +423,6 @@ pub fn resolve_version(meta: &serde_json::Value, version: &str) -> Option<String
     if versions.contains_key(version) {
         return Some(version.to_string());
     }
-    // Try as dist-tag
     let dist_tags = meta.get("dist-tags").and_then(|t| t.as_object());
     if let Some(tags) = dist_tags {
         if let Some(tag) = tags.get(version) {
@@ -437,7 +431,6 @@ pub fn resolve_version(meta: &serde_json::Value, version: &str) -> Option<String
             }
         }
     }
-    // Semver range: ^1.0, ~2.0, >=1.0.0 <2.0.0, etc.
     let looks_like_range = version.starts_with('^')
         || version.starts_with('~')
         || version.starts_with('>')
@@ -452,7 +445,7 @@ pub fn resolve_version(meta: &serde_json::Value, version: &str) -> Option<String
     None
 }
 
-/// Get tarball URL for a specific version from metadata
+/// Get tarball URL for a specific version from metadata.
 pub fn get_tarball_url(meta: &serde_json::Value, version: &str) -> Option<String> {
     let versions = meta.get("versions")?.as_object()?;
     let ver_obj = versions.get(version)?.as_object()?;
@@ -473,8 +466,7 @@ pub fn get_integrity_for_version(meta: &serde_json::Value, version: &str) -> Opt
         .map(String::from)
 }
 
-/// Fill the content-addressable store from the registry for a package@version (no npm pack).
-/// Fetches packument, gets tarball URL and integrity, downloads and verifies.
+/// Fill the content-addressable store from the registry for a package@version.
 pub fn fill_store_from_registry(
     package: &str,
     version: &str,
@@ -488,7 +480,7 @@ pub fn fill_store_from_registry(
     download_tarball_to_store(&url, cache_dir, &pkg_key, None, integrity.as_deref())
 }
 
-/// Get required (non-optional) dependencies of a specific version from packument.
+/// Get required dependencies of a specific version from packument.
 pub fn get_version_required_dependencies(
     meta: &serde_json::Value,
     version: &str,
@@ -536,16 +528,19 @@ pub fn get_version_optional_dependencies(
     out
 }
 
-/// Get dependencies of a specific version from packument (dependencies + optionalDependencies).
-pub fn get_version_dependencies(meta: &serde_json::Value, version: &str) -> std::collections::HashMap<String, String> {
+pub fn get_version_dependencies(
+    meta: &serde_json::Value,
+    version: &str,
+) -> std::collections::HashMap<String, String> {
     let mut out = get_version_required_dependencies(meta, version);
-    let optional = get_version_optional_dependencies(meta, version);
-    out.extend(optional);
+    out.extend(get_version_optional_dependencies(meta, version));
     out
 }
 
-/// Get peer dependencies of a specific version from packument.
-pub fn get_version_peer_dependencies(meta: &serde_json::Value, version: &str) -> std::collections::HashMap<String, String> {
+pub fn get_version_peer_dependencies(
+    meta: &serde_json::Value,
+    version: &str,
+) -> std::collections::HashMap<String, String> {
     let mut out = std::collections::HashMap::new();
     let versions = match meta.get("versions").and_then(|v| v.as_object()) {
         Some(v) => v,
@@ -565,7 +560,6 @@ pub fn get_version_peer_dependencies(meta: &serde_json::Value, version: &str) ->
     out
 }
 
-/// Get peerDependenciesMeta of a version from packument.
 pub fn get_version_peer_dependencies_meta(
     meta: &serde_json::Value,
     version: &str,
@@ -587,16 +581,14 @@ pub fn get_version_peer_dependencies_meta(
     out
 }
 
-/// Download tarball from URL to a file; returns path (uses bounded HTTP client).
+/// Download tarball from URL to a file (uses shared HTTP client).
 pub fn download_tarball(url: &str, dest: &Path) -> Result<PathBuf, String> {
     let token = registry_auth_token();
     crate::http_client::get_to_file_with_bearer(url, dest, token.as_deref())?;
     Ok(dest.to_path_buf())
 }
 
-/// Download tarball from URL into the content-addressable store. No packument fetch.
-/// If index_batch is Some, adds pkg_key->hash to it and does not write the index; caller must flush.
-/// If expected_integrity is Some (SRI string, e.g. "sha512-..."), verifies after download.
+/// Download tarball to store and return hash. Does not update the store index (for parallel use).
 pub fn download_tarball_to_store(
     url: &str,
     cache_dir: &Path,
@@ -618,7 +610,7 @@ pub fn download_tarball_to_store(
 
 static TMP_DOWNLOAD_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Download tarball to store and return hash. Does not update the store index (for parallel use).
+/// Download tarball to store and return hash. Does not update the store index.
 pub fn download_tarball_to_store_hash_only(
     url: &str,
     cache_dir: &Path,
@@ -660,7 +652,7 @@ pub fn ensure_unpacked_in_store(tarball_path: &Path, cache_dir: &Path) -> Result
     Ok(unpacked)
 }
 
-/// Extract .tgz into dest_dir, stripping one top-level directory from tarball (for unpacked store).
+/// Extract .tgz into dest_dir, stripping one top-level directory from tarball.
 pub fn extract_tarball_to_dir(tarball_path: &Path, dest_dir: &Path) -> Result<(), String> {
     use flate2::read::GzDecoder;
     use tar::Archive;
@@ -690,22 +682,25 @@ pub fn extract_tarball_to_dir(tarball_path: &Path, dest_dir: &Path) -> Result<()
             if let Some(p) = out_path.parent() {
                 std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
             }
-            // Streaming extraction through tar reader; avoids loading archive into memory.
             entry.unpack(&out_path).map_err(|e| e.to_string())?;
         }
     }
     Ok(())
 }
 
-/// Extract .tgz to node_modules/<package_name>. Strips one top-level directory from tarball.
-pub fn extract_tarball(tarball_path: &Path, node_modules_dir: &Path, package_name: &str) -> Result<(), String> {
+/// Extract .tgz to node_modules/<package_name>. Strips one top-level directory.
+pub fn extract_tarball(
+    tarball_path: &Path,
+    node_modules_dir: &Path,
+    package_name: &str,
+) -> Result<(), String> {
     let dest = node_modules_dir.join(package_name);
     std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
     extract_tarball_to_dir(tarball_path, &dest)
 }
 
 /// Install a single package via native registry (fetch metadata, download tarball, extract).
-/// Returns Ok(()) on success, Err on failure (caller can fall back to npm).
+/// Returns Ok(()) on success, Err on failure (caller can fall back to npm/bun).
 pub fn install_package_native(
     package: &str,
     node_modules: &Path,
@@ -728,7 +723,8 @@ pub fn install_package_native(
     } else {
         (package, "latest")
     };
-    let version = resolve_version(&meta, version_req).ok_or_else(|| format!("could not resolve version {}", version_req))?;
+    let version =
+        resolve_version(&meta, version_req).ok_or_else(|| format!("could not resolve version {}", version_req))?;
     let tarball_url = get_tarball_url(&meta, &version).ok_or("no tarball in metadata")?;
 
     let pkg_key = format!("{}@{}", base_name, version);
@@ -739,7 +735,9 @@ pub fn install_package_native(
     download_tarball(&tarball_url, &tmp).map_err(|e| format!("download: {}", e))?;
     let hash = crate::utils::content_hash(&tmp).map_err(|e| e.to_string())?;
     let store_file = store_dir.join(format!("{}.tgz", hash));
-    std::fs::rename(&tmp, &store_file).or_else(|_| std::fs::copy(&tmp, &store_file).map(|_| ())).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &store_file)
+        .or_else(|_| std::fs::copy(&tmp, &store_file).map(|_| ()))
+        .map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(&tmp);
     let mut index = crate::utils::read_store_index();
     index.insert(pkg_key, hash.clone());

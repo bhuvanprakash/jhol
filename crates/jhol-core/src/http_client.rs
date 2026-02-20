@@ -163,6 +163,78 @@ impl HttpClient {
         Ok(())
     }
 
+    /// GET url with optional bearer auth and return body as in-memory bytes.
+    /// Preferred over get_to_file_with_bearer for tarballs: lets the caller
+    /// hash + extract in one pass from memory, eliminating 2 extra disk reads.
+    /// Pre-allocates from Content-Length to avoid reallocs on large tarballs.
+    pub fn get_bytes_with_bearer(
+        &self,
+        url: &str,
+        bearer_token: Option<&str>,
+    ) -> Result<Vec<u8>, String> {
+        let _guard = self.limit.acquire();
+        let resp = self.send_with_retry(|| {
+            let req = self.agent.get(url);
+            match bearer_token {
+                Some(token) if !token.is_empty() => req
+                    .set("Authorization", &format!("Bearer {}", token))
+                    .call(),
+                _ => req.call(),
+            }
+        })?;
+        // Pre-allocate from Content-Length if present to reduce reallocs.
+        let hint = resp
+            .header("Content-Length")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(0);
+        let mut buf = Vec::with_capacity(if hint > 0 { hint } else { 256 * 1024 });
+        resp.into_reader()
+            .read_to_end(&mut buf)
+            .map_err(|e| e.to_string())?;
+        Ok(buf)
+    }
+
+    /// GET with custom request headers. Returns (http_status, body_bytes, etag_from_response).
+    /// Handles 304 without retrying (caller decides). Uses shared agent for connection pooling.
+    pub fn get_raw_with_headers(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<(u16, Vec<u8>, Option<String>), String> {
+        let _guard = self.limit.acquire();
+        let mut req = self.agent.get(url);
+        for (k, v) in headers {
+            req = req.set(k, v);
+        }
+        match req.call() {
+            Ok(resp) => {
+                let status = resp.status();
+                let etag = resp
+                    .header("ETag")
+                    .or_else(|| resp.header("etag"))
+                    .map(|s| s.to_string());
+                let hint = resp
+                    .header("Content-Length")
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(0);
+                let mut body = Vec::with_capacity(if hint > 0 { hint } else { 256 * 1024 });
+                resp.into_reader()
+                    .read_to_end(&mut body)
+                    .map_err(|e| e.to_string())?;
+                Ok((status, body, etag))
+            }
+            Err(ureq::Error::Status(304, resp)) => {
+                let etag = resp
+                    .header("ETag")
+                    .or_else(|| resp.header("etag"))
+                    .map(|s| s.to_string());
+                Ok((304, Vec::new(), etag))
+            }
+            Err(ureq::Error::Status(code, _)) => Err(format!("HTTP {}", code)),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
     fn send_with_retry<F>(&self, mut send: F) -> Result<ureq::Response, String>
     where
         F: FnMut() -> Result<ureq::Response, ureq::Error>,
@@ -234,6 +306,21 @@ pub fn get_to_file_with_bearer(
     bearer_token: Option<&str>,
 ) -> Result<(), String> {
     get_global().get_to_file_with_bearer(url, dest, bearer_token)
+}
+
+/// GET url with optional bearer token, return body as bytes (for one-pass hash+extract).
+pub fn get_bytes_with_bearer(url: &str, bearer_token: Option<&str>) -> Result<Vec<u8>, String> {
+    get_global().get_bytes_with_bearer(url, bearer_token)
+}
+
+/// GET url with custom request headers. Returns (status, body, etag).
+/// 304 is returned as-is (empty body); caller handles cached response.
+/// Uses the global shared Agent — all threads reuse TCP connections.
+pub fn get_raw_with_headers(
+    url: &str,
+    headers: &[(&str, &str)],
+) -> Result<(u16, Vec<u8>, Option<String>), String> {
+    get_global().get_raw_with_headers(url, headers)
 }
 
 /// POST JSON body to url (uses global bounded client).
