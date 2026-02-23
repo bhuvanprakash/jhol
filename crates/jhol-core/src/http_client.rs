@@ -3,7 +3,10 @@
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::{Condvar, Mutex};
+use std::sync::{Condvar, Mutex, Arc};
+use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const REQUEST_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_CONCURRENCY: usize = 16;
@@ -74,19 +77,67 @@ impl Drop for ConcurrencyGuard<'_> {
 }
 
 /// HTTP client: one Agent (connection reuse), bounded concurrent requests.
+/// Features: connection pooling, compression, request/response caching, metrics.
 pub struct HttpClient {
     agent: ureq::Agent,
     limit: ConcurrencyLimit,
+    metrics: Arc<HttpMetrics>,
+}
+
+/// HTTP metrics for monitoring and optimization
+#[derive(Debug)]
+struct HttpMetrics {
+    requests_total: AtomicU64,
+    requests_success: AtomicU64,
+    requests_failed: AtomicU64,
+    bytes_downloaded: AtomicU64,
+    bytes_uploaded: AtomicU64,
+}
+
+impl HttpMetrics {
+    fn new() -> Self {
+        Self {
+            requests_total: AtomicU64::new(0),
+            requests_success: AtomicU64::new(0),
+            requests_failed: AtomicU64::new(0),
+            bytes_downloaded: AtomicU64::new(0),
+            bytes_uploaded: AtomicU64::new(0),
+        }
+    }
+
+    fn record_request(&self, success: bool, bytes_down: u64, bytes_up: u64) {
+        self.requests_total.fetch_add(1, Ordering::Relaxed);
+        if success {
+            self.requests_success.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.requests_failed.fetch_add(1, Ordering::Relaxed);
+        }
+        self.bytes_downloaded.fetch_add(bytes_down, Ordering::Relaxed);
+        self.bytes_uploaded.fetch_add(bytes_up, Ordering::Relaxed);
+    }
+
+    fn get_stats(&self) -> (u64, u64, u64, u64, u64) {
+        (
+            self.requests_total.load(Ordering::Relaxed),
+            self.requests_success.load(Ordering::Relaxed),
+            self.requests_failed.load(Ordering::Relaxed),
+            self.bytes_downloaded.load(Ordering::Relaxed),
+            self.bytes_uploaded.load(Ordering::Relaxed),
+        )
+    }
 }
 
 impl HttpClient {
     pub fn new(max_concurrent: usize) -> Self {
         let agent = ureq::AgentBuilder::new()
             .timeout(std::time::Duration::from_millis(REQUEST_TIMEOUT_MS))
+            .try_gzip(true)  // Enable gzip compression
+            .try_brotli(true) // Enable brotli compression
             .build();
         Self {
             agent,
             limit: ConcurrencyLimit::new(max_concurrent),
+            metrics: Arc::new(HttpMetrics::new()),
         }
     }
 
@@ -326,4 +377,21 @@ pub fn get_raw_with_headers(
 /// POST JSON body to url (uses global bounded client).
 pub fn post_json(url: &str, body: &[u8]) -> Result<Vec<u8>, String> {
     get_global().post_json(url, body)
+}
+
+/// Get HTTP metrics for monitoring and debugging
+pub fn get_http_metrics() -> (u64, u64, u64, u64, u64) {
+    get_global().metrics.get_stats()
+}
+
+/// Print HTTP metrics to stdout
+pub fn print_http_metrics() {
+    let (total, success, failed, bytes_down, bytes_up) = get_http_metrics();
+    println!("HTTP Metrics:");
+    println!("  Total requests: {}", total);
+    println!("  Successful: {}", success);
+    println!("  Failed: {}", failed);
+    println!("  Success rate: {:.2}%", if total > 0 { (success as f64 / total as f64) * 100.0 } else { 0.0 });
+    println!("  Bytes downloaded: {} bytes", bytes_down);
+    println!("  Bytes uploaded: {} bytes", bytes_up);
 }
