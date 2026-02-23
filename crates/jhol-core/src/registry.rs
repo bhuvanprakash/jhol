@@ -22,10 +22,12 @@ fn packument_cache_dir() -> PathBuf {
 }
 
 fn packument_cache_key(package: &str, abbreviated: bool) -> String {
+    // Use a more efficient cache key that's shorter but still unique
     let mut hasher = Sha256::new();
     hasher.update(package.as_bytes());
     hasher.update(if abbreviated { b"abbr" } else { b"full" });
-    format!("{:x}", hasher.finalize())
+    // Take only first 16 bytes (32 hex chars) for faster string operations
+    format!("{:x}", &hasher.finalize()[..16])
 }
 
 fn packument_cache_paths(package: &str, abbreviated: bool) -> (PathBuf, PathBuf) {
@@ -117,7 +119,7 @@ fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>
                     let _ = write_packument_cache(package, abbreviated, &body, etag.as_deref());
                     Ok(body)
                 }
-                _ => Err(format!("Empty packument body for {} after 304 retry", package)),
+                _ => Err(format!("Failed to fetch packument for {} after 304 retry", package)),
             }
         }
         Ok((_, body, etag)) => {
@@ -151,18 +153,14 @@ fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>
     }
 }
 
-fn encoded_package_path(package: &str) -> String {
-    if package.starts_with('@') {
-        package.replace('/', "%2F")
-    } else {
-        package.to_string()
-    }
-}
-
 /// Fetch a specific version manifest (/<pkg>/latest or /<pkg>/<version>).
 /// Routes through the global shared HTTP client — reuses existing TCP connection.
 fn fetch_manifest(package: &str, selector: &str) -> Result<serde_json::Value, String> {
-    let path = encoded_package_path(package);
+    let path = if package.starts_with('@') {
+        package.replace('/', "%2F")
+    } else {
+        package.to_string()
+    };
     let base = registry_url();
     let url = format!(
         "{}/{}/{}",
@@ -218,15 +216,22 @@ pub fn resolve_tarball_via_manifest(
     Ok(Some((resolved_version, tarball, integrity)))
 }
 
+const DEFAULT_PACKUMENT_CONCURRENCY: usize = 8;
+const MAX_PACKUMENT_CONCURRENCY: usize = 64;
+const MIN_PACKUMENT_CONCURRENCY: usize = 1;
+const DEFAULT_PARALLELISM_MULTIPLIER: usize = 2;
+const MIN_PARALLEL_CONCURRENCY: usize = 8;
+const MAX_PARALLEL_CONCURRENCY: usize = 32;
+
 fn packument_concurrency() -> usize {
     std::env::var("JHOL_PACKUMENT_CONCURRENCY")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .map(|n| n.clamp(1, 64))
+        .map(|n| n.clamp(MIN_PACKUMENT_CONCURRENCY, MAX_PACKUMENT_CONCURRENCY))
         .unwrap_or_else(|| {
             std::thread::available_parallelism()
-                .map(|n| (n.get() * 2).clamp(8, 32))
-                .unwrap_or(8)
+                .map(|n| (n.get() * DEFAULT_PARALLELISM_MULTIPLIER).clamp(MIN_PARALLEL_CONCURRENCY, MAX_PARALLEL_CONCURRENCY))
+                .unwrap_or(DEFAULT_PACKUMENT_CONCURRENCY)
         })
 }
 
@@ -300,15 +305,33 @@ pub fn parallel_fetch_metadata(
 ) -> Vec<(String, Result<serde_json::Value, String>)> {
     use std::sync::mpsc;
     use std::thread;
+    
     let mut results = Vec::with_capacity(names.len());
     let concurrency = packument_concurrency();
-    for chunk in names.chunks(concurrency) {
+    
+    // Pre-filter already cached packages to reduce thread overhead
+    let mut uncached_names = Vec::new();
+    {
+        let guard = cache.lock().unwrap();
+        for name in names {
+            if !guard.contains_key(name) {
+                uncached_names.push(name.clone());
+            } else {
+                let cached = guard.get(name).unwrap().clone();
+                results.push((name.clone(), Ok(cached)));
+            }
+        }
+    }
+    
+    // Process remaining uncached packages in parallel
+    for chunk in uncached_names.chunks(concurrency) {
         let (tx, rx) = mpsc::channel();
         for name in chunk {
             let name = name.clone();
             let tx = tx.clone();
             let cache = std::sync::Arc::clone(cache);
             thread::spawn(move || {
+                // Double-check cache after thread spawn
                 {
                     let guard = cache.lock().unwrap();
                     if let Some(cached) = guard.get(&name) {
@@ -316,6 +339,7 @@ pub fn parallel_fetch_metadata(
                         return;
                     }
                 }
+                
                 let res = fetch_metadata(&name);
                 if let Ok(ref meta) = res {
                     let mut guard = cache.lock().unwrap();
@@ -557,6 +581,29 @@ pub fn get_version_peer_dependencies(
             }
         }
     }
+    out
+}
+
+/// Enhanced peer dependency resolution that considers peerDependenciesMeta for optional dependencies.
+pub fn resolve_peer_dependencies_with_meta(
+    meta: &serde_json::Value,
+    version: &str,
+) -> std::collections::HashMap<String, (String, bool)> {
+    let mut out = std::collections::HashMap::new();
+    let peer_deps = get_version_peer_dependencies(meta, version);
+    let peer_deps_meta = get_version_peer_dependencies_meta(meta, version);
+    
+    for (name, range) in peer_deps {
+        // Check if this peer dependency is optional according to peerDependenciesMeta
+        let optional = peer_deps_meta
+            .get(&name)
+            .and_then(|meta| meta.get("optional"))
+            .and_then(|opt| opt.as_bool())
+            .unwrap_or(false);
+        
+        out.insert(name, (range, optional));
+    }
+    
     out
 }
 

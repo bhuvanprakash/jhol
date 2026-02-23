@@ -512,6 +512,8 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         let cache_dir = std::path::PathBuf::from(utils::get_cache_dir());
         let node_modules = Path::new("node_modules");
         std::fs::create_dir_all(node_modules).map_err(|e| e.to_string())?;
+        // Create .bin directory for compatibility with npm
+        std::fs::create_dir_all(node_modules.join(".bin")).map_err(|e| e.to_string())?;
         let mut fallback_tarballs = Vec::new();
         let cache_install_inputs: Vec<(String, std::path::PathBuf)> = to_install_from_cache
             .iter()
