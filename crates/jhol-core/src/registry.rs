@@ -6,8 +6,10 @@ use std::fs::File;
 use std::io::BufReader;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use semver::{Version, VersionReq};
 use sha2::{Digest, Sha256};
+use serde_json::Value;
 
 fn registry_url() -> String {
     crate::config::effective_registry_url(Path::new("."))
@@ -268,20 +270,166 @@ pub fn parallel_resolve_tarballs_via_manifest(
     results
 }
 
+/// Lazy JSON parser for efficient metadata access
+#[derive(Debug)]
+pub struct LazyMetadata {
+    raw_bytes: Vec<u8>,
+    parsed: Option<Value>,
+}
+
+impl LazyMetadata {
+    pub fn new(raw_bytes: Vec<u8>) -> Self {
+        Self {
+            raw_bytes,
+            parsed: None,
+        }
+    }
+
+    pub fn parse(&mut self) -> Result<&Value, String> {
+        if self.parsed.is_none() {
+            self.parsed = Some(serde_json::from_slice(&self.raw_bytes).map_err(|e| e.to_string())?);
+        }
+        Ok(self.parsed.as_ref().unwrap())
+    }
+
+    pub fn get_versions(&mut self) -> Result<Option<&Value>, String> {
+        self.parse()?.get("versions").ok_or_else(|| "No versions found".to_string())
+    }
+
+    pub fn get_dist_tags(&mut self) -> Result<Option<&Value>, String> {
+        self.parse()?.get("dist-tags").ok_or_else(|| "No dist-tags found".to_string())
+    }
+
+    pub fn get_name(&mut self) -> Result<Option<&Value>, String> {
+        self.parse()?.get("name").ok_or_else(|| "No name found".to_string())
+    }
+}
+
+/// Cached metadata with lazy evaluation
+#[derive(Debug)]
+pub struct CachedMetadata {
+    lazy: LazyMetadata,
+    last_access: std::time::Instant,
+}
+
+impl CachedMetadata {
+    pub fn new(raw_bytes: Vec<u8>) -> Self {
+        Self {
+            lazy: LazyMetadata::new(raw_bytes),
+            last_access: std::time::Instant::now(),
+        }
+    }
+
+    pub fn access(&mut self) -> Result<&LazyMetadata, String> {
+        self.last_access = std::time::Instant::now();
+        Ok(&self.lazy)
+    }
+}
+
+/// LRU cache for parsed metadata
+#[derive(Debug)]
+struct MetadataCache {
+    cache: HashMap<String, CachedMetadata>,
+    capacity: usize,
+}
+
+impl MetadataCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            cache: HashMap::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    fn get(&mut self, key: &str) -> Option<&mut CachedMetadata> {
+        self.cache.get_mut(key)
+    }
+
+    fn insert(&mut self, key: String, metadata: CachedMetadata) {
+        if self.cache.len() >= self.capacity {
+            // LRU eviction: remove least recently accessed
+            let mut oldest_key = None;
+            let mut oldest_time = std::time::Instant::now();
+            
+            for (k, cached) in &self.cache {
+                if cached.last_access < oldest_time {
+                    oldest_time = cached.last_access;
+                    oldest_key = Some(k.clone());
+                }
+            }
+            
+            if let Some(key) = oldest_key {
+                self.cache.remove(&key);
+            }
+        }
+        
+        self.cache.insert(key, metadata);
+    }
+}
+
+/// Global metadata cache
+static METADATA_CACHE: std::sync::OnceLock<std::sync::Mutex<MetadataCache>> = std::sync::OnceLock::new();
+
+fn get_metadata_cache() -> &'static std::sync::Mutex<MetadataCache> {
+    METADATA_CACHE.get_or_init(|| {
+        std::sync::Mutex::new(MetadataCache::new(
+            std::env::var("JHOL_METADATA_CACHE_SIZE")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(1000)
+        ))
+    })
+}
+
 /// Fetch package metadata from registry. Scoped: @scope/pkg -> @scope%2Fpkg.
 /// Tries abbreviated packument (Accept: application/vnd.npm.install-v1+json) first;
 /// falls back to full if unsupported or incomplete.
 pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
+    let cache_key = format!("metadata:{}", package);
+    
+    // Try cache first
+    {
+        let mut cache = get_metadata_cache().lock().unwrap();
+        if let Some(cached) = cache.get(&cache_key) {
+            if let Ok(lazy) = cached.access() {
+                if let Ok(parsed) = lazy.parse() {
+                    // Check if abbreviated packument is sufficient
+                    if parsed.get("versions").and_then(|v| v.as_object()).map(|o| !o.is_empty()).unwrap_or(false) {
+                        return Ok(parsed.clone());
+                    }
+                }
+            }
+        }
+    }
+    
+    // Fetch from network
     let body = match fetch_packument_with_etag(package, true) {
         Ok(b) => b,
         Err(_) => fetch_packument_with_etag(package, false)?,
     };
-    let v: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
-    if v.get("versions").and_then(|v| v.as_object()).map(|o| o.is_empty()).unwrap_or(true) {
-        let body = fetch_packument_with_etag(package, false)?;
-        let v: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
-        return Ok(v);
+    
+    let mut lazy_meta = LazyMetadata::new(body);
+    
+    // Parse and check if abbreviated is sufficient
+    if let Ok(parsed) = lazy_meta.parse() {
+        if parsed.get("versions").and_then(|v| v.as_object()).map(|o| !o.is_empty()).unwrap_or(true) {
+            // Cache the metadata
+            let mut cache = get_metadata_cache().lock().unwrap();
+            cache.insert(cache_key, CachedMetadata::new(lazy_meta.raw_bytes));
+            
+            // Return parsed value
+            return Ok(parsed.clone());
+        }
     }
+    
+    // Fall back to full packument
+    let body = fetch_packument_with_etag(package, false)?;
+    let v: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+    
+    // Cache the full metadata
+    let mut cache = get_metadata_cache().lock().unwrap();
+    cache.insert(cache_key, CachedMetadata::new(body));
+    
     Ok(v)
 }
 

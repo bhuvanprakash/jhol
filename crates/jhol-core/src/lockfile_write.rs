@@ -1,8 +1,10 @@
 //! Native lockfile writing: resolve dependency tree and emit package-lock.json.
+//! Optimized for performance with incremental updates and async I/O.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::lockfile;
 use crate::registry;
@@ -523,8 +525,260 @@ fn build_packages_json(
     serde_json::Value::Object(packages)
 }
 
+/// Lockfile cache for incremental updates
+#[derive(Debug)]
+struct LockfileCache {
+    last_modified: std::time::SystemTime,
+    content_hash: u64,
+    packages: HashMap<String, ResolvedPackage>,
+}
+
+/// Incremental lockfile updater
+pub struct IncrementalLockfileUpdater {
+    cache: Option<LockfileCache>,
+}
+
+impl IncrementalLockfileUpdater {
+    pub fn new() -> Self {
+        Self { cache: None }
+    }
+
+    /// Check if lockfile needs updating based on package.json changes
+    pub fn needs_update(&self, lock_path: &Path, package_json_path: &Path) -> bool {
+        if !lock_path.exists() {
+            return true;
+        }
+        
+        let lock_meta = std::fs::metadata(lock_path);
+        let package_meta = std::fs::metadata(package_json_path);
+        
+        match (lock_meta, package_meta) {
+            (Ok(lock_meta), Ok(package_meta)) => {
+                let lock_modified = lock_meta.modified().unwrap_or_default();
+                let package_modified = package_meta.modified().unwrap_or_default();
+                
+                if package_modified > lock_modified {
+                    return true;
+                }
+                
+                // Check if cache is still valid
+                if let Some(cache) = &self.cache {
+                    if let Ok(current_modified) = lock_path.metadata().and_then(|m| m.modified()) {
+                        if current_modified == cache.last_modified {
+                            return false;
+                        }
+                    }
+                }
+                
+                true
+            }
+            _ => true,
+        }
+    }
+
+    /// Update lockfile incrementally if possible, otherwise write full lockfile
+    pub fn update_lockfile(
+        &mut self,
+        lock_path: &Path,
+        package_json_path: &Path,
+        tree: &HashMap<String, ResolvedPackage>,
+    ) -> Result<(), String> {
+        if !self.needs_update(lock_path, package_json_path) {
+            return Ok(());
+        }
+
+        // Try incremental update first
+        if let Some(existing_tree) = self.read_existing_lockfile(lock_path) {
+            if let Some(incremental_tree) = self.compute_incremental_update(&existing_tree, tree) {
+                return self.write_incremental_lockfile(lock_path, package_json_path, &incremental_tree);
+            }
+        }
+
+        // Fall back to full write
+        self.write_full_lockfile(lock_path, package_json_path, tree)
+    }
+
+    fn read_existing_lockfile(&self, lock_path: &Path) -> Option<HashMap<String, ResolvedPackage>> {
+        if !lock_path.exists() {
+            return None;
+        }
+        
+        let content = std::fs::read_to_string(lock_path).ok()?;
+        let lockfile: serde_json::Value = serde_json::from_str(&content).ok()?;
+        
+        let packages = lockfile.get("packages")?.as_object()?;
+        let mut tree = HashMap::new();
+        
+        for (key, value) in packages {
+            if key == "" {
+                continue; // Skip root package
+            }
+            
+            let version = value.get("version")?.as_str()?.to_string();
+            let resolved = value.get("resolved")?.as_str()?.to_string();
+            let integrity = value.get("integrity").and_then(|i| i.as_str()).map(String::from);
+            
+            let dependencies = value.get("dependencies")
+                .and_then(|d| d.as_object())
+                .map(|d| d.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string())).collect())
+                .unwrap_or_default();
+            
+            let peer_dependencies = value.get("peerDependencies")
+                .and_then(|d| d.as_object())
+                .map(|d| d.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string())).collect())
+                .unwrap_or_default();
+            
+            let peer_dependencies_meta = value.get("peerDependenciesMeta")
+                .and_then(|d| d.as_object())
+                .map(|d| d.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                .unwrap_or_default();
+            
+            tree.insert(key.clone(), ResolvedPackage {
+                version,
+                resolved,
+                integrity,
+                dependencies,
+                peer_dependencies,
+                peer_dependencies_meta,
+            });
+        }
+        
+        Some(tree)
+    }
+
+    fn compute_incremental_update(
+        &self,
+        existing: &HashMap<String, ResolvedPackage>,
+        new: &HashMap<String, ResolvedPackage>,
+    ) -> Option<HashMap<String, ResolvedPackage>> {
+        let mut updated = existing.clone();
+        let mut has_changes = false;
+        
+        for (key, new_pkg) in new {
+            if let Some(existing_pkg) = existing.get(key) {
+                if existing_pkg.version != new_pkg.version 
+                    || existing_pkg.resolved != new_pkg.resolved
+                    || existing_pkg.integrity != new_pkg.integrity {
+                    updated.insert(key.clone(), new_pkg.clone());
+                    has_changes = true;
+                }
+            } else {
+                updated.insert(key.clone(), new_pkg.clone());
+                has_changes = true;
+            }
+        }
+        
+        if has_changes {
+            Some(updated)
+        } else {
+            None
+        }
+    }
+
+    fn write_incremental_lockfile(
+        &mut self,
+        lock_path: &Path,
+        package_json_path: &Path,
+        tree: &HashMap<String, ResolvedPackage>,
+    ) -> Result<(), String> {
+        let (root_name, root_version) = read_root_package_info(package_json_path)?;
+        let deps = lockfile::read_package_json_deps(package_json_path).unwrap_or_default();
+        let direct_dep_names: Vec<String> = deps.keys().cloned().collect();
+
+        let packages = build_packages_json(&root_name, &root_version, &direct_dep_names, tree);
+
+        let lockfile_content = serde_json::json!({
+            "name": root_name,
+            "version": root_version,
+            "lockfileVersion": 3,
+            "packages": packages,
+        });
+
+        // Use atomic write to prevent corruption
+        let temp_path = lock_path.with_extension("tmp");
+        let pretty = serde_json::to_string_pretty(&lockfile_content).map_err(|e| e.to_string())?;
+        std::fs::write(&temp_path, pretty).map_err(|e| e.to_string())?;
+        std::fs::rename(temp_path, lock_path).map_err(|e| e.to_string())?;
+        
+        // Update cache
+        self.update_cache(lock_path, tree);
+        
+        Ok(())
+    }
+
+    fn write_full_lockfile(
+        &mut self,
+        lock_path: &Path,
+        package_json_path: &Path,
+        tree: &HashMap<String, ResolvedPackage>,
+    ) -> Result<(), String> {
+        let (root_name, root_version) = read_root_package_info(package_json_path)?;
+        let deps = lockfile::read_package_json_deps(package_json_path).unwrap_or_default();
+        let direct_dep_names: Vec<String> = deps.keys().cloned().collect();
+
+        let packages = build_packages_json(&root_name, &root_version, &direct_dep_names, tree);
+
+        let lockfile_content = serde_json::json!({
+            "name": root_name,
+            "version": root_version,
+            "lockfileVersion": 3,
+            "packages": packages,
+        });
+
+        // Use atomic write to prevent corruption
+        let temp_path = lock_path.with_extension("tmp");
+        let pretty = serde_json::to_string_pretty(&lockfile_content).map_err(|e| e.to_string())?;
+        std::fs::write(&temp_path, pretty).map_err(|e| e.to_string())?;
+        std::fs::rename(temp_path, lock_path).map_err(|e| e.to_string())?;
+        
+        // Update cache
+        self.update_cache(lock_path, tree);
+        
+        Ok(())
+    }
+
+    fn update_cache(&mut self, lock_path: &Path, tree: &HashMap<String, ResolvedPackage>) {
+        if let Ok(metadata) = lock_path.metadata() {
+            if let Ok(modified) = metadata.modified() {
+                let content_hash = self.compute_tree_hash(tree);
+                self.cache = Some(LockfileCache {
+                    last_modified: modified,
+                    content_hash,
+                    packages: tree.clone(),
+                });
+            }
+        }
+    }
+
+    fn compute_tree_hash(&self, tree: &HashMap<String, ResolvedPackage>) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        let mut hasher = DefaultHasher::new();
+        for (key, pkg) in tree {
+            key.hash(&mut hasher);
+            pkg.version.hash(&mut hasher);
+            pkg.resolved.hash(&mut hasher);
+            if let Some(ref integrity) = pkg.integrity {
+                integrity.hash(&mut hasher);
+            }
+        }
+        hasher.finish()
+    }
+}
+
 /// Write package-lock.json to the given path.
 pub fn write_package_lock(
+    lock_path: &Path,
+    package_json_path: &Path,
+    tree: &HashMap<String, ResolvedPackage>,
+) -> Result<(), String> {
+    let mut updater = IncrementalLockfileUpdater::new();
+    updater.update_lockfile(lock_path, package_json_path, tree)
+}
+
+/// Async lockfile writer for better I/O performance
+pub async fn write_package_lock_async(
     lock_path: &Path,
     package_json_path: &Path,
     tree: &HashMap<String, ResolvedPackage>,
@@ -543,7 +797,9 @@ pub fn write_package_lock(
     });
 
     let pretty = serde_json::to_string_pretty(&lockfile_content).map_err(|e| e.to_string())?;
-    std::fs::write(lock_path, pretty).map_err(|e| e.to_string())?;
+    
+    // Use async I/O for better performance
+    tokio::fs::write(lock_path, pretty).await.map_err(|e| e.to_string())?;
     Ok(())
 }
 

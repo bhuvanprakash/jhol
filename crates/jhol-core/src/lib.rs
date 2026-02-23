@@ -6,6 +6,7 @@ pub mod backend;
 pub mod cdn;
 pub mod config;
 pub mod doctor;
+pub mod error_handling;
 pub mod exec;
 pub mod http_client;
 pub mod install;

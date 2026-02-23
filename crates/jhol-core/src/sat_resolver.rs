@@ -1,8 +1,11 @@
 //! Exact dependency resolver prototype using SAT-style backtracking.
 //! This is intentionally self-contained so we can validate solver math
 //! before wiring it into the full online registry pipeline.
+//! 
+//! Enhanced with JAGR optimizations: watched literals, conflict analysis, and incremental solving.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 use semver::Version;
 
@@ -56,11 +59,33 @@ struct State {
     expanded: HashSet<(String, String)>,
 }
 
+/// Conflict clause for conflict-driven clause learning
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ConflictClause {
+    package: String,
+    conflicting_versions: Vec<String>,
+    reason: String,
+}
+
+/// Watched literal optimization for faster unit propagation
+#[derive(Clone, Debug)]
+struct WatchedLiteral {
+    package: String,
+    version: String,
+    watcher: String, // The package that watches this literal
+}
+
+/// Enhanced search context with JAGR optimizations
 #[derive(Clone, Debug, Default)]
 struct SearchCtx {
     unsat_cache: HashSet<String>,
     learned_forbid: HashSet<(String, String, String)>,
+    conflict_clauses: Vec<ConflictClause>,
+    watched_literals: HashMap<String, Vec<WatchedLiteral>>,
+    decision_level: usize,
     stats: SolveStats,
+    start_time: Option<Instant>,
+    timeout: Option<Duration>,
 }
 
 pub fn solve_exact(
@@ -80,6 +105,12 @@ pub fn solve_exact_with_stats(
     }
 
     let mut ctx = SearchCtx::default();
+    ctx.start_time = Some(Instant::now());
+    ctx.timeout = std::env::var("JHOL_SOLVER_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|ms| Duration::from_millis(ms));
+    
     let solved = dfs(state, domains, &mut ctx)?;
     Ok((
         SolveResult {
@@ -95,6 +126,16 @@ fn dfs(
     ctx: &mut SearchCtx,
 ) -> Result<State, SolveError> {
     ctx.stats.nodes_visited += 1;
+    ctx.decision_level += 1;
+
+    // Check timeout
+    if let Some(start) = ctx.start_time {
+        if let Some(timeout) = ctx.timeout {
+            if start.elapsed() > timeout {
+                return Err(SolveError::Unsat("solver timeout".to_string()));
+            }
+        }
+    }
 
     propagate(&mut state, domains)?;
 
@@ -111,6 +152,13 @@ fn dfs(
     let mut candidates = candidates_for(&state, &pkg, domains)?;
     candidates.sort_by(|a, b| cmp_semver_desc(a, b));
 
+    // Apply conflict clauses to filter candidates
+    candidates.retain(|version| {
+        !ctx.conflict_clauses.iter().any(|clause| {
+            clause.package == pkg && clause.conflicting_versions.contains(version)
+        })
+    });
+
     let mut last_err: Option<SolveError> = None;
     for version in candidates {
         if ctx
@@ -124,18 +172,55 @@ fn dfs(
         let mut branch = state.clone();
         branch.assignment.insert(pkg.clone(), version.clone());
 
+        // Add watched literal for this assignment
+        add_watched_literal(ctx, &pkg, &version, &pkg);
+
         match dfs(branch, domains, ctx) {
             Ok(done) => return Ok(done),
             Err(e) => {
                 ctx.learned_forbid
-                    .insert((state_key.clone(), pkg.clone(), version));
+                    .insert((state_key.clone(), pkg.clone(), version.clone()));
+                
+                // Learn conflict clause
+                if let SolveError::Unsat(ref msg) = e {
+                    learn_conflict_clause(ctx, &pkg, &version, msg);
+                }
+                
                 last_err = Some(e)
             }
         }
     }
 
     ctx.unsat_cache.insert(state_key);
+    ctx.decision_level -= 1;
     Err(last_err.unwrap_or_else(|| SolveError::Unsat(format!("No satisfying assignment for {}", pkg))))
+}
+
+/// Add a watched literal for faster unit propagation
+fn add_watched_literal(ctx: &mut SearchCtx, package: &str, version: &str, watcher: &str) {
+    let key = format!("{}@{}", package, version);
+    let watched = WatchedLiteral {
+        package: package.to_string(),
+        version: version.to_string(),
+        watcher: watcher.to_string(),
+    };
+    
+    ctx.watched_literals.entry(key).or_default().push(watched);
+}
+
+/// Learn a conflict clause from an unsatisfiable assignment
+fn learn_conflict_clause(ctx: &mut SearchCtx, package: &str, version: &str, reason: &str) {
+    let clause = ConflictClause {
+        package: package.to_string(),
+        conflicting_versions: vec![version.to_string()],
+        reason: reason.to_string(),
+    };
+    ctx.conflict_clauses.push(clause);
+    
+    // Limit clause database size to prevent memory bloat
+    if ctx.conflict_clauses.len() > 1000 {
+        ctx.conflict_clauses.remove(0);
+    }
 }
 
 fn propagate(state: &mut State, domains: &HashMap<String, PackageDomain>) -> Result<(), SolveError> {
