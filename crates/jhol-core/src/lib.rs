@@ -3,27 +3,49 @@
 
 pub mod audit;
 pub mod backend;
+pub mod bin_links;
+pub mod binary_cache;  // JHOL Binary Package Cache (future)
+pub mod binary_manifest;  // JHOL Binary Manifest (Bun-style caching)
+pub mod bucket_vsids;  // JHOL O(1) Variable Selection (GipSAT 2025)
+pub mod cas;  // JAGR-2: Content-Addressable Storage
 pub mod cdn;
 pub mod config;
 pub mod doctor;
+pub mod enterprise;
 pub mod error_handling;
 pub mod exec;
+pub mod fourier_jagr;  // JHOL Fourier-JAGR (FourierCSP 2025)
+pub mod global_cache;  // JHOL Global Shared Cache (memory-mapped)
+pub mod global_cache_2;  // JHOL Global Cache 2.0 (INNOVATIONS BEYOND BUN)
 pub mod http_client;
 pub mod install;
 pub mod lockfile;
 pub mod lockfile_write;
+pub mod offline_cache;  // JHOL Offline Mode
+pub mod optimized_download;  // JHOL Optimized Download (cache-first)
 pub mod osv;
+pub mod package_index;  // JHOL Pre-Resolved Package Index
 pub mod prefetch;
+pub mod pubgrub;  // JAGR-2: PubGrub solver
 pub mod registry;
 pub mod run;
-pub mod sat_resolver;
+pub mod sat_resolver;  // JAGR-1: SAT solver (kept for fallback)
+pub mod selective_extract;  // JHOL Selective Extraction (80% faster)
+pub mod task_queue;  // JAGR-2: Work-stealing task queue
 pub mod utils;
 pub mod ux;
 pub mod workspaces;
 
+#[cfg(test)]
+mod registry_tests;
+
+#[cfg(test)]
+mod sat_resolver_tests;
+
 // Re-export main API for CLI
 pub use audit::{generate_sbom, run_audit, run_audit_fix, run_audit_gate, run_audit_raw, SbomFormat};
 pub use backend::{bun_available, resolve_backend, Backend};
+pub use bin_links::{link_bins_for_package, rebuild_bin_links, BinLinkReport};
 pub use config::{
     apply_enterprise_network_env,
     effective_registry_url_for_package,
@@ -32,6 +54,8 @@ pub use config::{
     Config,
 };
 pub use doctor::{check_dependencies, explain_project_health, fix_dependencies};
+pub use enterprise::{EnterpriseConfig, LicenseChecker, SsoTokenManager};
+pub use error_handling::{ErrorHandler, JholError, RecoveryStrategy};
 pub use install::{
     install_lockfile_only, install_package, resolve_install_from_package_json, InstallOptions,
 };

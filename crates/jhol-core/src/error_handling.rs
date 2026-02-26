@@ -215,13 +215,13 @@ impl PerformanceLogger {
         self.context.system_info = Some(info.to_string());
     }
 
-    pub fn finish(self) -> u64 {
+    pub fn finish(mut self) -> u64 {
         let duration = self.start_time.elapsed().as_millis() as u64;
         self.context.duration = Some(duration);
         
         // Log performance metrics
         if duration > 5000 {
-            eprintln!("WARNING: Slow operation detected: {} took {}ms", self.operation, duration);
+            crate::utils::log(&format!("WARNING: Slow operation detected: {} took {}ms", self.operation, duration));
         }
         
         duration
@@ -241,6 +241,10 @@ pub enum RecoveryStrategy {
     UseCache { cache_key: String },
     /// Manual intervention required
     ManualIntervention { instructions: String },
+    /// Continue with partial results
+    PartialResult { missing_items: Vec<String> },
+    /// Degrade functionality gracefully
+    DegradeFunctionality { degraded_features: Vec<String> },
 }
 
 /// Error handler with recovery capabilities
@@ -286,19 +290,19 @@ impl ErrorHandler {
             }
             RecoveryStrategy::Fallback { alternative } => {
                 if self.enable_logging {
-                    eprintln!("Falling back to alternative: {}", alternative);
+                    crate::utils::log(&format!("Falling back to alternative: {}", alternative));
                 }
                 Ok(())
             }
             RecoveryStrategy::Skip { reason } => {
                 if self.enable_logging {
-                    eprintln!("Skipping operation: {}", reason);
+                    crate::utils::log(&format!("Skipping operation: {}", reason));
                 }
                 Ok(())
             }
             RecoveryStrategy::UseCache { cache_key } => {
                 if self.enable_logging {
-                    eprintln!("Using cached data for key: {}", cache_key);
+                    crate::utils::log(&format!("Using cached data for key: {}", cache_key));
                 }
                 Ok(())
             }
@@ -308,6 +312,18 @@ impl ErrorHandler {
                     details: Some(instructions),
                     source: "Manual intervention required".to_string(),
                 })
+            }
+            RecoveryStrategy::PartialResult { missing_items } => {
+                if self.enable_logging {
+                    crate::utils::log(&format!("Continuing with partial results, missing: {:?}", missing_items));
+                }
+                Ok(())
+            }
+            RecoveryStrategy::DegradeFunctionality { degraded_features } => {
+                if self.enable_logging {
+                    crate::utils::log(&format!("Degrading functionality, disabled features: {:?}", degraded_features));
+                }
+                Ok(())
             }
         }
     }
@@ -321,12 +337,19 @@ impl ErrorHandler {
     ) -> Result<(), JholError> {
         for attempt in 1..=max_attempts {
             if self.enable_logging {
-                eprintln!("Retry attempt {} for error: {}", attempt, error);
+                crate::utils::log(&format!("Retry attempt {} for error: {}", attempt, error));
             }
 
-            // Exponential backoff delay
+            // Exponential backoff delay with jitter to avoid thundering herd
             if attempt > 1 {
-                let delay = backoff_factor * (2_u64.pow(attempt - 2));
+                let base_delay = backoff_factor * (2_u64.pow(attempt - 2));
+                let jitter = base_delay / 4; // Add up to 25% jitter
+                let random_jitter = if jitter > 0 {
+                    rand::random::<u64>() % (jitter * 2)
+                } else {
+                    0
+                };
+                let delay = base_delay + random_jitter;
                 std::thread::sleep(std::time::Duration::from_millis(delay));
             }
 
@@ -355,10 +378,10 @@ impl ErrorHandler {
         );
 
         match severity {
-            ErrorSeverity::Info => println!("{}", log_entry),
-            ErrorSeverity::Warning => eprintln!("WARNING: {}", log_entry),
-            ErrorSeverity::Error => eprintln!("ERROR: {}", log_entry),
-            ErrorSeverity::Critical => eprintln!("CRITICAL: {}", log_entry),
+            ErrorSeverity::Info => crate::utils::log(&log_entry),
+            ErrorSeverity::Warning => crate::utils::log(&format!("WARNING: {}", log_entry)),
+            ErrorSeverity::Error => crate::utils::log(&format!("ERROR: {}", log_entry)),
+            ErrorSeverity::Critical => crate::utils::log(&format!("CRITICAL: {}", log_entry)),
         }
     }
 
@@ -381,13 +404,13 @@ pub mod utils {
         }
     }
 
-    /// Convert reqwest::Error to JholError
-    pub fn network_error(operation: &str, url: Option<&str>, source: reqwest::Error) -> JholError {
+    /// Convert network error to JholError
+    pub fn network_error(operation: &str, url: Option<&str>, source: String) -> JholError {
         JholError::Network {
             operation: operation.to_string(),
             url: url.map(String::from),
-            status: source.status().map(|s| s.as_u16()),
-            source: source.to_string(),
+            status: None,
+            source,
         }
     }
 
@@ -422,6 +445,63 @@ pub mod utils {
             operation: operation.to_string(),
             path: path.map(String::from),
             reason: reason.to_string(),
+        }
+    }
+
+    /// Create a cache error
+    pub fn cache_error(operation: &str, key: Option<&str>, source: &str) -> JholError {
+        JholError::Cache {
+            operation: operation.to_string(),
+            key: key.map(String::from),
+            source: source.to_string(),
+        }
+    }
+
+    /// Create a config error
+    pub fn config_error(operation: &str, field: Option<&str>, source: &str) -> JholError {
+        JholError::Config {
+            operation: operation.to_string(),
+            field: field.map(String::from),
+            source: source.to_string(),
+        }
+    }
+
+    /// Create a registry error with package context
+    pub fn registry_error_with_package(operation: &str, package: &str, version: Option<&str>, source: &str) -> JholError {
+        JholError::Registry {
+            operation: operation.to_string(),
+            package: Some(package.to_string()),
+            version: version.map(String::from),
+            source: source.to_string(),
+        }
+    }
+
+    /// Create a network error with status code
+    pub fn network_error_with_status(operation: &str, url: Option<&str>, status: u16, source: &str) -> JholError {
+        JholError::Network {
+            operation: operation.to_string(),
+            url: url.map(String::from),
+            status: Some(status),
+            source: source.to_string(),
+        }
+    }
+
+    /// Create a resolution error with detailed conflict information
+    pub fn detailed_resolution_error(operation: &str, package: &str, conflict_details: &str, source: &str) -> JholError {
+        JholError::Resolution {
+            operation: operation.to_string(),
+            package: Some(package.to_string()),
+            conflict_details: Some(conflict_details.to_string()),
+            source: source.to_string(),
+        }
+    }
+
+    /// Create an application error
+    pub fn application_error(operation: &str, field: Option<&str>, source: &str) -> JholError {
+        JholError::Application {
+            operation: operation.to_string(),
+            details: field.map(String::from),
+            source: source.to_string(),
         }
     }
 }
@@ -473,5 +553,97 @@ mod tests {
         );
         
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_new_recovery_strategies() {
+        let handler = ErrorHandler::new().with_logging(false);
+
+        // Test PartialResult strategy
+        let error = JholError::Registry {
+            operation: "resolve".to_string(),
+            package: Some("missing-package".to_string()),
+            version: None,
+            source: "Package not found".to_string(),
+        };
+
+        let result = handler.handle_error(
+            error,
+            RecoveryStrategy::PartialResult { missing_items: vec!["missing-package".to_string()] }
+        );
+        assert!(result.is_ok());
+
+        // Test DegradeFunctionality strategy
+        let error = JholError::Cache {
+            operation: "read_cache".to_string(),
+            key: Some("corrupted_cache".to_string()),
+            source: "Cache corrupted".to_string(),
+        };
+
+        let result = handler.handle_error(
+            error,
+            RecoveryStrategy::DegradeFunctionality { degraded_features: vec!["caching".to_string()] }
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_new_error_utils() {
+        // Test cache_error
+        let cache_err = utils::cache_error("read_cache", Some("test_key"), "Cache miss");
+        match cache_err {
+            JholError::Cache { operation, key, source } => {
+                assert_eq!(operation, "read_cache");
+                assert_eq!(key, Some("test_key".to_string()));
+                assert_eq!(source, "Cache miss");
+            }
+            _ => panic!("Expected Cache error"),
+        }
+
+        // Test registry_error_with_package
+        let registry_err = utils::registry_error_with_package("resolve", "test-pkg", Some("1.0.0"), "Not found");
+        match registry_err {
+            JholError::Registry { operation, package, version, source } => {
+                assert_eq!(operation, "resolve");
+                assert_eq!(package, Some("test-pkg".to_string()));
+                assert_eq!(version, Some("1.0.0".to_string()));
+                assert_eq!(source, "Not found");
+            }
+            _ => panic!("Expected Registry error"),
+        }
+
+        // Test detailed_resolution_error
+        let resolution_err = utils::detailed_resolution_error("install", "conflicted-pkg", "Version conflict: needs 2.0.0, found 1.0.0", "Conflict");
+        match resolution_err {
+            JholError::Resolution { operation, package, conflict_details, source } => {
+                assert_eq!(operation, "install");
+                assert_eq!(package, Some("conflicted-pkg".to_string()));
+                assert_eq!(conflict_details, Some("Version conflict: needs 2.0.0, found 1.0.0".to_string()));
+                assert_eq!(source, "Conflict");
+            }
+            _ => panic!("Expected Resolution error"),
+        }
+    }
+
+    #[test]
+    fn test_error_display_formatting() {
+        // Test that all error variants display properly
+        let errors = vec![
+            utils::io_error("read_file", Some("/test/path"), std::io::Error::new(std::io::ErrorKind::NotFound, "File not found")),
+            utils::network_error_with_status("fetch", Some("https://example.com"), 404, "Not Found"),
+            utils::registry_error_with_package("resolve", "test-pkg", Some("1.0.0"), "Not found"),
+            utils::detailed_resolution_error("install", "conflict-pkg", "Version mismatch", "Conflict"),
+            utils::cache_error("read_cache", Some("cache_key"), "Cache miss"),
+            utils::config_error("load_config", Some("registry"), "Invalid URL"),
+            utils::security_error("verify_integrity", Some("/package.tgz"), "Checksum mismatch"),
+            utils::timeout_error("download", 10000, 5000),
+        ];
+
+        for error in errors {
+            let display = format!("{}", error);
+            assert!(!display.is_empty(), "Error display should not be empty");
+            // Basic check that the display contains expected elements
+            assert!(display.contains(":"), "Error display should contain colon separator");
+        }
     }
 }

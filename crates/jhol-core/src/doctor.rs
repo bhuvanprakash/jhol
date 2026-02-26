@@ -1,19 +1,106 @@
 use std::path::Path;
 
+use crate::error_handling::{JholError, RecoveryStrategy};
 use crate::lockfile;
 use crate::registry;
 use crate::utils;
+
+/// Convert JholError to user-friendly string for display
+fn format_jhol_error(error: &JholError) -> String {
+    match error {
+        JholError::Io { operation, path, source } => {
+            if let Some(path) = path {
+                format!("I/O error in {}: {} (path: {})", operation, source, path)
+            } else {
+                format!("I/O error in {}: {}", operation, source)
+            }
+        }
+        JholError::Network { operation, url, status, source } => {
+            let mut msg = format!("Network error in {}: {}", operation, source);
+            if let Some(url) = url {
+                msg.push_str(&format!(" (url: {})", url));
+            }
+            if let Some(status) = status {
+                msg.push_str(&format!(" (status: {})", status));
+            }
+            msg
+        }
+        JholError::Registry { operation, package, version, source } => {
+            let mut msg = format!("Registry error in {}: {}", operation, source);
+            if let Some(package) = package {
+                msg.push_str(&format!(" (package: {})", package));
+            }
+            if let Some(version) = version {
+                msg.push_str(&format!(" (version: {})", version));
+            }
+            msg
+        }
+        JholError::Resolution { operation, package, conflict_details, source } => {
+            let mut msg = format!("Resolution error in {}: {}", operation, source);
+            if let Some(package) = package {
+                msg.push_str(&format!(" (package: {})", package));
+            }
+            if let Some(details) = conflict_details {
+                msg.push_str(&format!(" (details: {})", details));
+            }
+            msg
+        }
+        JholError::Cache { operation, key, source } => {
+            if let Some(key) = key {
+                format!("Cache error in {}: {} (key: {})", operation, source, key)
+            } else {
+                format!("Cache error in {}: {}", operation, source)
+            }
+        }
+        JholError::Config { operation, field, source } => {
+            if let Some(field) = field {
+                format!("Configuration error in {}: {} (field: {})", operation, source, field)
+            } else {
+                format!("Configuration error in {}: {}", operation, source)
+            }
+        }
+        JholError::Security { operation, path, reason } => {
+            if let Some(path) = path {
+                format!("Security error in {}: {} (path: {})", operation, reason, path)
+            } else {
+                format!("Security error in {}: {}", operation, reason)
+            }
+        }
+        JholError::Performance { operation, duration, limit, source } => {
+            let mut msg = format!("Performance error in {}: {}", operation, source);
+            if let Some(duration) = duration {
+                msg.push_str(&format!(" (duration: {}ms)", duration));
+            }
+            if let Some(limit) = limit {
+                msg.push_str(&format!(" (limit: {}ms)", limit));
+            }
+            msg
+        }
+        JholError::Application { operation, details, source } => {
+            if let Some(details) = details {
+                format!("Application error in {}: {} (details: {})", operation, source, details)
+            } else {
+                format!("Application error in {}: {}", operation, source)
+            }
+        }
+    }
+}
 
 /// Outdated entry: (name, current, wanted, latest)
 pub type OutdatedEntry = (String, String, String);
 
 /// Native outdated: read package.json + lockfile, fetch packuments, compare with latest.
-pub fn native_outdated() -> Result<Vec<OutdatedEntry>, String> {
+pub fn native_outdated() -> Result<Vec<OutdatedEntry>, JholError> {
     let pj = Path::new("package.json");
     if !pj.exists() {
-        return Err("No package.json found in current directory.".to_string());
+        return Err(crate::error_handling::utils::io_error(
+            "native_outdated",
+            Some("package.json"),
+            std::io::Error::new(std::io::ErrorKind::NotFound, "File not found")
+        ));
     }
-    let deps = lockfile::read_package_json_deps(pj).ok_or("Could not read package.json.")?;
+    let deps = lockfile::read_package_json_deps(pj)
+        .ok_or_else(|| crate::error_handling::utils::config_error("read_package_json_deps", Some("dependencies"), "Could not read package.json"))?;
     if deps.is_empty() {
         return Ok(Vec::new());
     }
@@ -23,7 +110,10 @@ pub fn native_outdated() -> Result<Vec<OutdatedEntry>, String> {
         let current = resolved.as_ref().and_then(|r| r.get(name).cloned()).unwrap_or_else(|| "?".to_string());
         let meta = match registry::fetch_metadata(name) {
             Ok(m) => m,
-            Err(_) => continue,
+            Err(e) => {
+                utils::log(&format!("Could not fetch metadata for {}: {}", name, e));
+                continue;
+            }
         };
         let latest = registry::resolve_version(&meta, "latest").unwrap_or_else(|| current.clone());
         let wanted = registry::resolve_version(&meta, spec).unwrap_or_else(|| current.clone());
@@ -35,11 +125,15 @@ pub fn native_outdated() -> Result<Vec<OutdatedEntry>, String> {
 }
 
 /// Scans dependencies using native registry and reports which are outdated
-pub fn check_dependencies(quiet: bool, _backend: crate::backend::Backend) -> Result<(), String> {
+pub fn check_dependencies(quiet: bool, _backend: crate::backend::Backend) -> Result<(), JholError> {
     utils::log("Starting dependency check...");
 
     if !Path::new("package.json").exists() {
-        return Err("No package.json found in current directory.".to_string());
+        return Err(crate::error_handling::utils::io_error(
+            "check_dependencies",
+            Some("package.json"),
+            std::io::Error::new(std::io::ErrorKind::NotFound, "File not found")
+        ));
     }
 
     if !quiet {
@@ -50,7 +144,7 @@ pub fn check_dependencies(quiet: bool, _backend: crate::backend::Backend) -> Res
         Ok(l) => l,
         Err(e) => {
             if !quiet {
-                println!("Could not check: {}", e);
+                println!("Could not check: {}", format_jhol_error(&e));
             }
             return Err(e);
         }
@@ -75,20 +169,24 @@ pub fn check_dependencies(quiet: bool, _backend: crate::backend::Backend) -> Res
 }
 
 /// Fix outdated dependencies: update lockfile to latest and run native install
-pub fn fix_dependencies(quiet: bool, _backend: crate::backend::Backend) -> Result<(), String> {
+pub fn fix_dependencies(quiet: bool, _backend: crate::backend::Backend) -> Result<(), JholError> {
     use crate::install;
 
     utils::log("Starting dependency fixes...");
 
     if !Path::new("package.json").exists() {
-        return Err("No package.json found in current directory.".to_string());
+        return Err(crate::error_handling::utils::io_error(
+            "fix_dependencies",
+            Some("package.json"),
+            std::io::Error::new(std::io::ErrorKind::NotFound, "File not found")
+        ));
     }
 
     let list = match native_outdated() {
         Ok(l) => l,
         Err(e) => {
             if !quiet {
-                println!("Could not check: {}", e);
+                println!("Could not check: {}", format_jhol_error(&e));
             }
             return Err(e);
         }
@@ -106,13 +204,15 @@ pub fn fix_dependencies(quiet: bool, _backend: crate::backend::Backend) -> Resul
     }
 
     let pj = Path::new("package.json");
-    let mut tree = crate::lockfile_write::resolve_full_tree(pj)?;
+    let mut tree = crate::lockfile_write::resolve_full_tree(pj)
+        .map_err(|e| crate::error_handling::utils::config_error("resolve_full_tree", None, &e))?;
     for (name, _current, latest) in &list {
         let key = format!("node_modules/{}", name);
         if let Some(entry) = tree.get_mut(&key) {
-            let meta = registry::fetch_metadata(name)?;
+            let meta = registry::fetch_metadata(name)
+                .map_err(|e| crate::error_handling::utils::registry_error_with_package("fetch_metadata", name, None, &e.to_string()))?;
             let resolved_url = registry::get_tarball_url(&meta, latest)
-                .ok_or_else(|| format!("No tarball for {}@{}", name, latest))?;
+                .ok_or_else(|| crate::error_handling::utils::registry_error_with_package("get_tarball_url", name, Some(latest), "No tarball available"))?;
             let integrity = meta
                 .get("versions")
                 .and_then(|v| v.as_object())
@@ -130,7 +230,8 @@ pub fn fix_dependencies(quiet: bool, _backend: crate::backend::Backend) -> Resul
     }
 
     let lock_path = Path::new("package-lock.json");
-    crate::lockfile_write::write_package_lock(lock_path, pj, &tree)?;
+    crate::lockfile_write::write_package_lock(lock_path, pj, &tree)
+        .map_err(|e| crate::error_handling::utils::io_error("write_package_lock", Some("package-lock.json"), std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
     let opts = install::InstallOptions {
         from_lockfile: true,
@@ -152,6 +253,7 @@ pub fn explain_project_health() -> Result<String, String> {
     let cwd = Path::new(".");
     let lock_kind = lockfile::detect_lockfile(cwd);
     let lock_name = match lock_kind {
+        lockfile::LockfileKind::NpmShrinkwrap => "npm-shrinkwrap.json",
         lockfile::LockfileKind::Npm => "package-lock.json",
         lockfile::LockfileKind::Bun => "bun.lock",
         lockfile::LockfileKind::None => "none",

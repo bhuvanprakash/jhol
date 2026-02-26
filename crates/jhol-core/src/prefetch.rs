@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use crate::error_handling::JholError;
 use crate::lockfile;
 use crate::registry;
 use crate::utils;
@@ -18,7 +19,7 @@ fn base_name(package: &str) -> &str {
 
 /// Prefetch all lockfile dependencies into the store. Requires package.json and lockfile.
 /// Does not create node_modules or run backend. Use before `jhol install --offline`.
-pub fn prefetch_from_lockfile(quiet: bool) -> Result<(), String> {
+pub fn prefetch_from_lockfile(quiet: bool) -> Result<(), JholError> {
     let specs = crate::install::resolve_install_from_package_json(true)?;
     if specs.is_empty() {
         if !quiet {
@@ -27,10 +28,10 @@ pub fn prefetch_from_lockfile(quiet: bool) -> Result<(), String> {
         return Ok(());
     }
     let (resolved_urls, resolved_integrity) = lockfile::read_resolved_urls_and_integrity_from_dir(Path::new("."))
-        .ok_or("No package-lock.json or bun.lock found.")?;
+        .ok_or_else(|| crate::error_handling::utils::config_error("read_resolved_urls", Some("lockfile"), "No package-lock.json or bun.lock found"))?;
     let cache_dir = std::path::PathBuf::from(utils::get_cache_dir());
     let store_dir = cache_dir.join("store");
-    std::fs::create_dir_all(&store_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&store_dir).map_err(|e| crate::error_handling::utils::io_error("create_store_dir", Some("cache/store"), e))?;
 
     let mut work: Vec<(String, String, Option<String>)> = Vec::new();
     for spec in &specs {
@@ -76,7 +77,10 @@ pub fn prefetch_from_lockfile(quiet: bool) -> Result<(), String> {
         }
         drop(tx);
         for (spec, res) in rx {
-            let hash = res?;
+            let hash = match res {
+                Ok(h) => h,
+                Err(e) => return Err(crate::error_handling::utils::network_error("download_tarball", Some(&spec), e.to_string())),
+            };
             index_batch.insert(spec, hash);
             fetched += 1;
         }
@@ -85,7 +89,7 @@ pub fn prefetch_from_lockfile(quiet: bool) -> Result<(), String> {
     if !index_batch.is_empty() {
         let mut index = utils::read_store_index();
         index.extend(index_batch);
-        utils::write_store_index(&index).map_err(|e| e.to_string())?;
+        utils::write_store_index(&index).map_err(|e| crate::error_handling::utils::io_error("write_store_index", Some("cache/index.json"), std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
     }
 
     if !quiet && fetched > 0 {
