@@ -1,0 +1,13 @@
+[
+  "asynckit",
+  "axios",
+  "chalk",
+  "combined-stream",
+  "es-set-tostringtag",
+  "follow-redirects",
+  "form-data",
+  "hasown",
+  "lodash",
+  "mime-types",
+  "proxy-from-env"
+]
