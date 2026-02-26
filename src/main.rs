@@ -7,6 +7,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::env;
 use std::fs;
 use std::io::IsTerminal;
+#[cfg(unix)]
+use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
@@ -15,6 +17,8 @@ use std::collections::HashSet;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::os::unix::net::{UnixListener, UnixStream};
 
 // ---- UI helpers (no-op when stdout isn't a TTY) ----
 
@@ -119,6 +123,149 @@ where
     }
 }
 
+#[cfg(unix)]
+fn daemon_socket_path() -> std::path::PathBuf {
+    if let Ok(v) = env::var("JHOL_DAEMON_SOCKET") {
+        return std::path::PathBuf::from(v);
+    }
+    std::env::temp_dir().join("jhol-install.sock")
+}
+
+#[cfg(unix)]
+fn daemon_serve() -> Result<(), String> {
+    let socket_path = daemon_socket_path();
+    if socket_path.exists() {
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    let listener = UnixListener::bind(&socket_path)
+        .map_err(|e| format!("failed to bind daemon socket {}: {}", socket_path.display(), e))?;
+    info(&format!("JHOL daemon listening on {}", socket_path.display()));
+
+    for stream in listener.incoming() {
+        let mut stream = match stream {
+            Ok(s) => s,
+            Err(e) => {
+                error(&format!("daemon accept failed: {}", e));
+                continue;
+            }
+        };
+
+        let mut req_buf = String::new();
+        if stream.read_to_string(&mut req_buf).is_err() {
+            let _ = stream.write_all(br#"{"ok":false,"error":"invalid request"}"#);
+            continue;
+        }
+
+        let req: serde_json::Value = match serde_json::from_str(&req_buf) {
+            Ok(v) => v,
+            Err(e) => {
+                let payload = serde_json::json!({"ok": false, "error": format!("invalid json: {}", e)});
+                let _ = stream.write_all(payload.to_string().as_bytes());
+                continue;
+            }
+        };
+
+        let cwd = req
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .unwrap_or(".")
+            .to_string();
+        let packages: Vec<String> = req
+            .get("packages")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+
+        let quiet = req.get("quiet").and_then(|v| v.as_bool()).unwrap_or(false);
+        let no_cache = req.get("noCache").and_then(|v| v.as_bool()).unwrap_or(false);
+        let offline = req.get("offline").and_then(|v| v.as_bool()).unwrap_or(false);
+        let strict_lockfile = req.get("strictLockfile").and_then(|v| v.as_bool()).unwrap_or(false);
+        let strict_peer_deps = req.get("strictPeerDeps").and_then(|v| v.as_bool()).unwrap_or(false);
+        let from_lockfile = req.get("fromLockfile").and_then(|v| v.as_bool()).unwrap_or(false);
+        let lockfile_only = req.get("lockfileOnly").and_then(|v| v.as_bool()).unwrap_or(false);
+        let native_only = req.get("nativeOnly").and_then(|v| v.as_bool()).unwrap_or(true);
+        let no_scripts = req.get("noScripts").and_then(|v| v.as_bool()).unwrap_or(true);
+
+        let prev_cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+        let result = (|| -> Result<(), String> {
+            std::env::set_current_dir(&cwd).map_err(|e| format!("chdir {}: {}", cwd, e))?;
+            let refs: Vec<&str> = packages.iter().map(|s| s.as_str()).collect();
+            let opts = jhol_core::InstallOptions {
+                no_cache,
+                quiet,
+                backend: jhol_core::resolve_backend(None),
+                lockfile_only,
+                offline,
+                strict_lockfile,
+                strict_peer_deps,
+                from_lockfile,
+                native_only,
+                no_scripts,
+                script_allowlist: None,
+            };
+            std::env::set_var("JHOL_DAEMON_MODE", "1");
+            if std::env::var("JHOL_TRANSITIVE_DEPTH").is_err() {
+                std::env::set_var("JHOL_TRANSITIVE_DEPTH", "2");
+            }
+            jhol_core::install_package(&refs, &opts).map_err(|e| e.to_string())
+        })();
+        let _ = std::env::set_current_dir(prev_cwd);
+
+        let payload = match result {
+            Ok(_) => serde_json::json!({"ok": true}),
+            Err(e) => serde_json::json!({"ok": false, "error": e}),
+        };
+        let _ = stream.write_all(payload.to_string().as_bytes());
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn install_via_daemon(
+    cwd: &Path,
+    packages: &[String],
+    opts: &jhol_core::InstallOptions,
+) -> Result<(), String> {
+    let socket_path = daemon_socket_path();
+    let mut stream = UnixStream::connect(&socket_path)
+        .map_err(|e| format!("daemon unavailable at {}: {}", socket_path.display(), e))?;
+    let req = serde_json::json!({
+        "cwd": cwd.display().to_string(),
+        "packages": packages,
+        "quiet": opts.quiet,
+        "noCache": opts.no_cache,
+        "offline": opts.offline,
+        "strictLockfile": opts.strict_lockfile,
+        "strictPeerDeps": opts.strict_peer_deps,
+        "fromLockfile": opts.from_lockfile,
+        "lockfileOnly": opts.lockfile_only,
+        "nativeOnly": opts.native_only,
+        "noScripts": opts.no_scripts,
+    });
+    stream
+        .write_all(req.to_string().as_bytes())
+        .map_err(|e| format!("daemon write failed: {}", e))?;
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+
+    let mut resp = String::new();
+    stream
+        .read_to_string(&mut resp)
+        .map_err(|e| format!("daemon read failed: {}", e))?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&resp).map_err(|e| format!("invalid daemon response: {}", e))?;
+    if parsed.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(parsed
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("daemon install failed")
+            .to_string())
+    }
+}
+
 fn install_globally() -> Result<(), String> {
     let install_path = if cfg!(target_os = "windows") {
         format!(
@@ -150,6 +297,25 @@ fn install_globally() -> Result<(), String> {
 }
 
 fn run() -> Result<(), String> {
+    fn read_trusted_dependencies(path: &Path) -> HashSet<String> {
+        let Ok(raw) = fs::read_to_string(path) else {
+            return HashSet::new();
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return HashSet::new();
+        };
+        v.get("trustedDependencies")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default()
+    }
+
     let backend_arg = Arg::new("backend")
         .long("backend")
         .value_parser(["bun", "npm"])
@@ -239,6 +405,24 @@ fn run() -> Result<(), String> {
                         .long("scripts")
                         .action(ArgAction::SetTrue)
                         .help("Allow lifecycle scripts in fallback backend installs"),
+                )
+                .arg(
+                    Arg::new("resolver")
+                        .long("resolver")
+                        .value_parser(["pubgrub-v2", "pubgrub", "jagr", "legacy"])
+                        .help("Resolver strategy for lockfile/dependency resolution"),
+                )
+                .arg(
+                    Arg::new("strict-peer-deps")
+                        .long("strict-peer-deps")
+                        .action(ArgAction::SetTrue)
+                        .help("Fail install when root peer dependency constraints conflict"),
+                )
+                .arg(
+                    Arg::new("daemon")
+                        .long("daemon")
+                        .action(ArgAction::SetTrue)
+                        .help("Send install request to running jhol daemon (Unix)"),
                 ),
         )
         .subcommand(
@@ -314,6 +498,16 @@ fn run() -> Result<(), String> {
         .subcommand(
             Command::new("global-install")
                 .about("Install jhol binary to PATH (e.g. /usr/local/bin)"),
+        )
+        .subcommand(
+            Command::new("daemon")
+                .about("Run persistent install daemon (Unix)")
+                .arg(
+                    Arg::new("serve")
+                        .long("serve")
+                        .action(ArgAction::SetTrue)
+                        .help("Run daemon server loop"),
+                ),
         )
         .subcommand(
             Command::new("cache")
@@ -474,6 +668,82 @@ fn run() -> Result<(), String> {
                 .arg(Arg::new("package").required(true).help("Package name")),
         )
         .subcommand(
+            Command::new("outdated")
+                .about("Show outdated dependencies with current, wanted, and latest versions")
+                .arg(
+                    Arg::new("quiet")
+                        .short('q')
+                        .long("quiet")
+                        .action(ArgAction::SetTrue)
+                        .help("Minimal output"),
+                )
+                .arg(
+                    Arg::new("all-workspaces")
+                        .long("all-workspaces")
+                        .action(ArgAction::SetTrue)
+                        .help("Run in all workspace packages"),
+                ),
+        )
+        .subcommand(
+            Command::new("init")
+                .about("Initialize a new package.json in the current directory")
+                .arg(
+                    Arg::new("yes")
+                        .short('y')
+                        .long("yes")
+                        .action(ArgAction::SetTrue)
+                        .help("Accept defaults without prompting"),
+                )
+                .arg(
+                    Arg::new("private")
+                        .long("private")
+                        .action(ArgAction::SetTrue)
+                        .help("Mark package as private (not for publishing)"),
+                ),
+        )
+        .subcommand(
+            Command::new("add")
+                .about("Alias for install: add packages to dependencies")
+                .arg(
+                    Arg::new("package")
+                        .required(false)
+                        .num_args(0..)
+                        .help("Package(s) to add"),
+                )
+                .arg(
+                    Arg::new("quiet")
+                        .short('q')
+                        .long("quiet")
+                        .action(ArgAction::SetTrue)
+                        .help("Minimal output"),
+                ),
+        )
+        .subcommand(
+            Command::new("remove")
+                .about("Alias for uninstall: remove packages from dependencies")
+                .arg(Arg::new("package").required(true).help("Package name(s) to remove"))
+                .arg(
+                    Arg::new("save")
+                        .long("save")
+                        .action(ArgAction::SetTrue)
+                        .help("Remove from package.json dependencies"),
+                ),
+        )
+        .subcommand(
+            Command::new("link")
+                .about("Link a local package directory into node_modules")
+                .arg(
+                    Arg::new("package")
+                        .required(false)
+                        .help("Package directory to link (default: current directory)"),
+                ),
+        )
+        .subcommand(
+            Command::new("unlink")
+                .about("Remove a linked package")
+                .arg(Arg::new("package").required(true).help("Package name to unlink")),
+        )
+        .subcommand(
             Command::new("sbom")
                 .about("Generate Software Bill of Materials")
                 .arg(
@@ -496,6 +766,21 @@ fn run() -> Result<(), String> {
     if let Some(("global-install", _)) = matches.subcommand() {
         install_globally().map_err(|e| e.to_string())?;
         return Ok(());
+    }
+
+    if let Some(("daemon", sub_m)) = matches.subcommand() {
+        if sub_m.get_flag("serve") {
+            #[cfg(unix)]
+            {
+                daemon_serve()?;
+                return Ok(());
+            }
+            #[cfg(not(unix))]
+            {
+                return Err("daemon mode is only supported on Unix".to_string());
+            }
+        }
+        return Err("use `jhol daemon --serve` to run daemon".to_string());
     }
 
     // cache list | size | prune | export | import | clean
@@ -663,6 +948,173 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    if let Some(("outdated", sub_m)) = matches.subcommand() {
+        let quiet = sub_m.get_flag("quiet");
+        let all_workspaces = sub_m.get_flag("all-workspaces");
+        if quiet {
+            env::set_var("JHOL_QUIET", "1");
+        }
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let roots: Vec<std::path::PathBuf> = if all_workspaces {
+            let r = jhol_core::list_workspace_roots(&cwd).unwrap_or_default();
+            if r.is_empty() {
+                vec![cwd]
+            } else {
+                r.into_iter().map(|p| cwd.join(p)).collect()
+            }
+        } else {
+            vec![cwd]
+        };
+        for root in &roots {
+            if roots.len() > 1 {
+                info(&format!("Workspace: {}", root.display()));
+            }
+            jhol_core::check_dependencies(quiet, jhol_core::Backend::Npm).map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+
+    if let Some(("init", sub_m)) = matches.subcommand() {
+        let _accept_defaults = sub_m.get_flag("yes");
+        let private = sub_m.get_flag("private");
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let package_json_path = cwd.join("package.json");
+        if package_json_path.exists() {
+            return Err("package.json already exists".to_string());
+        }
+        let name = cwd.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("my-package")
+            .to_lowercase()
+            .replace(" ", "-");
+        let json_value = serde_json::json!({
+            "name": name,
+            "version": "1.0.0",
+            "description": "",
+            "main": "index.js",
+            "scripts": {
+                "test": "echo \"Error: no test specified\" && exit 1"
+            },
+            "keywords": [],
+            "author": "",
+            "license": "MIT",
+            "private": private
+        });
+        let json_str = serde_json::to_string_pretty(&json_value).map_err(|e| e.to_string())?;
+        fs::write(&package_json_path, &json_str).map_err(|e| e.to_string())?;
+        success(&format!("Created {} in {}", package_json_path.display(), cwd.display()));
+        info("Run `jhol install` to get started.");
+        return Ok(());
+    }
+
+    if let Some(("add", sub_m)) = matches.subcommand() {
+        let packages: Vec<&str> = sub_m.get_many::<String>("package")
+            .map(|v| v.map(|s| s.as_str()).collect())
+            .unwrap_or_default();
+        let quiet = sub_m.get_flag("quiet");
+        if packages.is_empty() {
+            return Err("At least one package must be specified".to_string());
+        }
+        let config = jhol_core::load_config(&std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+        let opts = jhol_core::InstallOptions {
+            no_cache: false,
+            quiet,
+            backend: config.backend.unwrap_or(jhol_core::Backend::Bun),
+            lockfile_only: false,
+            offline: false,
+            strict_lockfile: false,
+            strict_peer_deps: false,
+            from_lockfile: false,
+            native_only: false,
+            no_scripts: true,
+            script_allowlist: None,
+        };
+        let refs: Vec<&str> = packages;
+        jhol_core::install_package(&refs, &opts).map_err(|e| e.to_string())?;
+        success("Package(s) added.");
+        return Ok(());
+    }
+
+    if let Some(("remove", sub_m)) = matches.subcommand() {
+        let packages: Vec<&str> = sub_m.get_many::<String>("package")
+            .map(|v| v.map(|s| s.as_str()).collect())
+            .unwrap_or_default();
+        let save = sub_m.get_flag("save");
+        if packages.is_empty() {
+            return Err("At least one package must be specified".to_string());
+        }
+        for pkg in packages {
+            jhol_core::uninstall(pkg, save).map_err(|e| e.to_string())?;
+        }
+        success("Package(s) removed.");
+        return Ok(());
+    }
+
+    if let Some(("link", sub_m)) = matches.subcommand() {
+        let package_dir = sub_m.get_one::<String>("package")
+            .map(|s| std::path::PathBuf::from(s))
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        if !package_dir.exists() {
+            return Err(format!("Package directory does not exist: {}", package_dir.display()));
+        }
+        let package_json = package_dir.join("package.json");
+        if !package_json.exists() {
+            return Err(format!("No package.json found in {}", package_dir.display()));
+        }
+        let pkg_data: serde_json::Value = serde_json::from_str(&fs::read_to_string(&package_json).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        let name = pkg_data.get("name")
+            .and_then(|n| n.as_str())
+            .ok_or("Package name not found in package.json")?;
+        let node_modules = cwd.join("node_modules");
+        fs::create_dir_all(&node_modules).map_err(|e| e.to_string())?;
+        let link_path = if name.starts_with('@') {
+            let parts: Vec<&str> = name.split('/').collect();
+            let scope_dir = node_modules.join(parts[0]);
+            fs::create_dir_all(&scope_dir).map_err(|e| e.to_string())?;
+            scope_dir.join(parts[1])
+        } else {
+            node_modules.join(name)
+        };
+        if link_path.exists() {
+            if link_path.is_symlink() {
+                fs::remove_file(&link_path).map_err(|e| e.to_string())?;
+            } else {
+                fs::remove_dir_all(&link_path).map_err(|e| e.to_string())?;
+            }
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&package_dir, &link_path).map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&package_dir, &link_path).map_err(|e| e.to_string())?;
+        success(&format!("Linked {} -> {}", name, link_path.display()));
+        return Ok(());
+    }
+
+    if let Some(("unlink", sub_m)) = matches.subcommand() {
+        let package = sub_m.get_one::<String>("package").map(|s| s.as_str()).unwrap();
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let node_modules = cwd.join("node_modules");
+        let link_path = if package.starts_with('@') {
+            let parts: Vec<&str> = package.split('/').collect();
+            if parts.len() != 2 {
+                return Err(format!("Invalid scoped package name: {}", package));
+            }
+            node_modules.join(parts[0]).join(parts[1])
+        } else {
+            node_modules.join(package)
+        };
+        if !link_path.exists() {
+            return Err(format!("Package {} is not linked", package));
+        }
+        if !link_path.is_symlink() {
+            return Err(format!("Package {} is not a symlink", package));
+        }
+        fs::remove_file(&link_path).map_err(|e| e.to_string())?;
+        success(&format!("Unlinked {}", package));
+        return Ok(());
+    }
+
     if let Some(("ci", sub_m)) = matches.subcommand() {
         jhol_core::init_cache().map_err(|e| format!("Failed to initialize cache: {}", e))?;
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -689,7 +1141,7 @@ fn run() -> Result<(), String> {
         };
         for root in &roots {
             std::env::set_current_dir(root).map_err(|e| format!("chdir {}: {}", root.display(), e))?;
-            let specs = jhol_core::resolve_install_from_package_json(true)?;
+            let specs = jhol_core::resolve_install_from_package_json(true).map_err(|e| e.to_string())?;
             let refs: Vec<&str> = specs.iter().map(|s| s.as_str()).collect();
             let opts = jhol_core::InstallOptions {
                 no_cache: false,
@@ -698,12 +1150,13 @@ fn run() -> Result<(), String> {
                 lockfile_only: false,
                 offline,
                 strict_lockfile: true,
+                strict_peer_deps: false,
                 from_lockfile: true,
                 native_only: true,
                 no_scripts: true,
                 script_allowlist: None,
             };
-            jhol_core::install_package(&refs, &opts)?;
+            jhol_core::install_package(&refs, &opts).map_err(|e| e.to_string())?;
         }
         std::env::set_current_dir(&cwd).ok();
         if json_out {
@@ -729,9 +1182,16 @@ fn run() -> Result<(), String> {
             let offline = sub_m.get_flag("offline")
                 || env::var("JHOL_OFFLINE").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
             let strict_lockfile = sub_m.get_flag("frozen");
+            let strict_peer_deps = sub_m.get_flag("strict-peer-deps")
+                || env::var("JHOL_STRICT_PEER_DEPS")
+                    .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
             let native_only = sub_m.get_flag("native-only") || !sub_m.get_flag("fallback-backend");
             let all_workspaces = sub_m.get_flag("all-workspaces");
             let no_scripts = !sub_m.get_flag("scripts") || sub_m.get_flag("no-scripts");
+            let use_daemon = sub_m.get_flag("daemon");
+            if let Some(resolver) = sub_m.get_one::<String>("resolver") {
+                env::set_var("JHOL_RESOLVER", resolver);
+            }
             let script_allowlist: Option<HashSet<String>> = env::var("JHOL_SCRIPT_ALLOWLIST")
                 .ok()
                 .map(|v| {
@@ -771,11 +1231,11 @@ fn run() -> Result<(), String> {
                     info(&format!("Workspace: {}", root.display()));
                 }
                 if packages.is_empty() && lockfile_only {
-                    jhol_core::install_lockfile_only(backend)?;
+                    jhol_core::install_lockfile_only(backend).map_err(|e| e.to_string())?;
                     continue;
                 }
                 let specs: Vec<String> = if packages.is_empty() {
-                    jhol_core::resolve_install_from_package_json(strict_lockfile)?
+                    jhol_core::resolve_install_from_package_json(strict_lockfile).map_err(|e| e.to_string())?
                 } else {
                     packages.iter().map(|s| s.clone()).collect()
                 };
@@ -795,13 +1255,31 @@ fn run() -> Result<(), String> {
                     lockfile_only,
                     offline,
                     strict_lockfile,
+                    strict_peer_deps,
                     from_lockfile,
                     native_only,
                     no_scripts,
-                    script_allowlist: script_allowlist.clone(),
+                    script_allowlist: {
+                        let mut merged = script_allowlist.clone().unwrap_or_default();
+                        if !no_scripts {
+                            merged.extend(read_trusted_dependencies(Path::new("package.json")));
+                        }
+                        if merged.is_empty() { None } else { Some(merged) }
+                    },
                 };
                 jhol_core::log(&format!("Installing: {:?}", specs));
-                jhol_core::install_package(&refs, &opts)?;
+                if use_daemon {
+                    #[cfg(unix)]
+                    {
+                        install_via_daemon(root, &specs, &opts)?;
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        return Err("--daemon install is only supported on Unix".to_string());
+                    }
+                } else {
+                    jhol_core::install_package(&refs, &opts).map_err(|e| e.to_string())?;
+                }
             }
             std::env::set_current_dir(&cwd).ok();
             if json_out {
@@ -847,10 +1325,10 @@ fn run() -> Result<(), String> {
                 }
                 if do_fix {
                     jhol_core::log("Running doctor --fix");
-                    jhol_core::fix_dependencies(quiet, backend)?;
+                    jhol_core::fix_dependencies(quiet, backend).map_err(|e| e.to_string())?;
                 } else {
                     jhol_core::log("Running doctor (check only)");
-                    jhol_core::check_dependencies(quiet, backend)?;
+                    jhol_core::check_dependencies(quiet, backend).map_err(|e| e.to_string())?;
                 }
             }
             std::env::set_current_dir(&cwd).ok();

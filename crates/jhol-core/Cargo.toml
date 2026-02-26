@@ -7,8 +7,9 @@ license-file = "../../LICENSE"
 repository = "https://github.com/bhuvanprakash/jhol"
 
 [features]
-default = []
+default = ["http-reqwest", "simd"]  # Enable SIMD by default
 http-reqwest = ["dep:reqwest", "dep:tokio"]
+simd = []  # SIMD optimizations enabled by default
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
@@ -21,4 +22,32 @@ sha2 = "0.10"
 semver = "1.0"
 base64 = "0.21"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
-tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "fs", "io-util"], optional = true }
+rand = "0.8"
+lazy_static = "1.4"
+
+# JAGR-2: PubGrub algorithm dependencies
+dashmap = "5.5"
+rayon = "1.8"  # Work-stealing parallelism (replaces crossbeam)
+
+# JAGR-2: SIMD JSON parsing (optional, enable with --features simd)
+simd-json = "0.13"
+
+# JAGR-2: Memory-efficient data structures
+bumpalo = "3.14"
+
+# JAGR-2: Reflink for copy-on-write (Linux/macOS)
+reflink-copy = "0.1"
+
+# JAGR-2: CPU detection for parallelism
+num_cpus = "1.16"
+
+# JHOL Global Cache - Memory-mapped files
+memmap2 = "0.9"
+dirs = "5.0"
+
+# JHOL: Faster decompression (like Bun uses libdeflate)
+libdeflater = "1.24"
+
+[dev-dependencies]
+tempfile = "3"

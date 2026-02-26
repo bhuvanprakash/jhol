@@ -52,25 +52,35 @@ fn is_quiet() -> bool {
         .unwrap_or(false)
 }
 
+fn should_write_log_file() -> bool {
+    if let Ok(v) = env::var("JHOL_LOG_FILE") {
+        let lower = v.to_lowercase();
+        return lower == "1" || lower == "true" || lower == "yes";
+    }
+    // Default: avoid synchronous log-file writes in quiet mode for speed.
+    !is_quiet()
+}
+
 pub fn log(message: &str) {
     let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
     let log_message = format!("[{}] {}", timestamp, message);
 
-    // When -q/--quiet or JHOL_LOG=quiet, never print logs to stdout (only to file)
     if !is_quiet() {
-        println!("{}", log_message);
+        eprintln!("{}", log_message);
+    }
+
+    if !should_write_log_file() {
+        return;
     }
 
     let log_path = format!("{}/{}", get_cache_dir(), LOG_FILE);
-    // Append-only: no read-back, no duplicate check — reading entire log on every call
-    // is O(n) per log and catastrophic when called from worker threads.
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
         let _ = writeln!(file, "{}", log_message);
     }
 }
 
 pub fn log_error(message: &str) {
-    eprintln!("{}", message);
+    eprintln!("ERROR: {}", message);
     log(message);
 }
 
@@ -253,52 +263,49 @@ pub fn verify_manifest_signature(manifest_json: &str, signature: &str) -> Result
     Ok(expected == signature.trim())
 }
 
-/// Verify file against SRI string (e.g. "sha512-<base64>"). Returns true if match.
-pub fn verify_sri(path: &Path, sri: &str) -> bool {
+fn parse_sri(sri: &str) -> Option<(String, Vec<u8>)> {
     let sri = sri.trim();
-    let Some((algo, rest)) = sri.split_once('-') else { return false };
+    let (algo, rest) = sri.split_once('-')?;
     let digest_b64 = rest.split_once('?').map(|(d, _)| d).unwrap_or(rest);
     use base64::Engine;
-    let expected = match base64::engine::general_purpose::STANDARD.decode(digest_b64.as_bytes()) {
-        Ok(b) => b,
-        Err(_) => return false,
+    let expected = base64::engine::general_purpose::STANDARD
+        .decode(digest_b64.as_bytes())
+        .ok()?;
+    Some((algo.to_lowercase(), expected))
+}
+
+/// Verify in-memory bytes against SRI string (e.g. "sha512-<base64>").
+pub fn verify_sri_bytes(data: &[u8], sri: &str) -> bool {
+    let Some((algo, expected)) = parse_sri(sri) else {
+        return false;
     };
-    let mut f = match File::open(path) {
-        Ok(x) => x,
-        Err(_) => return false,
-    };
-    let mut buf = [0u8; 8192];
-    match algo.to_lowercase().as_str() {
+
+    match algo.as_str() {
         "sha512" => {
             use sha2::{Digest, Sha512};
-            let mut hasher = Sha512::new();
-            loop {
-                let n = match f.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => n,
-                    Err(_) => return false,
-                };
-                hasher.update(&buf[..n]);
-            }
-            let got = hasher.finalize();
+            let got = Sha512::digest(data);
             got.as_slice() == expected.as_slice()
         }
         "sha384" => {
             use sha2::{Digest, Sha384};
-            let mut hasher = Sha384::new();
-            loop {
-                let n = match f.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => n,
-                    Err(_) => return false,
-                };
-                hasher.update(&buf[..n]);
-            }
-            let got = hasher.finalize();
+            let got = Sha384::digest(data);
             got.as_slice() == expected.as_slice()
         }
         _ => false,
     }
+}
+
+/// Verify file against SRI string (e.g. "sha512-<base64>"). Returns true if match.
+pub fn verify_sri(path: &Path, sri: &str) -> bool {
+    let mut f = match File::open(path) {
+        Ok(x) => x,
+        Err(_) => return false,
+    };
+    let mut data = Vec::new();
+    if f.read_to_end(&mut data).is_err() {
+        return false;
+    }
+    verify_sri_bytes(&data, sri)
 }
 
 /// SHA256 hash of file (hex)
@@ -328,6 +335,27 @@ pub fn lockfile_content_hash(dir: &Path) -> Option<String> {
         return None;
     };
     content_hash(&path).ok()
+}
+
+/// Sanitize package name to prevent path traversal attacks
+fn sanitize_package_name(package: &str) -> Option<String> {
+    // Remove any path separators and dangerous characters
+    let sanitized: String = package
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '.' || *c == '_' || *c == '@' || *c == '/')
+        .collect();
+    
+    // Ensure it doesn't contain path traversal sequences
+    if sanitized.contains("..") || sanitized.contains("//") {
+        return None;
+    }
+    
+    // Ensure it's not empty and doesn't start with a path separator
+    if sanitized.is_empty() || sanitized.starts_with('/') || sanitized.starts_with('\\') {
+        return None;
+    }
+    
+    Some(sanitized)
 }
 
 /// Returns the path to a cached tarball if present.

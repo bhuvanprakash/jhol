@@ -15,7 +15,7 @@ keywords = ["package-manager", "npm", "cache", "offline"]
 categories = ["command-line-utilities", "development-tools"]
 
 [features]
-default = []
+default = ["http-reqwest"]
 http-reqwest = ["jhol-core/http-reqwest"]
 
 [dependencies]
