@@ -1114,7 +1114,9 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
             }
         }
         seen_packages.insert(base.to_string());
-        utils::log(&format!("Installing package: {}", package));
+        if !options.quiet {
+            utils::log(&format!("Installing package: {}", package));
+        }
 
         if !options.no_cache {
             if let Some(tarball) = get_cached_tarball_fast(package, &cache_dir_for_lookup, &store_index) {
@@ -1231,7 +1233,9 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
             if ok {
                 let base = base_name(&pkg).to_string();
                 let _ = bin_links::link_bins_for_package(node_modules, &base);
-                utils::log(&format!("Installed {} from cache (link/copy).", pkg));
+                if !options.quiet {
+                    utils::log(&format!("Installed {} from cache (link/copy).", pkg));
+                }
             } else {
                 fallback_tarballs.push((pkg, tarball_path));
             }
@@ -1256,7 +1260,9 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
             match backend::backend_install_tarballs(&paths, options.backend, options.no_scripts) {
                 Ok(()) => {
                     for (pkg, _) in &fallback_tarballs {
-                        utils::log(&format!("Installed {} from cache (backend).", pkg));
+                        if !options.quiet {
+                            utils::log(&format!("Installed {} from cache (backend).", pkg));
+                        }
                     }
                 }
                 Err(e) => return Err(crate::error_handling::utils::application_error(
@@ -1577,7 +1583,9 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                     if let Some(version) = read_installed_version(base) {
                         let _ = registry::fill_store_from_registry(base, &version, &cache_dir);
                     }
-                    utils::log(&format!("Installed {} via backend.", pkg));
+                    if !options.quiet {
+                        utils::log(&format!("Installed {} via backend.", pkg));
+                    }
                 }
                 let _ = bin_links::rebuild_bin_links(node_modules);
                 sync_hidden_lockfile();
