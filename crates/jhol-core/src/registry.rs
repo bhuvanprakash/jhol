@@ -931,6 +931,7 @@ static TMP_DOWNLOAD_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::A
 
 static BINARY_PACKAGES_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
 static BINARY_PACKAGE_INDEX: OnceLock<Option<HashMap<String, String>>> = OnceLock::new();
+static BINARY_PACKAGE_DEPS_INDEX: OnceLock<Option<HashMap<String, HashMap<String, String>>>> = OnceLock::new();
 
 fn discover_binary_packages_dir() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("JHOL_BINARY_PACKAGES_DIR") {
@@ -979,6 +980,17 @@ fn binary_package_index() -> Option<&'static HashMap<String, String>> {
             let index_path = dir.join("index.json");
             let raw = std::fs::read_to_string(index_path).ok()?;
             serde_json::from_str::<HashMap<String, String>>(&raw).ok()
+        })
+        .as_ref()
+}
+
+fn binary_package_deps_index() -> Option<&'static HashMap<String, HashMap<String, String>>> {
+    BINARY_PACKAGE_DEPS_INDEX
+        .get_or_init(|| {
+            let dir = binary_packages_dir()?;
+            let path = dir.join("deps.json");
+            let raw = std::fs::read_to_string(path).ok()?;
+            serde_json::from_str::<HashMap<String, HashMap<String, String>>>(&raw).ok()
         })
         .as_ref()
 }
@@ -1069,6 +1081,13 @@ fn load_binary_tarball(package: &str, version: &str) -> Result<Option<Vec<u8>>, 
 
 
 pub fn binary_package_dependencies(package: &str, version: &str) -> Option<HashMap<String, String>> {
+    let spec_key = format!("{}@{}", package, version);
+    if let Some(index) = binary_package_deps_index() {
+        if let Some(deps) = index.get(&spec_key) {
+            return Some(deps.clone());
+        }
+    }
+
     let tarball = load_binary_tarball(package, version).ok().flatten()?;
     let dec = flate2::read::GzDecoder::new(std::io::Cursor::new(tarball));
     let mut archive = tar::Archive::new(dec);
