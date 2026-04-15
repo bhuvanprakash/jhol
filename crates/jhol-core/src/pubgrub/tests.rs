@@ -1,13 +1,13 @@
 //! Tests for PubGrub solver
 
 use super::*;
-use version_set::{PackedVersion, VersionRange, VersionSet};
 use std::collections::HashMap;
+use version_set::{PackedVersion, VersionRange, VersionSet};
 
 #[test]
 fn test_simple_dependency_resolution() {
     let mut solver = PubGrubSolver::new("root".to_string());
-    
+
     // Root requires pkg-a ^1.0.0
     let mut requirements = HashMap::new();
     requirements.insert(
@@ -20,16 +20,19 @@ fn test_simple_dependency_resolution() {
         }),
     );
     solver.add_root_requirements(requirements);
-    
-    solver.set_available_versions_from_strings("pkg-a", vec![
-        "1.0.0".to_string(),
-        "1.1.0".to_string(),
-        "1.2.0".to_string(),
-    ]);
-    
+
+    solver.set_available_versions_from_strings(
+        "pkg-a",
+        vec![
+            "1.0.0".to_string(),
+            "1.1.0".to_string(),
+            "1.2.0".to_string(),
+        ],
+    );
+
     let result = solver.solve().unwrap();
     assert!(result.contains_key("pkg-a"));
-    
+
     // Should choose highest compatible version
     let version = result.get("pkg-a").unwrap();
     assert_eq!(*version, PackedVersion::parse("1.2.0").unwrap());
@@ -38,7 +41,7 @@ fn test_simple_dependency_resolution() {
 #[test]
 fn test_multiple_packages() {
     let mut solver = PubGrubSolver::new("root".to_string());
-    
+
     let mut requirements = HashMap::new();
     requirements.insert(
         "react".to_string(),
@@ -59,16 +62,16 @@ fn test_multiple_packages() {
         }),
     );
     solver.add_root_requirements(requirements);
-    
-    solver.set_available_versions_from_strings("react", vec![
-        "18.0.0".to_string(),
-        "18.2.0".to_string(),
-    ]);
-    solver.set_available_versions_from_strings("react-dom", vec![
-        "18.0.0".to_string(),
-        "18.2.0".to_string(),
-    ]);
-    
+
+    solver.set_available_versions_from_strings(
+        "react",
+        vec!["18.0.0".to_string(), "18.2.0".to_string()],
+    );
+    solver.set_available_versions_from_strings(
+        "react-dom",
+        vec!["18.0.0".to_string(), "18.2.0".to_string()],
+    );
+
     let result = solver.solve().unwrap();
     assert_eq!(result.len(), 2);
     assert!(result.contains_key("react"));
@@ -78,7 +81,7 @@ fn test_multiple_packages() {
 #[test]
 fn test_no_solution() {
     let mut solver = PubGrubSolver::new("root".to_string());
-    
+
     // Require both ^1.0.0 and ^2.0.0 - impossible
     let mut requirements = HashMap::new();
     requirements.insert(
@@ -100,12 +103,10 @@ fn test_no_solution() {
         }),
     );
     solver.add_root_requirements(requirements);
-    
-    solver.set_available_versions_from_strings("pkg", vec![
-        "1.0.0".to_string(),
-        "2.0.0".to_string(),
-    ]);
-    
+
+    solver
+        .set_available_versions_from_strings("pkg", vec!["1.0.0".to_string(), "2.0.0".to_string()]);
+
     let result = solver.solve();
     assert!(matches!(result, Err(PubGrubError::NoSolution(_))));
 }
@@ -113,7 +114,7 @@ fn test_no_solution() {
 #[test]
 fn test_version_selection() {
     let mut solver = PubGrubSolver::new("root".to_string());
-    
+
     let mut requirements = HashMap::new();
     requirements.insert(
         "pkg".to_string(),
@@ -125,40 +126,78 @@ fn test_version_selection() {
         }),
     );
     solver.add_root_requirements(requirements);
-    
+
     // Available versions
-    solver.set_available_versions_from_strings("pkg", vec![
-        "1.0.0".to_string(),
-        "2.0.0".to_string(),
-        "2.5.0".to_string(),
-        "3.0.0".to_string(),
-    ]);
-    
+    solver.set_available_versions_from_strings(
+        "pkg",
+        vec![
+            "1.0.0".to_string(),
+            "2.0.0".to_string(),
+            "2.5.0".to_string(),
+            "3.0.0".to_string(),
+        ],
+    );
+
     let result = solver.solve().unwrap();
     let version = result.get("pkg").unwrap();
-    
+
     // Should choose highest compatible version (3.0.0)
     assert_eq!(*version, PackedVersion::parse("3.0.0").unwrap());
 }
 
 #[test]
 fn test_solver_stats() {
-    let mut solver = PubGrubSolver::new("root".to_string());
-    
     let mut requirements = HashMap::new();
-    requirements.insert(
-        "pkg".to_string(),
-        VersionSet::any(),
-    );
+    requirements.insert("pkg".to_string(), VersionSet::any());
+
+    let mut solver = PubGrubSolver::new("root".to_string());
     solver.add_root_requirements(requirements);
-    
-    solver.set_available_versions_from_strings("pkg", vec![
-        "1.0.0".to_string(),
-    ]);
-    
+    solver.set_available_versions_from_strings("pkg", vec!["1.0.0".to_string()]);
+
     let result = solver.solve();
     assert!(result.is_ok());
-    
+
     let stats = solver.stats();
     assert!(stats.decisions >= 1);
+}
+
+#[test]
+fn test_deterministic_resolution() {
+    let mut requirements = HashMap::new();
+    requirements.insert(
+        "lodash".to_string(),
+        VersionSet::from_range(VersionRange {
+            min: PackedVersion::parse("4.17.0").unwrap(),
+            max: PackedVersion::parse("4.255.255").unwrap(),
+            min_inclusive: true,
+            max_inclusive: true,
+        }),
+    );
+
+    let mut solver1 = PubGrubSolver::new("root".to_string());
+    solver1.add_root_requirements(requirements.clone());
+    solver1.set_available_versions_from_strings(
+        "lodash",
+        vec!["4.17.20".to_string(), "4.17.21".to_string()],
+    );
+    let result1 = solver1.solve().unwrap();
+
+    let mut solver2 = PubGrubSolver::new("root".to_string());
+    solver2.add_root_requirements(requirements);
+    solver2.set_available_versions_from_strings(
+        "lodash",
+        vec!["4.17.20".to_string(), "4.17.21".to_string()],
+    );
+    let result2 = solver2.solve().unwrap();
+
+    assert_eq!(
+        result1, result2,
+        "Resolution should be deterministic: same inputs must produce same outputs"
+    );
+
+    assert_eq!(
+        result1.get("lodash"),
+        Some(&PackedVersion::parse("4.17.21").unwrap()),
+        "Should choose highest compatible version"
+    );
 }
