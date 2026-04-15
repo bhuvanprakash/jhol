@@ -44,8 +44,8 @@ structured so it can evolve into full CDCL internals.
 ## Integration in jhol-core
 
 - Entry path: `crates/jhol-core/src/lockfile_write.rs`
-- Default strategy: `resolve_full_tree` → JAGR-1 first
-- Safety fallback: legacy greedy resolver still exists and auto-fallbacks on JAGR failure
+- Default strategy: PubGrub V2 with fallback to JAGR-1 → legacy
+- Uses proper SAT solving with semantic versioning
 - Override for debugging:
 
 ```bash

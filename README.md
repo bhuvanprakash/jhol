@@ -310,8 +310,8 @@ python3 scripts/enterprise_npmrc_report.py \
 
 ### Current limitations
 
-- Dependency resolution currently uses a greedy strategy and may diverge from npm in complex graphs.
-- Some advanced peer dependency cases are still being expanded in parity testing.
+- Some advanced peer dependency cases may still diverge from npm in complex graphs.
+- Auto-falls back to alternative resolvers on failure for reliability.
 - Benchmark baselines are CI-automated, but environment-specific tuning is still evolving.
 
 ## Production Checklist

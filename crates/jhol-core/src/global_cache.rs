@@ -7,7 +7,33 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::PoisonError;
 use std::sync::{Arc, RwLock};
+
+/// RAII guard for RwLock - ensures locks are always released (RAII)
+macro_rules! rw_lock {
+    ($lock:expr, read) => {{
+        match $lock.read() {
+            Ok(guard) => guard,
+            Err(_) => panic!("GlobalCache index: lock poisoned (read)"),
+        }
+    }};
+    ($lock:expr, write) => {{
+        match $lock.write() {
+            Ok(guard) => guard,
+            Err(_) => panic!("GlobalCache index: lock poisoned (write)"),
+        }
+    }};
+}
+
+macro_rules! rw_lock_try {
+    ($lock:expr, read) => {
+        $lock.read()
+    };
+    ($lock:expr, write) => {
+        $lock.write()
+    };
+}
 
 /// Global shared cache instance
 pub struct GlobalCache {
@@ -77,7 +103,7 @@ impl GlobalCache {
     /// Check if package is in global cache
     pub fn has(&self, package: &str, version: &str) -> bool {
         let key = format!("{}@{}", package, version);
-        self.index.read().unwrap().contains_key(&key)
+        rw_lock!(self.index, read).contains_key(&key)
     }
 
     /// Get package from cache (zero-copy read via mmap)
@@ -85,17 +111,17 @@ impl GlobalCache {
         let key = format!("{}@{}", package, version);
 
         // Update access count
-        if let Some(entry) = self.index.write().unwrap().get_mut(&key) {
+        if let Some(entry) = rw_lock!(self.index, write).get_mut(&key) {
             entry.accessed_count += 1;
         }
 
         // Try memory-mapped read
-        if let Some(mmap) = self.mmap_files.read().unwrap().get(&key) {
+        if let Some(mmap) = rw_lock!(self.mmap_files, read).get(&key) {
             return Some(mmap.to_vec());
         }
 
         // Fall back to file read
-        let entry = self.index.read().unwrap().get(&key)?.clone();
+        let entry = rw_lock!(self.index, read).get(&key)?.clone();
         let file_path = self.cache_dir.join(format!("{}.pkg", entry.hash));
 
         if file_path.exists() {
@@ -105,7 +131,7 @@ impl GlobalCache {
 
             // Memory-map for future access
             if let Ok(mmap) = unsafe { memmap2::Mmap::map(&file) } {
-                self.mmap_files.write().unwrap().insert(key, mmap);
+                rw_lock!(self.mmap_files, write).insert(key, mmap);
             }
 
             Some(data)
@@ -123,7 +149,7 @@ impl GlobalCache {
 
         // Check if already cached
         if self.has(package, version) {
-            return Ok(self.index.read().unwrap().get(&key).unwrap().clone());
+            return Ok(rw_lock!(self.index, read).get(&key).unwrap().clone());
         }
 
         // Write to cache file
@@ -140,7 +166,7 @@ impl GlobalCache {
             .map_err(|e| format!("Failed to open for mmap: {}", e))?;
 
         if let Ok(mmap) = unsafe { memmap2::Mmap::map(&file) } {
-            self.mmap_files.write().unwrap().insert(key.clone(), mmap);
+            rw_lock!(self.mmap_files, write).insert(key.clone(), mmap);
         }
 
         // Create entry
@@ -159,7 +185,7 @@ impl GlobalCache {
         };
 
         // Update index
-        self.index.write().unwrap().insert(key, entry.clone());
+        rw_lock!(self.index, write).insert(key, entry.clone());
 
         // Save index
         self.save_index()?;
@@ -176,7 +202,7 @@ impl GlobalCache {
         let _lock = FileLock::lock(&index_path)
             .map_err(|e| format!("Failed to acquire index lock: {}", e))?;
 
-        let content = serde_json::to_string_pretty(&*self.index.read().unwrap())
+        let content = serde_json::to_string_pretty(&*rw_lock!(self.index, read))
             .map_err(|e| format!("Failed to serialize index: {}", e))?;
 
         AtomicWrite::write_to_file(&index_path, content.as_bytes())
@@ -187,7 +213,7 @@ impl GlobalCache {
 
     /// Get cache statistics
     pub fn stats(&self) -> CacheStats {
-        let index = self.index.read().unwrap();
+        let index = rw_lock!(self.index, read);
 
         let total_size: u64 = index.values().map(|e| e.size).sum();
         let total_packages = index.len();
@@ -208,10 +234,10 @@ impl GlobalCache {
     /// Clear cache
     pub fn clear(&self) -> Result<(), String> {
         // Clear memory maps
-        self.mmap_files.write().unwrap().clear();
+        rw_lock!(self.mmap_files, write).clear();
 
         // Remove cache files
-        for entry in self.index.read().unwrap().values() {
+        for entry in rw_lock!(self.index, read).values() {
             let file_path = self.cache_dir.join(format!("{}.pkg", entry.hash));
             let _ = fs::remove_file(&file_path);
         }
