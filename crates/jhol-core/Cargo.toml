@@ -48,6 +48,7 @@ dirs = "5.0"
 
 # JHOL: Faster decompression (like Bun uses libdeflate)
 libdeflater = "1.24"
+thiserror = "2.0.18"
 
 [dev-dependencies]
 tempfile = "3"

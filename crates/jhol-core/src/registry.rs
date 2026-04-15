@@ -362,7 +362,10 @@ impl LazyMetadata {
         if self.parsed.is_none() {
             self.parsed = Some(serde_json::from_slice(&self.raw_bytes).map_err(|e| e.to_string())?);
         }
-        Ok(self.parsed.as_ref().unwrap())
+        Ok(self
+            .parsed
+            .as_ref()
+            .expect("lazy_metadata: parsed should be Some after successful parse"))
     }
 
     pub fn get_versions(&mut self) -> Result<Option<&Value>, String> {
@@ -463,9 +466,14 @@ pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
 
     // Try cache first
     {
-        let mut cache = get_metadata_cache().lock().unwrap();
+        let mut cache = get_metadata_cache()
+            .lock()
+            .expect("metadata_cache: mutex lock failed (poisoned)");
         if let Some(cached) = cache.get(&cache_key) {
-            let bytes = &cached.access().unwrap().raw_bytes;
+            let bytes = &cached
+                .access()
+                .expect("lazy_metadata: failed to access cached data")
+                .raw_bytes;
             if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(bytes) {
                 // Check if abbreviated packument is sufficient
                 if parsed
@@ -501,7 +509,9 @@ pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
 
     if has_versions {
         // Cache the metadata
-        let mut cache = get_metadata_cache().lock().unwrap();
+        let mut cache = get_metadata_cache()
+            .lock()
+            .expect("metadata_cache: mutex lock failed (poisoned)");
         cache.insert(cache_key, CachedMetadata::new(body));
 
         // Return parsed value
@@ -513,7 +523,9 @@ pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
     let v: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
 
     // Cache the full metadata
-    let mut cache = get_metadata_cache().lock().unwrap();
+    let mut cache = get_metadata_cache()
+        .lock()
+        .expect("metadata_cache: mutex lock failed (poisoned)");
     cache.insert(cache_key, CachedMetadata::new(body));
 
     Ok(v)
@@ -561,12 +573,17 @@ pub fn parallel_fetch_metadata(
     // Pre-filter already cached packages to reduce thread overhead
     let mut uncached_names = Vec::new();
     {
-        let guard = cache.lock().unwrap();
+        let guard = cache
+            .lock()
+            .expect("metadata_cache: mutex lock failed (poisoned)");
         for name in names {
             if !guard.contains_key(name) {
                 uncached_names.push(name.clone());
             } else {
-                let cached = guard.get(name).unwrap().clone();
+                let cached = guard
+                    .get(name)
+                    .expect("metadata_cache: key disappeared between contains_key and get")
+                    .clone();
                 results.push((name.clone(), Ok(cached)));
             }
         }
@@ -582,7 +599,9 @@ pub fn parallel_fetch_metadata(
             thread::spawn(move || {
                 // Double-check cache after thread spawn
                 {
-                    let guard = cache.lock().unwrap();
+                    let guard = cache
+                        .lock()
+                        .expect("metadata_cache: mutex lock failed (poisoned)");
                     if let Some(cached) = guard.get(&name) {
                         let _ = tx.send((name, Ok(cached.clone())));
                         return;
@@ -591,7 +610,9 @@ pub fn parallel_fetch_metadata(
 
                 let res = fetch_metadata(&name);
                 if let Ok(ref meta) = res {
-                    let mut guard = cache.lock().unwrap();
+                    let mut guard = cache
+                        .lock()
+                        .expect("metadata_cache: mutex lock failed (poisoned)");
                     guard.insert(name.clone(), meta.clone());
                 }
                 let _ = tx.send((name, res));

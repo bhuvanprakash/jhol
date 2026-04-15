@@ -1070,15 +1070,21 @@ pub fn resolve_install_from_package_json(strict_lockfile: bool) -> Result<Vec<St
                 "Strict lockfile: integrity entries missing. Run install without --frozen to regenerate lockfile with integrity."
             ));
         }
-        let r = resolved.as_ref().unwrap();
+        let r = resolved.as_ref().ok_or_else(|| {
+            crate::error_handling::utils::config_error(
+                "strict_lockfile_validation",
+                Some("lockfile"),
+                "Lockfile data not available",
+            )
+        })?;
         for name in deps.keys() {
             if !r.contains_key(name) {
                 return Err(crate::error_handling::utils::detailed_resolution_error(
-                    "strict_lockfile_validation",
-                    name,
-                    "dependency not in lockfile",
-                    "Strict lockfile: dependency not in lockfile. Run install without --frozen to update lockfile."
-                ));
+                "strict_lockfile_validation",
+                name,
+                "dependency not in lockfile",
+                "Strict lockfile: dependency not in lockfile. Run install without --frozen to update lockfile."
+            ));
             }
         }
     }
