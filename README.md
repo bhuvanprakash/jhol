@@ -65,6 +65,7 @@ See [CHANGELOG.md](./CHANGELOG.md) for release notes.
 - [Architecture](#architecture)
 - [Benchmarking and reports](#benchmarking-and-reports)
 - [Compatibility and limitations](#compatibility-and-limitations)
+- [Production Checklist](#production-checklist)
 - [Links](#links)
 - [License](#license)
 
@@ -313,7 +314,15 @@ python3 scripts/enterprise_npmrc_report.py \
 - Some advanced peer dependency cases are still being expanded in parity testing.
 - Benchmark baselines are CI-automated, but environment-specific tuning is still evolving.
 
-If you hit an issue, open a GitHub issue with the failing dependency graph and lockfile.
+## Production Checklist
+
+Before using Jhol in production, ensure:
+
+- [ ] Run `jhol audit` - address all vulnerabilities
+- [ ] Use `--frozen` or `jhol ci` in CI for deterministic builds
+- [ ] Set appropriate timeouts for your network (`JHOL_RESOLVE_TIMEOUT_SECS`)
+- [ ] Set up cache pruning schedule for large deployments
+- [ ] Test your specific dependency graph with `jhol doctor`
 
 ---
 
