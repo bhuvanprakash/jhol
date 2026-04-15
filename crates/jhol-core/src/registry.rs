@@ -2,16 +2,16 @@
 //! All HTTP calls go through `crate::http_client` (shared Agent = TCP connection pool).
 //! Optimized with pre-resolved package index for instant resolution of common packages.
 
+use semver::{Version, VersionReq};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::sync::OnceLock;
-use semver::{Version, VersionReq};
-use sha2::{Digest, Sha256};
-use serde_json::Value;
+use std::sync::{Arc, Mutex};
 
 lazy_static::lazy_static! {
     /// Global package index for O(1) resolution
@@ -40,19 +40,27 @@ fn packument_cache_key(package: &str, abbreviated: bool) -> String {
     hasher.update(if abbreviated { b"abbr" } else { b"full" });
     // Take only first 16 bytes (32 hex chars) for faster string operations
     let hash_bytes = hasher.finalize();
-    hash_bytes[..16].iter().map(|b| format!("{:02x}", b)).collect::<String>()
+    hash_bytes[..16]
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>()
 }
 
 fn packument_cache_paths(package: &str, abbreviated: bool) -> (PathBuf, PathBuf) {
     let key = packument_cache_key(package, abbreviated);
     let dir = packument_cache_dir();
-    (dir.join(format!("{}.json", key)), dir.join(format!("{}.etag", key)))
+    (
+        dir.join(format!("{}.json", key)),
+        dir.join(format!("{}.etag", key)),
+    )
 }
 
 fn read_packument_cache(package: &str, abbreviated: bool) -> (Option<Vec<u8>>, Option<String>) {
     let (body_path, etag_path) = packument_cache_paths(package, abbreviated);
     let body = std::fs::read(&body_path).ok();
-    let etag = std::fs::read_to_string(&etag_path).ok().map(|s| s.trim().to_string());
+    let etag = std::fs::read_to_string(&etag_path)
+        .ok()
+        .map(|s| s.trim().to_string());
     (body, etag)
 }
 
@@ -82,7 +90,11 @@ fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>
         package.to_string()
     };
     let base = registry_url();
-    let url = format!("{}/{}", base.trim_end_matches('/'), path.trim_start_matches('/'));
+    let url = format!(
+        "{}/{}",
+        base.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
     let auth_token = registry_auth_token();
     let (cached_body_raw, cached_etag) = read_packument_cache(package, abbreviated);
     let cached_body = cached_body_raw.filter(|b| !b.is_empty());
@@ -97,7 +109,10 @@ fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>
     let make_headers = |with_etag: bool| -> Vec<(String, String)> {
         let mut h: Vec<(String, String)> = Vec::new();
         if abbreviated {
-            h.push(("Accept".into(), "application/vnd.npm.install-v1+json".into()));
+            h.push((
+                "Accept".into(),
+                "application/vnd.npm.install-v1+json".into(),
+            ));
         }
         if let Some(ref v) = auth_hdr {
             h.push(("Authorization".into(), v.clone()));
@@ -114,7 +129,10 @@ fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>
 
     let do_fetch = |with_etag: bool| -> Result<(u16, Vec<u8>, Option<String>), String> {
         let owned = make_headers(with_etag);
-        let refs: Vec<(&str, &str)> = owned.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let refs: Vec<(&str, &str)> = owned
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         crate::http_client::get_raw_with_headers(&url, &refs)
     };
 
@@ -132,7 +150,10 @@ fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>
                     let _ = write_packument_cache(package, abbreviated, &body, etag.as_deref());
                     Ok(body)
                 }
-                _ => Err(format!("Failed to fetch packument for {} after 304 retry", package)),
+                _ => Err(format!(
+                    "Failed to fetch packument for {} after 304 retry",
+                    package
+                )),
             }
         }
         Ok((_, body, etag)) => {
@@ -189,7 +210,10 @@ fn fetch_manifest(package: &str, selector: &str) -> Result<serde_json::Value, St
 
 /// Resolve package from pre-resolved index (O(1) lookup!)
 /// Returns None if package not in index (will fetch from network)
-fn resolve_from_index(package: &str, _version_req: &str) -> Option<crate::package_index::PreResolvedPackage> {
+fn resolve_from_index(
+    package: &str,
+    _version_req: &str,
+) -> Option<crate::package_index::PreResolvedPackage> {
     let index = PACKAGE_INDEX.lock().ok()?;
     index.lookup(package, _version_req).cloned()
 }
@@ -214,9 +238,13 @@ pub fn resolve_tarball_via_manifest(
 ) -> Result<Option<(String, String, Option<String>)>, String> {
     // FIRST: Try pre-resolved package index (O(1) lookup!)
     if let Some(resolved) = resolve_from_index(package, version_req) {
-        return Ok(Some((resolved.version, resolved.tarball_url, Some(resolved.integrity))));
+        return Ok(Some((
+            resolved.version,
+            resolved.tarball_url,
+            Some(resolved.integrity),
+        )));
     }
-    
+
     // SECOND: Try manifest endpoint
     let selector = if version_req.trim().is_empty() || version_req.trim() == "latest" {
         Some("latest".to_string())
@@ -253,12 +281,12 @@ pub fn resolve_tarball_via_manifest(
     Ok(Some((resolved_version, tarball, integrity)))
 }
 
-const DEFAULT_PACKUMENT_CONCURRENCY: usize = 32;  // Increased from 8 to 32 for better parallelism
+const DEFAULT_PACKUMENT_CONCURRENCY: usize = 32; // Increased from 8 to 32 for better parallelism
 const MAX_PACKUMENT_CONCURRENCY: usize = 64;
 const MIN_PACKUMENT_CONCURRENCY: usize = 1;
-const DEFAULT_PARALLELISM_MULTIPLIER: usize = 4;  // Increased from 2 to 4 for more aggressive parallelism
-const MIN_PARALLEL_CONCURRENCY: usize = 16;       // Increased from 8 to 16
-const MAX_PARALLEL_CONCURRENCY: usize = 64;       // Increased from 32 to 64
+const DEFAULT_PARALLELISM_MULTIPLIER: usize = 4; // Increased from 2 to 4 for more aggressive parallelism
+const MIN_PARALLEL_CONCURRENCY: usize = 16; // Increased from 8 to 16
+const MAX_PARALLEL_CONCURRENCY: usize = 64; // Increased from 32 to 64
 
 fn packument_concurrency() -> usize {
     std::env::var("JHOL_PACKUMENT_CONCURRENCY")
@@ -267,7 +295,10 @@ fn packument_concurrency() -> usize {
         .map(|n| n.clamp(MIN_PACKUMENT_CONCURRENCY, MAX_PACKUMENT_CONCURRENCY))
         .unwrap_or_else(|| {
             std::thread::available_parallelism()
-                .map(|n| (n.get() * DEFAULT_PARALLELISM_MULTIPLIER).clamp(MIN_PARALLEL_CONCURRENCY, MAX_PARALLEL_CONCURRENCY))
+                .map(|n| {
+                    (n.get() * DEFAULT_PARALLELISM_MULTIPLIER)
+                        .clamp(MIN_PARALLEL_CONCURRENCY, MAX_PARALLEL_CONCURRENCY)
+                })
                 .unwrap_or(DEFAULT_PACKUMENT_CONCURRENCY)
         })
 }
@@ -277,7 +308,10 @@ fn packument_concurrency() -> usize {
 /// Output tuple: (request_id, resolve_result).
 pub fn parallel_resolve_tarballs_via_manifest(
     requests: &[(String, String, String)],
-) -> Vec<(String, Result<Option<(String, String, Option<String>)>, String>)> {
+) -> Vec<(
+    String,
+    Result<Option<(String, String, Option<String>)>, String>,
+)> {
     use std::sync::mpsc;
     use std::thread;
 
@@ -389,25 +423,26 @@ impl MetadataCache {
             // LRU eviction: remove least recently accessed
             let mut oldest_key = None;
             let mut oldest_time = std::time::Instant::now();
-            
+
             for (k, cached) in &self.cache {
                 if cached.last_access < oldest_time {
                     oldest_time = cached.last_access;
                     oldest_key = Some(k.clone());
                 }
             }
-            
+
             if let Some(key) = oldest_key {
                 self.cache.remove(&key);
             }
         }
-        
+
         self.cache.insert(key, metadata);
     }
 }
 
 /// Global metadata cache
-static METADATA_CACHE: std::sync::OnceLock<std::sync::Mutex<MetadataCache>> = std::sync::OnceLock::new();
+static METADATA_CACHE: std::sync::OnceLock<std::sync::Mutex<MetadataCache>> =
+    std::sync::OnceLock::new();
 
 fn get_metadata_cache() -> &'static std::sync::Mutex<MetadataCache> {
     METADATA_CACHE.get_or_init(|| {
@@ -415,7 +450,7 @@ fn get_metadata_cache() -> &'static std::sync::Mutex<MetadataCache> {
             std::env::var("JHOL_METADATA_CACHE_SIZE")
                 .ok()
                 .and_then(|v| v.parse::<usize>().ok())
-                .unwrap_or(1000)
+                .unwrap_or(1000),
         ))
     })
 }
@@ -433,7 +468,12 @@ pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
             let bytes = &cached.access().unwrap().raw_bytes;
             if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(bytes) {
                 // Check if abbreviated packument is sufficient
-                if parsed.get("versions").and_then(|v| v.as_object()).map(|o| !o.is_empty()).unwrap_or(false) {
+                if parsed
+                    .get("versions")
+                    .and_then(|v| v.as_object())
+                    .map(|o| !o.is_empty())
+                    .unwrap_or(false)
+                {
                     return Ok(parsed.clone());
                 }
             }
@@ -453,7 +493,11 @@ pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
     cache_in_index(package, &parsed);
 
     // Check if abbreviated packument is sufficient
-    let has_versions = parsed.get("versions").and_then(|v| v.as_object()).map(|o| !o.is_empty()).unwrap_or(true);
+    let has_versions = parsed
+        .get("versions")
+        .and_then(|v| v.as_object())
+        .map(|o| !o.is_empty())
+        .unwrap_or(true);
 
     if has_versions {
         // Cache the metadata
@@ -476,9 +520,11 @@ pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
 }
 
 /// Fetch metadata for multiple packages in parallel using rayon
-pub fn fetch_metadata_parallel(packages: &[String]) -> Vec<(String, Result<serde_json::Value, String>)> {
+pub fn fetch_metadata_parallel(
+    packages: &[String],
+) -> Vec<(String, Result<serde_json::Value, String>)> {
     use rayon::prelude::*;
-    
+
     packages
         .par_iter()
         .map(|package| {
@@ -508,10 +554,10 @@ pub fn parallel_fetch_metadata(
 ) -> Vec<(String, Result<serde_json::Value, String>)> {
     use std::sync::mpsc;
     use std::thread;
-    
+
     let mut results = Vec::with_capacity(names.len());
     let concurrency = packument_concurrency();
-    
+
     // Pre-filter already cached packages to reduce thread overhead
     let mut uncached_names = Vec::new();
     {
@@ -525,7 +571,7 @@ pub fn parallel_fetch_metadata(
             }
         }
     }
-    
+
     // Process remaining uncached packages in parallel
     for chunk in uncached_names.chunks(concurrency) {
         let (tx, rx) = mpsc::channel();
@@ -542,7 +588,7 @@ pub fn parallel_fetch_metadata(
                         return;
                     }
                 }
-                
+
                 let res = fetch_metadata(&name);
                 if let Ok(ref meta) = res {
                     let mut guard = cache.lock().unwrap();
@@ -644,7 +690,10 @@ pub fn resolve_version(meta: &serde_json::Value, version: &str) -> Option<String
     let version = version.trim();
     if version.is_empty() || version == "latest" {
         let dist_tags = meta.get("dist-tags")?.as_object()?;
-        return dist_tags.get("latest").and_then(|v| v.as_str()).map(String::from);
+        return dist_tags
+            .get("latest")
+            .and_then(|v| v.as_str())
+            .map(String::from);
     }
     let versions = meta.get("versions")?.as_object()?;
     if versions.contains_key(version) {
@@ -745,7 +794,10 @@ pub fn get_version_optional_dependencies(
         Some(v) => v,
         None => return out,
     };
-    if let Some(deps) = ver_obj.get("optionalDependencies").and_then(|d| d.as_object()) {
+    if let Some(deps) = ver_obj
+        .get("optionalDependencies")
+        .and_then(|d| d.as_object())
+    {
         for (k, v) in deps {
             if let Some(s) = v.as_str() {
                 out.insert(k.clone(), s.to_string());
@@ -795,7 +847,7 @@ pub fn resolve_peer_dependencies_with_meta(
     let mut out = std::collections::HashMap::new();
     let peer_deps = get_version_peer_dependencies(meta, version);
     let peer_deps_meta = get_version_peer_dependencies_meta(meta, version);
-    
+
     for (name, range) in peer_deps {
         // Check if this peer dependency is optional according to peerDependenciesMeta
         let optional = peer_deps_meta
@@ -803,10 +855,10 @@ pub fn resolve_peer_dependencies_with_meta(
             .and_then(|meta| meta.get("optional"))
             .and_then(|opt| opt.as_bool())
             .unwrap_or(false);
-        
+
         out.insert(name, (range, optional));
     }
-    
+
     out
 }
 
@@ -823,7 +875,10 @@ pub fn get_version_peer_dependencies_meta(
         Some(v) => v,
         None => return out,
     };
-    if let Some(meta_obj) = ver_obj.get("peerDependenciesMeta").and_then(|d| d.as_object()) {
+    if let Some(meta_obj) = ver_obj
+        .get("peerDependenciesMeta")
+        .and_then(|d| d.as_object())
+    {
         for (k, v) in meta_obj {
             out.insert(k.clone(), v.clone());
         }
@@ -845,23 +900,24 @@ pub fn download_and_extract_streaming(
     dest_dir: &Path,
     expected_integrity: Option<&str>,
 ) -> Result<PathBuf, String> {
-    use std::io::{Read, Write};
     use flate2::read::GzDecoder;
+    use std::io::{Read, Write};
     use tar::Archive;
 
     // Create temp file for download
-    let tmp = std::env::temp_dir().join(format!("jhol-stream-{}-{}.tgz", 
-        std::process::id(), 
+    let tmp = std::env::temp_dir().join(format!(
+        "jhol-stream-{}-{}.tgz",
+        std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis()
     ));
-    
+
     // Download with streaming support
     let token = registry_auth_token();
     crate::http_client::get_to_file_with_bearer(url, &tmp, token.as_deref())?;
-    
+
     // Verify integrity if provided
     if let Some(sri) = expected_integrity {
         if !crate::utils::verify_sri(&tmp, sri) {
@@ -869,15 +925,15 @@ pub fn download_and_extract_streaming(
             return Err(format!("Integrity check failed during streaming download"));
         }
     }
-    
+
     // Extract while potentially still downloading (in full implementation would use channels)
     // For now, extract after download completes
     std::fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
-    
+
     let f = File::open(&tmp).map_err(|e| e.to_string())?;
     let dec = GzDecoder::new(std::io::BufReader::new(f));
     let mut archive = Archive::new(dec);
-    
+
     for entry in archive.entries().map_err(|e| e.to_string())? {
         let mut entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path().map_err(|e| e.to_string())?;
@@ -900,10 +956,10 @@ pub fn download_and_extract_streaming(
             entry.unpack(&out_path).map_err(|e| e.to_string())?;
         }
     }
-    
+
     // Cleanup temp file
     let _ = std::fs::remove_file(&tmp);
-    
+
     Ok(dest_dir.to_path_buf())
 }
 
@@ -931,7 +987,8 @@ static TMP_DOWNLOAD_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::A
 
 static BINARY_PACKAGES_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
 static BINARY_PACKAGE_INDEX: OnceLock<Option<HashMap<String, String>>> = OnceLock::new();
-static BINARY_PACKAGE_DEPS_INDEX: OnceLock<Option<HashMap<String, HashMap<String, String>>>> = OnceLock::new();
+static BINARY_PACKAGE_DEPS_INDEX: OnceLock<Option<HashMap<String, HashMap<String, String>>>> =
+    OnceLock::new();
 
 fn discover_binary_packages_dir() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("JHOL_BINARY_PACKAGES_DIR") {
@@ -1073,14 +1130,21 @@ fn load_binary_tarball(package: &str, version: &str) -> Result<Option<Vec<u8>>, 
         return Ok(None);
     }
 
-    let data = std::fs::read(&archive_path)
-        .map_err(|e| format!("failed to read binary package {}: {}", archive_path.display(), e))?;
+    let data = std::fs::read(&archive_path).map_err(|e| {
+        format!(
+            "failed to read binary package {}: {}",
+            archive_path.display(),
+            e
+        )
+    })?;
     let tarball = decode_binary_package_archive(&data)?;
     Ok(Some(tarball))
 }
 
-
-pub fn binary_package_dependencies(package: &str, version: &str) -> Option<HashMap<String, String>> {
+pub fn binary_package_dependencies(
+    package: &str,
+    version: &str,
+) -> Option<HashMap<String, String>> {
     let spec_key = format!("{}@{}", package, version);
     if let Some(index) = binary_package_deps_index() {
         if let Some(deps) = index.get(&spec_key) {
@@ -1189,7 +1253,6 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-
 
 fn version_matches_all_constraints(version: &semver::Version, constraints: &[String]) -> bool {
     let vs = version.to_string();
@@ -1316,7 +1379,6 @@ pub fn ensure_unpacked_in_store(tarball_path: &Path, cache_dir: &Path) -> Result
     Ok(unpacked)
 }
 
-
 fn extract_tarball_bytes_to_dir(tarball_data: &[u8], dest_dir: &Path) -> Result<(), String> {
     use flate2::read::GzDecoder;
     use tar::Archive;
@@ -1393,6 +1455,8 @@ pub fn extract_tarball(
     node_modules_dir: &Path,
     package_name: &str,
 ) -> Result<(), String> {
+    let package_name = crate::utils::sanitize_package_name(package_name)
+        .ok_or_else(|| format!("Invalid package name: {}", package_name))?;
     let dest = node_modules_dir.join(package_name);
     std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
     extract_tarball_to_dir(tarball_path, &dest)
@@ -1415,15 +1479,18 @@ pub fn install_package_native(
     } else if package.starts_with('@') {
         let idx = package.rfind('@').unwrap_or(0);
         if idx > 0 {
-            (package[..idx].trim_end_matches('@'), package[idx + 1..].trim())
+            (
+                package[..idx].trim_end_matches('@'),
+                package[idx + 1..].trim(),
+            )
         } else {
             (package, "latest")
         }
     } else {
         (package, "latest")
     };
-    let version =
-        resolve_version(&meta, version_req).ok_or_else(|| format!("could not resolve version {}", version_req))?;
+    let version = resolve_version(&meta, version_req)
+        .ok_or_else(|| format!("could not resolve version {}", version_req))?;
     let tarball_url = get_tarball_url(&meta, &version).ok_or("no tarball in metadata")?;
 
     let pkg_key = format!("{}@{}", base_name, version);
