@@ -14,6 +14,7 @@ pub mod doctor;
 pub mod enterprise;
 pub mod error_handling;
 pub mod exec;
+pub mod file_lock;
 pub mod fourier_jagr;  // JHOL Fourier-JAGR (FourierCSP 2025)
 pub mod global_cache;  // JHOL Global Shared Cache (memory-mapped)
 pub mod global_cache_2;  // JHOL Global Cache 2.0 (INNOVATIONS BEYOND BUN)

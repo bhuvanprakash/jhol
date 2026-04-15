@@ -252,10 +252,19 @@ pub fn read_store_index() -> HashMap<String, String> {
 }
 
 pub fn write_store_index(map: &HashMap<String, String>) -> Result<()> {
+    use crate::file_lock::{AtomicWrite, FileLock};
+
     let path = store_index_path();
+    let _lock = FileLock::lock(&path).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Failed to lock store index: {}", e),
+        )
+    })?;
     let s = serde_json::to_string_pretty(map)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    fs::write(path, s)?;
+    AtomicWrite::write_to_file(&path, s.as_bytes())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     Ok(())
 }
 
