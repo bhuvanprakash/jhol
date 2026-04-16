@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 lazy_static::lazy_static! {
     /// Global package index for O(1) resolution
-    static ref PACKAGE_INDEX: Arc<Mutex<crate::package_index::PackageIndex>> = {
+    pub static ref PACKAGE_INDEX: Arc<Mutex<crate::package_index::PackageIndex>> = {
         let index_path = PathBuf::from(crate::utils::get_cache_dir()).join("package-index");
         Arc::new(Mutex::new(crate::package_index::PackageIndex::new(index_path)))
     };

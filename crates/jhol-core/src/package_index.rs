@@ -99,6 +99,21 @@ impl PackageIndex {
         Ok(())
     }
 
+    /// Get all packages (for prefetch optimization)
+    pub fn all_packages(&self) -> &HashMap<String, PreResolvedPackage> {
+        &self.packages
+    }
+
+    /// Has package in index?
+    pub fn has(&self, package: &str) -> bool {
+        self.packages.contains_key(package)
+    }
+
+    /// Get package directly (for fast resolution)
+    pub fn get_package(&self, package: &str) -> Option<&PreResolvedPackage> {
+        self.packages.get(package)
+    }
+
     /// Lookup package in index.
     /// Only returns when the *latest indexed version* satisfies `version_req`.
     pub fn lookup(&self, package: &str, version_req: &str) -> Option<&PreResolvedPackage> {

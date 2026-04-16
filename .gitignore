@@ -39,3 +39,4 @@ benchmark-results.json
 
 # Git worktrees
 .worktrees/
+binary-packages/
