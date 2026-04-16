@@ -480,6 +480,7 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
     let mut selected: HashMap<String, String> = HashMap::new();
     let mut metadata_cache: HashMap<String, serde_json::Value> = HashMap::new();
     let mut queue: VecDeque<(String, usize)> = VecDeque::new();
+    let mut deferred_packages: Vec<String> = Vec::new();
 
     for package in packages {
         let base = base_name(package).to_string();
@@ -487,6 +488,195 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
         constraints.entry(base.clone()).or_default().push(spec);
         required.insert(base.clone(), true);
         queue.push_back((base, 0));
+    }
+
+    // First pass: try binary index and cache, collect deferred packages
+    while let Some((name, depth)) = queue.pop_front() {
+        let Some(pkg_constraints) = constraints.get(&name).cloned() else {
+            continue;
+        };
+
+        if !metadata_cache.contains_key(&name) {
+            // Zero-network fast path: resolve from local binary package index and read deps
+            // directly from bundled binary package metadata when available.
+            if let Some(binary_version) =
+                registry::best_binary_version_matching(&name, &pkg_constraints)
+            {
+                let changed = selected
+                    .get(&name)
+                    .map(|existing| existing != &binary_version)
+                    .unwrap_or(true);
+
+                if changed {
+                    selected.insert(name.clone(), binary_version.clone());
+                    if depth < max_depth {
+                        if let Some(required_deps) =
+                            registry::binary_package_dependencies(&name, &binary_version)
+                        {
+                            for (dep_name, dep_spec) in required_deps {
+                                let dep_constraints =
+                                    constraints.entry(dep_name.clone()).or_default();
+                                if !dep_constraints.iter().any(|s| s == &dep_spec) {
+                                    dep_constraints.push(dep_spec);
+                                    required.insert(dep_name.clone(), true);
+                                    queue.push_back((dep_name, depth + 1));
+                                }
+                            }
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            }
+
+            // Check transitive cache
+            let snapshot_hit = if transitive_cache_enabled() {
+                transitive_metadata_snapshot()
+                    .lock()
+                    .ok()
+                    .and_then(|cache| cache.get(&name).cloned())
+            } else {
+                None
+            };
+
+            if let Some(hit) = snapshot_hit {
+                metadata_cache.insert(name.clone(), hit);
+            } else {
+                // Defer this package for parallel fetch
+                if !deferred_packages.contains(&name) {
+                    deferred_packages.push(name.clone());
+                }
+                continue;
+            }
+        }
+
+        // Package is in metadata_cache, process it
+        let metadata = metadata_cache
+            .get(&name)
+            .ok_or_else(|| format!("Missing metadata for {}", name))?;
+
+        let version =
+            resolve_version_for_constraints(metadata, &pkg_constraints).ok_or_else(|| {
+                format!(
+                    "Dependency conflict for {} (constraints: {})",
+                    name,
+                    pkg_constraints.join(", ")
+                )
+            })?;
+
+        let is_required = *required.get(&name).unwrap_or(&true);
+        if !version_supported_on_current_platform(metadata, &version) {
+            if is_required {
+                return Err(format!(
+                    "Package {}@{} is incompatible with current platform (os/cpu)",
+                    name, version
+                ));
+            }
+            continue;
+        }
+
+        let changed = selected
+            .get(&name)
+            .map(|existing| existing != &version)
+            .unwrap_or(true);
+
+        if !changed {
+            continue;
+        }
+
+        selected.insert(name.clone(), version.clone());
+
+        if depth < max_depth {
+            let required_deps = registry::get_version_required_dependencies(metadata, &version);
+            for (dep_name, dep_spec) in required_deps {
+                let dep_constraints = constraints.entry(dep_name.clone()).or_default();
+                if !dep_constraints.iter().any(|s| s == &dep_spec) {
+                    dep_constraints.push(dep_spec);
+                    required.insert(dep_name.clone(), true);
+                    if !deferred_packages.contains(&dep_name)
+                        && !metadata_cache.contains_key(&dep_name)
+                        && registry::best_binary_version_matching(&dep_name, &[]).is_none()
+                    {
+                        deferred_packages.push(dep_name.clone());
+                    }
+                    queue.push_back((dep_name, depth + 1));
+                }
+            }
+
+            let optional_deps = registry::get_version_optional_dependencies(metadata, &version);
+            for (dep_name, dep_spec) in optional_deps {
+                let dep_constraints = constraints.entry(dep_name.clone()).or_default();
+                if !dep_constraints.iter().any(|s| s == &dep_spec) {
+                    dep_constraints.push(dep_spec);
+                    required.entry(dep_name.clone()).or_insert(false);
+                    if !deferred_packages.contains(&dep_name)
+                        && !metadata_cache.contains_key(&dep_name)
+                        && registry::best_binary_version_matching(&dep_name, &[]).is_none()
+                    {
+                        deferred_packages.push(dep_name.clone());
+                    }
+                    queue.push_back((dep_name, depth + 1));
+                }
+            }
+        }
+    }
+
+    // Parallel fetch all deferred packages at once
+    if !deferred_packages.is_empty() {
+        let cache_arc = std::sync::Arc::new(std::sync::Mutex::new(metadata_cache.clone()));
+        let fetch_results = registry::parallel_fetch_metadata(&deferred_packages, &cache_arc);
+
+        for (pkg_name, result) in fetch_results {
+            match result {
+                Ok(meta) => {
+                    metadata_cache.insert(pkg_name.clone(), meta.clone());
+                    if transitive_cache_enabled() {
+                        if let Ok(mut cache) = transitive_metadata_snapshot().lock() {
+                            cache.insert(pkg_name, meta);
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Err(format!("Failed to fetch metadata for {}: {}", pkg_name, e));
+                }
+            }
+        }
+    }
+
+    // Second pass: now process all packages with metadata available
+    for (name, pkg_constraints) in constraints.iter() {
+        if selected.contains_key(name) {
+            continue; // Already resolved via binary index
+        }
+
+        let Some(metadata) = metadata_cache.get(name) else {
+            continue;
+        };
+
+        let version =
+            resolve_version_for_constraints(metadata, pkg_constraints).ok_or_else(|| {
+                format!(
+                    "Dependency conflict for {} (constraints: {})",
+                    name,
+                    pkg_constraints.join(", ")
+                )
+            })?;
+
+        let is_required = *required.get(name).unwrap_or(&true);
+        if !version_supported_on_current_platform(metadata, &version) {
+            if is_required {
+                return Err(format!(
+                    "Package {}@{} is incompatible with current platform (os/cpu)",
+                    name, version
+                ));
+            }
+            continue;
+        }
+
+        selected.insert(name.clone(), version.clone());
     }
 
     while let Some((name, depth)) = queue.pop_front() {
@@ -530,6 +720,7 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
                 }
             }
 
+            // Try to get from transitive cache first
             let snapshot_hit = if transitive_cache_enabled() {
                 transitive_metadata_snapshot()
                     .lock()
@@ -538,19 +729,42 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
             } else {
                 None
             };
-            let meta = if let Some(hit) = snapshot_hit {
-                hit
+
+            if snapshot_hit.is_some() {
+                metadata_cache.insert(name.clone(), snapshot_hit.unwrap());
             } else {
-                let fetched = registry::fetch_metadata(&name)
-                    .map_err(|e| format!("Failed to fetch metadata for {}: {}", name, e))?;
-                if transitive_cache_enabled() {
-                    if let Ok(mut cache) = transitive_metadata_snapshot().lock() {
-                        cache.insert(name.clone(), fetched.clone());
+                // Defer fetching - collect all needed packages and fetch in parallel
+                continue;
+            }
+        }
+
+        // Second pass: fetch all deferred packages in parallel
+        let deferred_packages: Vec<String> = queue
+            .iter()
+            .filter(|(name, _)| !metadata_cache.contains_key(name))
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        if !deferred_packages.is_empty() {
+            let fetch_results = registry::parallel_fetch_metadata(
+                &deferred_packages,
+                &std::sync::Arc::new(std::sync::Mutex::new(metadata_cache.clone())),
+            );
+            for (pkg_name, result) in fetch_results {
+                match result {
+                    Ok(meta) => {
+                        metadata_cache.insert(pkg_name.clone(), meta.clone());
+                        if transitive_cache_enabled() {
+                            if let Ok(mut cache) = transitive_metadata_snapshot().lock() {
+                                cache.insert(pkg_name, meta);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        return Err(format!("Failed to fetch metadata for {}: {}", pkg_name, e));
                     }
                 }
-                fetched
-            };
-            metadata_cache.insert(name.clone(), meta);
+            }
         }
 
         let metadata = metadata_cache
@@ -587,28 +801,6 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
         }
 
         selected.insert(name.clone(), version.clone());
-
-        if depth < max_depth {
-            let required_deps = registry::get_version_required_dependencies(metadata, &version);
-            for (dep_name, dep_spec) in required_deps {
-                let dep_constraints = constraints.entry(dep_name.clone()).or_default();
-                if !dep_constraints.iter().any(|s| s == &dep_spec) {
-                    dep_constraints.push(dep_spec);
-                    required.insert(dep_name.clone(), true);
-                    queue.push_back((dep_name, depth + 1));
-                }
-            }
-
-            let optional_deps = registry::get_version_optional_dependencies(metadata, &version);
-            for (dep_name, dep_spec) in optional_deps {
-                let dep_constraints = constraints.entry(dep_name.clone()).or_default();
-                if !dep_constraints.iter().any(|s| s == &dep_spec) {
-                    dep_constraints.push(dep_spec);
-                    required.entry(dep_name.clone()).or_insert(false);
-                    queue.push_back((dep_name, depth + 1));
-                }
-            }
-        }
     }
 
     let mut specs: Vec<String> = selected
@@ -863,31 +1055,123 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
     }
 
     let mut index_batch: HashMap<String, String> = HashMap::new();
-    for entry in &to_fetch {
-        let hash = registry::download_tarball_to_store_hash_only(
-            &entry.resolved,
-            &cache_dir,
-            &entry.spec,
-            entry.integrity.as_deref(),
-        )
-        .map_err(|e| {
-            crate::error_handling::utils::registry_error_with_package(
-                "download_tarball_to_store_hash_only",
-                &entry.spec,
-                None,
-                &e,
-            )
-        })?;
+    let concurrency = download_concurrency();
 
-        let store_path = cache_dir.join("store").join(format!("{}.tgz", hash));
-        install_entry(entry, &store_path).map_err(|e| {
+    if concurrency <= 1 || to_fetch.len() <= 1 {
+        for entry in &to_fetch {
+            let hash = registry::download_tarball_to_store_hash_only(
+                &entry.resolved,
+                &cache_dir,
+                &entry.spec,
+                entry.integrity.as_deref(),
+            )
+            .map_err(|e| {
+                crate::error_handling::utils::registry_error_with_package(
+                    "download_tarball_to_store_hash_only",
+                    &entry.spec,
+                    None,
+                    &e,
+                )
+            })?;
+
+            let store_path = cache_dir.join("store").join(format!("{}.tgz", hash));
+            install_entry(entry, &store_path).map_err(|e| {
+                crate::error_handling::utils::application_error(
+                    "install_lockfile_layout_fetch",
+                    Some("extract_failed"),
+                    &format!("{} -> {}", entry.spec, e),
+                )
+            })?;
+            index_batch.insert(entry.spec.clone(), hash);
+        }
+    } else {
+        use std::sync::mpsc;
+        use std::thread;
+
+        let cache_dir_arc = Arc::new(cache_dir.clone());
+        let results_arc: Arc<Mutex<Vec<Result<(String, String, String), (String, String)>>>> =
+            Arc::new(Mutex::new(Vec::with_capacity(to_fetch.len())));
+
+        for chunk in to_fetch.chunks(concurrency) {
+            let (tx, rx) = mpsc::channel();
+            let cache_dir_clone = cache_dir_arc.clone();
+            let results_clone = results_arc.clone();
+
+            for entry in chunk {
+                let tx = tx.clone();
+                let resolved = entry.resolved.clone();
+                let spec = entry.spec.clone();
+                let integrity = entry.integrity.clone();
+                let cache_dir_inner = cache_dir_clone.clone();
+
+                thread::spawn(move || {
+                    let result = registry::download_tarball_to_store_hash_only(
+                        &resolved,
+                        &cache_dir_inner,
+                        &spec,
+                        integrity.as_deref(),
+                    )
+                    .map(|hash| (spec.clone(), hash, resolved));
+                    let _ = tx.send(result);
+                });
+            }
+            drop(tx);
+
+            for received in rx {
+                match received {
+                    Ok((spec, hash, _resolved)) => {
+                        if let Ok(mut results) = results_clone.lock() {
+                            results.push(Ok((spec, hash, "ok".to_string())));
+                        }
+                    }
+                    Err(e) => {
+                        if let Ok(mut results) = results_clone.lock() {
+                            results.push(Err((e, "download_failed".to_string())));
+                        }
+                    }
+                }
+            }
+        }
+
+        let results = results_arc.lock().map_err(|e| {
             crate::error_handling::utils::application_error(
-                "install_lockfile_layout_fetch",
-                Some("extract_failed"),
-                &format!("{} -> {}", entry.spec, e),
+                "install_lockfile_layout_results",
+                Some("lock_error"),
+                &e.to_string(),
             )
         })?;
-        index_batch.insert(entry.spec.clone(), hash);
+        let mut successful: Vec<(String, String)> = Vec::new();
+        let mut errors: Vec<String> = Vec::new();
+
+        for result in results.iter() {
+            match result {
+                Ok((spec, hash, _)) => successful.push((spec.clone(), hash.clone())),
+                Err((e, _)) => errors.push(e.clone()),
+            }
+        }
+
+        if !errors.is_empty() {
+            return Err(crate::error_handling::utils::application_error(
+                "install_lockfile_layout_parallel_fetch",
+                Some("download_failed"),
+                &format!("Failed to download: {}", errors.join("; ")),
+            ));
+        }
+
+        for (spec, hash) in successful {
+            let entry = to_fetch.iter().find(|e| e.spec == spec);
+            if let Some(entry) = entry {
+                let store_path = cache_dir.join("store").join(format!("{}.tgz", hash));
+                if let Err(e) = install_entry(entry, &store_path) {
+                    return Err(crate::error_handling::utils::application_error(
+                        "install_lockfile_layout_parallel_install",
+                        Some("extract_failed"),
+                        &format!("{} -> {}", spec, e),
+                    ));
+                }
+                index_batch.insert(spec, hash);
+            }
+        }
     }
 
     if !index_batch.is_empty() {
