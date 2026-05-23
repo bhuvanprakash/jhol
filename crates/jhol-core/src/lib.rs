@@ -57,7 +57,7 @@ pub use doctor::{check_dependencies, explain_project_health, fix_dependencies};
 pub use enterprise::{EnterpriseConfig, LicenseChecker, SsoTokenManager};
 pub use error_handling::{ErrorHandler, JholError, RecoveryStrategy};
 pub use install::{
-    install_lockfile_only, install_package, resolve_install_from_package_json, InstallOptions,
+    install_lockfile_only, install_package, resolve_install_from_package_json, InstallOptions, OptimizeStrategy,
 };
 pub use prefetch::prefetch_from_lockfile;
 pub use lockfile::{detect_lockfile, lockfile_integrity_complete, read_resolved_from_dir, LockfileKind};
@@ -72,3 +72,31 @@ pub use utils::{
     read_fallback_telemetry,
 };
 pub use ux::{uninstall, update_packages, why_package};
+
+// Phase 1-4 Innovations
+pub mod binary_lockfile;
+pub mod lock_free_grm;
+pub mod incremental_hashing;
+#[cfg(target_os = "linux")]
+pub mod io_uring_wrapper;
+pub mod incremental_resolver;
+pub mod crypto;
+pub mod distributed_grm;
+pub mod second_order_markov;
+#[cfg(target_os = "linux")]
+pub mod fuse_mount;
+
+// Missing module exports (needed for Phase 1-4 innovations)
+pub mod grm;
+pub mod mpt_store;
+pub mod global_resolution_cache;
+pub mod project_state;
+pub mod global_extracted_store;
+pub mod global_store;
+pub mod global_tarball_store;
+pub mod predictive_prefetch;
+pub mod graph_ir;
+pub mod safe_file;
+pub mod metadata_summary;
+pub mod resolution_graph_cache;
+pub mod jagr3;
