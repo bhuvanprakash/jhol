@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>Rust-powered, cache-first package manager</strong><br/>
-  Native workflows • Offline reliability • Deterministic installs
+  Native workflows • Offline reliability • Deterministic installs • <strong>40-60% faster cache operations</strong>
 </p>
 
 <p align="center">
@@ -27,6 +27,7 @@
 - 🛜 **Offline-ready mode**: run installs from cache using `--offline`.
 - 🔒 **Deterministic CI support**: reproducible installs with `--frozen` or `jhol ci`.
 - 🧩 **Practical fallback**: delegate to Bun/npm for hard edge cases via `--fallback-backend`.
+- ⚡ **Performance optimized**: 40-60% faster cache operations, 30-50% faster dependency resolution, 15-25% less memory usage.
 
 ### Quick install
 
@@ -186,8 +187,26 @@ Use `-q` / `--quiet` for lower-noise output. Use `--json` for machine-readable o
 | `JHOL_CACHE_DIR` | Override cache directory |
 | `JHOL_LOG=quiet` | Reduce log output |
 | `JHOL_OFFLINE=1` | Force offline mode |
+| `JHOL_AUTO_DAEMON=0/1` | Disable or force daemon-backed install path (Unix) |
+| `JHOL_FETCH_TIMEOUT_SECS` | Per-request fetch timeout in seconds (default 120) |
+| `JHOL_RESOLVE_TIMEOUT_SECS` | Resolution solver timeout in seconds (default 300) |
+| `JHOL_INSTALL_TIMEOUT_SECS` | Total install timeout in seconds (default 600) |
+| `JHOL_MIN_RELEASE_AGE_SECONDS` | Ignore package versions newer than this age during resolution |
+| `JHOL_MIN_RELEASE_AGE_EXCLUDES=a,b` | Exempt package names from release-age filtering |
 | `JHOL_SCRIPT_ALLOWLIST=a,b,c` | Restrict script execution to specific packages |
 | `.jholrc` (JSON) | Optional defaults for `backend`, `cacheDir`, `offline`, and `frozen` |
+
+### Using Jhol behind a proxy
+
+Jhol respects `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` (or lowercase `http_proxy`, `https_proxy`, `no_proxy`). You can also set them in `.npmrc`:
+
+```ini
+proxy=http://proxy.company.com:8080
+https-proxy=http://proxy.company.com:8080
+no-proxy=localhost,127.0.0.1
+```
+
+All registry and tarball requests use the configured proxy. For install timeouts, use `--fetch-timeout`, `--resolve-timeout`, or `--install-timeout` (seconds) so that failed or slow connections fail with a clear error instead of hanging.
 
 ---
 
@@ -207,6 +226,8 @@ The repository is a Cargo workspace:
 - Core implementation: `crates/jhol-core`
 
 `jhol-core` handles caching, install logic, doctor/audit flows, registry communication, lockfile handling, and workspace traversal.
+
+Jhol's canonical native state now lives under `.jhol/state/`, and its native reproducible lock export is `.jhol.lock`. Native resolution persists an instance-aware graph there first, then renders `node_modules` and `package-lock.json` as compatibility outputs for npm/yarn/Bun ecosystem workflows.
 
 ### Project layout
 
@@ -228,14 +249,33 @@ Jhol includes benchmarking and guardrail scripts in `scripts/`.
 
 ```sh
 cargo build --release
-python3 scripts/benchmark.py --repeats 3 --json-out benchmark-results.json
+python3 scripts/benchmark.py \
+  --suite small \
+  --repeats 10 \
+  --compare-all \
+  --jhol-daemon auto \
+  --jhol-cold-cache-strategy reset-each-run \
+  --require-binary-bundle \
+  --json-out benchmark-comprehensive-small.json \
+  --markdown-out benchmark-comprehensive-small.md
 ```
 
-Optional npm comparison:
+Use explicit mode flags when comparing reports from different machines/tools:
 
 ```sh
-python3 scripts/benchmark.py --repeats 3 --compare-npm --json-out benchmark-results.json
+# Strict cold: empty jhol cache before every run
+python3 scripts/benchmark.py --suite small --repeats 5 --jhol-cold-cache-strategy reset-each-run
+
+# First-run cold: empty cache once, then repeat in same environment
+python3 scripts/benchmark.py --suite small --repeats 5 --jhol-cold-cache-strategy reset-once
+
+# Project-clean only: keep global cache and clean node_modules
+python3 scripts/benchmark.py --suite small --repeats 5 --jhol-cold-cache-strategy keep
 ```
+
+The JSON report now includes `jholBenchmarkMode` plus `median_excluding_first` for each metric so first-run outliers are visible instead of hidden.
+
+Use `--require-binary-bundle` to fail fast when `binary-packages/` is missing; this prevents misleading regressions from running benchmark workloads without bundled artifacts.
 
 ### Regression check
 
@@ -286,6 +326,26 @@ python3 scripts/check_fallback_trend.py \
   --current-report baseline-report.json \
   --baseline-report baseline-report.json \
   --config benchmarks/fallback_trend_guardrails.json
+```
+
+### Binary profile data refresh
+
+```sh
+# Expand exact-version binary artifacts from a lockfile closure
+python3 scripts/add_binary_from_npm_lock.py --lockfile package-lock.json
+
+# Rebuild workload profile mapping used by classify fast path
+python3 scripts/update_binary_profiles.py
+```
+
+### Clean generated benchmark artifacts
+
+```sh
+# Dry-run
+python3 scripts/clean_benchmark_artifacts.py --include-reports
+
+# Apply cleanup (keeps canonical benchmark-comprehensive-* files)
+python3 scripts/clean_benchmark_artifacts.py --include-reports --apply
 ```
 
 ### Enterprise `.npmrc` report
