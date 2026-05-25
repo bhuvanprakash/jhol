@@ -66,4 +66,11 @@ mod tests {
         assert!(valid_sri.starts_with("sha"));
         assert!(valid_sri.contains('-'));
     }
+
+    #[test]
+    fn test_version_satisfaction_with_spaced_comparators() {
+        assert!(registry::version_satisfies(">= 2.1.2 < 3.0.0", "2.1.2"));
+        assert!(registry::version_satisfies(">= 2.1.2 < 3.0.0", "2.9.9"));
+        assert!(!registry::version_satisfies(">= 2.1.2 < 3.0.0", "3.0.0"));
+    }
 }
