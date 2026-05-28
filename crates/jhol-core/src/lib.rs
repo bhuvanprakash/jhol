@@ -86,17 +86,17 @@ pub mod second_order_markov;
 #[cfg(target_os = "linux")]
 pub mod fuse_mount;
 
-// Missing module exports (needed for Phase 1-4 innovations)
+// Note: Following modules referenced but not yet implemented
 pub mod grm;
-pub mod mpt_store;
-pub mod global_resolution_cache;
-pub mod project_state;
-pub mod global_extracted_store;
-pub mod global_store;
-pub mod global_tarball_store;
-pub mod predictive_prefetch;
-pub mod graph_ir;
-pub mod safe_file;
-pub mod metadata_summary;
-pub mod resolution_graph_cache;
-pub mod jagr3;
+// pub mod mpt_store;
+// pub mod global_resolution_cache;
+// pub mod project_state;
+// pub mod global_extracted_store;
+// pub mod global_store;
+// pub mod global_tarball_store;
+// pub mod predictive_prefetch;
+// pub mod graph_ir;
+// pub mod safe_file;
+// pub mod metadata_summary;
+// pub mod resolution_graph_cache;
+// pub mod jagr3;
