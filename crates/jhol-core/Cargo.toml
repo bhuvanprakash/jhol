@@ -1,6 +1,6 @@
 [package]
 name = "jhol-core"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 description = "Core logic for Jhol: cache, install, doctor, registry, lockfile"
 license-file = "../../LICENSE"

@@ -10,7 +10,7 @@ strip = true
 
 [package]
 name = "jhol"
-version = "1.0.1"
+version = "1.0.2"
 authors = ["Bhuvan Prakash <bhuvanstark6@gmail.com>"]
 edition = "2021"
 description = "Fast, offline-friendly package manager with cache, doctor, and npm fallback"
@@ -25,7 +25,7 @@ default = ["http-reqwest"]
 http-reqwest = ["jhol-core/http-reqwest"]
 
 [dependencies]
-jhol-core = { version = "1.0.1", path = "crates/jhol-core" }
+jhol-core = { version = "1.0.2", path = "crates/jhol-core" }
 clap = { version = "4.5", features = ["cargo"] }
 colored = "2.1"
 indicatif = "0.17"
