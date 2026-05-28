@@ -36,6 +36,12 @@ tempfile = "3"
 dashmap = "6.1"
 parking_lot = "0.12"
 serde = { version = "1.0", features = ["derive"] }
+criterion = "0.5"
+
+[[bench]]
+name = "phase1_4_benchmarks"
+path = "benchmarks/phase1_4_benchmarks.rs"
+harness = false
 
 [[bin]]
 name = "jhol"
