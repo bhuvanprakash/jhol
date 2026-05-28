@@ -21,6 +21,7 @@ pub mod http_client;
 pub mod install;
 pub mod lockfile;
 pub mod lockfile_write;
+pub mod mpt_store;
 pub mod offline_cache;  // JHOL Offline Mode
 pub mod optimized_download;  // JHOL Optimized Download (cache-first)
 pub mod osv;
