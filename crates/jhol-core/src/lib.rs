@@ -30,6 +30,7 @@ pub mod prefetch;
 pub mod pubgrub;  // JAGR-2: PubGrub solver
 pub mod registry;
 pub mod run;
+pub mod safe_file;
 pub mod sat_resolver;  // JAGR-1: SAT solver (kept for fallback)
 pub mod selective_extract;  // JHOL Selective Extraction (80% faster)
 pub mod task_queue;  // JAGR-2: Work-stealing task queue
@@ -97,7 +98,6 @@ pub mod grm;
 // pub mod global_tarball_store;
 // pub mod predictive_prefetch;
 // pub mod graph_ir;
-// pub mod safe_file;
 // pub mod metadata_summary;
 // pub mod resolution_graph_cache;
 // pub mod jagr3;

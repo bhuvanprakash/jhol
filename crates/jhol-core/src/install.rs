@@ -894,6 +894,13 @@ pub struct InstallOptions {
     pub script_allowlist: Option<std::collections::HashSet<String>>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum OptimizeStrategy {
+    None,
+    Speed,
+    Size,
+}
+
 impl Default for InstallOptions {
     fn default() -> Self {
         Self {
