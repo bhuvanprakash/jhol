@@ -3,7 +3,8 @@
 //!
 //! Internals are stored as adjacency lists so the common operations are
 //! linear or near-linear in the number of edges instead of cubic in the
-//! number of nodes.
+//! number of nodes. A dense compatibility matrix (`mat`) is also maintained
+//! for callers that still rely on the old public field.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
@@ -67,37 +68,61 @@ pub struct ModuleDep {
     pub edge: TropicalEdge,
 }
 
-/// The tropical module graph stored as sparse adjacency lists.
+/// The tropical module graph stored as sparse adjacency lists, with a dense
+/// compatibility matrix (`mat`) kept in sync.
 pub struct TropicalModuleGraph {
     /// Module names indexed by ID.
     pub names: Vec<String>,
     /// Name → ID lookup.
     pub name_to_id: HashMap<String, ModuleId>,
+    /// Dense compatibility adjacency matrix. `mat[from][to]` is the tropical
+    /// edge between the two modules, or `TropicalEdge::UNREACHABLE`.
+    pub mat: Vec<Vec<TropicalEdge>>,
     /// Outgoing adjacency list: outgoing[from] = [(to, edge), ...]
     outgoing: Vec<Vec<(ModuleId, TropicalEdge)>>,
     /// Incoming adjacency list: incoming[to] = [(from, edge), ...]
     incoming: Vec<Vec<(ModuleId, TropicalEdge)>>,
-    /// Initial capacity hint.
+    /// Current allocated matrix capacity.
     capacity: usize,
+    /// Hard node limit (from `JHOL_TROPICAL_MAX_NODES`, default 16_384).
+    max_nodes: usize,
 }
 
 impl TropicalModuleGraph {
     pub fn new(capacity: usize) -> Self {
         let cap = if capacity == 0 { 16 } else { capacity };
+        let mat = if cap > 0 {
+            vec![vec![TropicalEdge::UNREACHABLE; cap]; cap]
+        } else {
+            vec![]
+        };
         Self {
             names: Vec::with_capacity(cap),
             name_to_id: HashMap::with_capacity(cap),
+            mat,
             outgoing: Vec::with_capacity(cap),
             incoming: Vec::with_capacity(cap),
             capacity: cap,
+            max_nodes: parse_max_nodes_cap(),
         }
     }
 
-    fn max_nodes_cap() -> usize {
-        const DEFAULT_CAP: usize = 16_384;
-        match env::var("JHOL_TROPICAL_MAX_NODES") {
-            Ok(s) => s.trim().parse::<usize>().unwrap_or(DEFAULT_CAP).max(16),
-            Err(_) => DEFAULT_CAP,
+    fn ensure_capacity(&mut self, id: ModuleId) {
+        let id_usize = id as usize;
+        if id_usize >= self.capacity {
+            let new_cap = (self.capacity * 2).max(id_usize + 16);
+            for row in self.mat.iter_mut() {
+                row.resize(new_cap, TropicalEdge::UNREACHABLE);
+            }
+            let old_cap = self.capacity;
+            self.mat
+                .resize(new_cap, vec![TropicalEdge::UNREACHABLE; new_cap]);
+            for row in self.mat.iter_mut().take(old_cap) {
+                row.resize(new_cap, TropicalEdge::UNREACHABLE);
+            }
+            self.outgoing.resize_with(new_cap, Vec::new);
+            self.incoming.resize_with(new_cap, Vec::new);
+            self.capacity = new_cap;
         }
     }
 
@@ -105,23 +130,37 @@ impl TropicalModuleGraph {
         if let Some(&id) = self.name_to_id.get(name) {
             return id;
         }
-        let cap = Self::max_nodes_cap();
-        let new_id = self.names.len() as ModuleId;
-        if self.names.len() >= cap {
-            // Safety cap exceeded: drop the new node and return the last valid ID.
-            return new_id.saturating_sub(1);
+        if self.names.len() >= self.max_nodes {
+            panic!(
+                "TropicalModuleGraph node limit {} exceeded; set JHOL_TROPICAL_MAX_NODES to raise it",
+                self.max_nodes
+            );
         }
-        self.outgoing.push(Vec::new());
-        self.incoming.push(Vec::new());
+        let id = self.names.len() as ModuleId;
+        self.ensure_capacity(id);
+        if self.outgoing.len() <= id as usize {
+            self.outgoing.push(Vec::new());
+            self.incoming.push(Vec::new());
+        }
         self.names.push(name.to_string());
-        self.name_to_id.insert(name.to_string(), new_id);
-        new_id
+        self.name_to_id.insert(name.to_string(), id);
+        id
     }
 
     pub fn add_edge(&mut self, from: &str, to: &str, cost: f64, is_optional: bool) {
+        if cost.is_nan() || cost < 0.0 {
+            panic!(
+                "tropical edge cost must be non-negative finite, got {}",
+                cost
+            );
+        }
         let fid = self.get_or_create_id(from);
         let tid = self.get_or_create_id(to);
         let new_edge = TropicalEdge { cost, is_optional };
+
+        // Keep the dense matrix in sync.
+        let existing_mat = self.mat[fid as usize][tid as usize];
+        self.mat[fid as usize][tid as usize] = existing_mat + new_edge;
 
         // Combine parallel edges with tropical (max-plus) addition.
         let out = &mut self.outgoing[fid as usize];
@@ -136,6 +175,14 @@ impl TropicalModuleGraph {
             existing.1 = existing.1 + new_edge;
         } else {
             inc.push((fid, new_edge));
+        }
+    }
+
+    /// Returns true if a finite edge exists between `from` and `to`.
+    pub fn has_edge(&self, from: &str, to: &str) -> bool {
+        match (self.name_to_id.get(from), self.name_to_id.get(to)) {
+            (Some(&f), Some(&t)) => self.mat[f as usize][t as usize].cost.is_finite(),
+            _ => false,
         }
     }
 
@@ -154,15 +201,16 @@ impl TropicalModuleGraph {
         if n > 1 {
             for _ in 0..n - 1 {
                 for u in 0..n {
-                    if dist[u] == T_INF {
+                    let du = dist[u];
+                    if !du.is_finite() {
                         continue;
                     }
                     for (v, edge) in &self.outgoing[u] {
-                        let v = *v as usize;
-                        if edge.cost == T_INF {
+                        if !edge.cost.is_finite() {
                             continue;
                         }
-                        let new_dist = dist[u] + edge.cost;
+                        let v = *v as usize;
+                        let new_dist = du + edge.cost;
                         // Max-plus: larger (longer) path wins.
                         if new_dist > dist[v] {
                             dist[v] = new_dist;
@@ -175,7 +223,7 @@ impl TropicalModuleGraph {
 
         let mut result = HashMap::new();
         for v in 0..n {
-            if dist[v] == T_INF {
+            if !dist[v].is_finite() {
                 continue;
             }
             let mut path = vec![self.names[v].clone()];
@@ -204,15 +252,16 @@ impl TropicalModuleGraph {
         let mut vec = vec![1.0; n];
         for _ in 0..20 {
             let mut next = vec![T_INF; n];
-            for i in 0..n {
-                if vec[i] == T_INF {
+            for (i, vi) in vec.iter().enumerate() {
+                let vi: f64 = *vi;
+                if !vi.is_finite() {
                     continue;
                 }
                 for (j, edge) in &self.outgoing[i] {
-                    if edge.cost == T_INF {
+                    if !edge.cost.is_finite() {
                         continue;
                     }
-                    let val = vec[i] + edge.cost;
+                    let val = vi + edge.cost;
                     let j = *j as usize;
                     if val > next[j] {
                         next[j] = val;
@@ -221,7 +270,7 @@ impl TropicalModuleGraph {
             }
             vec = next;
         }
-        let max_val = vec.iter().cloned().fold(T_INF, f64::max);
+        let max_val = vec.iter().copied().fold(T_INF, f64::max);
         if max_val == T_INF {
             0.0
         } else {
@@ -280,7 +329,7 @@ impl TropicalModuleGraph {
         let mut dist = vec![T_INF; n];
         dist[src_id as usize] = 0.0;
         for &u in topo.iter().rev() {
-            if dist[u] == T_INF {
+            if !dist[u].is_finite() {
                 continue;
             }
             for (v, edge) in &self.outgoing[u] {
@@ -392,18 +441,21 @@ impl TropicalModuleGraph {
                     }
                     continue;
                 }
-                if Self::has_alternative_path(&dag, &dag_topo, su, sv, edge.cost) {
+                if has_alternative_path(&dag, &dag_topo, su, sv, edge.cost) {
                     redundant.insert((u as ModuleId, *v));
                 }
             }
         }
 
-        // Filter adjacency lists in place.
+        // Filter adjacency lists in place and keep the dense matrix in sync.
         for u in 0..n {
             self.outgoing[u].retain(|(v, _)| !redundant.contains(&(u as ModuleId, *v)));
         }
         for v in 0..n {
             self.incoming[v].retain(|(u, _)| !redundant.contains(&(*u, v as ModuleId)));
+        }
+        for (u, v) in &redundant {
+            self.mat[*u as usize][*v as usize] = TropicalEdge::UNREACHABLE;
         }
     }
 
@@ -457,11 +509,10 @@ impl TropicalModuleGraph {
         let mut comp = vec![ModuleId::MAX; n];
         let mut label: ModuleId = 0;
         for &start in order.iter().rev() {
-            let s = start as usize;
-            if comp[s] != ModuleId::MAX {
+            if comp[start] != ModuleId::MAX {
                 continue;
             }
-            let mut stack = vec![s];
+            let mut stack = vec![start];
             while let Some(u) = stack.pop() {
                 if comp[u] != ModuleId::MAX {
                     continue;
@@ -478,37 +529,45 @@ impl TropicalModuleGraph {
         }
         comp
     }
+}
 
-    fn has_alternative_path(
-        dag: &[Vec<(usize, f64)>],
-        topo: &[usize],
-        source: usize,
-        target: usize,
-        direct_cost: f64,
-    ) -> bool {
-        if source == target {
-            return false;
+fn parse_max_nodes_cap() -> usize {
+    const DEFAULT_CAP: usize = 16_384;
+    match env::var("JHOL_TROPICAL_MAX_NODES") {
+        Ok(s) => s.trim().parse::<usize>().unwrap_or(DEFAULT_CAP).max(16),
+        Err(_) => DEFAULT_CAP,
+    }
+}
+
+fn has_alternative_path(
+    dag: &[Vec<(usize, f64)>],
+    topo: &[usize],
+    source: usize,
+    target: usize,
+    direct_cost: f64,
+) -> bool {
+    if source == target {
+        return false;
+    }
+    let src_pos = topo.iter().position(|&x| x == source).unwrap_or(0);
+    let mut dist = vec![T_INF; dag.len()];
+    dist[source] = 0.0;
+    for &u in &topo[src_pos..] {
+        if !dist[u].is_finite() {
+            continue;
         }
-        let src_pos = topo.iter().position(|&x| x == source).unwrap_or(0);
-        let mut dist = vec![T_INF; dag.len()];
-        dist[source] = 0.0;
-        for &u in &topo[src_pos..] {
-            if dist[u] == T_INF {
+        for (v, w) in &dag[u] {
+            // Skip the direct edge whose redundancy we are checking.
+            if u == source && *v == target {
                 continue;
             }
-            for (v, w) in &dag[u] {
-                // Skip the direct edge whose redundancy we are checking.
-                if u == source && *v == target {
-                    continue;
-                }
-                let nd = dist[u] + *w;
-                if nd > dist[*v] {
-                    dist[*v] = nd;
-                }
+            let nd = dist[u] + *w;
+            if nd > dist[*v] {
+                dist[*v] = nd;
             }
         }
-        dist[target] >= direct_cost
     }
+    dist[target] >= direct_cost
 }
 
 impl std::fmt::Debug for TropicalModuleGraph {
@@ -534,14 +593,14 @@ impl std::fmt::Debug for TropicalModuleGraph {
 fn topological_sort(graph: &[Vec<(usize, f64)>]) -> Vec<usize> {
     let n = graph.len();
     let mut indeg = vec![0usize; n];
-    for u in 0..n {
-        for (v, _) in &graph[u] {
+    for neighbors in graph {
+        for (v, _) in neighbors {
             indeg[*v] += 1;
         }
     }
     let mut queue = VecDeque::new();
-    for u in 0..n {
-        if indeg[u] == 0 {
+    for (u, &deg) in indeg.iter().enumerate() {
+        if deg == 0 {
             queue.push_back(u);
         }
     }
