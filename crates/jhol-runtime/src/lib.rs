@@ -1,5 +1,7 @@
 pub mod engine;
 pub mod errors;
+#[cfg(feature = "jsc-engine")]
+pub mod jsc_engine;
 pub mod modules;
 pub mod resolver;
 pub mod transpile;

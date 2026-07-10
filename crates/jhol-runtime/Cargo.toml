@@ -9,6 +9,7 @@ repository = "https://github.com/bhuvanprakash/jhol"
 [features]
 default = ["native-engine"]
 native-engine = ["dep:quickjs-rusty"]
+jsc-engine = ["dep:javascriptcore"]
 swc-transpile = ["dep:swc_core"]
 native-watcher = ["dep:notify"]
 http-server = ["dep:tiny_http"]
@@ -18,6 +19,9 @@ sqlite = ["dep:rusqlite"]
 [dependencies]
 # JS Engine (QuickJS — lightweight, embeddable, no MSRV issues)
 quickjs-rusty = { version = "0.12", optional = true }
+
+# JavaScriptCore backend (Apple / WebKitGTK Linux; includes JIT)
+javascriptcore = { version = "0.0.6", optional = true }
 
 # TypeScript/JSX transpilation (optional — requires newer Rust)
 swc_core = { version = "71", default-features = false, features = [
