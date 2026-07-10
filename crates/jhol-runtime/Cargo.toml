@@ -10,6 +10,7 @@ repository = "https://github.com/bhuvanprakash/jhol"
 default = ["native-engine"]
 native-engine = ["dep:quickjs-rusty"]
 swc-transpile = ["dep:swc_core"]
+native-watcher = ["dep:notify"]
 
 [dependencies]
 # JS Engine (QuickJS — lightweight, embeddable, no MSRV issues)
@@ -52,6 +53,9 @@ regex-lite = "0.1"
 
 # Cache directory resolution
 dirs = "5.0"
+
+# Native file watching (optional)
+notify = { version = "6.1", optional = true }
 
 # Native HTTP (replace curl process spawn)
 ureq = { version = "2.12", default-features = false, features = ["tls"] }
