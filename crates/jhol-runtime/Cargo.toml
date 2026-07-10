@@ -11,6 +11,9 @@ default = ["native-engine"]
 native-engine = ["dep:quickjs-rusty"]
 swc-transpile = ["dep:swc_core"]
 native-watcher = ["dep:notify"]
+http-server = ["dep:tiny_http"]
+websocket = ["dep:tungstenite"]
+sqlite = ["dep:rusqlite"]
 
 [dependencies]
 # JS Engine (QuickJS — lightweight, embeddable, no MSRV issues)
@@ -18,9 +21,16 @@ quickjs-rusty = { version = "0.12", optional = true }
 
 # TypeScript/JSX transpilation (optional — requires newer Rust)
 swc_core = { version = "71", default-features = false, features = [
+    "common",
+    "common_tty",
+    "ecma_ast",
     "ecma_parser",
+    "ecma_parser_typescript",
     "ecma_transforms",
+    "ecma_transforms_typescript",
+    "ecma_transforms_react",
     "ecma_codegen",
+    "ecma_visit",
     "ecma_minifier",
 ], optional = true }
 
@@ -43,10 +53,13 @@ thiserror = "2.0"
 sha2 = "0.10"
 hmac = "0.12"
 
-# HTTP server + WebSocket + SQLite (real impls)
-tiny_http = "0.12"
-tungstenite = { version = "0.24", features = ["handshake"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+# HTTP server + WebSocket + SQLite (optional)
+tiny_http = { version = "0.12", optional = true }
+tungstenite = { version = "0.24", features = ["handshake"], optional = true }
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+
+# Randomness
+rand = "0.8"
 
 # Regex
 regex-lite = "0.1"

@@ -7,6 +7,16 @@ use std::time::{Duration, Instant, SystemTime};
 
 static EXIT_CODE: AtomicI32 = AtomicI32::new(0);
 
+fn ureq_agent() -> &'static ureq::Agent {
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    AGENT.get_or_init(|| {
+        ureq::AgentBuilder::new()
+            .timeout(std::time::Duration::from_secs(30))
+            .max_idle_connections(64)
+            .build()
+    })
+}
+
 // Timer queue shared between JS callbacks (which are `Fn`) and the Runtime.
 static TIMER_QUEUE: OnceLock<Mutex<Vec<TimerEntry>>> = OnceLock::new();
 static CANCELLED_IDS: OnceLock<Mutex<std::collections::HashSet<u32>>> = OnceLock::new();
@@ -203,13 +213,10 @@ impl Runtime {
         let _ = self
             .context
             .add_callback("__jhol_random_bytes", |len: i32| -> Vec<u8> {
+                use rand::Rng;
                 let count = len.clamp(0, 65536) as usize;
                 let mut buf = vec![0u8; count];
-                use std::fs::File;
-                use std::io::Read;
-                if let Ok(mut f) = File::open("/dev/urandom") {
-                    let _ = f.read_exact(&mut buf);
-                }
+                rand::thread_rng().fill(&mut buf[..]);
                 buf
             });
         let _ = self.context.add_callback(
@@ -313,11 +320,11 @@ impl Runtime {
                 }
                 true
             });
-        // fetch() via native ureq (no curl process spawn, zero overhead)
+        // fetch() via shared ureq agent (connection reuse)
         let _ = self
             .context
             .add_callback("__jhol_fetch", |url: String, _opts: String| -> String {
-                let resp = ureq::get(&url).call();
+                let resp = ureq_agent().get(&url).call();
                 match resp {
                     Ok(r) => {
                         let status = r.status();
@@ -341,44 +348,68 @@ impl Runtime {
                 arch, platform, cpus, homedir, std::env::temp_dir().display())
         });
 
-        // rt-9: Real HTTP server via tiny_http
-        let _ = self.context.add_callback(
-            "__jhol_http_listen",
-            |port: i32, _cb_name: String| -> String {
-                let port = port.clamp(1024, 65535) as u16;
-                let addr = format!("0.0.0.0:{}", port);
-                match tiny_http::Server::http(&addr) {
-                    Ok(server) => {
-                        std::thread::spawn(move || {
-                            for request in server.incoming_requests() {
-                                let method = request.method().to_string();
-                                let url = request.url().to_string();
-                                let response = tiny_http::Response::from_string(format!(
-                                    "{{\"method\":\"{}\",\"url\":\"{}\"}}",
-                                    method, url
-                                ));
-                                let _ = request.respond(response);
-                            }
-                        });
-                        format!("{{\"ok\":true,\"port\":{}}}", port)
+        // rt-9: Real HTTP server via tiny_http (optional)
+        #[cfg(feature = "http-server")]
+        {
+            let _ = self.context.add_callback(
+                "__jhol_http_listen",
+                |port: i32, _cb_name: String| -> String {
+                    let port = port.clamp(1024, 65535) as u16;
+                    let addr = format!("0.0.0.0:{}", port);
+                    match tiny_http::Server::http(&addr) {
+                        Ok(server) => {
+                            std::thread::spawn(move || {
+                                for request in server.incoming_requests() {
+                                    let method = request.method().to_string();
+                                    let url = request.url().to_string();
+                                    let response = tiny_http::Response::from_string(format!(
+                                        "{{\"method\":\"{}\",\"url\":\"{}\"}}",
+                                        method, url
+                                    ));
+                                    let _ = request.respond(response);
+                                }
+                            });
+                            format!("{{\"ok\":true,\"port\":{}}}", port)
+                        }
+                        Err(e) => format!("{{\"ok\":false,\"error\":\"{}\"}}", e),
                     }
-                    Err(e) => format!("{{\"ok\":false,\"error\":\"{}\"}}", e),
-                }
-            },
-        );
+                },
+            );
+        }
+        #[cfg(not(feature = "http-server"))]
+        {
+            let _ = self.context.add_callback(
+                "__jhol_http_listen",
+                |_port: i32, _cb_name: String| -> String {
+                    "{\"ok\":false,\"error\":\"http-server feature not enabled\"}".to_string()
+                },
+            );
+        }
 
-        // rt-10: Real WebSocket via tungstenite
-        let _ = self
-            .context
-            .add_callback("__jhol_ws_connect", |url: String| -> String {
-                match tungstenite::connect(&url) {
-                    Ok((mut socket, _)) => {
-                        let _ = socket.send(tungstenite::Message::Text("jhol ws connected".into()));
-                        "{\"ok\":true}".to_string()
+        // rt-10: Real WebSocket via tungstenite (optional)
+        #[cfg(feature = "websocket")]
+        {
+            let _ = self
+                .context
+                .add_callback("__jhol_ws_connect", |url: String| -> String {
+                    match tungstenite::connect(&url) {
+                        Ok((mut socket, _)) => {
+                            let _ = socket.send(tungstenite::Message::Text("jhol ws connected".into()));
+                            "{\"ok\":true}".to_string()
+                        }
+                        Err(e) => format!("{{\"ok\":false,\"error\":\"{}\"}}", e),
                     }
-                    Err(e) => format!("{{\"ok\":false,\"error\":\"{}\"}}", e),
-                }
-            });
+                });
+        }
+        #[cfg(not(feature = "websocket"))]
+        {
+            let _ = self.context.add_callback(
+                "__jhol_ws_connect",
+                |_url: String| -> String {
+                    "{\"ok\":false,\"error\":\"websocket feature not enabled\"}".to_string()
+                },
+            );
+        }
 
         // rt-11: child_process spawn
         let _ =
@@ -403,22 +434,38 @@ impl Runtime {
                     }
                 });
 
-        // rt-12: SQLite stub
-        let _ = self
-            .context
-            .add_callback("__jhol_db_open", |_path: String| -> String {
-                "{\"ok\":false}".to_string()
-            });
-        let _ = self
-            .context
-            .add_callback("__jhol_db_exec", |_id: i32, _sql: String| -> String {
-                "{\"ok\":false}".to_string()
-            });
-        let _ = self
-            .context
-            .add_callback("__jhol_db_close", |_id: i32, _: String| -> String {
-                "{\"ok\":true}".to_string()
-            });
+        // rt-12: SQLite (optional)
+        #[cfg(feature = "sqlite")]
+        {
+            let _ = self
+                .context
+                .add_callback("__jhol_db_open", |_path: String| -> String { "{\"ok\":false}".to_string() });
+            let _ = self
+                .context
+                .add_callback("__jhol_db_exec", |_id: i32, _sql: String| -> String { "{\"ok\":false}".to_string() });
+            let _ = self
+                .context
+                .add_callback("__jhol_db_close", |_id: i32, _: String| -> String { "{\"ok\":true}".to_string() });
+        }
+        #[cfg(not(feature = "sqlite"))]
+        {
+            let _ = self.context.add_callback(
+                "__jhol_db_open",
+                |_path: String| -> String {
+                    "{\"ok\":false,\"error\":\"sqlite feature not enabled\"}".to_string()
+                },
+            );
+            let _ = self.context.add_callback(
+                "__jhol_db_exec",
+                |_id: i32, _sql: String| -> String {
+                    "{\"ok\":false,\"error\":\"sqlite feature not enabled\"}".to_string()
+                },
+            );
+            let _ = self.context.add_callback(
+                "__jhol_db_close",
+                |_id: i32, _: String| -> String { "{\"ok\":true}".to_string() },
+            );
+        }
 
         // rt-13: File watcher via mtime poll
         let _ = self.context.add_callback(
@@ -464,13 +511,9 @@ impl Runtime {
             });
         // crypto.randomUUID
         let _ = self.context.add_callback("__jhol_random_uuid", |_: String| -> String {
+            use rand::Rng;
             let mut buf = [0u8; 16];
-            if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-                use std::io::Read;
-                let _ = f.read_exact(&mut buf);
-            }
-            buf[6] = (buf[6] & 0x0f) | 0x40;
-            buf[8] = (buf[8] & 0x3f) | 0x80;
+            rand::thread_rng().fill(&mut buf);
             format!("{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
                 buf[0],buf[1],buf[2],buf[3],buf[4],buf[5],buf[6],buf[7],
                 buf[8],buf[9],buf[10],buf[11],buf[12],buf[13],buf[14],buf[15])

@@ -9,7 +9,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(feature = "native-watcher")]
+use crate::errors::RuntimeError;
 use crate::errors::RuntimeResult;
+
+#[cfg(feature = "native-watcher")]
+use notify::Watcher as NotifyWatcher;
 
 const POLL_INTERVAL_MS: u64 = 200;
 
@@ -115,6 +120,7 @@ pub struct NativeWatcher {
 
 #[cfg(feature = "native-watcher")]
 impl NativeWatcher {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> RuntimeResult<Box<dyn Watcher>> {
         let (tx, rx) = std::sync::mpsc::channel();
         let watcher = notify::recommended_watcher(move |res| {
