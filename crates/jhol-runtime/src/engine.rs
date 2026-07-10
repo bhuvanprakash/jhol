@@ -617,7 +617,6 @@ globalThis.require = function(name) {
     wrapper(mod, mod.exports, globalThis.require);
     return mod.exports;
 };
-__jhol_stdout_write('bootstrap ok\n');
 // rt-2: UTF-8 Buffer polyfill (no TextEncoder in QuickJS)
 (function(){
 function utf8_encode(s){var o=[];for(var i=0;i<s.length;i++){var c=s.charCodeAt(i);if(c<128)o.push(c);else if(c<2048){o.push(192|c>>6);o.push(128|c&63)}else{o.push(224|c>>12);o.push(128|c>>6&63);o.push(128|c&63)}}return new Uint8Array(o)}
