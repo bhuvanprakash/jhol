@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
+use rayon::prelude::*;
+
 static EXIT_CODE: AtomicI32 = AtomicI32::new(0);
 
 fn ureq_agent() -> &'static ureq::Agent {
@@ -97,6 +99,7 @@ impl TimerState {
     }
 }
 
+use quickjs_rusty::compile::{compile, from_bytecode, run_compiled_function, to_bytecode};
 use quickjs_rusty::{Context, ExecutionError};
 
 use crate::errors::{RuntimeError, RuntimeResult};
@@ -653,36 +656,33 @@ if(!globalThis.process.env)globalThis.process.env={};
         let canonical = std::fs::canonicalize(path)
             .map_err(|_| RuntimeError::FileNotFound(path.to_path_buf()))?;
 
-        // rt-6: Tropical pre-fetch — pre-read predicted modules in load order.
-        // Uses tropical graph's load_order_from() to predict which modules will
-        // be require'd, then pre-reads them into file_cache before execution.
-        // Overlaps I/O with JS execution — zero stat() on require().
-        {
-            if let Some(state) = RUNTIME_STATE.get() {
-                let order = {
-                    let tg = state.tropical_graph.read().expect("tropical graph lock");
-                    tg.load_order_from("entry")
-                };
-                for mod_name in &order {
-                    let base = canonical.parent().unwrap_or(std::path::Path::new("."));
-                    if let Ok(resolved) = state.resolver.resolve(mod_name, base) {
-                        if resolved.format == ModuleFormat::Native {
-                            continue;
-                        }
-                        let cpath = if let Ok(c) = std::fs::canonicalize(&resolved.path) {
-                            c
-                        } else {
-                            resolved.path.clone()
-                        };
-                        if let (Ok(raw), Ok(meta)) =
-                            (std::fs::read_to_string(&cpath), std::fs::metadata(&cpath))
-                        {
-                            if let Ok(mtime) = meta.modified() {
-                                self.file_cache.entry(cpath).or_insert((mtime, Arc::from(raw)));
-                            }
-                        }
+        // rt-6: Tropical pre-fetch — parallel pre-read + transpile of predicted modules.
+        if let Some(state) = RUNTIME_STATE.get() {
+            let order = {
+                let tg = state.tropical_graph.read().expect("tropical graph lock");
+                tg.load_order_from("entry")
+            };
+            let base = canonical.parent().unwrap_or(std::path::Path::new("."));
+            let fetched: Vec<(PathBuf, SystemTime, Arc<str>)> = order
+                .par_iter()
+                .filter_map(|mod_name| {
+                    let resolved = state.resolver.resolve(mod_name, base).ok()?;
+                    if resolved.format == ModuleFormat::Native {
+                        return None;
                     }
-                }
+                    let cpath = std::fs::canonicalize(&resolved.path).unwrap_or_else(|_| resolved.path.clone());
+                    let raw = std::fs::read_to_string(&cpath).ok()?;
+                    let mtime = std::fs::metadata(&cpath).ok()?.modified().ok()?;
+                    let js = if transpile::needs_transpile(&cpath) {
+                        transpile::transpile(&raw, cpath.to_str().unwrap_or("unknown")).ok()?
+                    } else {
+                        raw
+                    };
+                    Some((cpath, mtime, Arc::from(js)))
+                })
+                .collect();
+            for (cpath, mtime, js) in fetched {
+                self.file_cache.entry(cpath).or_insert((mtime, js));
             }
         }
 
@@ -744,8 +744,6 @@ if(!globalThis.process.env)globalThis.process.env={};
     }
 
     fn evaluate(&mut self, code: &str, filename: &str) -> RuntimeResult<()> {
-        // rt-7: Spectral dead-module detection — skip modules unreachable from entry.
-        // Only applies when tropical graph has edges (any require() was called).
         if let Some(state) = RUNTIME_STATE.get() {
             let _ = state
                 .tropical_graph
@@ -764,23 +762,45 @@ var require = globalThis.require;
 "#,
             filename, _dirname, code
         );
-        let result = self.context.eval(&wrapped, false);
 
-        match result {
-            Ok(val) => {
-                let display = val.to_string().unwrap_or_default();
-                if !display.is_empty() && display != "null" {
-                    println!("{}", display);
+        let hash = crate::bytecode_cache::key(&wrapped);
+        if let Some(bytes) = crate::bytecode_cache::load(hash) {
+            let raw = unsafe { self.context.context_raw() };
+            if let Ok(func) = from_bytecode(raw, &bytes) {
+                if let Ok(compiled) = func.try_into_compiled_function() {
+                    if run_compiled_function(&compiled).is_ok() {
+                        return Ok(());
+                    }
                 }
-                Ok(())
             }
-            Err(e) => {
-                let msg = format_error(&e);
-                Err(RuntimeError::ExecutionError(format!(
-                    "{}:{}",
-                    filename, msg
-                )))
+        }
+
+        let raw = unsafe { self.context.context_raw() };
+        match compile(raw, &wrapped, filename) {
+            Ok(func) => {
+                if let Ok(compiled) = func.try_into_compiled_function() {
+                    let bytes = to_bytecode(raw, &compiled);
+                    let _ = crate::bytecode_cache::save(hash, &bytes);
+                    if run_compiled_function(&compiled).is_ok() {
+                        Ok(())
+                    } else {
+                        Err(RuntimeError::ExecutionError(format!(
+                            "{}: compiled function failed",
+                            filename
+                        )))
+                    }
+                } else {
+                    Err(RuntimeError::ExecutionError(format!(
+                        "{}: compile output was not a function",
+                        filename
+                    )))
+                }
             }
+            Err(e) => Err(RuntimeError::ExecutionError(format!(
+                "{}:{}",
+                filename,
+                format_error(&e)
+            ))),
         }
     }
 

@@ -1,7 +1,13 @@
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+pub mod bytecode_cache;
 pub mod engine;
 pub mod errors;
 #[cfg(feature = "jsc-engine")]
 pub mod jsc_engine;
+pub mod transpile_cache;
 pub mod modules;
 pub mod resolver;
 pub mod transpile;

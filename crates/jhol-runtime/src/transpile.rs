@@ -158,16 +158,26 @@ mod swc_backend {
 pub fn transpile(source: &str, filename: &str) -> RuntimeResult<String> {
     let lower = filename.to_lowercase();
     if lower.ends_with(".ts") || lower.ends_with(".tsx") || lower.ends_with(".jsx") {
-        #[cfg(feature = "swc-transpile")]
-        {
-            swc_backend::transpile_ts_to_js(source, filename)
+        let hash = crate::transpile_cache::key(source);
+        if let Some(cached) = crate::transpile_cache::load(hash) {
+            return Ok(cached);
         }
-        #[cfg(not(feature = "swc-transpile"))]
-        {
-            fast_strip_ts(source, filename)
-        }
+        let js = transpile_inner(source, filename)?;
+        let _ = crate::transpile_cache::save(hash, &js);
+        Ok(js)
     } else {
         Ok(source.to_string())
+    }
+}
+
+fn transpile_inner(source: &str, filename: &str) -> RuntimeResult<String> {
+    #[cfg(feature = "swc-transpile")]
+    {
+        swc_backend::transpile_ts_to_js(source, filename)
+    }
+    #[cfg(not(feature = "swc-transpile"))]
+    {
+        fast_strip_ts(source, filename)
     }
 }
 
