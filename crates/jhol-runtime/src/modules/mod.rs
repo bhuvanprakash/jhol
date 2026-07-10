@@ -21,6 +21,12 @@ pub trait BuiltinModule: Send + Sync {
     fn exports(&self) -> HashMap<String, String>;
 }
 
+impl Default for ModuleRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ModuleRegistry {
     pub fn new() -> Self {
         let mut modules: HashMap<String, Box<dyn BuiltinModule + Send + Sync>> = HashMap::new();
@@ -38,8 +44,8 @@ impl ModuleRegistry {
         Self { modules }
     }
 
-    pub fn get(&self, name: &str) -> Option<&Box<dyn BuiltinModule + Send + Sync>> {
-        self.modules.get(name)
+    pub fn get(&self, name: &str) -> Option<&(dyn BuiltinModule + Send + Sync)> {
+        self.modules.get(name).map(|b| b.as_ref())
     }
 
     pub fn has(&self, name: &str) -> bool {

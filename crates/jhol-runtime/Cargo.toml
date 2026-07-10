@@ -50,5 +50,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # Regex
 regex-lite = "0.1"
 
+# Cache directory resolution
+dirs = "5.0"
+
 # Native HTTP (replace curl process spawn)
 ureq = { version = "2.12", default-features = false, features = ["tls"] }

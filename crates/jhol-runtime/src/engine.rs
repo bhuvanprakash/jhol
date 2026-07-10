@@ -117,7 +117,7 @@ impl Runtime {
         let _ = self
             .context
             .add_callback("__jhol_random_bytes", |len: i32| -> Vec<u8> {
-                let count = len.max(0).min(65536) as usize;
+                let count = len.clamp(0, 65536) as usize;
                 let mut buf = vec![0u8; count];
                 use std::fs::File;
                 use std::io::Read;
@@ -128,7 +128,7 @@ impl Runtime {
             });
         let _ = self.context.add_callback(
             "__jhol_hmac",
-            |algo: String, key: String, data: String| -> String {
+            |_algo: String, key: String, data: String| -> String {
                 use sha2::digest::KeyInit;
                 use sha2::Sha256;
                 if let Ok(mut mac) = hmac::Hmac::<Sha256>::new_from_slice(key.as_bytes()) {
@@ -215,7 +215,7 @@ impl Runtime {
         let _ = self.context.add_callback(
             "__jhol_http_listen",
             |port: i32, _cb_name: String| -> String {
-                let port = port.max(1024).min(65535) as u16;
+                let port = port.clamp(1024, 65535) as u16;
                 let addr = format!("0.0.0.0:{}", port);
                 match tiny_http::Server::http(&addr) {
                     Ok(server) => {
@@ -517,14 +517,11 @@ if(!globalThis.process.env)globalThis.process.env={};
                         } else {
                             resolved.path.clone()
                         };
-                        if !self.file_cache.contains_key(&cpath) {
-                            if let (Ok(raw), Ok(meta)) =
-                                (std::fs::read_to_string(&cpath), std::fs::metadata(&cpath))
-                            {
-                                if let Ok(mtime) = meta.modified() {
-                                    self.file_cache
-                                        .insert(cpath, (mtime, Arc::from(raw)));
-                                }
+                        if let (Ok(raw), Ok(meta)) =
+                            (std::fs::read_to_string(&cpath), std::fs::metadata(&cpath))
+                        {
+                            if let Ok(mtime) = meta.modified() {
+                                self.file_cache.entry(cpath).or_insert((mtime, Arc::from(raw)));
                             }
                         }
                     }
@@ -631,7 +628,8 @@ var require = globalThis.require;
     }
 
     pub fn run_event_loop(&mut self) -> RuntimeResult<i32> {
-        Ok(self.exit_code)
+        let global_code = EXIT_CODE.load(Ordering::Relaxed);
+        Ok(if global_code != 0 { global_code } else { self.exit_code })
     }
 
     pub fn exit_code(&self) -> i32 {

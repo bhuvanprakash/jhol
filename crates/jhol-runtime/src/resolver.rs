@@ -65,8 +65,11 @@ const INDEX_EXTS: &[&str] = &[
 ];
 
 fn cache_file_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    let base = PathBuf::from(home).join(".jhol");
+    let base = dirs::cache_dir()
+        .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
+        .or_else(|| std::env::var("USERPROFILE").ok().map(PathBuf::from))
+        .unwrap_or_else(std::env::temp_dir)
+        .join("jhol");
     let _ = fs::create_dir_all(&base);
     base.join(CACHE_FILE_NAME)
 }
@@ -104,7 +107,12 @@ fn save_persistent_cache(entries: &HashMap<u64, PersistentEntry>) {
     };
     if let Ok(bytes) = bincode::serialize(&file) {
         let tmp = path.with_extension("tmp");
-        if fs::write(&tmp, bytes).is_ok() {
+        if fs::write(&tmp, &bytes).is_ok() {
+            // On Windows rename fails if target exists; remove it first.
+            #[cfg(windows)]
+            {
+                let _ = fs::remove_file(&path);
+            }
             let _ = fs::rename(&tmp, &path);
         }
     }
@@ -251,7 +259,11 @@ impl ModuleResolver {
                     if let Some(path) = Self::resolve_package_internal(&pkg_dir, "")? {
                         return Ok(Some(path));
                     }
-                    return Ok(Some(pkg_dir));
+                    // package.json missing or invalid — try directory index files.
+                    if let Some(path) = Self::try_path_with_extensions(&pkg_dir) {
+                        return Ok(Some(path));
+                    }
+                    return Ok(None);
                 }
                 let sub_path = pkg_dir.join(subpath);
                 if let Some(path) = Self::try_path_with_extensions(&sub_path) {
@@ -268,7 +280,10 @@ impl ModuleResolver {
                     if let Some(path) = Self::resolve_package_internal(&pkg_dir, "")? {
                         return Ok(Some(path));
                     }
-                    return Ok(Some(pkg_dir));
+                    if let Some(path) = Self::try_path_with_extensions(&pkg_dir) {
+                        return Ok(Some(path));
+                    }
+                    return Ok(None);
                 }
                 let sub_path = pkg_dir.join(subpath);
                 if let Some(path) = Self::try_path_with_extensions(&sub_path) {
@@ -443,11 +458,26 @@ impl ModuleResolver {
 
     pub fn save(&self) {
         if self.dirty.load(Ordering::Relaxed) {
-            if let Ok(entries) = self.persistent.read() {
-                save_persistent_cache(&*entries);
+            // Take write lock to clone entries and reset dirty atomically,
+            // preventing a concurrent resolve from setting dirty between
+            // snapshot and reset.
+            let entries = if let Ok(persistent) = self.persistent.write() {
+                let cloned: HashMap<u64, PersistentEntry> = persistent.clone();
                 self.dirty.store(false, Ordering::Relaxed);
+                Some(cloned)
+            } else {
+                None
+            };
+            if let Some(entries) = entries {
+                save_persistent_cache(&entries);
             }
         }
+    }
+}
+
+impl Default for ModuleResolver {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
