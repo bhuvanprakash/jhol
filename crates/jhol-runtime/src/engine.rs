@@ -558,7 +558,7 @@ impl Runtime {
             },
         );
 
-        self.context.eval(r##"
+        let bootstrap = r##"
 globalThis.global = globalThis;
 globalThis._jhol_timer_id = 0;
 globalThis._jhol_timers = {};
@@ -645,8 +645,30 @@ globalThis.crypto.getRandomValues=function(a){var b=__jhol_random_bytes(a.length
 if(!globalThis.process)globalThis.process={};
 if(!globalThis.process.env)globalThis.process.env={};
 (function(){try{var e=__jhol_fs_read('.env');if(e){e.split(String.fromCharCode(10)).forEach(function(l){l=l.trim();if(!l||l[0]==='#')return;var eq=l.indexOf('=');if(eq<0)return;var k=l.substring(0,eq).trim();var v=l.substring(eq+1).trim();if((v[0]===String.fromCharCode(34)||v[0]===String.fromCharCode(39))&&v[v.length-1]===v[0])v=v.slice(1,-1);globalThis.process.env[k]=v})}}catch(_){}})()
-"##, false)
-            .map_err(|e| RuntimeError::Internal(format!("Bootstrap failed: {}", format_error(&e))))?;
+"##;
+        let hash = crate::bytecode_cache::key(bootstrap);
+        if let Some(bytes) = crate::bytecode_cache::load(hash) {
+            let raw = unsafe { self.context.context_raw() };
+            if let Ok(func) = from_bytecode(raw, &bytes) {
+                if let Ok(compiled) = func.try_into_compiled_function() {
+                    if run_compiled_function(&compiled).is_ok() {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        let raw = unsafe { self.context.context_raw() };
+        match compile(raw, bootstrap, "<bootstrap>") {
+            Ok(func) => {
+                if let Ok(compiled) = func.try_into_compiled_function() {
+                    let bytes = to_bytecode(raw, &compiled);
+                    let _ = crate::bytecode_cache::save(hash, &bytes);
+                    run_compiled_function(&compiled)
+                        .map_err(|e| RuntimeError::Internal(format!("Bootstrap failed: {}", format_error(&e))))?;
+                }
+            }
+            Err(e) => return Err(RuntimeError::Internal(format!("Bootstrap failed: {}", format_error(&e)))),
+        }
         // L5: lazy — spectral cycle detection deferred to explicit call
         // spectral_radius() no longer called at bootstrap. No O(n³) startup penalty.
         Ok(())
