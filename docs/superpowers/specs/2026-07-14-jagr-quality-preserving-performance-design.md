@@ -129,3 +129,52 @@ regresses performance beyond the guardrail is reverted or redesigned.
   or error-reporting quality.
 - Large graph-representation rewrites in the same change set.
 
+## Approved 2026-07-16 extension: certified lazy JAGR
+
+JAGR keeps its name and four layers. The resolver adds a monotone knowledge
+lattice around them so metadata work follows proof demand instead of eagerly
+expanding every candidate version.
+
+### Monotone knowledge lattice
+
+Each package-version advances through `Unknown`, `VersionKnown`,
+`ManifestKnown`, and `ConstraintCertified`. Transitions only move forward.
+An abbreviated packument creates the version domain; a version manifest adds
+authoritative dependency, optional-dependency, peer, distribution, and
+integrity data. Unknown metadata is never interpreted as an empty dependency
+set.
+
+### Dual-bound closure
+
+An optimistic problem, in which unknown manifests impose no undiscovered
+constraints, supplies a lower objective bound. A completely hydrated and
+certificate-valid assignment supplies an upper bound. Optimized resolution may
+finish only when the bounds meet and the existing dependency certificate
+passes. This protects feasibility and preference quality. UNSAT is final only
+when its proof depends exclusively on authoritative constraints.
+
+### Obstruction quotient and information scheduler
+
+Certified graph regions collapse out of the unresolved quotient. Layer 0
+supplies spectral influence, Layer 3 supplies tropical slack, Layer 2 supplies
+relative obstruction support, and Layer 1 supplies conflict/core frequency.
+These values rank hydration work but never decide correctness. Ranking is
+deterministic and byte-aware.
+
+### Persistent exact refinement
+
+Refinement rounds retain the exact formula, learned information, objective
+bounds, and deterministic phase choices. New authoritative constraints are
+monotonic additions guarded by activation state. The first implementation may
+retain only reusable formula/bound state when safely retaining the internal
+CDCL trail is not yet valid; telemetry must distinguish both cases.
+
+### Rollout and rollback
+
+`JHOL_JAGR_REFINEMENT=off|shadow|on` controls the experiment. `off` preserves
+the current resolver. `shadow` computes and compares the candidate while the
+current resolver remains authoritative. `on` may return the candidate only
+after parity and performance gates pass. Every phase is independently
+revertible. Any correctness difference fails immediately; repeated median
+regression above 3% or P95 regression above 5% restores the previous green
+phase.
