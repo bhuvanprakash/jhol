@@ -5,7 +5,7 @@
 **Product name:** JAGR
 **Scope:** Replace generic OL3P/CDCL on JAGR's production resolution hot path while preserving the four-layer identity, exact resolution quality, deterministic output, and safe fallback behavior.
 
-**Revision:** The approved native proof engine now includes Certified Range Cells, a Dominance Antichain, Proof Supernodes, the Certified Membrane-Local Chebyshev-Hodge Proof Funnel, a Cohomology Conservation Ledger, Membrane Braid Join, a Residual Core Basis, Bidirectional Bound Braid, Conflict Membrane Learning, and an Adaptive Exact Portfolio. These mechanisms replace full-graph candidate enumeration, broad cubic cohomology recomputation, and monolithic depth-first knot search without weakening exactness.
+**Revision:** The approved native proof engine now uses a Dual-Geometry architecture. Contextual Instance Fibers and Living Range Crystals preserve npm placement and peer context. Exact topology uses certified low-width matrix decomposition and a Hodge Elimination Loom; exact resolver search uses Semantic Entropy Membranes, a JAGR Membrane Transfer Algebra, Continuation-Complete Crystals, an exact Braid dispatcher, Proof Orbit Folding, and a Proof Horizon Circuit. The two geometries have separate width parameters and proof systems. Chebyshev remains an optional routing accelerator, never an exactness authority.
 
 ## 1. Executive summary
 
@@ -13,7 +13,7 @@ JAGR currently converts the package-resolution problem into a generic Boolean op
 
 The problem is therefore not the existence of JAGR's four mathematical layers. The problem is their current relationship with the exact solver. The upper layers mostly analyze or classify the graph, while the final layer still receives a large generic Boolean formula. Lazy metadata refinement can also cause repeated solves after the request fingerprint changes, losing much of the prior exact-search work.
 
-This design replaces the production OL3P/CDCL path with a package-native exact resolver. It compiles behaviorally equivalent versions into Certified Range Cells, removes only proof-dominated cells, contracts membrane-equivalent components into Proof Supernodes, propagates constraints and objective bounds in both directions, and collapses forced packages into a certified shell. The remaining topology passes through a Certified Membrane-Local Chebyshev-Hodge Proof Funnel: spectral work routes proof effort, certified reductions preserve topology, exact local bases are stitched across membranes, and cubic rank work is confined to the irreducible residual core. Hard knots use balanced Membrane Braid Join rather than monolithic depth-first enumeration. Every transformation carries a replayable reason, and a separate certificate verifier—not the solver itself—authorizes output.
+This design replaces the production OL3P/CDCL path with a package-native exact resolver. It materializes only distinct placement and peer contexts, refines behaviorally equivalent versions through split-only Living Range Crystals, removes only proof-dominated cells, propagates constraints and bounds in both directions, and collapses forced packages into a certified shell. The unresolved problem then separates into two exact geometries. The Hodge side performs certified sparse elimination parameterized by the treewidth of the matrix incidence graph. The resolver side compiles components into exact membrane transfer maps parameterized by semantic boundary entropy, then uses continuation compression, exact lattice or zipper joins, orbit proofs, and shared horizon certificates. Every transformation carries a replayable reason, and a separate certificate verifier—not the solver itself—authorizes output.
 
 The old OL3P/CDCL implementation is not immediately deleted. During rollout it becomes a shadow oracle, emergency fallback, and difficult-case collector. The current default remains authoritative until the native engine passes correctness, determinism, parity, and performance gates.
 
@@ -33,8 +33,11 @@ The design must:
 8. Produce independently replayable certificates for success, UNSAT, decomposition, and objective optimality.
 9. Exploit Rust's compact data layout, bit operations, arenas, safe parallelism, and deterministic integer arithmetic.
 10. Remain safe by default through shadow comparison, fallback, telemetry, and automatic rejection of uncertified results.
-11. Replace full-graph cubic topology work with exact parameterized work over sparse support, certified membrane width, and a small residual core.
-12. Reduce both candidate width and exponential knot depth before exact enumeration.
+11. Replace full-graph cubic topology work with exact field-sealed low-width matrix elimination while retaining an honest general exact fallback.
+12. Reduce candidate count, semantic boundary entropy, compatible join output, and proof duplication before exact enumeration.
+13. Model multiple package placements and peer environments without eagerly materializing their Cartesian product.
+14. Separate polynomial bounded-width matrix work from irreducible combinatorial boundary-state work.
+15. Minimize semantic information crossing a separator rather than merely minimizing its package count.
 
 ## 3. Non-goals
 
@@ -52,6 +55,8 @@ This work will not:
 10. Claim superiority over Bun or npm without reproducible measured evidence.
 11. Claim universal linear-time exact Betti-number computation for unrestricted complexes.
 12. Allow Chebyshev estimates, hashes, dominance heuristics, or portfolio selection to become correctness authorities.
+13. Present established mathematical results as original JAGR inventions; JAGR's invention is their proof-bearing package-native composition.
+14. Hide decomposition discovery, compatible-join output, proof size, or objective-frontier growth from complexity accounting.
 
 ## 4. Evidence motivating replacement
 
@@ -98,40 +103,43 @@ If any item cannot be proven, the native engine cannot authorize output.
 
 ## 6. High-level architecture
 
-The native engine consists of fifteen cooperating units:
+The native engine consists of seventeen cooperating units:
 
-1. **Domain and Range Cell compiler:** converts authoritative metadata into compact native domains and certified behavioral equivalence cells.
-2. **Evidence and cohomology ledger:** stores append-only facts, manifest hashes, and replayable topology-preserving transformations.
-3. **Dominance Antichain:** removes a cell only after proving support containment, absence of additional conflict, and objective non-inferiority.
-4. **Proof-wave and bound propagator:** applies forward and backward domain reductions and objective obligations to a fixed point.
-5. **Reason arena:** records why every cell was removed, package forced, bound derived, or topology transformed.
-6. **Certified-shell builder:** removes fully proven packages from the active quotient.
-7. **Proof Supernode builder:** contracts components only after crossing-edge and membrane-behavior equivalence replay.
-8. **Obstruction-quotient decomposer:** isolates unresolved components and their certified boundaries.
-9. **Certified Chebyshev-Hodge Funnel:** routes spectral work, performs certified reductions, constructs membrane-local exact bases, and isolates an irreducible residual core.
-10. **Membrane Braid Join:** solves balanced knot halves and exhaustively joins compatible boundary proof signatures.
-11. **Residual Core Basis:** performs exact sparse bitset rank maintenance only on Funnel leftovers.
-12. **Conflict Membrane learner:** reuses verified contradiction boundaries under identical authoritative context.
-13. **Adaptive Exact Portfolio:** selects propagation, decomposition, Braid Join, journal search, or residual-core solving by certified structure.
-14. **Certificate verifier:** independently replays feasibility, topology conservation, decomposition, branch closure, and optimality.
-15. **Shadow/fallback controller:** compares the native result with the old solver and controls rollout.
+1. **Contextual Instance Fiber compiler:** materializes a package instance domain only for a distinct parent placement, workspace scope, or peer environment.
+2. **Living Range Crystal compiler:** maintains split-only certified behavioral partitions with stable ancestry across metadata hydration.
+3. **Evidence, reason, and conservation ledgers:** store append-only authoritative facts and replayable proof transformations.
+4. **Dominance Antichain:** removes a crystal only after support, obligation, placement, policy, and objective containment replay.
+5. **Proof-wave and bound propagator:** applies forward and backward domain reductions and objective obligations to a fixed point.
+6. **Certified-shell builder:** removes fully proven fibers from the active quotient.
+7. **Proof Supernode builder:** contracts components only after equality of their exact observable transfer behavior.
+8. **Dual-Geometry planner:** independently measures Hodge matrix width and resolver semantic boundary entropy.
+9. **Certified Hodge Elimination Loom:** performs exact low-width sparse elimination and emits a Two-Sided Rank Seal.
+10. **JAGR Membrane Transfer Algebra:** represents a resolver component as an exact boundary-input to boundary-output relation with obligations, objective frontier, and proof root.
+11. **Continuation-Complete Crystal reducer:** keeps only transfer states that preserve feasibility and optimum against every exterior continuation represented by the compatibility model.
+12. **Exact Braid dispatcher:** selects Obligation Möbius Braid when subset-lattice structure is certified, otherwise Signature-Zipper Braid or journal search.
+13. **Proof Orbit folder:** quotients only label-, edge-, policy-, placement-, and objective-preserving membrane symmetries.
+14. **Conflict Membrane learner:** reuses verified contradiction boundaries under identical authoritative context.
+15. **Proof Horizon Circuit:** shares contradiction and objective-bound proofs across covered domain regions.
+16. **Certificate verifier:** independently replays feasibility, matrix rank, transfer composition, exhaustive coverage, and optimality.
+17. **Shadow/fallback controller:** compares the native result with the old solver and controls rollout.
 
 The normal data flow is:
 
 ```text
 authoritative metadata
     -> append evidence
-    -> compile/update Range Cells
+    -> materialize Contextual Instance Fibers
+    -> split/update Living Range Crystals
     -> construct Dominance Antichain
     -> propagate proof and bound waves
     -> collapse certified shell
-    -> contract Proof Supernodes
-    -> decompose obstruction quotient and membranes
-    -> run Certified Chebyshev-Hodge Funnel
-    -> hydrate missing proof-support metadata when necessary
-    -> choose exact portfolio engine per knot
-    -> Braid Join balanced knots / journal-search tiny knots
-    -> solve only the irreducible Residual Core Basis
+    -> measure both exact geometries
+        -> Hodge incidence decomposition -> Elimination Loom -> Rank Seal
+        -> Semantic Entropy Membranes -> Transfer Algebra
+            -> Continuation-Complete Crystals
+            -> Möbius Braid / Signature-Zipper / journal search
+            -> Proof Orbit Folding
+    -> build Proof Horizon Circuit
     -> combine component proofs
     -> verify global certificate
     -> emit lockfile
@@ -139,58 +147,78 @@ authoritative metadata
 
 No stage may skip the independent verifier.
 
-### 6.1 Complexity symbols and claim boundary
+### 6.1 Dual-Geometry complexity symbols
 
 The design uses these symbols consistently:
 
-- `V`: authoritative package versions before Range Cell compression;
-- `E`: typed dependency, peer, optional, policy, and crossing edges;
+- `V`: authoritative package versions before Crystal compression;
+- `F`: materialized Contextual Instance Fibers;
+- `E_f`: typed dependency, peer, placement, optional, policy, and crossing edges between fibers;
 - `S`: compiled support incidences used by dominance indexes;
 - `Q`: active quotient vertices after shell collapse;
-- `M`: sparse simplices or non-zero boundary incidences in the active topological support;
-- `n`: full active topological matrix dimension before certified reduction;
-- `t`: fixed Chebyshev polynomial degree used for routing;
-- `w`: maximum certified membrane boundary width;
+- `N_H`: Hodge matrix rows plus columns;
+- `M_H`: non-zero Hodge boundary incidences;
+- `k_H`: treewidth of the Hodge matrix's bipartite non-zero incidence graph;
+- `T_decomp`: time to discover and certify a usable decomposition;
+- `t_used`: optional Chebyshev routing degree actually consumed;
+- `eta_R`: maximum resolver membrane semantic entropy, `sum(log2(cell_count))` over its fibers;
+- `C`: retained continuation-complete transfer states;
+- `C_build`: time to construct and certify transfer maps and representative states;
+- `C_L`, `C_R`: retained transfer states on the two sides of a composition;
+- `B`: canonical boundary signatures;
+- `b`: number of Boolean obligation dimensions in a certified subset-lattice join;
+- `P`: nondominated exact objective-frontier states;
+- `P_work`: exact objective-frontier construction and dominance work;
+- `J`: compatible output joins actually produced or aggregated;
+- `R_orbit`: certified symmetry-orbit representatives;
+- `T_orbit`: symmetry nomination, verification, and expansion-proof work;
+- `H`: Proof Horizon Circuit nodes;
 - `K`: exact knot decision dimension after contractions;
-- `d`: average cell branching width inside a knot;
-- `r_c`: dimension of the irreducible exact residual core;
-- `Delta`: number of changed residual boundary vectors;
-- `W`: machine word width, initially 64 bits.
+- `d`: average Crystal branching width inside a knot.
 
-The topology target is:
+The favorable combined target is:
 
 ```text
-O(tM + M f(w) + r_c^3/W)
+O(S + F + E_f + T_decomp + k_H^2 N_H + t_used M_H
+  + C_build + C_L + C_R + J + P_work + T_orbit + H)
 ```
 
-where the favorable local-basis path has `f(w) = w^2/W`, while exhaustive boundary-state stitching has conservative `f(w) = 2^w/W`. This is exact and linear in sparse support `M` when `t`, `w`, and `r_c` are bounded. It is not a claim that unrestricted exact cohomology is universally linear. If membrane width or residual-core dimension grows, telemetry exposes that growth and the exact fallback remains authoritative.
+This expression deliberately separates exact linear algebra from exact resolver search. With a supplied certified decomposition, exact rank over an arbitrary field targets `O(k_H^2 N_H)`. Resolver state remains exponential in semantic information in the unrestricted worst case: `C`, `P`, or `J` may be `2^Theta(eta_R)`. Decomposition discovery, join output, proof size, and frontier growth are never hidden.
 
 ### 6.2 Approved strong-invention map
 
 | Strong JAGR invention | Replaces weak part | Target complexity | Why exact / no quality loss | Expected effect |
 |---|---|---:|---|---|
-| **Certified Range Cells** | Searching every version separately | Build `O((V+E) log V)`; solve cells instead of versions | Split a cell whenever authoritative dependency, peer, platform, policy, manifest, or objective behavior differs | Compresses large version histories into semantic choices |
-| **Dominance Antichain** | Blind candidate enumeration | Indexed target `O(S log V)`; dense worst `O(V^2/W)` | Every elimination carries a replayable support-containment and objective proof | Removes inferior choices before search |
-| **Proof Supernodes** | Large obstruction quotient | `O(Q+E)` hashing plus linear verification | Crossing-edge and membrane-behavior equivalence are replayed before contraction | Shrinks exact knot dimension `K` |
-| **Certified Membrane-Local Chebyshev-Hodge Funnel** | Full cubic topology matrices and broad rank work | `O(tM + M f(w) + r_c^3/W)` | Chebyshev only routes; exact reductions, local bases, membrane stitching, and residual rank authorize | Makes favorable topology work parameterized `O(M)` |
-| **Cohomology Conservation Ledger** | Unverifiable topology reduction | `O(M alpha(n))` construction; linear replay | Every permitted contraction includes a homology-preserving witness and reversible accounting entry | Makes aggressive reduction independently safe |
-| **Membrane Braid Join** | Exponential depth-first knot search | Balanced target `O(d^(K/2))` time and memory instead of `O(d^K)` | Both halves are exhaustive and the verifier checks every accepted boundary-signature join | Strongest exact hard-knot reduction |
-| **Residual Core Basis** | Rank rebuilding over the full complex | Update `O(Delta r_c n/W)`; final dense core `O(r_c^3/W)` | Exact sparse bitset basis with no approximate answer or size cutoff | Confines cubic work to `r_c` |
-| **Bidirectional Bound Braid** | Weak one-direction objective bounds | Initial `O(E+V)`; incremental `O(affected edges)` | A prune requires replayable forward and backward bounds | Closes losing branches earlier |
+| **Contextual Instance Fibers** | A single global package/version domain | `O(F+E_f)` over materialized contexts | Fibers merge only under verified parent, peer, workspace, and placement equivalence | Preserves npm tree semantics without eager Cartesian expansion |
+| **Living Range Crystals** | Rebuilding cells after hydration | Initial `O(S+V log V)`; delta proportional to affected ancestry | Authoritative differences cause monotone splits with exact expansion maps | Reuses unaffected search and proofs |
+| **Dominance Antichain** | Blind candidate enumeration | Indexed target `O(S log V)`; dense worst explicitly measured | Every elimination carries replayable support, obligation, placement, and objective containment | Removes inferior choices before search |
+| **Proof Supernodes** | Re-solving transfer-equivalent components | Nomination `O(Q+E_f)` plus exact map replay | Contraction requires equality of all observable transfer behavior | Shrinks quotient while preserving exact expansion |
+| **Dual-Width Membrane Geometry** | One width for unrelated hard problems | `O(Q+E_f)` structural measurement plus decomposition work | Hodge width and resolver entropy are independently certified | Prevents false linearity claims and chooses correct engine |
+| **Certified Hodge Elimination Loom** | Cubic rank and exponential topology-state enumeration | `T_decomp + O(k_H^2 N_H)` with supplied low-width decomposition | Exact field-sealed elimination plus Two-Sided Rank Seal | Gives parameterized near-linear exact topology work |
+| **Semantic Entropy Membranes** | Separators chosen by package count | Search cost parameter `eta_R = max sum log2(cell_count)` | All assignments remain represented | Minimizes actual boundary information |
+| **Membrane Transfer Algebra** | Separate Supernode, memo, Braid, conflict, and objective interfaces | `C_build` plus exact composition cost | Transfer maps enumerate every certified boundary behavior | Unifies proof reuse and composition |
+| **Continuation-Complete Crystals** | Keeping all partial assignments | `C <= 2^eta_R`; reduction cost exposed | Removal preserves compatibility and optimum for every represented continuation | Compresses exact DP tables |
+| **Obligation Möbius Braid** | Direct subset-state joining | `O(b^2 2^b)` where exact subset-lattice preconditions hold | Exact transform and inversion certificate | Replaces applicable `O(3^b)` joins |
+| **Signature-Zipper Braid** | Raw half-assignment storage | `O(C_L+C_R+J)` time; `O(B+P)` memory | Streams every compatible representative signature | Handles general typed boundaries honestly |
+| **Proof Orbit Folding** | Re-solving certified symmetries | Proportional to `R_orbit` | Every quotient carries a verified structure-preserving permutation | Reduces repeated workspace and peer patterns |
+| **Proof Dividend Scheduler** | Always running every accelerator | Structural scan plus deterministic measured work | Stopping routes unchanged state to another exact engine | Prevents mathematics overhead on easy graphs |
+| **Bidirectional Bound Braid** | Weak one-direction objective bounds | Initial `O(E_f+F)`; incremental affected edges | A prune requires replayable forward and backward bounds | Closes losing branches earlier |
 | **Conflict Membrane Learning** | Re-solving an equivalent contradiction | Learn `O(reason DAG)`; indexed lookup average `O(1)` plus replay | Reuse requires an identical authoritative membrane and verified reason DAG | Reuses structural conflicts without Boolean clauses |
-| **Adaptive Exact Portfolio** | One engine for every graph shape | Structural scan `O(Q+E)` | Every selected engine emits the same independently checked proof format | Avoids a single engine's worst graph shape |
+| **Delta Proof Slicing** | Broad invalidation after hydration | `O(affected proof cone)` | Exact evidence dependencies decide reuse | Preserves unaffected Crystals and transfer proofs |
+| **Proof Horizon Circuit** | Repeated branch-proof forests | `O(H + replay)` verification | Shared nodes represent identical authoritative domain regions | Compresses success, UNSAT, and optimality certificates |
 
 ### 6.3 Complexity progression
 
 | Topology path | Time complexity | Authority | Scaling interpretation |
 |---|---:|---|---|
-| Current full dense Hodge/cohomology work | `O(n^3)` | Exact | Cubic work follows the full matrix dimension |
-| Earlier Chebyshev-Hodge Funnel | `O(tM + Mr + r^3/W)` | Exact only after residual proof | Near-linear when unresolved support rank `r` stays small, but `r` can grow with the graph |
-| Certified Membrane-Local Funnel | `O(tM + M f(w) + r_c^3/W)` | Exact after conservation, stitching, and residual replay | Sparse work follows `M`; hard work is parameterized by membrane width `w` and residual core `r_c` |
+| Current full dense Hodge/cohomology work | `O(N_H^3)` | Exact | Cubic work follows full matrix dimension |
+| Previous single-width Funnel | `O(tM + M f(w) + r_c^3/W)` | Exact after residual proof | Conflates matrix width with resolver-state width |
+| Hodge Elimination Loom | `T_decomp + O(k_H^2 N_H)` | Exact Two-Sided Rank Seal | Polynomial in matrix width and near-linear in matrix size when `k_H` is bounded |
+| Resolver transfer geometry | `C_build+C_L+C_R+J+P_work+T_orbit+H` | Exact continuation, join, orbit, objective, and horizon proofs | Exponential dependence remains visible through `eta_R`, `C`, `P`, and `J` |
 
-The revision is not justified by a larger headline speed factor on already easy bounded-rank graphs. Its value is robustness: it prevents broad unresolved rank `r` from silently restoring full-complex cubic behavior, and it exposes the exact structural parameters responsible when favorable scaling does not occur. Whole-resolver speedup remains subject to measured stage share; no algorithmic-stage ratio is reported as an end-to-end benchmark result.
+The revision removes an unnecessary exponential term from the linear-algebra side while refusing to hide the genuine combinatorial term on the resolver side. Whole-resolver speedup remains subject to measured stage share; no algorithmic-stage ratio is reported as an end-to-end benchmark result.
 
-## 7. Native finite-domain model
+## 7. Contextual finite-domain model
 
 ### 7.1 Stable identifiers
 
@@ -207,6 +235,8 @@ Strings are parsed and interned outside the search loop. The live engine uses st
 
 Identifiers remain stable while metadata is appended. New versions or packages extend the tables; existing identifiers never change.
 
+Stable identities additionally cover placement scopes, workspace roots, peer environments, Fiber contexts, Crystal ancestry, transfer states, and proof orbits.
+
 ### 7.2 Version ordering
 
 Every package owns a deterministic table of available versions. The table retains:
@@ -222,7 +252,7 @@ No floating-point value participates in correctness or deterministic ordering. O
 
 ### 7.3 Domain representation
 
-A package domain is a bitset over its version table. Common operations become word operations:
+A Fiber's version domain is a bitset over its package's version table. Common operations become word operations:
 
 - range filtering is bitwise intersection;
 - conflict removal clears bits;
@@ -235,11 +265,17 @@ Small domains may use inline words. Larger domains use contiguous arena-backed w
 
 ### 7.4 Compiled dependency support
 
-For each known package version and dependency edge, the compiler stores a target-domain mask describing compatible versions. Required, optional, and peer edges remain distinct typed relations. Unknown target manifests do not block knowing the target version range, but unknown source manifests prevent that source version from becoming constraint-certified.
+For each known source Crystal version and typed Fiber edge, the compiler stores a target-domain mask describing compatible target versions in the relevant placement and peer context. Required, optional, and peer edges remain distinct typed relations. Unknown target manifests do not block knowing the target version range, but unknown source manifests prevent that source version from becoming constraint-certified.
 
-### 7.5 Certified Range Cells
+### 7.5 Contextual Instance Fibers
 
-Versions of one package may share a Range Cell only when they have identical authoritative behavior under every dimension that can affect resolution:
+A package instance requirement is not assumed to have one global resolver identity. JAGR creates a Fiber key from the package name, parent placement scope, workspace scope, peer environment, override context, and platform/policy context. Each Fiber owns a domain of possible versions; the version is deliberately not part of the Fiber key. A new Fiber is materialized only when one of these contexts is observably distinct. Two Fibers merge only after exact context equivalence replay.
+
+This preserves multiple installed versions, peer-set behavior, and location-sensitive lockfile semantics without eagerly constructing every theoretical context combination. The output certificate expands each selected Fiber into its exact lockfile path and peer environment.
+
+### 7.6 Living Range Crystals
+
+Versions of one compatible Fiber context may share a Living Range Crystal only when they have identical authoritative behavior under every dimension that can affect resolution:
 
 - required, optional, and peer support masks;
 - override and resolution scope;
@@ -249,18 +285,18 @@ Versions of one package may share a Range Cell only when they have identical aut
 - canonical objective rank class for the active preference mode;
 - lockfile-preservation behavior when an existing selection is present.
 
-The compiler constructs canonical behavior signatures and sorts or indexes them in `O((V+E) log V)`. Hash equality proposes a cell; deterministic field-by-field comparison certifies it. A late manifest or policy fact that distinguishes two versions splits the cell without changing stable version identities. Search operates on cells, but the final certificate names the exact selected version and proves deterministic representative choice inside the winning cell.
+The compiler constructs canonical behavior signatures and sorts or indexes them in `O(S+V log V)`. Hash equality proposes a Crystal; deterministic field-by-field comparison certifies it. A late manifest or policy fact that distinguishes versions creates monotone child Crystals under a stable ancestry node. Unaffected children retain their domains, reasons, transfer summaries, and proof dependencies. Search operates on Crystals, but the final certificate names the exact selected Fiber and version and proves deterministic representative choice.
 
-### 7.6 Dominance Antichain
+### 7.7 Dominance Antichain
 
-For cells `a` and `b` of the same package, `a` dominates `b` only when all of the following are proven in the current context:
+For Crystals `a` and `b` of the same compatible Fiber context, `a` dominates `b` only when all of the following are proven in the current context:
 
 1. Every required, optional, peer, platform, policy, and boundary support available to `b` is also available to `a`.
-2. Choosing `a` introduces no conflict or obligation absent from `b`.
+2. Choosing `a` introduces no conflict, placement, peer, or policy obligation absent from `b`.
 3. The active objective ranks `a` equal to or better than `b` under every still-reachable context.
 4. Lockfile-preservation and deterministic tie-breaking do not prefer `b`.
 
-The live candidate set is the antichain of non-dominated cells. Each removal stores the compared support bitsets, objective tuple, context root, and replay result. Failure to prove any condition retains `b`; dominance is never inferred from semver order alone.
+The live candidate set is the antichain of non-dominated Crystals. Each removal stores the compared support bitsets, objective tuple, context root, and replay result. Failure to prove any condition retains `b`; dominance is never inferred from semver order alone.
 
 ## 8. Append-only evidence and conservation ledger
 
@@ -322,7 +358,7 @@ When a target domain changes, backward propagation revisits only source versions
 
 ### 10.3 Bidirectional objective bounds
 
-The forward side computes the cheapest objective contribution of mandatory root closure through remaining cells. The backward side computes unavoidable peer, boundary, override, and policy obligations implied by every surviving target. A branch may be pruned only when their replayable combination cannot beat the incumbent. Initial construction is `O(E+V)`; updates touch affected edges. Either bound alone may prioritize work, but an uncertified or incomplete bound cannot close a branch.
+The forward side computes the cheapest objective contribution of mandatory root closure through remaining Crystals. The backward side computes unavoidable peer, boundary, override, and policy obligations implied by every surviving target. A branch may be pruned only when their replayable combination cannot beat the incumbent. Initial construction is `O(E_f+F)`; updates touch affected edges. Either bound alone may prioritize work, but an uncertified or incomplete bound cannot close a branch.
 
 ### 10.4 Fixed point
 
@@ -370,7 +406,7 @@ The journal is also useful for proof construction: the engine can identify every
 
 ## 12. Certified shell
 
-A package may leave the active obstruction quotient only when:
+A Fiber may leave the active obstruction quotient only when:
 
 1. Its domain contains exactly one version.
 2. That version is at least `ConstraintsCompiled`.
@@ -379,7 +415,7 @@ A package may leave the active obstruction quotient only when:
 5. No unresolved override, platform, or context condition touches it.
 6. Its forcing reasons replay successfully.
 
-The package and its proof become part of the certified shell. Shell packages remain visible as immutable boundary assignments but no longer participate in exact branching.
+The Fiber and its proof become part of the certified shell. Shell Fibers remain visible as immutable boundary assignments but no longer participate in exact branching.
 
 If later evidence invalidates a shell proof, the context generation changes and the affected shell component is reopened. Unrelated shell components remain reusable.
 
@@ -387,9 +423,9 @@ If later evidence invalidates a shell proof, the context generation changes and 
 
 ### 13.1 Proof Supernodes
 
-Before constructing the final obstruction quotient, JAGR groups packages or already-reduced components by canonical membrane behavior. Equal hashes merely nominate a contraction. Certification then compares all internal typed relations, every crossing edge, boundary obligation, objective contribution, evidence generation, and policy context. Only components that are interchangeable at every observable boundary become a Proof Supernode.
+Before constructing the final obstruction quotient, JAGR groups Fibers or already-reduced components by canonical membrane behavior. Equal hashes merely nominate a contraction. Certification compares their exact transfer maps: every boundary input must produce the same feasible outputs, obligations, canonical objective frontier, and expansion semantics. Only components indistinguishable to every represented exterior continuation become a Proof Supernode.
 
-Supernode construction targets `O(Q+E)` hashing plus linear verification of nominated groups. The proof preserves an expansion map to original packages and cells so the verifier and lockfile writer never lose identity. A failed equivalence check leaves the components separate.
+Supernode nomination targets `O(Q+E_f)` hashing; authorization additionally replays the complete nominated transfer maps. The proof preserves an expansion map to original Fibers and Crystals so the verifier and lockfile writer never lose identity. A failed equivalence check leaves the components separate.
 
 ### 13.2 Quotient contents
 
@@ -413,38 +449,43 @@ Each unresolved component has a membrane describing its interface with the certi
 - peer obligations crossing the boundary;
 - objective contribution already fixed outside;
 - manifest/context hashes;
-- proof identifiers supporting the boundary.
+- proof identifiers supporting the boundary;
+- surviving Crystal count for every boundary Fiber;
+- semantic entropy `sum(log2(cell_count))`;
+- transfer-state and objective-frontier identities.
 
 Two components may be solved independently only when all paths between them pass through certified membrane assignments and neither objective nor peer constraint crosses the separation unresolved.
+
+Separators are ranked primarily by predicted semantic entropy, not vertex count. A larger membrane of forced Fibers can be cheaper than a smaller membrane containing several wide Crystal domains.
 
 ### 13.4 Decomposition proof
 
 Component independence is itself certified. The proof enumerates crossing edges and shows that each is discharged by a fixed boundary assignment. The verifier rejects recombination if it finds an unaccounted unresolved crossing constraint.
 
-### 13.5 Certified Membrane-Local Chebyshev-Hodge Proof Funnel
+### 13.5 Dual-Geometry planner
 
-The Funnel replaces full-complex cubic cohomology work with five ordered stages:
+The planner builds two different certified structures:
 
-1. **Certified chain/coreduction:** apply only topology-preserving reductions whose local free-pair, collapse, or equivalent admissibility conditions can be replayed. Record every transformation in the Cohomology Conservation Ledger.
-2. **Chebyshev harmonic-support routing:** run a fixed-degree sparse Chebyshev recurrence over the reduced Hodge operator in `O(tM)`. It estimates where near-zero spectral support may remain and orders membranes and residual vectors. It never proves a Betti number, SAT, UNSAT, or branch closure.
-3. **Certified membrane decomposition:** choose small separators over the reduced obstruction support and prove that every cross-membrane incidence is represented in its boundary signature.
-4. **Exact membrane-local bases:** compute exact cycle, boundary, and cocycle bases locally using compact sparse/bitset coordinates, then carry canonical boundary signatures between membranes.
-5. **Exact residual authorization:** exhaustively stitch boundary states and run exact rank maintenance over only the irreducible residual core.
+1. The **Hodge incidence geometry** is the bipartite graph connecting matrix rows and columns at non-zero coefficients. Its structural parameter is `k_H`.
+2. The **resolver transfer geometry** contains Contextual Instance Fibers and typed constraints. Its structural parameter is semantic membrane entropy `eta_R`, not `k_H` or raw package count.
 
-The intended complexity is:
+The structures may suggest separators to each other, but neither width substitutes for the other. The planner records decomposition discovery time separately and verifies every produced bag, running-intersection property, matrix incidence, and resolver crossing edge.
+
+### 13.6 Certified Hodge Elimination Loom
+
+Given a certified decomposition of the Hodge incidence graph, the Loom performs exact field-sealed elimination bag by bag. Interior pivots are eliminated while the active frontier is bounded by `k_H`; pivot count, row operations, boundary projections, and kernel information are appended to the conservation ledger.
+
+The target is:
 
 ```text
-certified reductions       O(M alpha(n))
-Chebyshev routing          O(tM)
-local exact basis          O(M w^2/W)         favorable
-boundary-state stitching  O(M 2^w/W)         conservative
-residual exact rank        O(r_c^3/W)
-combined                   O(tM + M f(w) + r_c^3/W)
+decomposition discovery       T_decomp
+exact rank/elimination         O(k_H^2 N_H)
+optional Chebyshev routing     O(t_used M_H)
 ```
 
-The implementation chooses the favorable local-basis path only when its proof shows that no combinatorial boundary-state enumeration is required. Otherwise it pays the conservative exhaustive term. There is no membrane-width cutoff that changes the answer: large `w` routes to another exact portfolio engine or fallback.
+Chebyshev may rank candidate decompositions or elimination regions in deterministic degree blocks. It can be skipped entirely and cannot create a pivot, rank claim, Betti claim, or resolver reduction. If no useful low-width decomposition is found, JAGR uses the exact general residual path and reports its cost rather than changing the answer.
 
-### 13.6 Cohomology Conservation Ledger
+### 13.7 Cohomology Conservation Ledger
 
 Each exact topology transformation stores:
 
@@ -457,11 +498,16 @@ Each exact topology transformation stores:
 - evidence context root;
 - deterministic inverse/replay recipe.
 
-The verifier recomputes the local boundary identities and accumulated Betti accounting. Approximate eigenvalues, floating-point tolerances, or spectral gaps never appear in the authorization proof.
+The verifier recomputes local boundary identities, field operations, accumulated Betti accounting, and the decomposition conditions used by the Loom. Approximate eigenvalues, floating-point tolerances, or spectral gaps never appear in the authorization proof.
 
-### 13.7 Residual Core Basis
+### 13.8 Two-Sided Rank Seal
 
-Vectors surviving all certified reductions form the residual core. Exact bitset elimination maintains only changed boundary vectors, targeting `O(Delta r_c n/W)` incremental work and `O(r_c^3/W)` for a dense `r_c`-dimensional final core. The basis records pivots and source vectors so rank, dependence, and topology claims are replayable. No approximate vector is inserted into the authoritative basis.
+Every rank `r` claim includes two independently replayable sides:
+
+- a pivot/minor or elimination witness establishing rank at least `r`;
+- a kernel, factorization, or span witness establishing rank at most `r`.
+
+The proof is sealed to its coefficient field. `u64` XOR operations are authoritative only for `GF(2)`. Other configured fields use exact field-specific arithmetic. General residual elimination remains available when low-width elimination is not applicable; no modular guess or floating estimate authorizes rank.
 
 ## 14. Four-layer contracts
 
@@ -474,8 +520,8 @@ Layer 0 supplies deterministic structural evidence:
 - articulation-like separator candidates;
 - high-impact edges;
 - prior proof-capsule matches;
-- obstruction-pressure features.
-- Certified Range Cell and Proof Supernode candidates.
+- obstruction-pressure features;
+- Living Range Crystal, Fiber, Proof Supernode, decomposition, and orbit candidates.
 
 Layer 0 may choose work order and propose decomposition. It cannot remove a version without a replayable native-domain reason.
 
@@ -490,13 +536,13 @@ Layer 3 operates on the unresolved quotient, not the full certified graph. It ma
 
 A Layer 3 reduction becomes authoritative only after translation into native-domain evidence and verifier replay. Expensive algebraic analysis remains optional and budgeted. A skipped Layer 3 analysis never changes correctness.
 
-Chebyshev recurrence belongs to the same advisory boundary: it may order support, reductions, or membranes, but cannot certify exact nullity or authorize a resolver decision.
+Chebyshev recurrence belongs to the same advisory boundary: it may order decomposition or elimination candidates, but cannot certify exact nullity or authorize a resolver decision.
 
 ### 14.3 Layer 2: sheaf gluing
 
-Layer 2 identifies where locally valid choices may fail to glue globally. Its production output is a proposed minimal obstruction support over packages and boundary edges. The Certified Funnel turns an accepted support into exact membrane-local bases, exhaustive boundary signatures where required, and a residual-core proof.
+Layer 2 identifies where locally valid choices may fail to glue globally. Its production output is a proposed obstruction support, Hodge incidence decomposition, or resolver membrane. The Hodge Loom turns an accepted matrix decomposition into exact elimination proofs; the Transfer Algebra turns an accepted resolver membrane into exact continuation semantics.
 
-The advisory support alone does not claim SAT or UNSAT. Exact membrane stitching and residual rank may become authoritative only through the conservation ledger and independent replay. Full diagnostic cohomology remains available through explicit analysis mode.
+The advisory support alone does not claim SAT or UNSAT. Exact elimination, transfer composition, and exhaustive join coverage become authoritative only through their ledgers and independent replay. Full diagnostic cohomology remains available through explicit analysis mode.
 
 ### 14.4 Layer 1: native proof engine
 
@@ -508,7 +554,7 @@ Layer 1 becomes the sole production authority before independent verification. I
 - validated component decompositions;
 - exact objective ranks.
 
-It performs Range Cell selection, dominance replay, native propagation, portfolio selection, exact knot search, branch closure, component recombination, and global proof construction.
+It performs Fiber materialization, Crystal refinement, dominance replay, native propagation, Dual-Geometry planning, exact transfer composition, knot search, branch closure, horizon construction, and global proof construction.
 
 ## 15. Native exact knot search
 
@@ -520,43 +566,80 @@ Exact branching begins only after propagation reaches a fixed point and no immed
 
 The engine chooses a package using deterministic obstruction pressure. Pressure combines:
 
-- remaining domain energy;
+- remaining Crystal entropy;
 - boundary influence;
 - peer coupling;
 - tropical slack risk;
 - historical obstruction frequency;
 - expected information or branching cost.
 
-Pressure is an integer tuple with deterministic tie-breaking by stable package identifier. It affects speed only.
+Pressure is an integer tuple with deterministic tie-breaking by stable Fiber and package identifiers. It affects speed only.
 
-### 15.3 Adaptive Exact Portfolio
+### 15.3 JAGR Membrane Transfer Algebra
 
-After an `O(Q+E)` structural scan, the engine selects one exact strategy for each component:
+A component transfer map has the canonical form:
+
+```text
+boundary input
+  -> feasible boundary outputs
+  + emitted peer/placement/policy obligations
+  + nondominated canonical objective tuples
+  + proof roots
+```
+
+Composition is associative under a fixed evidence context and canonical objective algebra. An empty output is a Conflict Membrane. Equal verified maps define a Proof Supernode. A resonance memo caches a map. Braid engines compose maps. This single algebra prevents different subsystems from inventing subtly incompatible boundary semantics.
+
+### 15.4 Continuation-Complete Crystals
+
+For each compatibility model, JAGR retains a subset of partial transfer states such that every represented exterior continuation that was feasible or optimal before reduction remains feasible or equally optimal afterward. A removed state carries a compatibility-preservation proof, not merely local dominance.
+
+The retained size is `C`, with `C <= 2^eta_R`; no smaller bound is assumed universally. Reduction is enabled only when its exact representative proof costs less than retaining the original states under the Proof Dividend rule.
+
+### 15.5 Exact Braid dispatcher
+
+After a structural scan, the engine selects one exact strategy for each component:
 
 - proof-wave propagation for forced shells;
 - certified decomposition for separable components;
-- Membrane Braid Join for balanced, boundary-sparse knots;
+- Obligation Möbius Braid for certified subset-lattice boundaries;
+- Signature-Zipper Braid for general typed boundaries;
 - reversible journal search for tiny or strongly asymmetric knots;
-- Residual Core Basis for irreducible topological support.
+- general exact fallback when compression preconditions fail.
 
-Selection affects runtime only. All strategies consume the same authoritative domains and emit the same proof vocabulary. A component may move to another strategy if its structure changes, but already-certified work remains reusable through its membrane signature.
+Selection affects runtime only. All strategies consume the same authoritative domains and emit the same proof vocabulary. A component may move to another strategy if its structure changes, but already-certified work remains reusable through its membrane transfer signature.
 
-### 15.4 Version ordering
+### 15.6 Proof Dividend Scheduler and Adaptive Chebyshev Pulse
+
+Optional accelerators spend from a deterministic exploration allowance and continue only while measured certified reduction, reusable transfer compression, or eliminated exact work repays their cost. This is a performance rule, never a semantic cutoff: stopping an accelerator routes the unchanged authoritative state to another exact engine.
+
+Chebyshev runs in deterministic degree blocks and stops when additional blocks produce no measured routing dividend. Its work is `O(t_used M_H)` with `0 <= t_used <= t_max`; `t_used = 0` is valid and must produce the same certified result.
+
+### 15.7 Obligation Möbius Braid
+
+When the verifier confirms that boundary compatibility is exactly a subset-lattice partition or cover relation and the objective encoding supports exact transform arithmetic, JAGR composes all boundary subsets through an exact transform and inversion certificate. The target is `O(b^2 2^b)` arithmetic operations instead of direct `O(3^b)` subset splitting.
+
+The transform is not used for arbitrary peer, placement, or policy relations. Failed algebraic preconditions route to Signature-Zipper Braid without semantic loss.
+
+### 15.8 Signature-Zipper Braid
+
+General boundaries are sorted by canonical transfer signature. Each side aggregates assignments only when boundary behavior and Pareto objective frontier are exactly equivalent. The zipper streams every compatible signature pair.
+
+Its honest complexity is `O(C_L+C_R+J)` time and `O(B+P)` memory, where `J` includes compatible outputs; it does not claim universal `O(d^(K/2))` when join output itself is larger.
+
+### 15.9 Proof Orbit Folding
+
+Before joining, JAGR may quotient membrane states by a verified permutation preserving package labels or declared equivalence classes, Crystal behavior, typed edges, placement and peer contexts, policies, evidence hashes, and objective ranks. The proof contains permutation generators and an expansion map. Hash similarity alone never creates an orbit.
+
+### 15.10 Version ordering
 
 Candidate versions are tried in the exact deterministic preference order for the active objective. This finds a strong incumbent early but does not replace proof of optimality.
 
-### 15.5 Membrane Braid Join
-
-For a knot with decision dimension `K`, choose the smallest balanced certified membrane. Enumerate the left and right halves independently, producing canonical boundary proof signatures containing assignments, obligations, objective contributions, and contradiction roots. Join only compatible signatures and verify that the enumeration covers every half-assignment.
-
-A balanced split targets `O(d^(K/2))` time and memory rather than `O(d^K)`. This is meet-in-the-middle exhaustive proof coverage, not heuristic pruning. If the boundary is too wide or the split is unbalanced, the portfolio chooses journal search or a different separator rather than claiming the target bound.
-
-### 15.6 Branch lifecycle
+### 15.11 Branch lifecycle
 
 For each candidate:
 
 1. Record a journal checkpoint.
-2. Restrict the package domain to the candidate.
+2. Restrict the Fiber domain to the candidate.
 3. Record a branch-assumption reason.
 4. Run bidirectional proof waves.
 5. Hydrate required authoritative proof support if permitted by the current budget.
@@ -566,7 +649,7 @@ For each candidate:
 9. Record complete certified assignments as incumbents.
 10. Restore the journal checkpoint.
 
-### 15.7 Branch closure
+### 15.12 Branch closure
 
 A branch closes only through one of:
 
@@ -575,7 +658,7 @@ A branch closes only through one of:
 - violated authoritative peer edge;
 - certified decomposition component UNSAT;
 - exact objective lower bound no better than the incumbent;
-- verified memoized component proof under an identical membrane signature.
+- verified memoized component proof under an identical membrane signature;
 - verified Conflict Membrane proof under an identical authoritative boundary signature.
 
 No timeout, heuristic score, or advisory mathematical result closes a branch.
@@ -599,16 +682,18 @@ The comparison order is part of the public resolver semantics and must be docume
 
 For every open branch or component, the Bidirectional Bound Braid combines a verified optimistic root-forward mandatory-closure bound with unavoidable peer/backward obligations from the membrane and surviving targets. A complete assignment supplies a certified upper bound.
 
+A component does not emit one scalar local cost when placement, deduplication, package count, or lockfile preservation can couple it to another component. For each boundary signature it emits a Pareto Objective Weave containing every nondominated canonical objective tuple. Composition combines tuples exactly and removes one only through componentwise dominance plus canonical tie-break proof. Frontier size `P` is measured and may be exponential in the worst case.
+
 The engine may stop only when every unexplored branch has either:
 
 - a contradiction proof; or
 - a lower bound that cannot improve the incumbent.
 
-### 16.3 Optimality certificate
+### 16.3 Proof Horizon optimality certificate
 
-The final proof contains the incumbent objective tuple plus a forest of branch closures demonstrating that no better tuple remains reachable. The verifier recomputes comparisons using the canonical objective definition.
+The final proof contains the incumbent objective tuple plus a shared Proof Horizon Circuit. A horizon node covers a canonical domain region and references either a contradiction proof, a bound proving the entire region cannot improve the incumbent, or exact children whose regions partition it. Hash-consing shares identical authoritative subproofs, but hashes never replace replay. The verifier checks complete region coverage and recomputes comparisons using the canonical objective definition.
 
-## 17. Boundary resonance memo and Conflict Membrane Learning
+## 17. Transfer memo, Conflict Membrane Learning, and Delta Proof Slicing
 
 Solved obstruction components are memoized by a resonance signature containing:
 
@@ -621,7 +706,7 @@ Solved obstruction components are memoized by a resonance signature containing:
 The memo value contains:
 
 - certified component assignment or UNSAT proof;
-- local objective contribution;
+- exact Pareto objective frontier;
 - boundary assumptions;
 - proof root;
 - exact context generation.
@@ -631,6 +716,8 @@ Memo reuse requires signature equality and proof replay. Hash equality without r
 When a contradiction is discovered, the engine walks its immutable reason DAG and minimizes only by replay: a boundary fact is removed when the contradiction still verifies without it. The resulting Conflict Membrane contains a subset-minimal replay-proven authoritative boundary signature, its reason root, context root, and affected cell mask. It is not claimed globally minimum unless exhaustive minimization is explicitly performed and certified.
 
 Learning costs `O(reason DAG)` plus replay work. Indexed candidate lookup is expected `O(1)`, but reuse still requires signature equality and verifier replay. This provides JAGR-native structural learning without translating the problem into Boolean clauses.
+
+Every proof and transfer node also stores an exact compact dependency set of evidence identifiers. When hydration splits a Crystal or changes an authoritative manifest context, JAGR follows reverse dependency links and invalidates only the affected proof cone. Unrelated Fibers, transfer maps, rank seals, or horizon nodes remain reusable. Bloom filters or probabilistic indexes may nominate affected nodes but cannot authorize retaining a proof; exact dependency membership decides reuse.
 
 ## 18. Information-gain hydration
 
@@ -647,7 +734,7 @@ When authoritative metadata is missing, each candidate hydration receives a dete
 
 Hydration uses bounded parallel batches, but results are committed to the evidence ledger in stable request order. A request failure for an optional package may be tolerated according to package semantics; a missing required authoritative manifest blocks certification and triggers fallback or error.
 
-Crucially, hydration extends the same live domains, journal, reason arena, and component memo. It does not recreate the exact solver.
+Crucially, hydration extends the same Fibers, Crystal ancestry, domains, journal, reason arena, decomposition certificates, transfer maps, and proof dependency graph. It does not recreate the exact solver. Unknown metadata is treated as an unresolved membrane boundary and cannot authorize absence of constraints.
 
 ## 19. Independent certificate verifier
 
@@ -656,26 +743,29 @@ The verifier is intentionally simpler than the solver. It does not perform heuri
 It validates:
 
 1. Context and manifest hashes.
-2. Every Range Cell equivalence and deterministic representative selection.
-3. Every dominance elimination and its support/objective containment proof.
-4. Root requirement satisfaction.
-5. Selected-version membership in authoritative domains.
-6. Required dependency closure.
-7. Peer dependency compatibility.
-8. Optional dependency semantics.
-9. Overrides, resolutions, platform, engine, and prerelease behavior.
-10. Every domain-elimination reason used by the final proof.
-11. Every certified-shell forcing proof.
-12. Every Proof Supernode equivalence and expansion map.
-13. Every conservation-ledger transformation and Betti accounting entry.
-14. Every membrane-local basis and boundary-signature stitch.
-15. Every Residual Core Basis pivot and rank claim.
-16. Every component membrane and decomposition proof.
-17. Exhaustive Braid Join half-coverage and accepted joins.
-18. Every contradiction branch closure and learned Conflict Membrane reuse.
-19. Every memoized proof used in the result.
-20. The final objective tuple.
-21. The bidirectional lower-bound closure of all potentially better branches.
+2. Every Contextual Instance Fiber identity, merge, placement, and peer-context expansion.
+3. Every Living Range Crystal equivalence, split ancestry, and deterministic representative selection.
+4. Every dominance elimination and its support, obligation, placement, and objective containment proof.
+5. Root requirement satisfaction.
+6. Selected-version membership in authoritative domains.
+7. Required dependency closure.
+8. Peer dependency compatibility and placement.
+9. Optional dependency semantics.
+10. Overrides, resolutions, platform, engine, and prerelease behavior.
+11. Every domain-elimination reason used by the final proof.
+12. Every certified-shell forcing proof.
+13. Every Proof Supernode transfer-map equivalence and expansion map.
+14. Every Hodge decomposition bag, incidence, and running-intersection condition.
+15. Every conservation-ledger transformation and field-sealed row operation.
+16. Both sides of every rank seal and resulting Betti accounting.
+17. Every Semantic Entropy Membrane and crossing constraint.
+18. Every Transfer Algebra composition and Continuation-Complete reduction.
+19. Every Möbius precondition, transform/inversion certificate, or Zipper-compatible output.
+20. Every Proof Orbit permutation and expansion.
+21. Every contradiction closure and learned Conflict Membrane reuse.
+22. Every memoized proof and exact evidence dependency used in the result.
+23. Every Pareto Objective Weave reduction and final objective tuple.
+24. Complete Proof Horizon region coverage and bidirectional bound closure.
 
 The verifier returns only:
 
@@ -766,12 +856,14 @@ The future implementation should exploit Rust through:
 - stable ordered commit of parallel results;
 - atomics for telemetry, not semantic state;
 - zero string parsing or JSON traversal in the inner search loop;
-- explicit memory and branch counters for benchmark attribution.
-- interned canonical behavior signatures for Range Cells;
+- explicit memory and branch counters for benchmark attribution;
+- interned Fiber keys, Crystal ancestry, and canonical transfer signatures;
 - word-parallel subset tests for dominance proofs;
-- structure-of-arrays storage for sparse boundaries and membrane signatures;
+- structure-of-arrays storage for sparse matrix incidence, decomposition bags, and membrane signatures;
 - cache-aligned contiguous Chebyshev recurrence buffers reused across degrees;
-- compact pivot-indexed residual bases using `u64` words;
+- coefficient-sealed pivot storage using `u64` words only for `GF(2)`;
+- compact transfer rows, Pareto frontiers, orbit maps, and Horizon Circuit nodes;
+- exact evidence-dependency sets and reverse invalidation indexes;
 - separate solver and verifier types so advisory spectral state cannot satisfy an exact-proof interface.
 
 Unsafe code is excluded from the initial design. It may be considered only after profiler evidence, a written safety argument, Miri-compatible tests where applicable, and demonstrated material benefit.
@@ -790,6 +882,9 @@ The engine must define stable order for:
 - branch variables;
 - candidate versions;
 - proof children;
+- decomposition bags;
+- Crystal splits and Fiber materialization;
+- transfer rows, Pareto tuples, and orbit representatives;
 - component recombination;
 - lockfile serialization.
 
@@ -829,17 +924,26 @@ Unit tests cover:
 - objective tuple ordering;
 - lower-bound soundness;
 - capsule tamper rejection;
-- deterministic pressure ordering.
-- Range Cell split and merge certification;
+- deterministic pressure ordering;
+- Fiber materialization, merge, placement, and peer-context certification;
+- Living Range Crystal split ancestry and expansion;
 - dominance proof replay and false-dominance rejection;
-- Proof Supernode crossing-edge equivalence;
+- Proof Supernode transfer-map equivalence;
 - conservation-ledger replay for every permitted reduction;
 - Chebyshev routing invariance of final answers;
-- exact membrane basis stitching;
-- Residual Core Basis rank replay;
-- Braid Join coverage and compatibility;
+- Hodge decomposition certification and malformed-bag rejection;
+- Two-Sided Rank Seal replay over each supported coefficient field;
+- semantic entropy calculation;
+- Transfer Algebra identity, associativity, and composition under fixed context;
+- Continuation-Complete reduction and false-representative rejection;
+- Möbius transform precondition and inversion replay;
+- Signature-Zipper output accounting;
+- orbit preservation and false-symmetry rejection;
+- Pareto Objective Weave composition;
+- Proof Horizon coverage and overlap rejection;
 - Conflict Membrane context rejection;
-- deterministic portfolio selection.
+- Delta Proof Slicing precision;
+- deterministic exact-engine selection.
 
 ### 26.2 Exhaustive small universes
 
@@ -908,15 +1012,20 @@ Benchmarks separate stage costs:
 - proof construction;
 - certificate verification;
 - fallback time;
-- total lockfile and install time.
-- raw versions versus Certified Range Cells;
+- total lockfile and install time;
+- theoretical contexts versus materialized Fibers;
+- raw versions versus Living Range Crystals;
 - dominance candidates, certified removals, and replay cost;
 - Proof Supernode compression ratio;
-- sparse topology size `M`, membrane width `w`, and residual dimension `r_c`;
+- Hodge dimensions `N_H`, nonzeros `M_H`, decomposition time, and width `k_H`;
+- resolver semantic entropy `eta_R` separately from raw boundary size;
 - certified reduction and conservation-replay time;
-- Chebyshev degree `t`, sparse operator passes, and routing time;
-- local basis and boundary-state stitching time;
-- Braid Join half-state counts, join candidates, and peak memory;
+- Chebyshev `t_used`, skipped pulses, and measured dividend;
+- transfer construction, Continuation-Complete size `C`, and Pareto size `P`;
+- Möbius and Zipper dispatch counts, compatible output `J`, and peak memory;
+- Proof Orbit candidate, verified, and representative counts;
+- Proof Horizon raw branches versus shared nodes `H`;
+- exact proof-cone invalidation size;
 - Conflict Membrane learn, hit, and replay counts;
 - portfolio selection and per-engine attribution.
 
@@ -930,7 +1039,11 @@ Required workloads include:
 - optional dependency graph;
 - large workspace;
 - generated wide domains;
-- generated narrow but deeply cyclic obstruction knots.
+- generated narrow but deeply cyclic obstruction knots;
+- repeated workspace/peer structures with valid and invalid symmetries;
+- low-`k_H` and high-`k_H` matrices of equal `N_H`;
+- equal-width resolver membranes with sharply different `eta_R`;
+- worst-case compatible joins and growing Pareto frontiers.
 
 Cold and warm runs use explicit cache definitions. Bun and npm comparisons must use equivalent operations and lockfile scope. Results include medians, P95, failure counts, and environment information.
 
@@ -941,6 +1054,8 @@ Cold and warm runs use explicit cache definitions. Bun and npm comparisons must 
 - Domain compiler matches current authoritative semantics.
 - No unknown manifest is treated as dependency-free.
 - Stable identifiers and deterministic tables pass repeated tests.
+- Fiber placement and peer-context expansion match lockfile tree semantics.
+- Crystal hydration splits preserve unaffected proof state.
 
 ### Gate B: propagation correctness
 
@@ -953,9 +1068,9 @@ Cold and warm runs use explicit cache definitions. Bun and npm comparisons must 
 - Native knot search matches exhaustive optimum.
 - Objective lower bounds are independently validated.
 - Certified UNSAT proofs cover every branch.
-- Range Cell, dominance, Supernode, conservation, membrane-stitching, and residual-rank proofs all replay independently.
+- Fiber, Crystal, dominance, Supernode, Hodge decomposition, rank-seal, transfer, continuation, orbit, and Horizon proofs replay independently.
 - Disabling Chebyshev routing changes performance only, never the certified result.
-- Braid Join and journal search return the same canonical optimum on exhaustive small universes.
+- Möbius, Zipper, journal search, and exhaustive enumeration return the same canonical optimum on small universes.
 
 ### Gate D: real fixture shadowing
 
@@ -971,8 +1086,9 @@ Cold and warm runs use explicit cache definitions. Bun and npm comparisons must 
 - Express completes below the existing 120-second guard.
 - Proof verification is a small bounded fraction of total runtime.
 - Native fallback rate decreases rather than hiding regressions.
-- Range Cell and Supernode compression never increase promoted median beyond the gate.
-- Topology benchmarks report scaling against `M`, `w`, and `r_c`; no universal linear-time claim is inferred from bounded-width fixtures.
+- Fiber, Crystal, transfer, and orbit machinery never increase promoted median beyond the gate.
+- Hodge benchmarks report `T_decomp`, `N_H`, `M_H`, and `k_H`.
+- Resolver benchmarks report `eta_R`, `C`, `P`, `J`, and `H`; no universal linear-time claim is inferred from bounded-entropy fixtures.
 
 ### Gate F: controlled promotion
 
@@ -996,47 +1112,47 @@ Freeze current binaries, exact fixture outputs, objective semantics, and benchma
 
 ### Phase 1: compile native domains
 
-Introduce stable identifiers, version tables, domain bitsets, compiled typed edges, and Certified Range Cells. Prove cell splits across every authoritative behavior dimension and compare expanded semantics without resolving.
+Introduce stable identifiers, Contextual Instance Fibers, Living Range Crystals, compiled typed edges, and exact placement/peer expansion. Prove Crystal splits across every authoritative behavior dimension and compare expanded semantics without resolving.
 
 ### Phase 2: evidence and reasons
 
-Introduce the append-only evidence ledger, Cohomology Conservation Ledger schema, immutable reason arena, proof hashing, and independent primitive-reason replay.
+Introduce the append-only evidence ledger, Cohomology Conservation Ledger schema, immutable reason arena, exact evidence-dependency sets, reverse proof slicing, proof hashing, and independent primitive-reason replay.
 
 ### Phase 3: persistent propagation
 
-Implement bidirectional proof waves, Bidirectional Bound Braid, fixed-point queues, forced domains, contradictions, and reversible domain journals.
+Implement bidirectional proof waves, Bidirectional Bound Braid, fixed-point queues, forced Fibers, contradictions, and reversible domain journals.
 
 ### Phase 4: exact candidate contraction
 
-Implement the Dominance Antichain, word-parallel support-containment proofs, deterministic objective proofs, Proof Supernode nomination, crossing-edge verification, and expansion replay.
+Implement the Dominance Antichain with placement/peer obligations, word-parallel support containment, deterministic objective proofs, and preliminary Proof Supernode nomination.
 
 ### Phase 5: certified shell and quotient
 
-Implement shell eligibility, membrane boundaries, obstruction-quotient construction, component decomposition, and decomposition proof replay.
+Implement shell eligibility, obstruction quotient construction, Dual-Geometry measurement, Hodge incidence graphs, Semantic Entropy Membranes, and independent decomposition proof replay.
 
-### Phase 6: Certified Chebyshev-Hodge Funnel
+### Phase 6: Certified Hodge Elimination Loom
 
-Implement certified chain/coreductions, conservation replay, sparse Hodge operators, fixed-degree Chebyshev routing, certified membrane decomposition, exact local bases, boundary-signature stitching, and the Residual Core Basis. Prove that disabling spectral routing cannot alter output.
+Implement coefficient-sealed sparse elimination over certified decomposition bags, conservation replay, general exact fallback, Two-Sided Rank Seals, and Adaptive Chebyshev Pulse. Prove that disabling spectral routing cannot alter output.
 
-### Phase 7: adaptive exact knots
+### Phase 7: Membrane Transfer Algebra
 
-Implement the Adaptive Exact Portfolio, deterministic journal search, Membrane Braid Join, exhaustive half-coverage proofs, component recombination, contradiction closure, and exact objective proof forests.
+Implement canonical transfer maps, Pareto Objective Weaves, exact composition, Continuation-Complete Crystals, transfer-equivalent Proof Supernodes, and resonance memo integration.
 
-### Phase 8: structural proof reuse
+### Phase 8: exact Braid and proof compression
 
-Implement Conflict Membrane Learning, minimized replayable reason boundaries, resonance memo integration, and strict authoritative-context rejection.
+Implement the Proof Dividend Scheduler, Obligation Möbius Braid with precondition and inversion certificates, Signature-Zipper Braid with explicit `J`, deterministic journal fallback, Proof Orbit Folding, Conflict Membrane Learning, and Proof Horizon Circuits.
 
 ### Phase 9: live hydration
 
-Connect bounded parallel metadata hydration to the same persistent engine. Preserve identifiers, cells, proofs, domains, topology ledgers, and memo state across evidence generations. Split affected Range Cells and reopen only invalidated proof regions.
+Connect bounded parallel metadata hydration to the same persistent engine. Preserve Fibers, Crystal ancestry, proofs, decompositions, transfer maps, and Horizon nodes across evidence generations. Split affected Crystals and reopen only exact reverse dependency cones.
 
 ### Phase 10: four-layer proof contracts
 
-Translate validated Layer 0, Layer 3, and Layer 2 outputs into replayable native-domain reductions, Funnel supports, decomposition proposals, or ordering hints. Keep spectral and otherwise unverifiable outputs advisory.
+Translate validated Layer 0, Layer 3, and Layer 2 outputs into replayable Fiber reductions, Hodge decompositions, resolver membranes, transfer proposals, or ordering hints. Keep spectral and otherwise unverifiable outputs advisory.
 
 ### Phase 11: verifier and proof capsules
 
-Complete independent verification for Range Cells, dominance, Supernodes, topology conservation, membrane stitching, residual bases, Braid Join, objective closure, component proof reuse, Merkle capsules, tamper rejection, and stale-context invalidation.
+Complete independent verification for Fibers, Crystals, dominance, Hodge decompositions, rank seals, transfer composition, continuation reduction, Möbius/Zipper joins, orbit proofs, Pareto objectives, Horizon coverage, Merkle capsules, tamper rejection, and stale-context invalidation.
 
 ### Phase 12: shadow and fallback rollout
 
@@ -1045,6 +1161,17 @@ Run native and old paths together, classify mismatches, collect difficult cases,
 ### Phase 13: measured promotion
 
 Promote only through correctness and performance gates. Retain the old solver as an explicit fallback until long-term evidence supports further removal.
+
+### 29.1 Research basis and JAGR originality boundary
+
+The complexity boundaries are informed by primary research:
+
+- Fürer, Hoppen, and Trevisan, *Fast Gaussian Elimination for Low Treewidth Matrices* (ESA 2025), proves `O(k^2(m+n))` exact rank and elimination over an arbitrary field when a suitable tree decomposition is supplied: <https://doi.org/10.4230/LIPIcs.ESA.2025.116>.
+- Björklund, Husfeldt, Kaski, and Koivisto, *Fourier Meets Möbius: Fast Subset Convolution*, gives exact `O(b^2 2^b)` subset convolution rather than direct `O(3^b)` evaluation: <https://doi.org/10.1145/1250790.1250801>.
+- Groenland, Mannens, Nederlof, Piecyk, and Rzazewski, *Towards Tight Bounds for the Graph Homomorphism Problem Parameterized by Cutwidth via Asymptotic Matrix Parameters* (ICALP 2024), formalizes continuation-preserving representative sets and matching exponential compatibility limits: <https://doi.org/10.4230/LIPIcs.ICALP.2024.77>.
+- Samer and Szeider, *Constraint Satisfaction with Bounded Treewidth Revisited*, establishes that structural width, domain size, arity, and the chosen constraint graph jointly govern tractability: <https://doi.org/10.1016/j.jcss.2009.04.003>.
+
+JAGR does not claim those theorems as inventions. Its original contribution is the package-native Dual-Geometry composition: Fiber/Crystal semantics, field-sealed rank proofs, semantic entropy membranes, typed dispatch between exact join algebras, continuation certificates, orbit proofs, hydration-aware proof slicing, and one independent verifier spanning all four JAGR layers.
 
 ## 30. Alternatives rejected
 
@@ -1062,15 +1189,19 @@ Allowing tropical or sheaf analysis to finalize resolution would couple correctn
 
 ### Pure Chebyshev nullity estimation
 
-Increasing polynomial degree can improve spectral localization but cannot, by itself, distinguish an exact zero eigenvalue from an arbitrarily small positive eigenvalue for unrestricted inputs. Chebyshev recurrence is therefore retained as `O(tM)` proof routing while exact local bases and residual rank authorize topology claims.
+Increasing polynomial degree can improve spectral localization but cannot, by itself, distinguish an exact zero eigenvalue from an arbitrarily small positive eigenvalue for unrestricted inputs. Chebyshev is therefore optional `O(t_used M_H)` routing while the Hodge Loom and Two-Sided Rank Seal authorize topology claims.
 
-### Full incremental obstruction basis
+### Single-width Chebyshev-Hodge Funnel
 
-Updating a full-complex sparse basis is preferable to rebuilding dense matrices, but it still carries broad coordinate width and can approach cubic work as obstruction support grows. The approved Funnel first performs certified reductions and membrane localization, then maintains exact rank only on `r_c`.
+Using one `w` for matrix elimination and resolver-state enumeration conflates polynomial bounded-width linear algebra with genuinely exponential finite-domain compatibility. The approved design separates `k_H` from `eta_R` and applies different exact mathematics to each.
 
 ### Monolithic exact knot enumeration
 
-Journaled depth-first search is appropriate for tiny or asymmetric knots but pays `O(d^K)` on balanced hard components. The portfolio retains it where appropriate and uses exhaustive Membrane Braid Join when a certified balanced boundary exists.
+Journaled depth-first search is appropriate for tiny or asymmetric knots but pays `O(d^K)` on hard components. The portfolio retains it where appropriate and uses exact Möbius or Signature-Zipper composition when their certified structure is better.
+
+### Universal meet-in-the-middle bound
+
+Claiming `O(d^(K/2))` ignores compatible join output and Pareto-frontier growth. The approved Zipper complexity includes `J`, while Möbius acceleration is used only under exact subset-lattice preconditions.
 
 ### Immediate deletion of OL3P/CDCL
 
@@ -1102,13 +1233,13 @@ Mitigation: immutable compact reason nodes, structural sharing, arena allocation
 
 Mitigation: parallelize only certified-independent components and commit in canonical component order.
 
-### Risk: difficult knots remain exponential
+### Risk: difficult resolver knots remain exponential
 
-Mitigation: exact worst cases cannot be eliminated honestly. Reduce candidate width through Range Cells and dominance, reduce `K` through Supernodes and certified decomposition, use Braid Join for balanced knots, and retain exact fallback. Track `d`, `K`, separator balance, join memory, and fallback causes explicitly.
+Mitigation: exact worst cases cannot be eliminated honestly. Reduce semantic entropy through Crystals, dominance, continuation representatives, transfer-equivalent Supernodes, and orbit proofs. Track `eta_R`, `C`, `P`, `J`, and fallback causes explicitly.
 
-### Risk: behavioral cells merge versions that later diverge
+### Risk: Fibers or Crystals merge contexts that later diverge
 
-Mitigation: signatures cover every authoritative semantic dimension, equality is verified beyond hashes, new evidence splits cells, and the final proof expands to an exact version.
+Mitigation: Fiber keys cover placement and peer environment; Crystal signatures cover every authoritative semantic dimension; equality is verified beyond hashes; new evidence creates monotone splits; final proof expands exact locations and versions.
 
 ### Risk: an unsound dominance relation removes the optimum
 
@@ -1116,15 +1247,27 @@ Mitigation: require support containment, no added obligation, context-sensitive 
 
 ### Risk: spectral approximation leaks into exact authority
 
-Mitigation: type-separate advisory Chebyshev outputs from exact proof objects. The verifier accepts only conservation witnesses, exact bases, exhaustive stitches, and exact residual pivots. A test mode disables Chebyshev and requires identical results.
+Mitigation: type-separate advisory Chebyshev outputs from exact proof objects. The verifier accepts only decomposition, elimination, transfer, coverage, and Two-Sided Rank proofs. A test mode disables Chebyshev and requires identical results.
 
-### Risk: membrane width defeats favorable scaling
+### Risk: decomposition discovery erases Hodge gains
 
-Mitigation: expose `w`, use the conservative `2^w` complexity in planning, select another exact strategy when appropriate, and never truncate boundary states. Performance may fall back; correctness cannot.
+Mitigation: report `T_decomp` separately, reuse certified decompositions by exact context, stop optional discovery under Proof Dividend rules, and route to general exact elimination. Never quote `O(k_H^2 N_H)` without the decomposition assumption.
 
-### Risk: Braid Join uses excessive memory
+### Risk: transfer joins or objective frontiers explode
 
-Mitigation: canonical signature compaction, deterministic batching, externalized proof chunks when measured necessary, and portfolio fallback to journal search. A memory budget may change strategy but never discard states and claim completeness.
+Mitigation: account for `C`, `P`, and `J`; use continuation proofs, exact orbit folding, streaming Zipper composition, and journal fallback. A memory budget may change strategy but never discard states and claim completeness.
+
+### Risk: coefficient-field mismatch invalidates topology
+
+Mitigation: seal matrix and proof types to the coefficient field, use XOR bitsets only for `GF(2)`, and require exact field-specific replay for every other field.
+
+### Risk: continuation compression loses a future optimum
+
+Mitigation: a Crystal is removed only by a proof covering every continuation represented by the compatibility model and every nondominated objective tuple. Unsupported relation shapes retain all states.
+
+### Risk: symmetry folding changes package identity
+
+Mitigation: verify every permutation against labels or declared equivalence classes, Fibers, typed edges, policies, evidence, and objective ranks; preserve an exact expansion map.
 
 ## 32. Invariants
 
@@ -1133,8 +1276,8 @@ The implementation must preserve these invariants:
 1. Domains shrink monotonically within a branch and context generation.
 2. Evidence grows monotonically within a context.
 3. Every removed version has a replayable reason.
-4. Every forced package has a replayable forcing proof.
-5. Every shell package is constraint-certified.
+4. Every forced Fiber has a replayable forcing proof.
+5. Every shell Fiber is constraint-certified.
 6. Every component decomposition accounts for all crossing constraints.
 7. Every branch closure is contradiction- or bound-certified.
 8. Every memo reuse matches its membrane and context exactly.
@@ -1142,16 +1285,20 @@ The implementation must preserve these invariants:
 10. Thread scheduling cannot alter semantic output.
 11. Unknown metadata cannot authorize absence of constraints.
 12. Timeouts produce `Unfinished`, never SAT or UNSAT.
-13. Two versions share a Range Cell only under verified authoritative behavioral equivalence.
-14. A dominated cell is removed only by replayable support and objective containment.
-15. Every Proof Supernode has a verified expansion map and complete crossing-edge proof.
-16. Every topology-changing reduction has a conservation-ledger witness.
-17. Chebyshev output can order proof work but cannot create an authoritative proof node.
-18. Every membrane stitch accounts for every boundary state required by its proof model.
-19. Every Residual Core Basis claim is exact and pivot-replayable.
-20. Every Braid Join proves exhaustive half-coverage and join compatibility.
-21. Every Conflict Membrane reuse matches authoritative context and replays its reason DAG.
-22. Portfolio selection cannot change accepted semantics or canonical optimum.
+13. Fibers merge only under verified placement, workspace, peer, override, platform, and policy context equivalence.
+14. Versions share a Crystal only under verified authoritative behavioral equivalence and stable split ancestry.
+15. A dominated Crystal is removed only by replayable support, obligation, placement, and objective containment.
+16. Every Proof Supernode has an equal verified transfer map and exact expansion map.
+17. Hodge and resolver geometries never substitute one width parameter for the other.
+18. Every topology-changing reduction has a conservation-ledger witness.
+19. Every Hodge rank claim has both lower- and upper-bound witnesses sealed to its field.
+20. Chebyshev output can order proof work but cannot create an authoritative proof node.
+21. Every transfer reduction preserves every represented continuation and objective optimum.
+22. Every Möbius use proves its algebraic preconditions and inversion; every Zipper accounts for `J`.
+23. Every orbit has a verified preserving permutation and expansion.
+24. Every Conflict Membrane reuse matches authoritative context and replays its reason DAG.
+25. Every Proof Horizon node covers its complete declared domain region.
+26. Portfolio selection and budgets cannot change accepted semantics or canonical optimum.
 
 ## 33. Observability
 
@@ -1172,13 +1319,20 @@ Telemetry should report, without affecting semantics:
 - verifier time;
 - native result state;
 - fallback reason;
-- shadow comparison class.
-- raw-version-to-Range-Cell compression;
+- shadow comparison class;
+- theoretical versus materialized Fiber contexts;
+- raw-version-to-Crystal compression and split ancestry reuse;
 - dominance-antichain width and proof cost;
 - Proof Supernode compression;
-- topology support `M`, Chebyshev degree `t`, membrane width `w`, and residual dimension `r_c`;
+- Hodge `N_H`, `M_H`, `T_decomp`, and `k_H`;
+- resolver boundary size and semantic entropy `eta_R`;
+- Chebyshev `t_used` and proof dividend;
 - conservation-ledger entries and replay time;
-- Braid Join split balance, half states, joins, and peak memory;
+- transfer states before/after continuation reduction, `C`, `B`, `P`, and `J`;
+- Möbius/Zipper/journal dispatch and peak memory;
+- orbit candidates, verified orbits, and representatives `R_orbit`;
+- raw proof branches versus Horizon nodes `H`;
+- evidence changes and invalidated proof-cone size;
 - Conflict Membrane learn/hit/replay counts;
 - exact portfolio choice and transitions.
 
@@ -1200,11 +1354,12 @@ The design is successfully implemented only when:
 10. Invalid proof capsules are harmless misses.
 11. Fallback is visible, bounded, and never presented as native success.
 12. Benchmark claims include reproducible commands and raw results.
-13. Range Cell expansion reproduces the exact selected version and lockfile semantics.
-14. Dominance, Supernode, topology, Braid Join, and learned-conflict proofs independently replay.
+13. Fiber and Crystal expansion reproduces exact selected versions, placements, peer contexts, and lockfile semantics.
+14. Dominance, Supernode, Hodge decomposition, rank seal, transfer, continuation, join, orbit, Horizon, and learned-conflict proofs independently replay.
 15. Chebyshev-enabled and Chebyshev-disabled runs produce identical certified results.
-16. Favorable scaling claims are reported with measured `M`, `t`, `w`, and `r_c`; unrestricted worst cases are not mislabeled linear.
-17. No topology approximation, membrane-width limit, or residual-size limit changes an answer.
+16. Favorable Hodge scaling claims include `T_decomp`, `N_H`, `M_H`, and `k_H`.
+17. Resolver scaling claims include `eta_R`, `C`, `P`, `J`, and `H`; unrestricted worst cases are not mislabeled linear.
+18. No topology approximation, entropy limit, frontier limit, join limit, orbit heuristic, or accelerator budget changes an answer.
 
 ## 35. Final architectural decision
 
@@ -1213,34 +1368,40 @@ JAGR will not abandon its four-layer identity. It will change what the layers pr
 The approved target is:
 
 ```text
-native version domains and Certified Range Cells
+Contextual Instance Fibers and Living Range Crystals
   + append-only evidence
   + Dominance Antichain
   + bidirectional proof and bound waves
   + certified shell
-  + Proof Supernodes
-  + obstruction quotient and certified membranes
-  + Certified Membrane-Local Chebyshev-Hodge Proof Funnel
-  + Cohomology Conservation Ledger
-  + Adaptive Exact Portfolio
-  + Membrane Braid Join
-  + Residual Core Basis
+  + Dual-Geometry planner
+      + Hodge incidence decomposition
+      + Certified Hodge Elimination Loom
+      + Two-Sided Rank Seal
+      + Semantic Entropy Membranes
+      + JAGR Membrane Transfer Algebra
+      + Continuation-Complete Crystals
+      + Obligation Möbius / Signature-Zipper Braid
+      + Proof Orbit Folding
   + Conflict Membrane Learning
-  + objective proof forest
+  + Proof Horizon Circuit
   + independent verification
 ```
 
 Its central execution order is:
 
 ```text
-Range Cells
+Contextual Instance Fibers
+  -> Living Range Crystals
   -> Dominance Antichain
-  -> Proof Supernodes
-  -> Certified Hodge Funnel
-  -> Membrane Braid Join
-  -> Residual Core
+  -> Dual-Geometry Measurement
+      -> Hodge Elimination Loom
+      -> Semantic Entropy Transfer Algebra
+          -> Continuation-Complete Crystals
+          -> Exact Braid Dispatcher
+          -> Proof Orbit Folding
+  -> Proof Horizon Circuit
 ```
 
-The target topology complexity is `O(tM + M f(w) + r_c^3/W)`, favorable parameterized `O(M)` when `t`, `w`, and `r_c` stay bounded. Balanced hard knots target `O(d^(K/2))` through exhaustive Braid Join rather than `O(d^K)` monolithic enumeration. These are structural targets to be validated by instrumentation, not benchmark claims made in advance.
+The Hodge target is `T_decomp + O(k_H^2 N_H + t_used M_H)` when a certified low-width decomposition is available; `t_used` is optional routing and may be zero. The resolver target is `C_build+C_L+C_R+J+P_work+T_orbit+H`, with genuine exponential dependence exposed through semantic entropy `eta_R`, continuation set `C`, objective frontier `P`, and join output `J`. These are structural targets to be validated by instrumentation, not benchmark claims made in advance.
 
 Generic OL3P/CDCL moves out of the intended production hot path and remains temporarily as a shadow oracle, fallback, and difficult-case collector. Promotion occurs only after correctness and performance evidence satisfies the gates above.
