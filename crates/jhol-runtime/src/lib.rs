@@ -7,10 +7,13 @@ pub mod engine;
 pub mod errors;
 #[cfg(feature = "jsc-engine")]
 pub mod jsc_engine;
-pub mod transpile_cache;
+pub mod jit;
+pub mod module_cache;
 pub mod modules;
 pub mod resolver;
+pub mod timer;
 pub mod transpile;
+pub mod transpile_cache;
 pub mod tropical_graph;
 pub mod watch;
 
@@ -24,12 +27,25 @@ pub const JHOL_RUNTIME_VERSION: &str = "1.0.2";
 /// Node.js compatibility version advertised
 pub const NODE_COMPAT_VERSION: &str = "23.0.0";
 
-/// Run a JavaScript/TypeScript file
+/// Run a JavaScript/TypeScript file.
+///
+/// When the `jsc-engine` feature is enabled, this dispatches to the
+/// JavaScriptCore backend so the runtime benefits from JSC's JIT and the
+/// context-pooling / function-cache optimizations implemented there.
+/// Otherwise it falls back to the native QuickJS backend.
+#[allow(clippy::needless_return)]
 pub fn run_file(path: &Path) -> RuntimeResult<i32> {
-    let mut runtime = engine::Runtime::new()?;
-    runtime.execute_file(path)?;
-    runtime.run_event_loop()?;
-    Ok(runtime.exit_code())
+    #[cfg(feature = "jsc-engine")]
+    {
+        return jsc_engine::run_file(path);
+    }
+    #[cfg(not(feature = "jsc-engine"))]
+    {
+        let mut runtime = engine::Runtime::new()?;
+        runtime.execute_file(path)?;
+        runtime.run_event_loop()?;
+        Ok(runtime.exit_code())
+    }
 }
 
 /// Run a JavaScript/TypeScript file with watch mode
@@ -44,13 +60,23 @@ pub fn run_file_watch(path: &Path) -> RuntimeResult<i32> {
     Ok(0)
 }
 
-/// Evaluate inline JavaScript/TypeScript code
+/// Evaluate inline JavaScript/TypeScript code.
+///
+/// Dispatches to the JSC backend when the `jsc-engine` feature is enabled.
+#[allow(clippy::needless_return)]
 pub fn eval_code(code: &str, filename: Option<&str>) -> RuntimeResult<i32> {
-    let mut runtime = engine::Runtime::new()?;
-    let fname = filename.unwrap_or("<eval>");
-    runtime.execute_code(code, fname)?;
-    runtime.run_event_loop()?;
-    Ok(runtime.exit_code())
+    #[cfg(feature = "jsc-engine")]
+    {
+        return jsc_engine::eval_code(code, filename);
+    }
+    #[cfg(not(feature = "jsc-engine"))]
+    {
+        let mut runtime = engine::Runtime::new()?;
+        let fname = filename.unwrap_or("<eval>");
+        runtime.execute_code(code, fname)?;
+        runtime.run_event_loop()?;
+        Ok(runtime.exit_code())
+    }
 }
 
 /// Compile TypeScript/JSX to JavaScript (returns the transpiled source)

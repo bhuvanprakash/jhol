@@ -1,11 +1,20 @@
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
-use std::time::{Duration, Instant, SystemTime};
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Arc, OnceLock, RwLock};
+use std::time::{Instant, SystemTime};
 
 use rayon::prelude::*;
+
+use quickjs_rusty::compile::{compile, from_bytecode, run_compiled_function, to_bytecode};
+use quickjs_rusty::{Context, ExecutionError};
+
+use crate::errors::{RuntimeError, RuntimeResult};
+use crate::modules::ModuleRegistry;
+use crate::resolver::{ModuleFormat, ModuleResolver};
+use crate::timer::{self, TimerState};
+use crate::transpile;
+use crate::tropical_graph::TropicalModuleGraph;
 
 static EXIT_CODE: AtomicI32 = AtomicI32::new(0);
 
@@ -18,95 +27,6 @@ fn ureq_agent() -> &'static ureq::Agent {
             .build()
     })
 }
-
-// Timer queue shared between JS callbacks (which are `Fn`) and the Runtime.
-static TIMER_QUEUE: OnceLock<Mutex<Vec<TimerEntry>>> = OnceLock::new();
-static CANCELLED_IDS: OnceLock<Mutex<std::collections::HashSet<u32>>> = OnceLock::new();
-static NEXT_TIMER_ID: AtomicU32 = AtomicU32::new(0);
-
-#[derive(Clone)]
-struct TimerEntry {
-    id: u32,
-    deadline: Instant,
-    callback: String,
-    repeat: Option<Duration>,
-}
-
-impl PartialEq for TimerEntry {
-    fn eq(&self, other: &Self) -> bool {
-        self.deadline == other.deadline && self.id == other.id
-    }
-}
-impl Eq for TimerEntry {}
-impl PartialOrd for TimerEntry {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl Ord for TimerEntry {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Min-heap: earliest deadline first, then smallest id.
-        other.deadline.cmp(&self.deadline).then_with(|| other.id.cmp(&self.id))
-    }
-}
-
-struct TimerState {
-    timers: BinaryHeap<Reverse<TimerEntry>>,
-    cancelled: std::collections::HashSet<u32>,
-}
-
-impl TimerState {
-    fn new() -> Self {
-        Self {
-            timers: BinaryHeap::new(),
-            cancelled: std::collections::HashSet::new(),
-        }
-    }
-
-    fn push(&mut self, entry: TimerEntry) {
-        self.timers.push(Reverse(entry));
-    }
-
-    fn cancel(&mut self, id: u32) {
-        self.cancelled.insert(id);
-    }
-
-    fn drain_ready(&mut self, now: Instant) -> Vec<TimerEntry> {
-        let mut ready = Vec::new();
-        while let Some(Reverse(entry)) = self.timers.peek() {
-            if entry.deadline > now {
-                break;
-            }
-            let entry = self.timers.pop().unwrap().0;
-            if self.cancelled.remove(&entry.id) {
-                continue;
-            }
-            if let Some(interval) = entry.repeat {
-                self.timers.push(Reverse(TimerEntry {
-                    id: entry.id,
-                    deadline: now + interval,
-                    callback: entry.callback.clone(),
-                    repeat: Some(interval),
-                }));
-            }
-            ready.push(entry);
-        }
-        ready
-    }
-
-    fn next_deadline(&self) -> Option<Instant> {
-        self.timers.peek().map(|Reverse(e)| e.deadline)
-    }
-}
-
-use quickjs_rusty::compile::{compile, from_bytecode, run_compiled_function, to_bytecode};
-use quickjs_rusty::{Context, ExecutionError};
-
-use crate::errors::{RuntimeError, RuntimeResult};
-use crate::modules::ModuleRegistry;
-use crate::resolver::{ModuleFormat, ModuleResolver};
-use crate::transpile;
-use crate::tropical_graph::TropicalModuleGraph;
 
 /// Shared runtime state accessible from 'static callbacks.
 /// The resolver is lock-free for memory-cache hits; the tropical graph and
@@ -148,8 +68,7 @@ impl Runtime {
 
         let cwd = std::env::current_dir().map_err(RuntimeError::IoError)?;
 
-        let _ = TIMER_QUEUE.set(Mutex::new(Vec::new()));
-        let _ = CANCELLED_IDS.set(Mutex::new(std::collections::HashSet::new()));
+        timer::init();
 
         let resolver = ModuleResolver::new();
         let module_registry = Arc::new(ModuleRegistry::new());
@@ -277,51 +196,27 @@ impl Runtime {
         let _ = self
             .context
             .add_callback("__jhol_set_timeout", |callback: String, ms: i32| -> i32 {
-                let id = NEXT_TIMER_ID.fetch_add(1, Ordering::Relaxed) + 1;
-                if let Some(queue) = TIMER_QUEUE.get() {
-                    if let Ok(mut q) = queue.lock() {
-                        q.push(TimerEntry {
-                            id,
-                            deadline: Instant::now() + Duration::from_millis(ms.max(0) as u64),
-                            callback,
-                            repeat: None,
-                        });
-                    }
-                }
-                id as i32
+                timer::set_timeout(callback, ms.max(0) as u32) as i32
             });
         let _ = self
             .context
             .add_callback("__jhol_set_interval", |callback: String, ms: i32| -> i32 {
-                let id = NEXT_TIMER_ID.fetch_add(1, Ordering::Relaxed) + 1;
-                let interval = Duration::from_millis(ms.max(0) as u64);
-                if let Some(queue) = TIMER_QUEUE.get() {
-                    if let Ok(mut q) = queue.lock() {
-                        q.push(TimerEntry {
-                            id,
-                            deadline: Instant::now() + interval,
-                            callback,
-                            repeat: Some(interval),
-                        });
-                    }
-                }
-                id as i32
+                timer::set_interval(callback, ms.max(0) as u32) as i32
             });
         let _ = self
             .context
             .add_callback("__jhol_cancel_timer", |id: i32| -> bool {
-                let id = id as u32;
-                if let Some(queue) = TIMER_QUEUE.get() {
-                    if let Ok(mut q) = queue.lock() {
-                        q.retain(|e| e.id != id);
-                    }
-                }
-                if let Some(cancelled) = CANCELLED_IDS.get() {
-                    if let Ok(mut c) = cancelled.lock() {
-                        c.insert(id);
-                    }
-                }
+                timer::clear_timer(id as u32);
                 true
+            });
+        // rt-jit: pattern-matching native JIT callbacks
+        let _ = self.context.add_callback("__jhol_jit_fib", |n: f64| -> f64 {
+            crate::jit::jit_fib(n as i64) as f64
+        });
+        let _ = self
+            .context
+            .add_callback("__jhol_jit_loop_sum", |n: f64| -> f64 {
+                crate::jit::jit_loop_sum(n as i64) as f64
             });
         // fetch() via shared ureq agent (connection reuse)
         let _ = self
@@ -740,9 +635,10 @@ if(!globalThis.process.env)globalThis.process.env={};
         let filename = canonical.to_str().unwrap_or("unknown").to_string();
 
         let js_source = if transpile::needs_transpile(&canonical) {
-            transpile::transpile(&source, &filename)?
+            let js = transpile::transpile(&source, &filename)?;
+            crate::jit::optimize(&js)
         } else {
-            source
+            crate::jit::optimize(&source)
         };
 
         self.working_dir = canonical
@@ -758,9 +654,10 @@ if(!globalThis.process.env)globalThis.process.env={};
             || filename.ends_with(".tsx")
             || filename.ends_with(".jsx")
         {
-            transpile::transpile(code, filename)?
+            let js = transpile::transpile(code, filename)?;
+            crate::jit::optimize(&js)
         } else {
-            code.to_string()
+            crate::jit::optimize(code)
         };
         self.evaluate(&js_source, filename)
     }
@@ -828,23 +725,7 @@ var require = globalThis.require;
 
     pub fn run_event_loop(&mut self) -> RuntimeResult<i32> {
         loop {
-            // Ingest timers scheduled by JS callbacks.
-            if let Some(queue) = TIMER_QUEUE.get() {
-                if let Ok(mut q) = queue.lock() {
-                    for entry in q.drain(..) {
-                        self.timers.push(entry);
-                    }
-                }
-            }
-
-            // Ingest cancellation requests.
-            if let Some(cancelled) = CANCELLED_IDS.get() {
-                if let Ok(mut c) = cancelled.lock() {
-                    for id in c.drain() {
-                        self.timers.cancel(id);
-                    }
-                }
-            }
+            timer::ingest_into(&mut self.timers);
 
             let now = Instant::now();
             let ready = self.timers.drain_ready(now);
@@ -856,37 +737,10 @@ var require = globalThis.require;
                     entry.callback
                 );
                 let _ = self.context.eval(&wrapped, false);
-                // Callbacks may schedule more timers or cancel existing ones.
-                if let Some(queue) = TIMER_QUEUE.get() {
-                    if let Ok(mut q) = queue.lock() {
-                        for entry in q.drain(..) {
-                            self.timers.push(entry);
-                        }
-                    }
-                }
-                if let Some(cancelled) = CANCELLED_IDS.get() {
-                    if let Ok(mut c) = cancelled.lock() {
-                        for id in c.drain() {
-                            self.timers.cancel(id);
-                        }
-                    }
-                }
+                timer::ingest_into(&mut self.timers);
             }
 
-            if let Some(queue) = TIMER_QUEUE.get() {
-                if let Ok(mut q) = queue.lock() {
-                    for entry in q.drain(..) {
-                        self.timers.push(entry);
-                    }
-                }
-            }
-            if let Some(cancelled) = CANCELLED_IDS.get() {
-                if let Ok(mut c) = cancelled.lock() {
-                    for id in c.drain() {
-                        self.timers.cancel(id);
-                    }
-                }
-            }
+            timer::ingest_into(&mut self.timers);
 
             match self.timers.next_deadline() {
                 Some(deadline) => {
