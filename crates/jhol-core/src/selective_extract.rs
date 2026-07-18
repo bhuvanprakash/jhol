@@ -228,10 +228,12 @@ mod tests {
     #[test]
     fn test_should_skip() {
         assert!(should_skip("test/index.js"));
-        assert!(should_skip("README.md"));
-        assert!(should_skip("docs/api.md"));
+        assert!(should_skip("coverage/index.js"));
+        assert!(should_skip("docs/api.js"));
         assert!(!should_skip("dist/index.js"));
         assert!(!should_skip("package.json"));
+        assert!(!should_skip("README.md"));
+        assert!(!should_skip("index.d.ts"));
     }
 
     #[test]

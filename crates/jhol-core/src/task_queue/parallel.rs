@@ -146,13 +146,14 @@ mod tests {
 
     #[test]
     fn test_parallel_for_each() {
-        use std::sync::Mutex;
+        use std::sync::{Arc, Mutex};
         
         let items: Vec<i32> = (0..100).collect();
-        let sum = Mutex::new(0);
+        let sum = Arc::new(Mutex::new(0));
         
-        parallel_for_each(items, |x| {
-            let mut s = sum.lock().unwrap();
+        let sum_clone = Arc::clone(&sum);
+        parallel_for_each(items, move |x| {
+            let mut s = sum_clone.lock().unwrap();
             *s += x;
         });
         

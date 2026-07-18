@@ -13,6 +13,22 @@ use semver::{Version, VersionReq};
 use sha2::{Digest, Sha256};
 use serde_json::Value;
 
+/// Extract package name without version specifier.
+/// Scoped `@scope/pkg@1.0.0` remains `@scope/pkg`.
+pub fn base_name(package_spec: &str) -> String {
+    if package_spec.starts_with('@') {
+        package_spec[1..]
+            .find('@')
+            .map(|index| package_spec[..index + 1].to_owned())
+            .unwrap_or_else(|| package_spec.to_owned())
+    } else {
+        package_spec
+            .find('@')
+            .map(|index| package_spec[..index].to_owned())
+            .unwrap_or_else(|| package_spec.to_owned())
+    }
+}
+
 lazy_static::lazy_static! {
     /// Global package index for O(1) resolution
     static ref PACKAGE_INDEX: Arc<Mutex<crate::package_index::PackageIndex>> = {

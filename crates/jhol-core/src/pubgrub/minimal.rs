@@ -346,10 +346,8 @@ mod tests {
         selector.add_constraint("pkg", VersionReq::parse(">=1.2.0").unwrap());
         selector.add_constraint("pkg", VersionReq::parse("~1.1.0").unwrap());
         
-        let result = selector.resolve().unwrap();
-        
-        // Should pick 1.2.0 (maximum of minimums)
-        assert_eq!(result.get("pkg").unwrap(), &Version::new(1, 2, 0));
+        // `~1.1.0` is below 1.2.0, so this set is unsatisfiable.
+        assert!(selector.resolve().is_err());
     }
 
     #[test]

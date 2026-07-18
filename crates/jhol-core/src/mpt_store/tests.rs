@@ -174,7 +174,7 @@ fn test_mpt_multiple_packages() {
         ("axios", "1.6.0"),
     ];
     
-    for (name, version) in packages {
+    for (name, version) in &packages {
         let package = PackageRef::new(name, Some(version));
         let content_hash = ContentHash::new(format!("{}@{} content", name, version).as_bytes());
         
@@ -191,7 +191,7 @@ fn test_mpt_multiple_packages() {
     }
     
     // Verify all lookups work
-    for (name, version) in packages {
+    for (name, version) in &packages {
         let package = PackageRef::new(name, Some(version));
         let found = store.lookup(&package).unwrap();
         assert!(found.is_some(), "Failed to find {}@{}", name, version);

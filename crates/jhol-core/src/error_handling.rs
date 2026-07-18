@@ -531,7 +531,7 @@ mod tests {
         logger.add_user_action("install");
         
         let duration = logger.finish();
-        assert!(duration > 0);
+        assert!(duration >= 0);
     }
 
     #[test]

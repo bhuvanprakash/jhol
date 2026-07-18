@@ -138,10 +138,9 @@ mod tests {
 
     #[test]
     fn test_binary_package_format() {
-        // Test binary package parsing
+        // Malformed data must not panic.
         let data = b"JHOL\x01\x00\x06\x00\x07\x00hashhashhashhashhashhashhash\x00\x00\x00\x00\x0a\x00\x00\x00testpkg1.0.0compressed";
         let result = extract_binary_package(data);
-        // Should parse without error (even if decompression fails)
-        assert!(result.is_err() || result.unwrap().is_some());
+        assert!(result.is_ok());
     }
 }

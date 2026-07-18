@@ -1003,7 +1003,7 @@ fn conflict_message(state: &State, pkg: &str) -> String {
     format!("UNSAT for {}: {}", pkg, details)
 }
 
-fn cmp_semver_desc(a: &str, b: &str) -> std::cmp::Ordering {
+pub fn cmp_semver_desc(a: &str, b: &str) -> std::cmp::Ordering {
     let va = Version::parse(a);
     let vb = Version::parse(b);
     match (va, vb) {

@@ -12,12 +12,6 @@ mod tests {
         
         // Create a simple package domain
         let mut lodash_domain = PackageDomain::default();
-        let mut versions = HashMap::new();
-        versions.insert("dependencies".to_string(), HashMap::new());
-        versions.insert("optional_dependencies".to_string(), HashMap::new());
-        versions.insert("peer_dependencies".to_string(), HashMap::new());
-        versions.insert("optional_peers".to_string(), std::collections::HashSet::new());
-        
         let v4_17_21 = PackageVersion {
             version: "4.17.21".to_string(),
             dependencies: HashMap::new(),
@@ -109,9 +103,9 @@ mod tests {
     fn test_version_ordering() {
         use crate::sat_resolver::cmp_semver_desc;
         
-        assert!(cmp_semver_desc("2.0.0", "1.0.0").is_gt());
-        assert!(cmp_semver_desc("1.5.0", "1.0.0").is_gt());
+        assert!(cmp_semver_desc("1.0.0", "2.0.0").is_gt());
+        assert!(cmp_semver_desc("1.0.0", "1.5.0").is_gt());
         assert!(cmp_semver_desc("1.0.0", "1.0.0").is_eq());
-        assert!(cmp_semver_desc("1.0.0", "2.0.0").is_lt());
+        assert!(cmp_semver_desc("2.0.0", "1.0.0").is_lt());
     }
 }

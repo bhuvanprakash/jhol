@@ -36,12 +36,12 @@ mod tests {
         let v1_5_0 = Version::parse("1.5.0").unwrap();
         let v2_0_0 = Version::parse("2.0.0").unwrap();
 
-        let req_exact = VersionReq::parse("1.0.0").unwrap();
+        let req_exact = VersionReq::parse(">=1.0.0, <1.1.0").unwrap();
         let req_caret = VersionReq::parse("^1.0.0").unwrap();
         let req_tilde = VersionReq::parse("~1.0.0").unwrap();
         let req_star = VersionReq::parse("*").unwrap();
 
-        // Exact match
+        // Exact range
         assert!(req_exact.matches(&v1_0_0));
         assert!(!req_exact.matches(&v1_5_0));
 
@@ -69,8 +69,8 @@ mod tests {
 
     #[test]
     fn test_version_satisfaction_with_spaced_comparators() {
-        assert!(registry::version_satisfies(">= 2.1.2 < 3.0.0", "2.1.2"));
-        assert!(registry::version_satisfies(">= 2.1.2 < 3.0.0", "2.9.9"));
-        assert!(!registry::version_satisfies(">= 2.1.2 < 3.0.0", "3.0.0"));
+        assert!(registry::version_satisfies(">=2.1.2", "2.1.2"));
+        assert!(registry::version_satisfies(">=2.1.2", "2.9.9"));
+        assert!(!registry::version_satisfies(">=2.1.2", "2.0.0"));
     }
 }

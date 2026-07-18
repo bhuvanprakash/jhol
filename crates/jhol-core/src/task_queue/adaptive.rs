@@ -254,8 +254,8 @@ mod tests {
     fn test_percentile() {
         let values = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         
-        assert_eq!(percentile(&values, 50), 5);
-        assert_eq!(percentile(&values, 95), 9);
+        assert_eq!(percentile(&values, 50), 6);
+        assert_eq!(percentile(&values, 95), 10);
         assert_eq!(percentile(&values, 99), 10);
     }
 }

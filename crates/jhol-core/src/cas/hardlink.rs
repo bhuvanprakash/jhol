@@ -275,7 +275,7 @@ mod tests {
         let _ = link_package(&source, &dest2).unwrap();
         
         // Calculate space saved
-        let paths = vec![&source, &dest1, &dest2];
+        let paths: Vec<&Path> = vec![source.as_path(), dest1.as_path(), dest2.as_path()];
         let saved = calculate_space_saved(&paths);
         
         // Should have saved 2x the file size (3 copies -> 1 actual)
