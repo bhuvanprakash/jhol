@@ -27,6 +27,7 @@ http-reqwest = ["jhol-core/http-reqwest"]
 [dependencies]
 jhol-core = { version = "1.0.2", path = "crates/jhol-core" }
 clap = { version = "4.5", features = ["cargo"] }
+clap_complete = "4"
 colored = "2.1"
 indicatif = "0.17"
 serde_json = "1.0"

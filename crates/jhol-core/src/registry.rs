@@ -25,7 +25,7 @@ fn registry_url() -> String {
     crate::config::effective_registry_url(Path::new("."))
 }
 
-fn registry_auth_token() -> Option<String> {
+pub fn registry_auth_token() -> Option<String> {
     crate::config::registry_auth_token(Path::new("."))
 }
 
