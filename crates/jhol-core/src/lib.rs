@@ -20,9 +20,6 @@ pub mod exec;
 pub mod global_cache;
 pub mod global_cache_2;
 pub mod file_lock;
-pub mod fourier_jagr;  // JHOL Fourier-JAGR (FourierCSP 2025)
-pub mod global_cache;  // JHOL Global Shared Cache (memory-mapped)
-pub mod global_cache_2;  // JHOL Global Cache 2.0 (INNOVATIONS BEYOND BUN)
 pub mod http_client;
 pub mod install;
 pub mod lockfile;

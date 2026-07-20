@@ -38,8 +38,6 @@ pub fn invalidate_env_cache() {
         guard.clear();
     }
 }
-use chrono::Local;
-use sha2::{Sha256, Digest};
 
 pub const LOG_FILE: &str = "logs.txt";
 pub const NPM_SHOW_TIMEOUT_SECS: u64 = 15;
@@ -435,7 +433,15 @@ pub fn lockfile_content_hash(dir: &Path) -> Option<String> {
 
 /// Sanitize package name to prevent path traversal attacks
 pub fn validate_package_name(package: &str) -> Option<String> {
+    sanitize_package_name_impl(package)
+}
+
+/// Public alias for backward compat.
 pub fn sanitize_package_name(package: &str) -> Option<String> {
+    sanitize_package_name_impl(package)
+}
+
+fn sanitize_package_name_impl(package: &str) -> Option<String> {
     // Remove any path separators and dangerous characters
     let sanitized: String = package
         .chars()
@@ -900,45 +906,45 @@ mod tests {
 
     #[test]
     fn test_sanitize_package_name_rejects_path_traversal() {
-        assert!(sanitize_package_name("../etc/passwd").is_none());
-        assert!(sanitize_package_name("..\\etc\\passwd").is_none());
-        assert!(sanitize_package_name("foo/../bar").is_none());
-        assert!(sanitize_package_name("foo/bar/..").is_none());
+        assert!(validate_package_name("../etc/passwd").is_none());
+        assert!(validate_package_name("..\\etc\\passwd").is_none());
+        assert!(validate_package_name("foo/../bar").is_none());
+        assert!(validate_package_name("foo/bar/..").is_none());
     }
 
     #[test]
     fn test_sanitize_package_name_rejects_absolute_paths() {
-        assert!(sanitize_package_name("/etc/passwd").is_none());
-        assert!(sanitize_package_name("\\etc\\passwd").is_none());
+        assert!(validate_package_name("/etc/passwd").is_none());
+        assert!(validate_package_name("\\etc\\passwd").is_none());
     }
 
     #[test]
     fn test_sanitize_package_name_accepts_valid_names() {
-        assert_eq!(sanitize_package_name("lodash"), Some("lodash".to_string()));
+        assert_eq!(validate_package_name("lodash"), Some("lodash".to_string()));
         assert_eq!(
-            sanitize_package_name("@scope/package"),
+            validate_package_name("@scope/package"),
             Some("@scope/package".to_string())
         );
         assert_eq!(
-            sanitize_package_name("lodash@4.17.21"),
+            validate_package_name("lodash@4.17.21"),
             Some("lodash@4.17.21".to_string())
         );
         assert_eq!(
-            sanitize_package_name("my-package"),
+            validate_package_name("my-package"),
             Some("my-package".to_string())
         );
         assert_eq!(
-            sanitize_package_name("my.package"),
+            validate_package_name("my.package"),
             Some("my.package".to_string())
         );
         assert_eq!(
-            sanitize_package_name("my_package"),
+            validate_package_name("my_package"),
             Some("my_package".to_string())
         );
     }
 
     #[test]
     fn test_sanitize_package_name_rejects_double_slashes() {
-        assert!(sanitize_package_name("foo//bar").is_none());
+        assert!(validate_package_name("foo//bar").is_none());
     }
 }
