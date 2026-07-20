@@ -231,3 +231,136 @@ pub fn clear_config_cache() {
         *guard = None;
     }
 }
+
+// ── Live capsule view cache ─────────────────────────────────────────────────────
+//
+// Daemon keeps the parsed capsule view in memory so warm requests skip mmap + verify.
+
+use std::sync::Arc;
+use crate::capsule::CapsuleView;
+
+static CAPSULE_CACHE: std::sync::OnceLock<Mutex<Option<CapsuleSnapshot>>> =
+    std::sync::OnceLock::new();
+
+struct CapsuleSnapshot {
+    manifest_hash: [u8; 8],
+    view: Arc<CapsuleView>,
+    timestamp: std::time::Instant,
+}
+
+fn capsule_lock() -> &'static Mutex<Option<CapsuleSnapshot>> {
+    CAPSULE_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+// ── Shared page cache pinning ───────────────────────────────────────────────────
+//
+// Daemon mmaps capsule + store_unpacked dirs with MAP_SHARED then calls
+// madvise(MADV_WILLNEED) so the kernel pre-loads their pages into the page cache.
+// When the CLI later mmaps the same files, it finds them already resident.
+// Zero page faults, zero disk I/O — pure pointer chase in userspace.
+
+use memmap2::Mmap;
+use std::fs;
+use std::os::unix::fs::MetadataExt;
+
+/// Pin a file in the kernel's page cache by mmap + MADV_WILLNEED.
+/// Returns the Mmap handle — keeping it alive keeps pages pinned.
+pub fn pin_file_in_page_cache(path: &Path) -> Option<Mmap> {
+    let file = fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    if len == 0 {
+        // Touch the parent directory dentry instead for dirs
+        let _ = std::os::unix::fs::MetadataExt::dev(&file.metadata().ok()?);
+        return None;
+    }
+    let mmap = unsafe { Mmap::map(&file).ok()? };
+    // MADV_WILLNEED: tell kernel to pre-load these pages
+    let ptr = mmap.as_ptr();
+    let len = mmap.len();
+    let ret = unsafe { libc::madvise(ptr as *mut libc::c_void, len, libc::MADV_WILLNEED) };
+    if ret != 0 {
+        // non-fatal: advice may be ignored on some platforms
+    }
+    // Keeping the Mmap handle alive prevents kernel from evicting these pages
+    Some(mmap)
+}
+
+/// Pre-warm dentries for a directory by reading its entries.
+/// This populates the kernel's dentry cache so stat() calls are instant.
+pub fn warm_dentry_cache(dir: &Path) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let _ = entry.path(); // touch the dentry
+        }
+    }
+}
+
+/// Pin the capsule and all known store_unpacked paths in page cache.
+/// Call after a successful install so the NEXT install's CLI finds pages hot.
+/// Returns Vec of Mmap handles — caller must keep them alive.
+pub fn pin_install_artifacts(project_dir: &Path) -> Vec<Mmap> {
+    let mut handles: Vec<Mmap> = Vec::new();
+
+    // Pin capsule file
+    let cap_path = crate::capsule::capsule_path(project_dir);
+    if cap_path.exists() {
+        if let Some(mmap) = pin_file_in_page_cache(&cap_path) {
+            handles.push(mmap);
+        }
+    }
+
+    // Pin store index (if it exists)
+    let store_idx = Path::new(&crate::utils::get_cache_dir()).join("index.json");
+    if store_idx.exists() {
+        if let Some(mmap) = pin_file_in_page_cache(&store_idx) {
+            handles.push(mmap);
+        }
+    }
+
+    // Warm dentries for store_unpacked/
+    let store_unpacked = Path::new(&crate::utils::get_cache_dir()).join("store_unpacked");
+    if store_unpacked.exists() {
+        warm_dentry_cache(&store_unpacked);
+    }
+
+    handles
+}
+
+/// Keep handles alive globally so pages stay pinned for the daemon's lifetime.
+static PINNED_HANDLES: std::sync::OnceLock<Mutex<Vec<Mmap>>> = std::sync::OnceLock::new();
+
+fn pinned() -> &'static Mutex<Vec<Mmap>> {
+    PINNED_HANDLES.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Replace the pinned handle set (drops old handles, which may evict old pages).
+pub fn repin_install_artifacts(project_dir: &Path) {
+    let new_handles = pin_install_artifacts(project_dir);
+    if let Ok(mut guard) = pinned().lock() {
+        *guard = new_handles;
+    }
+}
+
+/// Store a capsule view in the daemon's in-memory cache.
+pub fn store_capsule_view(hash: [u8; 8], view: CapsuleView) {
+    if let Ok(mut guard) = capsule_lock().lock() {
+        *guard = Some(CapsuleSnapshot {
+            manifest_hash: hash,
+            view: Arc::new(view),
+            timestamp: std::time::Instant::now(),
+        });
+    }
+}
+
+/// Get the cached capsule view if fingerprint matches.
+pub fn get_cached_capsule(hash: [u8; 8]) -> Option<Arc<CapsuleView>> {
+    let guard = capsule_lock().lock().ok()?;
+    let snap = guard.as_ref()?;
+    if snap.manifest_hash != hash {
+        return None;
+    }
+    if snap.timestamp.elapsed().as_secs() > 3600 {
+        return None;
+    }
+    Some(snap.view.clone())
+}

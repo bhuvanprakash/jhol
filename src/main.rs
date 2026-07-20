@@ -546,6 +546,33 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
     let prev_cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let result = (|| -> Result<(), String> {
         std::env::set_current_dir(&cwd).map_err(|e| format!("chdir {}: {}", cwd, e))?;
+
+        // Daemon fast-path: if resolved graph cached and fingerprint matches,
+        // skip resolution entirely — use live capsule view from memory.
+        let cap_path = jhol_core::capsule::capsule_path(Path::new("."));
+        if let Ok(hash) = jhol_core::capsule::compute_manifest_hash(Path::new(".")) {
+            // Check live in-memory capsule first (avoids mmap + verify)
+            if let Some(view) = jhol_core::daemon_cache::get_cached_capsule(hash) {
+                return jhol_core::capsule::install_from_capsule(&view, Path::new("."))
+                    .map_err(|e| e.to_string());
+            }
+            // Fallback: check disk capsule
+            if let Some(_cached) = jhol_core::daemon_cache::get_resolved_graph(hash) {
+                if cap_path.exists() {
+                    if let Ok(view) = jhol_core::capsule::read_capsule(&cap_path) {
+                        if view.manifest_hash() == hash {
+                            let result = jhol_core::capsule::install_from_capsule(&view, Path::new("."))
+                                .map_err(|e| e.to_string());
+                            if result.is_ok() {
+                                jhol_core::daemon_cache::store_capsule_view(hash, view);
+                            }
+                            return result;
+                        }
+                    }
+                }
+            }
+        }
+
         let refs: Vec<&str> = packages.iter().map(|s| s.as_str()).collect();
         let opts = jhol_core::InstallOptions {
             no_cache, quiet,
@@ -570,6 +597,10 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
             if cap_path.exists() {
                 if let Ok(view) = jhol_core::capsule::read_capsule(&cap_path) {
                     let hash = view.manifest_hash();
+                    // Store live capsule view for next request (avoids mmap)
+                    jhol_core::daemon_cache::store_capsule_view(hash, view);
+                    // Pin capsule + store pages in kernel page cache for next CLI
+                    jhol_core::daemon_cache::repin_install_artifacts(Path::new("."));
                     if let Some(tree) = jhol_core::lockfile::read_resolved_from_dir(Path::new(".")) {
                         let mut resolved = std::collections::HashMap::new();
                         for (spec, _version) in &tree {

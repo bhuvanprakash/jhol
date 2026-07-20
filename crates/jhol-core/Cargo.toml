@@ -57,8 +57,9 @@ zstd = "0.13"
 parking_lot = "0.12"
 xxhash-rust = { version = "0.8", features = ["xxh3", "xxh64"] }
 
+libc = "0.2"
+
 # Error handling
-thiserror = "1.0"
 hex = "0.4"
 
 # JAGR-3: Graph IR dependencies
