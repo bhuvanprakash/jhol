@@ -1664,7 +1664,7 @@ pub fn write_capsule_from_tree(project_dir: &Path, tree: &HashMap<String, Resolv
         let version = &pkg.version;
         let unpacked = 0u32; // Size not available in ResolvedPackage
         let flags = 0u16;
-        let idx = builder.add_package(name, version, &tarball_hash, unpacked, &[], 0, flags);
+        let idx = builder.add_package(name, version, &tarball_hash, unpacked, &[], 0, flags, "");
         name_to_idx.insert(name.clone(), idx);
     }
 

@@ -45,7 +45,8 @@ pub struct PackageEntry {
     pub dep_count: u16,
     pub flags: u16,
     pub install_order: u16,
-    _reserved: [u8; 10],
+    pub url_off: u32,         // offset into string table for tarball URL (0 = not stored)
+    _reserved: [u8; 6],
 }
 
 #[repr(C)]
@@ -161,6 +162,15 @@ impl CapsuleView {
         unsafe { std::str::from_utf8_unchecked(&remaining[..end]) }
     }
 
+    /// Read tarball URL from string table (zero-copy).
+    pub fn entry_url(&self, entry: &PackageEntry) -> &str {
+        if entry.url_off == 0 { return ""; }
+        let start = entry.url_off as usize;
+        let remaining = &unsafe { std::slice::from_raw_parts(self.string_table, self.str_len) }[start..];
+        let end = remaining.iter().position(|&b| b == 0).unwrap_or(remaining.len());
+        unsafe { std::str::from_utf8_unchecked(&remaining[..end]) }
+    }
+
     pub fn entry_deps(&self, entry: &PackageEntry) -> &[DepEdge] {
         let start = entry.dep_start as usize;
         let count = entry.dep_count as usize;
@@ -252,9 +262,11 @@ impl CapsuleBuilder {
         deps: &[(u32, u16)],
         install_order: u16,
         flags: u16,
+        tarball_url: &str,
     ) -> u32 {
         let name_off = self.intern_string(name);
         let version_off = self.intern_string(version);
+        let url_off = if tarball_url.is_empty() { 0 } else { self.intern_string(tarball_url) };
         let dep_start = self.dep_count;
 
         for &(pkg_idx, edge_type) in deps {
@@ -273,7 +285,8 @@ impl CapsuleBuilder {
         self.entries.extend_from_slice(&(deps.len() as u16).to_le_bytes());
         self.entries.extend_from_slice(&flags.to_le_bytes());
         self.entries.extend_from_slice(&install_order.to_le_bytes());
-        self.entries.extend_from_slice(&[0u8; 10]);
+        self.entries.extend_from_slice(&url_off.to_le_bytes());
+        self.entries.extend_from_slice(&[0u8; 6]);
 
         self.pkg_count += 1;
         self.total_unpacked += unpacked_size as u64;
@@ -405,13 +418,17 @@ pub fn install_from_capsule(view: &CapsuleView, project_dir: &Path) -> Result<()
             crate::selective_extract::extract_selective_to_path(&tarball_file, &pkg_dir)
                 .map_err(|e| format!("capsule: extract {}: {}", name, e))?;
         } else {
-            // Fetch from registry
-            let url = format!(
-                "https://registry.npmjs.org/{}/-/{}-{}.tgz",
-                name.replace('/', "%2F"),
-                name.split('/').last().unwrap_or(name),
-                version
-            );
+            // Fetch from registry — use URL from capsule if available
+            let url = if entry.url_off != 0 {
+                view.entry_url(entry).to_string()
+            } else {
+                format!(
+                    "https://registry.npmjs.org/{}/-/{}-{}.tgz",
+                    name.replace('/', "%2F"),
+                    name.split('/').last().unwrap_or(name),
+                    version
+                )
+            };
             let bytes = crate::http_client::get_bytes_with_bearer(url.as_str(), None)
                 .map_err(|e| format!("capsule: fetch {}@{}: {}", name, version, e))?;
 
@@ -485,7 +502,7 @@ pub fn write_capsule_from_project(project_dir: &Path) -> Result<(), String> {
         let flags = extract_flags(pkg);
         // install_order based on key depth — deeper = later
         let depth = key.matches('/').count() as u16;
-        builder.add_package(name, version, &tarball_hash, unpacked_size, &[], depth, flags);
+        builder.add_package(name, version, &tarball_hash, unpacked_size, &[], depth, flags, "");
     }
 
     let cap_path = capsule_path(project_dir);
@@ -567,13 +584,13 @@ mod tests {
         let path = dir.join("test.jhlcpl");
         let mut builder = CapsuleBuilder::new([0xab; 8]);
 
-        let idx0 = builder.add_package("left-pad", "1.0.0", &[0x01; 32], 1024, &[], 0, 0);
+        let idx0 = builder.add_package("left-pad", "1.0.0", &[0x01; 32], 1024, &[], 0, 0, "");
         let dep1 = [(idx0, 0)];
-        let idx1 = builder.add_package("is-positive", "1.0.0", &[0x02; 32], 512, &dep1, 1, 0);
+        let idx1 = builder.add_package("is-positive", "1.0.0", &[0x02; 32], 512, &dep1, 1, 0, "");
         let dep2 = [(idx1, 0)];
-        let idx2 = builder.add_package("@scope/foo", "2.1.3", &[0x03; 32], 2048, &dep2, 2, 0);
+        let idx2 = builder.add_package("@scope/foo", "2.1.3", &[0x03; 32], 2048, &dep2, 2, 0, "");
         let dep3 = [(idx0, 0), (idx2, 0)];
-        builder.add_package("bar", "0.5.0", &[0x04; 32], 256, &dep3, 3, 0);
+        builder.add_package("bar", "0.5.0", &[0x04; 32], 256, &dep3, 3, 0, "");
 
         assert_eq!(builder.package_count(), 4);
 
@@ -607,7 +624,7 @@ mod tests {
     fn test_corrupt_capsule_rejected() {
         let dir = make_tmp_dir();
         let mut builder = CapsuleBuilder::new([0xab; 8]);
-        builder.add_package("pkg", "1.0", &[0x01; 32], 100, &[], 0, 0);
+        builder.add_package("pkg", "1.0", &[0x01; 32], 100, &[], 0, 0, "");
         let mut data = builder.build();
         data[0] = 0xFF; // corrupt magic
         let path = dir.join("bad.jhlcpl");
@@ -644,8 +661,8 @@ mod tests {
         let dir = make_tmp_dir();
         let mut builder = CapsuleBuilder::new([0x00; 8]);
         // Two packages with same name but different versions
-        builder.add_package("lodash", "4.17.21", &[0x01; 32], 100, &[], 0, 0);
-        builder.add_package("lodash", "4.17.20", &[0x02; 32], 100, &[], 1, 0);
+        builder.add_package("lodash", "4.17.21", &[0x01; 32], 100, &[], 0, 0, "");
+        builder.add_package("lodash", "4.17.20", &[0x02; 32], 100, &[], 1, 0, "");
         let path = dir.join("shared.jhlcpl");
         write_capsule(&path, builder).unwrap();
         let view = read_capsule(&path).unwrap();
