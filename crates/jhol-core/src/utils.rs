@@ -1,3 +1,5 @@
+use chrono::Local;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::env;
 use std::fs::{self, File, OpenOptions};
@@ -57,7 +59,11 @@ pub fn get_cache_dir() -> String {
     } else {
         env::var("HOME").unwrap_or_else(|_| ".".to_string())
     };
-    let sep = if cfg!(target_os = "windows") { "\\" } else { "/" };
+    let sep = if cfg!(target_os = "windows") {
+        "\\"
+    } else {
+        "/"
+    };
     format!("{}{}.jhol-cache", base, sep)
 }
 
@@ -74,7 +80,10 @@ pub fn init_cache() -> Result<()> {
 }
 
 fn is_quiet() -> bool {
-    if env::var("JHOL_QUIET").map(|v| v == "1" || v == "true").unwrap_or(false) {
+    if env::var("JHOL_QUIET")
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(false)
+    {
         return true;
     }
     env::var("JHOL_LOG")
@@ -172,7 +181,9 @@ pub fn link_package_from_store(
         node_modules.join(package_name)
     };
     if link_path.exists() {
-        fs::remove_dir_all(&link_path).or_else(|_| fs::remove_file(&link_path)).ok();
+        fs::remove_dir_all(&link_path)
+            .or_else(|_| fs::remove_file(&link_path))
+            .ok();
     }
     if let Some(parent) = link_path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -183,7 +194,8 @@ pub fn link_package_from_store(
     }
     #[cfg(windows)]
     {
-        std::os::windows::fs::symlink_dir(store_unpacked_path, &link_path).map_err(|e| e.to_string())?;
+        std::os::windows::fs::symlink_dir(store_unpacked_path, &link_path)
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -309,6 +321,19 @@ pub fn write_store_index(map: &HashMap<String, String>) -> Result<()> {
         let _ = crate::jagrs::flush_store();
     }
 
+    use crate::file_lock::{AtomicWrite, FileLock};
+
+    let path = store_index_path();
+    let _lock = FileLock::lock(&path).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Failed to lock store index: {}", e),
+        )
+    })?;
+    let s = serde_json::to_string_pretty(map)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    AtomicWrite::write_to_file(&path, s.as_bytes())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     Ok(())
 }
 
@@ -410,22 +435,25 @@ pub fn lockfile_content_hash(dir: &Path) -> Option<String> {
 
 /// Sanitize package name to prevent path traversal attacks
 pub fn validate_package_name(package: &str) -> Option<String> {
+pub fn sanitize_package_name(package: &str) -> Option<String> {
     // Remove any path separators and dangerous characters
     let sanitized: String = package
         .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '.' || *c == '_' || *c == '@' || *c == '/')
+        .filter(|c| {
+            c.is_alphanumeric() || *c == '-' || *c == '.' || *c == '_' || *c == '@' || *c == '/'
+        })
         .collect();
-    
+
     // Ensure it doesn't contain path traversal sequences
     if sanitized.contains("..") || sanitized.contains("//") {
         return None;
     }
-    
+
     // Ensure it's not empty and doesn't start with a path separator
     if sanitized.is_empty() || sanitized.starts_with('/') || sanitized.starts_with('\\') {
         return None;
     }
-    
+
     Some(sanitized)
 }
 
@@ -476,7 +504,10 @@ pub fn get_cached_tarball(package: &str) -> Option<PathBuf> {
         if let Ok(entries) = fs::read_dir(&cache_dir) {
             for e in entries.flatten() {
                 let name = e.file_name().to_string_lossy().into_owned();
-                if name.starts_with(&format!("{}-", base_name)) && name.ends_with(".tgz") && !name.contains("store") {
+                if name.starts_with(&format!("{}-", base_name))
+                    && name.ends_with(".tgz")
+                    && !name.contains("store")
+                {
                     return Some(e.path());
                 }
             }
@@ -521,13 +552,18 @@ pub fn cache_package_tarball(base_name: &str, version: &str) -> Result<PathBuf> 
     let from = cwd.join(&tgz_name);
 
     if !from.exists() {
-        return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "npm pack did not create tarball"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "npm pack did not create tarball",
+        ));
     }
 
     // Content-addressable: hash and store in store/<hash>.tgz
     let hash = content_hash(&from)?;
     let store_file = store_dir().join(format!("{}.tgz", hash));
-    fs::copy(&from, &store_file).map(|_| ()).or_else(|_| fs::rename(&from, &store_file))?;
+    fs::copy(&from, &store_file)
+        .map(|_| ())
+        .or_else(|_| fs::rename(&from, &store_file))?;
     let _ = fs::remove_file(&from);
 
     let pkg_key = format!("{}@{}", base_name, version);
@@ -584,7 +620,9 @@ pub fn cache_clean() -> Result<usize> {
     if store.exists() {
         for e in fs::read_dir(&store)? {
             let e = e?;
-            if e.path().extension().map(|x| x == "tgz").unwrap_or(false) && fs::remove_file(e.path()).is_ok() {
+            if e.path().extension().map(|x| x == "tgz").unwrap_or(false)
+                && fs::remove_file(e.path()).is_ok()
+            {
                 removed += 1;
             }
         }
@@ -639,7 +677,11 @@ pub fn cache_prune(keep_recent: Option<usize>) -> Result<usize> {
         let e = e?;
         let path = e.path();
         if path.extension().map(|x| x == "tgz").unwrap_or(false) {
-            let hash = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+            let hash = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
             let in_index = index.values().any(|v| v == &hash);
             if !in_index {
                 if fs::remove_file(&path).is_ok() {
@@ -656,7 +698,8 @@ pub fn cache_prune(keep_recent: Option<usize>) -> Result<usize> {
         if entries.len() > n {
             entries.sort_by(|a, b| b.1.cmp(&a.1));
             let to_remove = entries.split_off(n);
-            let keep_hashes: std::collections::HashSet<String> = entries.into_iter().map(|(_, _, h)| h).collect();
+            let keep_hashes: std::collections::HashSet<String> =
+                entries.into_iter().map(|(_, _, h)| h).collect();
             index.retain(|_, hash| keep_hashes.contains(hash));
             write_store_index(&index)?;
             for (path, _, _) in to_remove {
@@ -679,7 +722,10 @@ pub fn cache_export(dir: &Path) -> Result<usize> {
         ));
     }
     let deps = crate::lockfile::read_package_json_deps(pj).ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "Could not read package.json deps")
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Could not read package.json deps",
+        )
     })?;
     if deps.is_empty() {
         return Ok(0);
@@ -700,15 +746,14 @@ pub fn cache_export(dir: &Path) -> Result<usize> {
     }
     let manifest_json: Vec<serde_json::Value> = manifest
         .iter()
-        .map(|(spec, file)| {
-            serde_json::json!({ "spec": spec, "file": file })
-        })
+        .map(|(spec, file)| serde_json::json!({ "spec": spec, "file": file }))
         .collect();
     let manifest_path = dir.join(CACHE_MANIFEST_NAME);
     let s = serde_json::to_string_pretty(&manifest_json)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     fs::write(manifest_path, s)?;
-    if let Ok(sig) = manifest_signature(&serde_json::to_string(&manifest_json).unwrap_or_default()) {
+    if let Ok(sig) = manifest_signature(&serde_json::to_string(&manifest_json).unwrap_or_default())
+    {
         let sig_path = dir.join(CACHE_MANIFEST_SIG);
         fs::write(sig_path, sig)?;
     }
@@ -811,7 +856,9 @@ pub fn run_command_timeout(program: &str, args: &[&str], timeout_secs: u64) -> R
         }
         #[cfg(windows)]
         {
-            let _ = Command::new("taskkill").args(["/F", "/PID", &pid.to_string()]).output();
+            let _ = Command::new("taskkill")
+                .args(["/F", "/PID", &pid.to_string()])
+                .output();
         }
     });
 
@@ -849,5 +896,49 @@ mod tests {
     fn test_is_package_cached_no_dir() {
         // With a non-existent path in cache dir, should be false
         assert!(!is_package_cached("nonexistent-package-xyz-123"));
+    }
+
+    #[test]
+    fn test_sanitize_package_name_rejects_path_traversal() {
+        assert!(sanitize_package_name("../etc/passwd").is_none());
+        assert!(sanitize_package_name("..\\etc\\passwd").is_none());
+        assert!(sanitize_package_name("foo/../bar").is_none());
+        assert!(sanitize_package_name("foo/bar/..").is_none());
+    }
+
+    #[test]
+    fn test_sanitize_package_name_rejects_absolute_paths() {
+        assert!(sanitize_package_name("/etc/passwd").is_none());
+        assert!(sanitize_package_name("\\etc\\passwd").is_none());
+    }
+
+    #[test]
+    fn test_sanitize_package_name_accepts_valid_names() {
+        assert_eq!(sanitize_package_name("lodash"), Some("lodash".to_string()));
+        assert_eq!(
+            sanitize_package_name("@scope/package"),
+            Some("@scope/package".to_string())
+        );
+        assert_eq!(
+            sanitize_package_name("lodash@4.17.21"),
+            Some("lodash@4.17.21".to_string())
+        );
+        assert_eq!(
+            sanitize_package_name("my-package"),
+            Some("my-package".to_string())
+        );
+        assert_eq!(
+            sanitize_package_name("my.package"),
+            Some("my.package".to_string())
+        );
+        assert_eq!(
+            sanitize_package_name("my_package"),
+            Some("my_package".to_string())
+        );
+    }
+
+    #[test]
+    fn test_sanitize_package_name_rejects_double_slashes() {
+        assert!(sanitize_package_name("foo//bar").is_none());
     }
 }

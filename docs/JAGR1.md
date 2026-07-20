@@ -64,6 +64,10 @@ while !all_satisfied(assignment) {
 }
 Key Innovations That Beat Everyone Else
 
+- Entry path: `crates/jhol-core/src/lockfile_write.rs`
+- Default strategy: PubGrub V2 with fallback to JAGR-1 → legacy
+- Uses proper SAT solving with semantic versioning
+- Override for debugging:
 
 
 

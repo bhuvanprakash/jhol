@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::utils;
+
 #[derive(Clone, Debug, Default)]
 pub struct BinLinkReport {
     pub packages_scanned: usize,
@@ -56,7 +58,9 @@ pub fn rebuild_bin_links(node_modules: &Path) -> Result<BinLinkReport, String> {
 }
 
 pub fn link_bins_for_package(node_modules: &Path, package_name: &str) -> Result<(), String> {
-    let pkg_dir = node_modules.join(package_name);
+    let package_name = utils::sanitize_package_name(package_name)
+        .ok_or_else(|| format!("Invalid package name: {}", package_name))?;
+    let pkg_dir = node_modules.join(package_name.clone());
     if !pkg_dir.is_dir() {
         return Ok(());
     }
@@ -81,7 +85,7 @@ pub fn link_bins_for_package(node_modules: &Path, package_name: &str) -> Result<
         if !target.exists() {
             continue;
         }
-        create_bin_link(&bin_dir, &bin_name, package_name, &rel_target)?;
+        create_bin_link(&bin_dir, &bin_name, &package_name, &rel_target)?;
     }
 
     Ok(())
@@ -89,10 +93,7 @@ pub fn link_bins_for_package(node_modules: &Path, package_name: &str) -> Result<
 
 fn parse_bin_entries(pkg: &serde_json::Value) -> Result<HashMap<String, String>, String> {
     let mut out = HashMap::new();
-    let package_name = pkg
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let package_name = pkg.get("name").and_then(|v| v.as_str()).unwrap_or("");
 
     let Some(bin) = pkg.get("bin") else {
         return Ok(out);
@@ -161,11 +162,14 @@ fn create_bin_link(
     } else {
         format!("#!/bin/sh\nexec \"$_dir/{rel_unix}\" \"$@\"\n")
     };
-    let wrapper = format!("#!/bin/sh\n_dir=\"$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\"\n{script}");
+    let wrapper =
+        format!("#!/bin/sh\n_dir=\"$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\"\n{script}");
     fs::write(&link_path, wrapper).map_err(|e| e.to_string())?;
 
     use std::os::unix::fs::PermissionsExt;
-    let mut perms = fs::metadata(&link_path).map_err(|e| e.to_string())?.permissions();
+    let mut perms = fs::metadata(&link_path)
+        .map_err(|e| e.to_string())?
+        .permissions();
     perms.set_mode(0o755);
     fs::set_permissions(&link_path, perms).map_err(|e| e.to_string())?;
 
@@ -234,7 +238,10 @@ mod tests {
     #[test]
     fn scoped_relative_target_is_correct() {
         let rel = relative_target_from_bin("@scope/foo", "dist/cli.js");
-        assert_eq!(rel.to_string_lossy().replace('\\', "/"), "../@scope/foo/dist/cli.js");
+        assert_eq!(
+            rel.to_string_lossy().replace('\\', "/"),
+            "../@scope/foo/dist/cli.js"
+        );
     }
 
     #[test]

@@ -7,6 +7,7 @@ use std::path::Path;
 use crate::lockfile;
 use crate::lockfile_write;
 use crate::registry;
+use crate::utils;
 
 fn read_root_name_version() -> (String, String) {
     let pj = Path::new("package.json");
@@ -49,19 +50,24 @@ pub fn uninstall(package: &str, update_package_json: bool) -> Result<(), String>
     if pkg.is_empty() {
         return Err("Package name required".to_string());
     }
+    let pkg = utils::sanitize_package_name(pkg)
+        .ok_or_else(|| format!("Invalid package name: {}", package))?;
+    let pkg_for_path = pkg.clone();
     let node_modules = Path::new("node_modules");
     if node_modules.exists() {
-        let path = if pkg.starts_with('@') {
-            let parts: Vec<&str> = pkg.splitn(2, '/').collect();
+        let path = if pkg_for_path.starts_with('@') {
+            let parts: Vec<&str> = pkg_for_path.splitn(2, '/').collect();
             if parts.len() != 2 {
-                return Err(format!("Invalid scoped package: {}", pkg));
+                return Err(format!("Invalid scoped package: {}", pkg_for_path));
             }
             node_modules.join(parts[0]).join(parts[1])
         } else {
-            node_modules.join(pkg)
+            node_modules.join(&pkg_for_path)
         };
         if path.exists() {
-            fs::remove_dir_all(&path).or_else(|_| fs::remove_file(&path)).map_err(|e| e.to_string())?;
+            fs::remove_dir_all(&path)
+                .or_else(|_| fs::remove_file(&path))
+                .map_err(|e| e.to_string())?;
         }
     }
 
@@ -73,17 +79,20 @@ pub fn uninstall(package: &str, update_package_json: bool) -> Result<(), String>
         let mut v = read_package_json(pj)?;
         let mut changed = false;
         if let Some(deps) = v.get_mut("dependencies").and_then(|d| d.as_object_mut()) {
-            if remove_dep(deps, pkg) {
+            if remove_dep(deps, &pkg) {
                 changed = true;
             }
         }
         if let Some(deps) = v.get_mut("devDependencies").and_then(|d| d.as_object_mut()) {
-            if remove_dep(deps, pkg) {
+            if remove_dep(deps, &pkg) {
                 changed = true;
             }
         }
-        if let Some(deps) = v.get_mut("peerDependencies").and_then(|d| d.as_object_mut()) {
-            if remove_dep(deps, pkg) {
+        if let Some(deps) = v
+            .get_mut("peerDependencies")
+            .and_then(|d| d.as_object_mut())
+        {
+            if remove_dep(deps, &pkg) {
                 changed = true;
             }
         }
@@ -128,7 +137,10 @@ pub fn update_packages(packages: &[String]) -> Result<(), String> {
         for key in ["dependencies", "devDependencies", "peerDependencies"] {
             if let Some(deps) = v.get_mut(key).and_then(|d| d.as_object_mut()) {
                 if deps.contains_key(pkg) {
-                    deps.insert(pkg.clone(), serde_json::Value::String(format!("^{}", version)));
+                    deps.insert(
+                        pkg.clone(),
+                        serde_json::Value::String(format!("^{}", version)),
+                    );
                     changed = true;
                 }
             }
@@ -158,7 +170,10 @@ pub fn why_package(package: &str) -> Result<Vec<String>, String> {
     };
     let s = fs::read_to_string(&lock_path).map_err(|e| e.to_string())?;
     let v: serde_json::Value = serde_json::from_str(&s).map_err(|e| e.to_string())?;
-    let packages = v.get("packages").and_then(|p| p.as_object()).ok_or("Invalid lockfile")?;
+    let packages = v
+        .get("packages")
+        .and_then(|p| p.as_object())
+        .ok_or("Invalid lockfile")?;
 
     let mut edges: HashMap<String, Vec<String>> = HashMap::new();
     for (key, val) in packages {
@@ -178,7 +193,9 @@ pub fn why_package(package: &str) -> Result<Vec<String>, String> {
     let mut results = Vec::new();
     let mut stack: Vec<(String, Vec<String>)> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    for (root_dep, _) in lockfile::read_package_json_deps(Path::new("package.json")).unwrap_or_default() {
+    for (root_dep, _) in
+        lockfile::read_package_json_deps(Path::new("package.json")).unwrap_or_default()
+    {
         stack.push((root_dep.clone(), vec![root_dep.clone()]));
     }
     while let Some((current, path)) = stack.pop() {
@@ -198,7 +215,10 @@ pub fn why_package(package: &str) -> Result<Vec<String>, String> {
         }
     }
     if results.is_empty() {
-        results.push(format!("{} is a direct dependency or resolved by lockfile", package));
+        results.push(format!(
+            "{} is a direct dependency or resolved by lockfile",
+            package
+        ));
     }
     Ok(results)
 }
@@ -215,7 +235,9 @@ pub fn import_lockfile(from: &str) -> Result<String, String> {
             } else if cwd.join("package-lock.json").exists() {
                 "npm"
             } else {
-                return Err("No supported lockfile found (bun.lock or package-lock.json)".to_string());
+                return Err(
+                    "No supported lockfile found (bun.lock or package-lock.json)".to_string(),
+                );
             }
         }
     };

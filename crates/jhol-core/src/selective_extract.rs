@@ -1,12 +1,14 @@
 //! JHOL Selective Extraction - Only extract necessary files
-//! 
+//!
 //! Research shows 80% of package files are never used (docs, tests, READMEs)
 //! This module extracts only what's needed for runtime
 
-use std::path::Path;
-use tar::Archive;
 use flate2::read::GzDecoder;
 use std::fs::{self, File};
+use std::path::Path;
+use tar::Archive;
+
+use crate::utils;
 
 /// Files/directories to ALWAYS extract
 const ESSENTIAL_PATTERNS: &[&str] = &[
@@ -45,7 +47,7 @@ const SKIP_PATTERNS: &[&str] = &[
     ".circleci/",
     "Makefile",
     "tsconfig.json",
-    "*.ts",  // Skip TypeScript source if JS exists
+    "*.ts", // Skip TypeScript source if JS exists
     "*.tsx",
     "*.jsx",
 ];
@@ -56,6 +58,8 @@ pub fn extract_selective(
     dest_dir: &Path,
     package_name: &str,
 ) -> Result<usize, String> {
+    let package_name = utils::sanitize_package_name(package_name)
+        .ok_or_else(|| format!("Invalid package name: {}", package_name))?;
     extract_selective_to_path(tarball_path, &dest_dir.join(package_name))
 }
 
@@ -63,21 +67,23 @@ pub fn extract_selective_to_path(
     tarball_path: &Path,
     package_root: &Path,
 ) -> Result<usize, String> {
-    let file = File::open(tarball_path)
-        .map_err(|e| format!("Failed to open tarball: {}", e))?;
+    let file = File::open(tarball_path).map_err(|e| format!("Failed to open tarball: {}", e))?;
 
     let decoder = GzDecoder::new(file);
     let mut archive = Archive::new(decoder);
 
-    fs::create_dir_all(package_root)
-        .map_err(|e| format!("Failed to create dest dir: {}", e))?;
+    fs::create_dir_all(package_root).map_err(|e| format!("Failed to create dest dir: {}", e))?;
 
     let mut extracted_count = 0;
 
-    for entry in archive.entries().map_err(|e| format!("Failed to read archive: {}", e))? {
+    for entry in archive
+        .entries()
+        .map_err(|e| format!("Failed to read archive: {}", e))?
+    {
         let mut entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-        
-        let path = entry.path()
+
+        let path = entry
+            .path()
             .map_err(|e| format!("Failed to get path: {}", e))?
             .to_string_lossy()
             .to_string();
@@ -85,16 +91,16 @@ pub fn extract_selective_to_path(
         let Some(rel_path) = normalize_tarball_rel_path(&path) else {
             continue;
         };
-        
+
         // Skip if matches skip patterns
         if should_skip(&rel_path) {
             continue;
         }
-        
+
         // Extract if matches essential patterns
         if should_extract(&rel_path) {
             let dest_path = package_root.join(&rel_path);
-            
+
             if entry.header().entry_type().is_dir() {
                 fs::create_dir_all(&dest_path)
                     .map_err(|e| format!("Failed to create dir: {}", e))?;
@@ -104,22 +110,23 @@ pub fn extract_selective_to_path(
                     fs::create_dir_all(parent)
                         .map_err(|e| format!("Failed to create parent: {}", e))?;
                 }
-                
+
                 // Stream unpack directly to disk to avoid extra memory copies.
-                entry.unpack(&dest_path)
+                entry
+                    .unpack(&dest_path)
                     .map_err(|e| format!("Failed to unpack file: {}", e))?;
                 extracted_count += 1;
             }
         }
     }
-    
+
     Ok(extracted_count)
 }
 
 /// Check if path should be skipped
 fn should_skip(path: &str) -> bool {
     let path_lower = path.to_lowercase();
-    
+
     for pattern in SKIP_PATTERNS {
         if pattern.ends_with('/') {
             // Directory pattern
@@ -138,7 +145,7 @@ fn should_skip(path: &str) -> bool {
             }
         }
     }
-    
+
     false
 }
 
@@ -148,7 +155,9 @@ fn normalize_tarball_rel_path(path: &str) -> Option<String> {
     if first != "package" {
         return None;
     }
-    let rel = parts.collect::<Vec<_>>().join(std::path::MAIN_SEPARATOR_STR);
+    let rel = parts
+        .collect::<Vec<_>>()
+        .join(std::path::MAIN_SEPARATOR_STR);
     if rel.is_empty() {
         None
     } else {
@@ -163,12 +172,12 @@ fn should_extract(path: &str) -> bool {
     }
 
     let path_lower = path.to_lowercase();
-    
+
     // Always extract package.json
     if path_lower == "package.json" {
         return true;
     }
-    
+
     for pattern in ESSENTIAL_PATTERNS {
         if pattern.ends_with('/') {
             // Directory pattern - extract everything in this dir
@@ -182,7 +191,7 @@ fn should_extract(path: &str) -> bool {
             }
         }
     }
-    
+
     // If no essential pattern matched, check if it's a JS file
     // (we want JS files even if not explicitly listed)
     path_lower.ends_with(".js") || path_lower.ends_with(".mjs") || path_lower.ends_with(".cjs")
@@ -190,19 +199,25 @@ fn should_extract(path: &str) -> bool {
 
 /// Get estimated size savings from selective extraction
 pub fn estimate_savings(tarball_path: &Path) -> Result<(u64, u64, f64), String> {
-    let file = File::open(tarball_path)
-        .map_err(|e| format!("Failed to open tarball: {}", e))?;
-    
+    let file = File::open(tarball_path).map_err(|e| format!("Failed to open tarball: {}", e))?;
+
     let decoder = GzDecoder::new(file);
     let mut archive = Archive::new(decoder);
-    
+
     let mut total_size = 0u64;
     let mut essential_size = 0u64;
-    
-    for entry in archive.entries().map_err(|e| format!("Failed to read archive: {}", e))? {
+
+    for entry in archive
+        .entries()
+        .map_err(|e| format!("Failed to read archive: {}", e))?
+    {
         let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-        let size = entry.header().size().map_err(|e| format!("Failed to get size: {}", e))?;
-        let path = entry.path()
+        let size = entry
+            .header()
+            .size()
+            .map_err(|e| format!("Failed to get size: {}", e))?;
+        let path = entry
+            .path()
             .map_err(|e| format!("Failed to get path: {}", e))?
             .to_string_lossy()
             .to_string();
@@ -215,13 +230,13 @@ pub fn estimate_savings(tarball_path: &Path) -> Result<(u64, u64, f64), String> 
             }
         }
     }
-    
+
     let savings = if total_size > 0 {
         ((total_size - essential_size) as f64 / total_size as f64) * 100.0
     } else {
         0.0
     };
-    
+
     Ok((total_size, essential_size, savings))
 }
 
@@ -250,8 +265,14 @@ mod tests {
 
     #[test]
     fn test_normalize_tarball_rel_path() {
-        assert_eq!(normalize_tarball_rel_path("package/package.json"), Some("package.json".to_string()));
-        assert_eq!(normalize_tarball_rel_path("package/lib/index.js"), Some(format!("lib{}index.js", std::path::MAIN_SEPARATOR)));
+        assert_eq!(
+            normalize_tarball_rel_path("package/package.json"),
+            Some("package.json".to_string())
+        );
+        assert_eq!(
+            normalize_tarball_rel_path("package/lib/index.js"),
+            Some(format!("lib{}index.js", std::path::MAIN_SEPARATOR))
+        );
         assert_eq!(normalize_tarball_rel_path("other/package.json"), None);
         assert_eq!(normalize_tarball_rel_path("package/"), None);
     }

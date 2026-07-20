@@ -11,6 +11,16 @@ use crate::registry;
 use crate::sat_resolver::{PackageDomain, PackageVersion, SolveInput};
 use crate::pubgrub::{PubGrubSolver, PackedVersion, can_use_minimal_selection, resolve_minimal};  // JAGR-2: PubGrub solver
 
+/// RAII-safe mutex lock helper (DRY principle)
+macro_rules! mutex_lock {
+    ($lock:expr) => {{
+        match $lock.lock() {
+            Ok(guard) => guard,
+            Err(_) => panic!("Mutex lock poisoned - thread panicked while holding lock"),
+        }
+    }};
+}
+
 /// One resolved package entry for the lockfile.
 #[derive(Clone, Debug)]
 pub struct ResolvedPackage {
@@ -422,15 +432,46 @@ fn resolve_full_tree_pubgrub(package_json_path: &Path) -> Result<HashMap<String,
 
     // Add root requirements
     let specs: HashMap<String, String> = deps.into_iter().collect();
-
-    // OPTIMIZATION: Fetch metadata in parallel using rayon
     let package_names: Vec<String> = specs.keys().cloned().collect();
-    let metadata_results = registry::fetch_metadata_parallel(&package_names);
 
+    // OPTIMIZATION: Check bundled index FIRST for instant resolution
     let mut metadata_cache = HashMap::new();
-    for (name, result) in metadata_results {
-        if let Ok(metadata) = result {
-            metadata_cache.insert(name, metadata);
+    {
+        if let Ok(index) = crate::registry::PACKAGE_INDEX.lock() {
+            for name in &package_names {
+                if let Some(pkg) = index.get_package(name) {
+                    // Instant: use bundled metadata directly
+                    let meta = serde_json::json!({
+                        "name": pkg.name,
+                        "dist": {
+                            "tarball": pkg.tarball_url,
+                            "integrity": pkg.integrity
+                        },
+                        "versions": pkg.versions.iter()
+                            .map(|v| (v.clone(), serde_json::json!({
+                                "version": v.clone(), 
+                                "dependencies": pkg.dependencies
+                            })))
+                            .collect::<serde_json::Map<String, _>>()
+                    });
+                    metadata_cache.insert(name.clone(), meta);
+                }
+            }
+        }
+    }
+
+    // Fetch ONLY missing packages from network
+    let missing: Vec<String> = package_names.iter()
+        .filter(|n| !metadata_cache.contains_key(*n))
+        .cloned()
+        .collect();
+    
+    if !missing.is_empty() {
+        let network_results = registry::fetch_metadata_parallel(&missing);
+        for (name, result) in network_results {
+            if let Ok(metadata) = result {
+                metadata_cache.insert(name, metadata);
+            }
         }
     }
 
@@ -940,7 +981,7 @@ fn build_tree_from_assignment(
             .cloned()
             .ok_or_else(|| format!("Missing assignment for {}", name))?;
         let meta = {
-            let mut cache = cache_arc.lock().unwrap();
+            let mut cache = mutex_lock!(cache_arc);
             registry::fetch_metadata_cached(&name, &mut *cache)?
         };
 
@@ -1019,7 +1060,7 @@ fn resolve_full_tree_legacy(package_json_path: &Path) -> Result<HashMap<String, 
     let mut conflicts: Vec<String> = Vec::new();
     while let Some((key, name, spec, requester)) = queue.pop() {
         let meta = {
-            let mut cache = cache_arc.lock().unwrap();
+            let mut cache = mutex_lock!(cache_arc);
             registry::fetch_metadata_cached(&name, &mut *cache)?
         };
 
@@ -1072,7 +1113,7 @@ fn resolve_full_tree_legacy(package_json_path: &Path) -> Result<HashMap<String, 
         let mut resolved_deps = HashMap::new();
         for (dep_name, dep_spec) in &version_deps {
             let dep_meta = {
-                let mut cache = cache_arc.lock().unwrap();
+                let mut cache = mutex_lock!(cache_arc);
                 match registry::fetch_metadata_cached(dep_name, &mut *cache) {
                     Ok(m) => m,
                     Err(_) => continue,

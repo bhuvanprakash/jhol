@@ -1,20 +1,20 @@
 //! Bounded HTTP client: connection reuse via a single Agent, capped concurrency.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::{Condvar, Mutex, Arc};
-use std::time::Duration;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 const REQUEST_TIMEOUT_MS: u64 = 30_000;
-const DEFAULT_CONCURRENCY: usize = 64;  // Increased from 32 to 64
-const MAX_CONCURRENCY_CAP: usize = 128;  // Increased from 64 to 128
+const DEFAULT_CONCURRENCY: usize = 64; // Increased from 32 to 64
+const MAX_CONCURRENCY_CAP: usize = 128; // Increased from 64 to 128
 const DEFAULT_RETRY_COUNT: usize = 2;
 const DEFAULT_RETRY_BACKOFF_MS: u64 = 250;
-const TCP_KEEPALIVE_SECS: u64 = 30;  // Added TCP keepalive
-const IDLE_TIMEOUT_SECS: u64 = 90;   // Added idle timeout for connection reuse
+const TCP_KEEPALIVE_SECS: u64 = 30; // Added TCP keepalive
+const IDLE_TIMEOUT_SECS: u64 = 90; // Added idle timeout for connection reuse
 const MAX_IDLE_PER_HOST: usize = 32; // Added max idle connections per host
 
 fn concurrency_from_env() -> usize {
@@ -60,9 +60,15 @@ impl ConcurrencyLimit {
     }
 
     fn acquire(&self) -> ConcurrencyGuard<'_> {
-        let mut guard = self.mutex.lock().unwrap();
+        let mut guard = self
+            .mutex
+            .lock()
+            .expect("concurrency_limit: mutex lock failed (poisoned)");
         while *guard >= self.max {
-            guard = self.condvar.wait(guard).unwrap();
+            guard = self
+                .condvar
+                .wait(guard)
+                .expect("concurrency_limit: condition wait failed (poisoned)");
         }
         *guard += 1;
         ConcurrencyGuard(self)
@@ -73,7 +79,11 @@ struct ConcurrencyGuard<'a>(&'a ConcurrencyLimit);
 
 impl Drop for ConcurrencyGuard<'_> {
     fn drop(&mut self) {
-        let mut guard = self.0.mutex.lock().unwrap();
+        let mut guard = self
+            .0
+            .mutex
+            .lock()
+            .expect("concurrency_limit: mutex lock failed (poisoned) in drop");
         *guard = guard.saturating_sub(1);
         self.0.condvar.notify_one();
     }
@@ -116,7 +126,8 @@ impl HttpMetrics {
         } else {
             self.requests_failed.fetch_add(1, Ordering::Relaxed);
         }
-        self.bytes_downloaded.fetch_add(bytes_down, Ordering::Relaxed);
+        self.bytes_downloaded
+            .fetch_add(bytes_down, Ordering::Relaxed);
         self.bytes_uploaded.fetch_add(bytes_up, Ordering::Relaxed);
     }
 
@@ -137,7 +148,7 @@ impl HttpClient {
             .timeout(std::time::Duration::from_millis(REQUEST_TIMEOUT_MS))
             .max_idle_connections(MAX_IDLE_PER_HOST)
             .build();
-        
+
         Self {
             agent,
             limit: ConcurrencyLimit::new(max_concurrent),
@@ -395,7 +406,14 @@ pub fn print_http_metrics() {
     println!("  Total requests: {}", total);
     println!("  Successful: {}", success);
     println!("  Failed: {}", failed);
-    println!("  Success rate: {:.2}%", if total > 0 { (success as f64 / total as f64) * 100.0 } else { 0.0 });
+    println!(
+        "  Success rate: {:.2}%",
+        if total > 0 {
+            (success as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        }
+    );
     println!("  Bytes downloaded: {} bytes", bytes_down);
     println!("  Bytes uploaded: {} bytes", bytes_up);
 }

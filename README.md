@@ -66,6 +66,7 @@ See [CHANGELOG.md](./CHANGELOG.md) for release notes.
 - [Architecture](#architecture)
 - [Benchmarking and reports](#benchmarking-and-reports)
 - [Compatibility and limitations](#compatibility-and-limitations)
+- [Production Checklist](#production-checklist)
 - [Links](#links)
 - [License](#license)
 
@@ -369,11 +370,19 @@ python3 scripts/enterprise_npmrc_report.py \
 
 ### Current limitations
 
-- Dependency resolution currently uses a greedy strategy and may diverge from npm in complex graphs.
-- Some advanced peer dependency cases are still being expanded in parity testing.
+- Some advanced peer dependency cases may still diverge from npm in complex graphs.
+- Auto-falls back to alternative resolvers on failure for reliability.
 - Benchmark baselines are CI-automated, but environment-specific tuning is still evolving.
 
-If you hit an issue, open a GitHub issue with the failing dependency graph and lockfile.
+## Production Checklist
+
+Before using Jhol in production, ensure:
+
+- [ ] Run `jhol audit` - address all vulnerabilities
+- [ ] Use `--frozen` or `jhol ci` in CI for deterministic builds
+- [ ] Set appropriate timeouts for your network (`JHOL_RESOLVE_TIMEOUT_SECS`)
+- [ ] Set up cache pruning schedule for large deployments
+- [ ] Test your specific dependency graph with `jhol doctor`
 
 ---
 
