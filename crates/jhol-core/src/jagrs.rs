@@ -551,6 +551,78 @@ pub fn v3_aliases_dir(cache_dir: &str) -> PathBuf {
     PathBuf::from(cache_dir).join(V3_DIR)
 }
 
+// ── Git-style object store (filesystem IS the hash table) ─────────────────────────
+//
+// Alternative backend to the mmap'd hash table. Uses objects/ab/cd/<hash> layout.
+// Zero startup cost, zero crash risk, zero memory for index.
+// Kernel dentry cache IS the hash table.
+pub mod git {
+    use std::path::{Path, PathBuf};
+    use std::fs;
+
+    pub fn git_base(cache_dir: &str) -> PathBuf {
+        PathBuf::from(cache_dir).join("v3").join("git")
+    }
+
+    pub fn object_path(base: &Path, hash: &str) -> PathBuf {
+        if hash.len() >= 4 {
+            base.join("objects").join(&hash[0..2]).join(&hash[2..4]).join(hash)
+        } else {
+            base.join("objects").join("xx").join("xx").join(hash)
+        }
+    }
+
+    pub fn alias_path(base: &Path, name: &str, version: &str) -> PathBuf {
+        base.join("aliases").join(name).join(version)
+    }
+
+    pub fn store_object(base: &Path, hash: &str, data: &[u8]) -> Result<(), String> {
+        let path = object_path(base, hash);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("git mkdir: {}", e))?;
+        }
+        if !path.exists() {
+            fs::write(&path, data).map_err(|e| format!("git write: {}", e))?;
+        }
+        Ok(())
+    }
+
+    pub fn has_object(base: &Path, hash: &str) -> bool {
+        object_path(base, hash).exists()
+    }
+
+    pub fn store_alias(base: &Path, name: &str, version: &str, hash: &str) -> Result<(), String> {
+        let link = alias_path(base, name, version);
+        if let Some(parent) = link.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("git alias mkdir: {}", e))?;
+        }
+        let target = object_path(base, hash);
+        if !link.exists() {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&target, &link).map_err(|e| format!("git symlink: {}", e))?;
+            #[cfg(not(unix))]
+            fs::write(&link, target.to_string_lossy().as_bytes()).map_err(|e| format!("git write: {}", e))?;
+        }
+        Ok(())
+    }
+
+    pub fn lookup_alias(base: &Path, name: &str, version: &str) -> Option<String> {
+        let link = alias_path(base, name, version);
+        let target = std::fs::read_link(&link).ok()?;
+        target.file_name()?.to_str().map(|s| s.to_string())
+    }
+
+    pub fn list_versions(base: &Path, name: &str) -> Vec<String> {
+        let dir = base.join("aliases").join(name);
+        match fs::read_dir(&dir) {
+            Ok(entries) => entries.filter_map(|e| {
+                e.ok()?.file_name().to_str().map(|s| s.to_string())
+            }).collect(),
+            Err(_) => vec![],
+        }
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

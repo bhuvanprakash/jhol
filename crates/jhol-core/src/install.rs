@@ -1561,6 +1561,37 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
             continue;
         }
 
+        // Markov predictive prefetch: check if model predicts next packages
+        // and start downloading them in background
+        if !options.offline && !options.no_cache {
+            let history: Vec<String> = seen_packages.iter().cloned().collect();
+            if history.len() >= 2 {
+                let prev = &history[history.len() - 2];
+                let curr = &history[history.len() - 1];
+                let predicted = crate::second_order_markov::predict_with_context(prev, curr, 3);
+                for next_pkg in predicted {
+                    let cache_dir_for_lookup = std::path::PathBuf::from(utils::get_cache_dir());
+                    let store_index = utils::read_store_index();
+                    let cache_key = format!("{}@latest", next_pkg);
+                    if !store_index.contains_key(&cache_key)
+                        && !get_cached_tarball_fast(&next_pkg, &cache_dir_for_lookup, &store_index).is_some()
+                    {
+                        if !options.quiet {
+                            utils::log(&format!("Markov predicts {} — prefetching...", next_pkg));
+                        }
+                        std::thread::spawn(move || {
+                            let url = format!("https://registry.npmjs.org/{}", next_pkg.replace('/', "%2F"));
+                            let _ = crate::jagrs::download_and_stream_to_store(
+                                &url,
+                                &crate::utils::get_cache_dir(),
+                                &format!("{}@latest", next_pkg),
+                            );
+                        });
+                    }
+                }
+            }
+        }
+
         if seen_packages.contains(base) {
             if !options.quiet {
                 crate::utils::log(&format!(
@@ -2059,6 +2090,15 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         }
         sync_hidden_lockfile();
         let _ = crate::capsule::write_capsule_from_project(Path::new("."));
+
+        // Train Markov model with installed packages for future predictions
+        if let Ok(pkgs) = read_all_installed_packages(node_modules) {
+            let names: Vec<String> = pkgs.keys().cloned().collect();
+            if names.len() >= 3 {
+                crate::second_order_markov::learn_from_install(&names);
+            }
+        }
+
         return Ok(());
     }
 
