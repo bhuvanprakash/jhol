@@ -8,7 +8,7 @@
 //! Lookup: O(1) pointer deref in mmap'd hash table. No parse. No I/O syscall.
 //! Store: O(1) append to log + CAS in hash table. No rewriting. No fragmentation.
 
-use memmap2::Mmap;
+use memmap2::MmapMut;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -63,7 +63,7 @@ pub struct ManifestHeader {
 
 pub struct JagrsStore {
     root: PathBuf,
-    manifest: Mmap,
+    manifest: memmap2::MmapMut,
     objects: fs::File,
     aliases: fs::File,
     objects_len: Mutex<u64>,
@@ -91,7 +91,8 @@ impl JagrsStore {
             .read(true).write(true).create(true)
             .open(&mf_path).map_err(|e| format!("jagrs open manifest: {}", e))?;
         let man_len = mf_file.metadata().map_err(|e| e.to_string())?.len();
-        let manifest = unsafe { Mmap::map(&mf_file).map_err(|e| format!("jagrs mmap manifest: {}", e))? };
+        let manifest = unsafe { memmap2::MmapOptions::new().map_mut(&mf_file).map_err(|e| format!("jagrs mmap manifest: {}", e))? };
+        let manifest: memmap2::MmapMut = manifest;
 
         // Parse header
         if manifest.len() < size_of::<ManifestHeader>() {
