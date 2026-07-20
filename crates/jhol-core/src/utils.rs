@@ -7,6 +7,35 @@ use std::process::{Command, Output, Stdio};
 use std::sync::{OnceLock, RwLock};
 use std::thread;
 use std::time::Duration;
+
+// ── Cached env var reader ────────────────────────────────────────────────────────
+// Avoids redundant syscalls: each env::var is a kernel call (~0.5-1µs).
+// Cache results so repeated reads of same var hit L1, not kernel.
+
+/// Read an env var, caching the result in a OnceLock.
+/// Returns None if the var is not set. Poisoned cache panics (should never happen).
+pub fn cached_env_var(key: &'static str) -> Option<String> {
+    let cache = ENV_CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+    if let Ok(guard) = cache.read() {
+        if let Some(val) = guard.get(key) {
+            return val.clone();
+        }
+    }
+    let val = env::var(key).ok();
+    if let Ok(mut guard) = cache.write() {
+        guard.insert(key, val.clone());
+    }
+    val
+}
+
+static ENV_CACHE: OnceLock<RwLock<HashMap<&'static str, Option<String>>>> = OnceLock::new();
+
+/// Invalidate the entire env var cache (called when env vars change at runtime).
+pub fn invalidate_env_cache() {
+    if let Ok(mut guard) = ENV_CACHE.get_or_init(|| RwLock::new(HashMap::new())).write() {
+        guard.clear();
+    }
+}
 use chrono::Local;
 use sha2::{Sha256, Digest};
 

@@ -156,7 +156,32 @@ pub fn detect_lockfile(dir: &Path) -> LockfileKind {
 }
 
 /// Read package.json and return (dependencies, devDependencies) as name -> version spec.
+use std::sync::{OnceLock, RwLock};
+use std::time::SystemTime;
+
+static PKG_JSON_CACHE: OnceLock<RwLock<Option<(SystemTime, HashMap<String, String>)>>> = OnceLock::new();
+
+/// Read dependencies from package.json, with caching.
 pub fn read_package_json_deps(path: &Path) -> Option<HashMap<String, String>> {
+    // Check cache
+    let mtime = std::fs::metadata(path).ok()?.modified().ok()?;
+    let cache = PKG_JSON_CACHE.get_or_init(|| RwLock::new(None));
+    if let Ok(guard) = cache.read() {
+        if let Some(ref cached) = *guard {
+            if cached.0 == mtime {
+                return Some(cached.1.clone());
+            }
+        }
+    }
+    // Cache miss — read and parse
+    let deps = read_package_json_deps_uncached(path)?;
+    if let Ok(mut guard) = cache.write() {
+        *guard = Some((mtime, deps.clone()));
+    }
+    Some(deps)
+}
+
+fn read_package_json_deps_uncached(path: &Path) -> Option<HashMap<String, String>> {
     let s = std::fs::read_to_string(path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&s).ok()?;
     let mut deps = HashMap::new();

@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{OnceLock, RwLock};
+use std::time::SystemTime;
 
 use crate::Backend;
 
@@ -169,6 +170,10 @@ fn npmrc_cache_key(dir: &Path) -> String {
 
 /// Load config from .jholrc in dir, then ~/.jholrc. Missing or invalid file = default.
 pub fn load_config(dir: &Path) -> Config {
+    load_config_cached(dir)
+}
+
+fn load_config_uncached(dir: &Path) -> Config {
     let mut cfg = Config::default();
     let home = dirs_home();
     let candidates = [
@@ -420,6 +425,46 @@ pub fn load_config(dir: &Path) -> Config {
         }
     }
     cfg
+}
+
+static CONFIG_CACHE: OnceLock<RwLock<Option<(SystemTime, Config)>>> = OnceLock::new();
+
+fn load_config_cached(dir: &Path) -> Config {
+    let cache = CONFIG_CACHE.get_or_init(|| RwLock::new(None));
+    // Check mtime of candidate files
+    let home = dirs_home();
+    let candidates = [
+        dir.join(".jholrc"),
+        home.map(|h| h.join(".jholrc"))
+            .unwrap_or_else(|| dir.join(".none")),
+    ];
+    let latest_mtime = candidates.iter()
+        .filter_map(|p| p.is_file().then(|| p.metadata().ok()?.modified().ok()))
+        .flatten()
+        .max();
+
+    // Read lock — if cache is fresh, return cached copy
+    if let Ok(guard) = cache.read() {
+        if let Some(ref cached) = *guard {
+            if cached.0 == latest_mtime.unwrap_or(SystemTime::UNIX_EPOCH) {
+                return cached.1.clone();
+            }
+        }
+    }
+
+    // Cache miss — load fresh
+    let cfg = load_config_uncached(dir);
+    if let Ok(mut guard) = cache.write() {
+        *guard = Some((latest_mtime.unwrap_or(SystemTime::now()), cfg.clone()));
+    }
+    cfg
+}
+
+/// Invalidate config cache (called when .jholrc changes via external tools).
+pub fn invalidate_config_cache() {
+    if let Ok(mut guard) = CONFIG_CACHE.get_or_init(|| RwLock::new(None)).write() {
+        *guard = None;
+    }
 }
 
 /// Deep-merge an env-specific block into the config.

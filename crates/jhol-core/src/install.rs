@@ -61,49 +61,31 @@ where
     }
 
     // Fast path: for tiny batches, avoid thread spawn + lock/channel overhead.
-    // This materially helps warm/offline installs where worksets are often very small.
     if concurrency <= 1 || items.len() <= sequential_threshold.clamp(1, 64) {
         return items.into_iter().map(job).collect();
     }
 
     let worker_count = concurrency.clamp(1, 64).min(items.len());
-    let queue = Arc::new(Mutex::new(VecDeque::from(items)));
-    let job = Arc::new(job);
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut handles = Vec::with_capacity(worker_count);
+    let total_items = items.len();
 
-    for _ in 0..worker_count {
-        let queue = Arc::clone(&queue);
-        let tx = tx.clone();
-        let job = Arc::clone(&job);
-        handles.push(std::thread::spawn(move || loop {
-            let next = match queue.lock() {
-                Ok(mut q) => q.pop_front(),
-                Err(_) => None,
-            };
-            let Some(item) = next else {
-                break;
-            };
+    // Use global rayon threadpool for thread reuse across install calls.
+    static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+    let pool = POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(64)
+            .thread_name(|i| format!("jhol-worker-{}", i))
+            .build()
+            .expect("jhol threadpool")
+    });
 
-            let output = (job)(item);
-            if tx.send(output).is_err() {
-                break;
-            }
-        }));
-    }
-
-    drop(tx);
-
-    let mut outputs = Vec::with_capacity(worker_count);
-    for item in rx {
-        outputs.push(item);
-    }
-
-    for handle in handles {
-        let _ = handle.join();
-    }
-
-    outputs
+    pool.install(|| {
+        use rayon::prelude::*;
+        items
+            .into_par_iter()
+            .with_max_len(std::cmp::max(1, total_items / worker_count))
+            .map(job)
+            .collect()
+    })
 }
 
 fn transitive_cache_enabled() -> bool {
@@ -906,7 +888,7 @@ impl Default for InstallOptions {
         Self {
             no_cache: false,
             quiet: false,
-            backend: backend::resolve_backend(None),
+            backend: Backend::Npm,  // lazy: avoid bun_available() subprocess at Default
             lockfile_only: false,
             offline: false,
             strict_lockfile: false,
