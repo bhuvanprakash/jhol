@@ -338,7 +338,7 @@ pub fn lockfile_content_hash(dir: &Path) -> Option<String> {
 }
 
 /// Sanitize package name to prevent path traversal attacks
-fn sanitize_package_name(package: &str) -> Option<String> {
+pub fn validate_package_name(package: &str) -> Option<String> {
     // Remove any path separators and dangerous characters
     let sanitized: String = package
         .chars()

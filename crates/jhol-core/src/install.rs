@@ -876,6 +876,7 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
     Ok(true)
 }
 
+#[derive(Clone)]
 pub struct InstallOptions {
     pub no_cache: bool,
     pub quiet: bool,
@@ -890,6 +891,12 @@ pub struct InstallOptions {
     pub native_only: bool,
     /// When true, skip lifecycle scripts in backend fallback paths.
     pub no_scripts: bool,
+    /// Resolver strategy string (from JHOL_RESOLVER env).
+    pub resolver: String,
+    /// Overrides from package.json (name → version spec).
+    pub overrides: Option<std::collections::HashMap<String, String>>,
+    /// Enable telemetry for this install.
+    pub telemetry: bool,
     /// Optional allowlist for packages allowed to run scripts in backend fallback mode.
     pub script_allowlist: Option<std::collections::HashSet<String>>,
 }
@@ -908,6 +915,9 @@ impl Default for InstallOptions {
             native_only: true,
             no_scripts: true,
             script_allowlist: None,
+            resolver: String::new(),
+            overrides: None,
+            telemetry: false,
         }
     }
 }

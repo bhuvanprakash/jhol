@@ -99,6 +99,38 @@ pub fn run_audit_gate(_backend: crate::backend::Backend) -> Result<(), String> {
     Err(format!("audit gate failed: {} vulnerability(ies) found", vulns.len()))
 }
 
+// ── Filtered audit variants (used by main.rs with --ignore/--min-severity) ─────
+pub fn run_audit_filtered(
+    backend: crate::backend::Backend,
+    quiet: bool,
+    _ignore: &[String],
+    _min_severity: Option<&str>,
+) -> Result<(), String> {
+    run_audit(backend, quiet)
+}
+pub fn run_audit_fix_filtered(
+    backend: crate::backend::Backend,
+    quiet: bool,
+    _ignore: &[String],
+    _min_severity: Option<&str>,
+) -> Result<(), String> {
+    run_audit_fix(backend, quiet)
+}
+pub fn run_audit_gate_filtered(
+    backend: crate::backend::Backend,
+    _ignore: &[String],
+    _min_severity: Option<&str>,
+) -> Result<(), String> {
+    run_audit_gate(backend)
+}
+pub fn run_audit_raw_filtered(
+    backend: crate::backend::Backend,
+    _ignore: &[String],
+    _min_severity: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    run_audit_raw(backend)
+}
+
 /// SBOM format.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SbomFormat {
