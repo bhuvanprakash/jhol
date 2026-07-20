@@ -1357,6 +1357,9 @@ pub fn download_tarball_to_store_hash_only(
                 }
             }
 
+            // JAGR-S: store tarball bytes in append-only log
+            let _ = crate::jagrs::store_tarball(&tarball);
+
             // Pre-populate unpacked store to avoid a second decompression pass in cold installs.
             let unpacked = cache_dir.join("store_unpacked").join(&hash);
             if !unpacked.exists() {
@@ -1393,6 +1396,12 @@ pub fn download_tarball_to_store_hash_only(
         }
     }
     let hash = crate::utils::content_hash(&tmp).map_err(|e| e.to_string())?;
+
+    // JAGR-S: store tarball bytes in append-only log
+    if let Ok(data) = std::fs::read(&tmp) {
+        let _ = crate::jagrs::store_tarball(&data);
+    }
+
     let store_file = store_dir.join(format!("{}.tgz", hash));
     std::fs::rename(&tmp, &store_file)
         .or_else(|_| std::fs::copy(&tmp, &store_file).map(|_| ()))

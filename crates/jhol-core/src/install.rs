@@ -903,6 +903,12 @@ fn get_cached_tarball_fast(
         if store_file.exists() {
             return Some(store_file);
         }
+        // Also check JAGR-S objects store
+        if crate::jagrs::has_tarball(hash) {
+            // Tarball exists in JAGR-S objects log — return the store path
+            // even if .tgz file doesn't exist (it will be extracted from JAGR-S)
+            return Some(store_file);
+        }
     }
 
     // Try original key
@@ -1287,6 +1293,28 @@ fn sync_hidden_lockfile() {
 /// Install dependencies from package.json (and optional package-lock.json or bun.lock). Returns list of specs to install.
 /// If strict_lockfile is true, requires lockfile to exist and all deps to be in lockfile.
 fn can_reuse_lockfile_for_requested(packages: &[&str]) -> Option<Vec<String>> {
+    // Try capsule first — zero-parse mmap walk
+    let cap_path = crate::capsule::capsule_path(Path::new("."));
+    if cap_path.exists() {
+        if let Ok(view) = crate::capsule::read_capsule(&cap_path) {
+            let n = view.package_count();
+            if n > 0 {
+                let mut specs: Vec<String> = Vec::with_capacity(n);
+                for i in 0..n {
+                    let e = view.entry(i);
+                    let name = view.entry_name(e);
+                    let version = view.entry_version(e);
+                    let spec = format!("{}@{}", name, version);
+                    specs.push(spec);
+                }
+                specs.sort();
+                specs.dedup();
+                return Some(specs);
+            }
+        }
+    }
+
+    // Fallback: lockfile-based lookup
     let resolved = lockfile::read_resolved_from_dir(Path::new("."))?;
 
     for pkg in packages {
@@ -1468,8 +1496,71 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         utils::read_store_index()
     };
 
+    // Topological wave optimization: use capsule to skip entire waves
+    // of already-installed packages. Only process waves with missing packages.
+    let wave_skip = if !options.no_cache {
+        let cap_path = crate::capsule::capsule_path(Path::new("."));
+        if cap_path.exists() {
+            if let Ok(view) = crate::capsule::read_capsule(&cap_path) {
+                if view.package_count() > 0 {
+                    // Group specs by install_order
+                    let mut wave_specs: std::collections::BTreeMap<u16, Vec<String>> = std::collections::BTreeMap::new();
+                    for i in 0..view.package_count() {
+                        let e = view.entry(i);
+                        let spec = format!("{}@{}", view.entry_name(e), view.entry_version(e));
+                        wave_specs.entry(e.install_order).or_default().push(spec);
+                    }
+                    // Check which waves are fully installed
+                    let mut skip_packages: std::collections::HashSet<String> = std::collections::HashSet::new();
+                    for (_order, specs) in &wave_specs {
+                        let all_installed = specs.iter().all(|s| {
+                            let name = s.split('@').next().unwrap_or(s);
+                            let pkg_dir = Path::new("node_modules").join(
+                                if name.starts_with('@') {
+                                    let parts: Vec<&str> = name.split('/').collect();
+                                    let scope = parts[0];
+                                    let rest: Vec<&str> = parts[1..].to_vec();
+                                    format!("{}/{}", scope, rest.join("/"))
+                                } else {
+                                    name.to_string()
+                                }
+                            );
+                            pkg_dir.join("package.json").exists()
+                        });
+                        if all_installed {
+                            for spec in specs {
+                                skip_packages.insert(spec.clone());
+                            }
+                        } else {
+                            // Wave partially installed — process all packages in it
+                            // (don't skip any in this wave)
+                        }
+                    }
+                    skip_packages
+                } else {
+                    std::collections::HashSet::new()
+                }
+            } else {
+                std::collections::HashSet::new()
+            }
+        } else {
+            std::collections::HashSet::new()
+        }
+    } else {
+        std::collections::HashSet::new()
+    };
+
     for package in &requested_packages {
         let base = base_name(package);
+
+        // Topological wave skip: if this entire wave is already installed, skip
+        if wave_skip.contains(package) || wave_skip.contains(base) {
+            if !options.quiet {
+                utils::log(&format!("Skipping {} (wave already installed)", package));
+            }
+            continue;
+        }
+
         if seen_packages.contains(base) {
             if !options.quiet {
                 crate::utils::log(&format!(

@@ -438,9 +438,61 @@ pub fn get_tarball(hash: &str) -> Option<Vec<u8>> {
     global_store().get_tarball(hash)
 }
 
-/// Flush all pending writes.
-pub fn flush_store() -> Result<(), String> {
-    global_store().flush()
+/// Download tarball and stream directly into JAGR-S objects + store_unpacked in one pass.
+/// No `.tgf` file is written to the flat store. Returns the content hash.
+pub fn download_and_stream_to_store(
+    url: &str,
+    cache_dir: &str,
+    pkg_key: &str,
+) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+
+    // Download into memory buffer
+    let bytes = crate::http_client::get(url)
+        .map_err(|e| format!("download: {}", e))?;
+
+    // Compute SHA256 hash
+    let hash = format!("{:x}", Sha256::digest(&bytes));
+
+    // Store in JAGR-S objects log
+    let store = global_store();
+    store.store(&bytes)?;
+
+    // Extract to store_unpacked/<hash> for fast symlinks
+    // Write bytes to temp file for extraction API
+    let unpacked = std::path::PathBuf::from(cache_dir).join("store_unpacked").join(&hash);
+    if !unpacked.exists() {
+        std::fs::create_dir_all(&unpacked).map_err(|e| format!("mkdir unpacked: {}", e))?;
+        let tmp_tar = std::path::PathBuf::from(cache_dir).join(format!("tmp-stream-{}.tgz", hash));
+        std::fs::write(&tmp_tar, &bytes).map_err(|e| format!("write temp: {}", e))?;
+        if let Err(e) = crate::selective_extract::extract_selective_to_path(&tmp_tar, &unpacked) {
+            let _ = std::fs::remove_dir_all(&unpacked);
+            let _ = std::fs::remove_file(&tmp_tar);
+            return Err(e);
+        }
+        let _ = std::fs::remove_file(&tmp_tar);
+    }
+
+    // Record alias
+    if let Some(at) = pkg_key.find('@') {
+        let name = &pkg_key[..at];
+        let version = &pkg_key[at + 1..];
+        store.store_alias(name, version, &hash).ok();
+    }
+
+    Ok(hash)
+}
+
+/// Check if a tarball exists in JAGR-S objects store.
+pub fn has_tarball_in_store(hash: &str) -> bool {
+    let key_hash = xxhash_rust::xxh3::xxh3_64(hash.as_bytes());
+    let store = global_store();
+    store.probe(key_hash, 1).is_some()
+}
+
+/// Get tarball bytes from JAGR-S objects store (for re-extraction).
+pub fn get_tarball_from_store(hash: &str) -> Option<Vec<u8>> {
+    global_store().get_tarball(hash)
 }
 
 /// Migrate from v1 JSON index to v3 JAGR-S store.
