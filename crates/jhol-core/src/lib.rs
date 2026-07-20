@@ -36,10 +36,12 @@ pub mod resolution_mirror;
 pub mod run;
 pub mod safe_file;
 pub mod selective_extract;
+pub mod soul_path;
 pub mod task_queue;
 pub mod utils;
 pub mod ux;
 pub mod workspaces;
+pub mod zero_copy_metadata;
 
 // Innovation modules
 pub mod binary_lockfile;
@@ -54,6 +56,7 @@ pub mod mpt_store;
 pub mod second_order_markov;
 pub mod lattice_cache;
 pub mod sat_resolver;
+pub mod feature_graph;
 
 #[cfg(target_os = "linux")]
 pub mod fuse_mount;
@@ -108,7 +111,10 @@ pub fn lockfile_fingerprint_matches() -> bool {
 
 /// Check whether a jhol-specific lockfile exists.
 pub fn has_jhol_lockfile(_project_dir: &std::path::Path) -> bool {
-    _project_dir.join("jhol-lock.json").exists()
+    let lock_path = _project_dir.join("package-lock.json");
+    std::fs::read_to_string(lock_path)
+        .map(|contents| contents.contains("\"jhol\""))
+        .unwrap_or(false)
 }
 
 // ── Audit re-exports (may be replaced by the full audit module later) ─────────

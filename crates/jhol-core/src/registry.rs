@@ -477,6 +477,7 @@ fn get_metadata_cache() -> &'static std::sync::Mutex<MetadataCache> {
 /// Fetch package metadata from registry. Scoped: @scope/pkg -> @scope%2Fpkg.
 /// Tries abbreviated packument (Accept: application/vnd.npm.install-v1+json) first;
 /// falls back to full if unsupported or incomplete.
+/// Soul Path: also checks daemon cache for pre-fetched packuments.
 pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
     let cache_key = format!("metadata:{}", package);
 
@@ -491,7 +492,6 @@ pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
                 .expect("lazy_metadata: failed to access cached data")
                 .raw_bytes;
             if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(bytes) {
-                // Check if abbreviated packument is sufficient
                 if parsed
                     .get("versions")
                     .and_then(|v| v.as_object())
@@ -500,6 +500,25 @@ pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
                 {
                     return Ok(parsed.clone());
                 }
+            }
+        }
+    }
+
+    // Soul Path: try daemon shared memory arena
+    if let Some(cached_bytes) = crate::daemon_cache::DaemonCache::lookup(package, true) {
+        if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&cached_bytes) {
+            if parsed
+                .get("versions")
+                .and_then(|v| v.as_object())
+                .map(|o| !o.is_empty())
+                .unwrap_or(false)
+            {
+                // warm in-mem cache
+                let mut cache = get_metadata_cache()
+                    .lock()
+                    .expect("metadata_cache: mutex lock failed (poisoned)");
+                cache.insert(cache_key, CachedMetadata::new(cached_bytes));
+                return Ok(parsed);
             }
         }
     }
@@ -528,9 +547,9 @@ pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
         let mut cache = get_metadata_cache()
             .lock()
             .expect("metadata_cache: mutex lock failed (poisoned)");
-        cache.insert(cache_key, CachedMetadata::new(body));
-
-        // Return parsed value
+        cache.insert(cache_key, CachedMetadata::new(body.clone()));
+        // Soul Path: propagate to daemon arena for cross-process reuse
+        crate::daemon_cache::DaemonCache::record(package, true, body);
         return Ok(parsed);
     }
 
@@ -538,11 +557,11 @@ pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
     let body = fetch_packument_with_etag(package, false)?;
     let v: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
 
-    // Cache the full metadata
     let mut cache = get_metadata_cache()
         .lock()
         .expect("metadata_cache: mutex lock failed (poisoned)");
-    cache.insert(cache_key, CachedMetadata::new(body));
+    cache.insert(cache_key, CachedMetadata::new(body.clone()));
+    crate::daemon_cache::DaemonCache::record(package, false, body);
 
     Ok(v)
 }
@@ -572,6 +591,15 @@ pub fn fetch_metadata_cached(
     }
     let meta = fetch_metadata(package)?;
     cache.insert(package.to_string(), meta.clone());
+    // Cache in zero-copy metadata mmap for future cross-project hits
+    if let Some(versions) = meta.get("versions").and_then(|v| v.as_object()) {
+        for (ver, pkg_data) in versions {
+            if let Some(obj) = pkg_data.as_object() {
+                let val: serde_json::Value = serde_json::Value::Object(obj.clone());
+                crate::zero_copy_metadata::cache_packument_metadata(package, ver, &val);
+            }
+        }
+    }
     Ok(meta)
 }
 
@@ -630,6 +658,15 @@ pub fn parallel_fetch_metadata(
                         .lock()
                         .expect("metadata_cache: mutex lock failed (poisoned)");
                     guard.insert(name.clone(), meta.clone());
+                    // Soul Path: store in zero-copy metadata mmap
+                    if let Some(versions) = meta.get("versions").and_then(|v| v.as_object()) {
+                        for (ver, pkg_data) in versions {
+                            if let Some(obj) = pkg_data.as_object() {
+                                let val: serde_json::Value = serde_json::Value::Object(obj.clone());
+                                crate::zero_copy_metadata::cache_packument_metadata(&name, ver, &val);
+                            }
+                        }
+                    }
                 }
                 let _ = tx.send((name, res));
             });
@@ -1398,9 +1435,24 @@ pub fn download_tarball_to_store_hash_only(
     }
     let hash = crate::utils::content_hash(&tmp).map_err(|e| e.to_string())?;
 
-    // JAGR-S: store tarball bytes in append-only log
+    // JAGR-S: store tarball bytes + alias; full unpack once (Soul Path content plane)
     if let Ok(data) = std::fs::read(&tmp) {
         let _ = crate::jagrs::store_tarball(&data);
+        if let Some((package, version)) = parse_exact_package_spec(pkg_key) {
+            let _ = crate::jagrs::store_alias(&package, &version, &hash);
+        }
+        let shard = if hash.len() >= 2 { &hash[..2] } else { "xx" };
+        let unpacked = cache_dir.join("store_unpacked").join(shard).join(&hash);
+        if !unpacked.exists() {
+            if let Err(e) = std::fs::create_dir_all(&unpacked)
+                .map_err(|e| e.to_string())
+                .and_then(|_| extract_tarball_bytes_to_dir(&data, &unpacked))
+            {
+                let _ = std::fs::remove_dir_all(&unpacked);
+                let _ = std::fs::remove_file(&tmp);
+                return Err(e);
+            }
+        }
     }
 
     let store_file = store_dir.join(format!("{}.tgz", hash));
@@ -1425,6 +1477,11 @@ pub fn ensure_unpacked_in_store(tarball_path: &Path, cache_dir: &Path) -> Result
         extract_tarball_to_dir(tarball_path, &unpacked)?;
     }
     Ok(unpacked)
+}
+
+/// Public full extract from in-memory tarball bytes (Soul Path / JAGR-S).
+pub fn extract_tarball_bytes_public(tarball_data: &[u8], dest_dir: &Path) -> Result<(), String> {
+    extract_tarball_bytes_to_dir(tarball_data, dest_dir)
 }
 
 fn extract_tarball_bytes_to_dir(tarball_data: &[u8], dest_dir: &Path) -> Result<(), String> {

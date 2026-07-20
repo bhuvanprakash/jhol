@@ -9,7 +9,12 @@
 use memmap2::Mmap;
 use std::fs;
 use std::io::Write;
+use std::mem::size_of;
 use std::path::{Path, PathBuf};
+
+const _: () = assert!(size_of::<CapsuleHeader>() == 64, "CapsuleHeader must be 64 bytes");
+const _: () = assert!(size_of::<PackageEntry>() == 64, "PackageEntry must be 64 bytes");
+const _: () = assert!(size_of::<DepEdge>() == 8, "DepEdge must be 8 bytes");
 
 // ── Constants ────────────────────────────────────────────────────────────────────
 
@@ -31,7 +36,9 @@ pub struct CapsuleHeader {
     pub string_table_len: u32,
     pub manifest_hash: [u8; 8],
     pub total_unpacked_bytes: u64,
-    _reserved: [u8; 24],
+    pub spectral_gap: f64,
+    pub predicted_beta1: u64,
+    _reserved: [u8; 8],
 }
 
 #[repr(C)]
@@ -44,8 +51,8 @@ pub struct PackageEntry {
     pub dep_start: u32,
     pub dep_count: u16,
     pub flags: u16,
+    pub url_off: u32,
     pub install_order: u16,
-    pub url_off: u32,         // offset into string table for tarball URL (0 = not stored)
     _reserved: [u8; 6],
 }
 
@@ -139,6 +146,14 @@ impl CapsuleView {
         unsafe { (*self.header).total_unpacked_bytes }
     }
 
+    pub fn spectral_gap(&self) -> f64 {
+        unsafe { (*self.header).spectral_gap }
+    }
+
+    pub fn predicted_beta1(&self) -> u64 {
+        unsafe { (*self.header).predicted_beta1 }
+    }
+
     pub fn entry(&self, idx: usize) -> &PackageEntry {
         assert!(idx < self.pkg_count, "capsule entry idx {} >= {}", idx, self.pkg_count);
         unsafe { &*self.entries.add(idx) }
@@ -226,6 +241,8 @@ pub struct CapsuleBuilder {
     dep_count: u32,
     total_unpacked: u64,
     manifest_hash: [u8; 8],
+    spectral_gap: f64,
+    predicted_beta1: u64,
 }
 
 impl CapsuleBuilder {
@@ -239,6 +256,8 @@ impl CapsuleBuilder {
             dep_count: 0,
             total_unpacked: 0,
             manifest_hash,
+            spectral_gap: 1.0,
+            predicted_beta1: 0,
         }
     }
 
@@ -284,8 +303,8 @@ impl CapsuleBuilder {
         self.entries.extend_from_slice(&dep_start.to_le_bytes());
         self.entries.extend_from_slice(&(deps.len() as u16).to_le_bytes());
         self.entries.extend_from_slice(&flags.to_le_bytes());
-        self.entries.extend_from_slice(&install_order.to_le_bytes());
         self.entries.extend_from_slice(&url_off.to_le_bytes());
+        self.entries.extend_from_slice(&install_order.to_le_bytes());
         self.entries.extend_from_slice(&[0u8; 6]);
 
         self.pkg_count += 1;
@@ -311,7 +330,9 @@ impl CapsuleBuilder {
         buf.extend_from_slice(&(self.string_table.len() as u32).to_le_bytes());
         buf.extend_from_slice(&self.manifest_hash);
         buf.extend_from_slice(&self.total_unpacked.to_le_bytes());
-        buf.extend_from_slice(&[0u8; 24]); // reserved
+        buf.extend_from_slice(&self.spectral_gap.to_le_bytes());
+        buf.extend_from_slice(&self.predicted_beta1.to_le_bytes());
+        buf.extend_from_slice(&[0u8; 8]); // reserved
 
         // Entries
         buf.extend_from_slice(&self.entries);
@@ -323,6 +344,11 @@ impl CapsuleBuilder {
         buf.extend_from_slice(&self.dep_edges);
 
         buf
+    }
+
+    pub fn set_spectral(&mut self, spectral_gap: f64, predicted_beta1: u64) {
+        self.spectral_gap = spectral_gap;
+        self.predicted_beta1 = predicted_beta1;
     }
 
     pub fn package_count(&self) -> usize {
@@ -378,95 +404,110 @@ pub fn compute_manifest_hash(project_dir: &Path) -> Result<[u8; 8], String> {
 // ── Install from capsule ─────────────────────────────────────────────────────────
 
 /// Install all packages from a capsule into node_modules.
-/// Uses the existing sync APIs: store_dir for tarballs, selective_extract for extraction.
+/// Soul Path: mmap → install_order waves → JAGR-S / store_unpacked project.
 pub fn install_from_capsule(view: &CapsuleView, project_dir: &Path) -> Result<(), String> {
+    // Prefer waveform path (parallel by install_order)
+    if crate::soul_path::stream_install_enabled() || view.package_count() > 0 {
+        return crate::soul_path::waveform_install_capsule(view, project_dir).or_else(|e| {
+            crate::utils::log(&format!(
+                "Soul Path waveform fallback to serial capsule: {}",
+                e
+            ));
+            install_from_capsule_serial(view, project_dir)
+        });
+    }
+    install_from_capsule_serial(view, project_dir)
+}
+
+fn install_from_capsule_serial(view: &CapsuleView, project_dir: &Path) -> Result<(), String> {
+    crate::soul_path::ensure_jagrs_migrated();
     let node_modules = project_dir.join("node_modules");
     fs::create_dir_all(&node_modules).map_err(|e| format!("capsule: mkdir node_modules: {}", e))?;
-    fs::create_dir_all(node_modules.join(".bin")).map_err(|e| format!("capsule: mkdir .bin: {}", e))?;
+    fs::create_dir_all(node_modules.join(".bin"))
+        .map_err(|e| format!("capsule: mkdir .bin: {}", e))?;
 
-    let cache_dir = crate::utils::get_cache_dir();
-    let store_dir = PathBuf::from(&cache_dir).join("store");
-    let nm = &node_modules;
+    let cache_dir = PathBuf::from(crate::utils::get_cache_dir());
+    let store_dir = cache_dir.join("store");
     let n = view.package_count();
-
     let mut install_any = false;
+    let mut index_batch: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
 
-    for i in 0..n {
+    // Sort by install_order for serial correctness
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by_key(|&i| view.entry(i).install_order);
+
+    for i in order {
         let entry = view.entry(i);
         let name = view.entry_name(entry);
         let version = view.entry_version(entry);
         let tarball_hex = hex::encode(entry.tarball_hash);
 
         let pkg_dir = if name.starts_with('@') {
-            let slash = name.find('/').ok_or_else(|| format!("invalid scoped name: {}", name))?;
-            let scope_dir = nm.join(&name[..slash]);
+            let slash = name
+                .find('/')
+                .ok_or_else(|| format!("invalid scoped name: {}", name))?;
+            let scope_dir = node_modules.join(&name[..slash]);
             fs::create_dir_all(&scope_dir).map_err(|e| format!("capsule: mkdir scope: {}", e))?;
             scope_dir.join(&name[slash + 1..])
         } else {
-            nm.join(name)
+            node_modules.join(name)
         };
 
         if pkg_dir.join("package.json").exists() {
-            continue; // already installed
+            continue;
         }
-
         install_any = true;
 
-        // Check store
-        let tarball_file = store_dir.join(format!("{}.tgz", tarball_hex));
-        if tarball_file.exists() {
-            crate::selective_extract::extract_selective_to_path(&tarball_file, &pkg_dir)
-                .map_err(|e| format!("capsule: extract {}: {}", name, e))?;
-        } else {
-            // Fetch from registry — use URL from capsule if available
-            let url = if entry.url_off != 0 {
-                view.entry_url(entry).to_string()
-            } else {
-                format!(
-                    "https://registry.npmjs.org/{}/-/{}-{}.tgz",
-                    name.replace('/', "%2F"),
-                    name.split('/').last().unwrap_or(name),
-                    version
-                )
-            };
-            let bytes = crate::http_client::get_bytes_with_bearer(url.as_str(), None)
-                .map_err(|e| format!("capsule: fetch {}@{}: {}", name, version, e))?;
-
-            // Save to store
-            let store_path = store_dir.join(format!("{}.tgz", tarball_hex));
-            fs::create_dir_all(&store_dir).ok();
-            {
-                let mut f = fs::File::create(&store_path)
-                    .map_err(|e| format!("capsule: store file: {}", e))?;
-                f.write_all(&bytes).map_err(|e| format!("capsule: write store: {}", e))?;
-            }
-
-            // Extract
-            crate::selective_extract::extract_selective_to_path(&store_path, &pkg_dir)
-                .map_err(|e| format!("capsule: extract {}: {}", name, e))?;
+        if crate::soul_path::project_package(name, version, &tarball_hex, &node_modules, &cache_dir)
+            .is_ok()
+        {
+            index_batch.insert(format!("{}@{}", name, version), tarball_hex);
+            continue;
         }
 
-        // Update store index
+        // Cold: fetch URL from capsule
+        let url = if entry.url_off != 0 {
+            view.entry_url(entry).to_string()
+        } else {
+            format!(
+                "https://registry.npmjs.org/{}/-/{}-{}.tgz",
+                name.replace('/', "%2F"),
+                name.split('/').last().unwrap_or(name),
+                version
+            )
+        };
+        let pkg_key = format!("{}@{}", name, version);
+        let hash: String = crate::jagrs::download_and_stream_to_store(&url, cache_dir.to_str().unwrap_or("."), &pkg_key)
+            .or_else(|_| -> Result<String, String> {
+                let bytes = crate::http_client::get_bytes_with_bearer(&url, None)?;
+                fs::create_dir_all(&store_dir).ok();
+                let store_path = store_dir.join(format!("{}.tgz", tarball_hex));
+                fs::write(&store_path, &bytes).map_err(|e| e.to_string())?;
+                let _ = crate::jagrs::store_tarball(&bytes);
+                let _ = crate::registry::ensure_unpacked_in_store(&store_path, &cache_dir);
+                Ok(tarball_hex.clone())
+            })?;
+        crate::soul_path::project_package(name, version, &hash, &node_modules, &cache_dir)
+            .map_err(|e| format!("capsule: project {}: {}", name, e))?;
+        index_batch.insert(format!("{}@{}", name, version), hash);
+    }
+
+    if !index_batch.is_empty() {
         let mut index = crate::utils::read_store_index();
-        index.insert(format!("{}@{}", name, version), tarball_hex.clone());
-        crate::utils::write_store_index(&index).ok();
+        index.extend(index_batch);
+        let _ = crate::utils::write_store_index(&index);
     }
-
     if install_any {
-        crate::bin_links::rebuild_bin_links(nm).ok();
+        crate::bin_links::rebuild_bin_links(&node_modules).ok();
     }
-
     Ok(())
 }
 
 // ── Build capsule from project directory ────────────────────────────────────────
 
 /// Build and write a capsule from the current project state.
-/// Reads package-lock.json and store index to construct the capsule.
-/// Stores each package name, version, tarball hash (from store index),
-/// and install_order (topological depth).
-/// Dependency edges are not stored in this simplified version — the linear
-/// walk by install_order is sufficient for the install fast path.
+/// Real DepEdges + topo install_order (Soul Path graph plane).
 pub fn write_capsule_from_project(project_dir: &Path) -> Result<(), String> {
     let lockfile_path = project_dir.join("package-lock.json");
     if !lockfile_path.exists() {
@@ -474,41 +515,200 @@ pub fn write_capsule_from_project(project_dir: &Path) -> Result<(), String> {
     }
 
     let manifest_hash = compute_manifest_hash(project_dir)?;
-    let lockfile_bytes = std::fs::read(&lockfile_path)
-        .map_err(|e| format!("read lockfile: {}", e))?;
-    let lockfile: serde_json::Value = serde_json::from_slice(&lockfile_bytes)
-        .map_err(|e| format!("parse lockfile: {}", e))?;
+    let lockfile_bytes =
+        std::fs::read(&lockfile_path).map_err(|e| format!("read lockfile: {}", e))?;
+    let lockfile: serde_json::Value =
+        serde_json::from_slice(&lockfile_bytes).map_err(|e| format!("parse lockfile: {}", e))?;
 
     let packages = match lockfile.get("packages").and_then(|p| p.as_object()) {
         Some(p) => p,
         None => return Ok(()),
     };
 
-    // Filter out root package (key = "")
-    let dep_keys: Vec<&String> = packages.keys().filter(|k| !k.is_empty()).collect();
-    if dep_keys.is_empty() {
+    // name → lockfile key (prefer top-level node_modules/<name>)
+    let mut name_to_key: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut ordered_names: Vec<String> = Vec::new();
+    for key in packages.keys() {
+        if key.is_empty() {
+            continue;
+        }
+        let name = lockfile_key_to_name(key);
+        // Prefer shallowest key for a name
+        let depth = key.matches("node_modules").count();
+        match name_to_key.get(&name) {
+            Some(existing) => {
+                let ed = existing.matches("node_modules").count();
+                if depth < ed {
+                    name_to_key.insert(name.clone(), key.clone());
+                }
+            }
+            None => {
+                name_to_key.insert(name.clone(), key.clone());
+                ordered_names.push(name);
+            }
+        }
+    }
+    if ordered_names.is_empty() {
         return Ok(());
     }
+
+    // name → capsule index
+    let mut name_idx: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    for (i, n) in ordered_names.iter().enumerate() {
+        name_idx.insert(n.clone(), i as u32);
+    }
+
+    // Build adjacency for topo order
+    let mut edges_by_name: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    let mut indeg: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    for n in &ordered_names {
+        indeg.entry(n.clone()).or_insert(0);
+    }
+    for name in &ordered_names {
+        let key = match name_to_key.get(name) {
+            Some(k) => k,
+            None => continue,
+        };
+        let pkg = &packages[key];
+        let mut deps = Vec::new();
+        if let Some(obj) = pkg.get("dependencies").and_then(|d| d.as_object()) {
+            for dname in obj.keys() {
+                if name_idx.contains_key(dname) {
+                    deps.push(dname.clone());
+                    *indeg.entry(dname.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+        edges_by_name.insert(name.clone(), deps);
+    }
+
+    // Kahn topo → install_order (deps first = lower order)
+    let mut order_map: std::collections::HashMap<String, u16> = std::collections::HashMap::new();
+    let mut queue: std::collections::VecDeque<String> = indeg
+        .iter()
+        .filter(|(_, &d)| d == 0)
+        .map(|(n, _)| n.clone())
+        .collect();
+    // Reverse edges: dep → dependents for Kahn on "deps first"
+    // Actually indeg counts how many packages depend ON this? We incremented for deps of name,
+    // so indeg[dep] = number of packages that list dep. Roots have indeg 0 = nothing depends... wait
+    // We want deps installed BEFORE dependents. So edge name→dep means name needs dep first.
+    // indeg[dep] was incremented when name depends on dep — that's wrong for "deps first".
+    // Fix: indeg[name] = number of deps name still needs.
+    let mut indeg2: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut rev: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for n in &ordered_names {
+        indeg2.insert(n.clone(), 0);
+    }
+    for (name, deps) in &edges_by_name {
+        indeg2.insert(name.clone(), deps.len() as u32);
+        for d in deps {
+            rev.entry(d.clone()).or_default().push(name.clone());
+        }
+    }
+    queue = indeg2
+        .iter()
+        .filter(|(_, &d)| d == 0)
+        .map(|(n, _)| n.clone())
+        .collect();
+    let mut wave: u16 = 0;
+    let mut placed = 0usize;
+    while !queue.is_empty() {
+        let layer: Vec<String> = queue.drain(..).collect();
+        for n in &layer {
+            order_map.insert(n.clone(), wave);
+            placed += 1;
+            if let Some(dependents) = rev.get(n) {
+                for depn in dependents {
+                    if let Some(c) = indeg2.get_mut(depn) {
+                        *c = c.saturating_sub(1);
+                        if *c == 0 {
+                            queue.push_back(depn.clone());
+                        }
+                    }
+                }
+            }
+        }
+        wave = wave.saturating_add(1);
+    }
+    // Cycles / leftovers
+    for n in &ordered_names {
+        order_map.entry(n.clone()).or_insert(wave);
+        if !order_map.contains_key(n) {
+            placed += 1;
+        }
+    }
+    let _ = placed;
 
     let store_index = crate::utils::read_store_index();
     let mut builder = CapsuleBuilder::new(manifest_hash);
 
-    for key in &dep_keys {
-        let pkg = &packages[*key];
-        let name = key.strip_prefix("node_modules/").unwrap_or(key.as_str());
-        let version = pkg.get("version").and_then(|v| v.as_str()).unwrap_or("0.0.0");
+    // Set spectral gate fields from DSSC proxy on root deps
+    if let Ok(pj_bytes) = std::fs::read(project_dir.join("package.json")) {
+        if let Ok(pj) = serde_json::from_slice::<serde_json::Value>(&pj_bytes) {
+            if let Some(deps_obj) = pj.get("dependencies").and_then(|d| d.as_object()) {
+                let deps: std::collections::HashMap<String, String> = deps_obj
+                    .iter()
+                    .map(|(k, v)| {
+                        (k.clone(), v.as_str().unwrap_or("*").to_string())
+                    })
+                    .collect();
+                let gate = crate::soul_path::spectral_gate_from_deps(&deps);
+                builder.set_spectral(gate.spectral_gap, gate.predicted_beta1 as u64);
+            }
+        }
+    }
+
+    // Add packages in ordered_names order so indices match name_idx
+    for name in &ordered_names {
+        let key = name_to_key.get(name).unwrap();
+        let pkg = &packages[key];
+        let version = pkg
+            .get("version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("0.0.0");
         let tarball_hash = resolve_tarball_hash(name, version, pkg, &store_index);
-        let unpacked_size = pkg.get("integrity").map(|_| 0u32).unwrap_or(0);
+        let unpacked_size = 0u32;
         let flags = extract_flags(pkg);
-        // install_order based on key depth — deeper = later
-        let depth = key.matches('/').count() as u16;
-        builder.add_package(name, version, &tarball_hash, unpacked_size, &[], depth, flags, "");
+        let install_order = *order_map.get(name).unwrap_or(&0);
+        let url = pkg
+            .get("resolved")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let mut deps_idx: Vec<(u32, u16)> = Vec::new();
+        if let Some(dlist) = edges_by_name.get(name) {
+            for d in dlist {
+                if let Some(&idx) = name_idx.get(d) {
+                    deps_idx.push((idx, 0)); // 0 = runtime dep
+                }
+            }
+        }
+        builder.add_package(
+            name,
+            version,
+            &tarball_hash,
+            unpacked_size,
+            &deps_idx,
+            install_order,
+            flags,
+            url,
+        );
     }
 
     let cap_path = capsule_path(project_dir);
     write_capsule(&cap_path, builder)?;
-
     Ok(())
+}
+
+fn lockfile_key_to_name(key: &str) -> String {
+    // node_modules/foo or node_modules/@s/p or nested .../node_modules/foo
+    if let Some(idx) = key.rfind("node_modules/") {
+        return key[idx + "node_modules/".len()..].to_string();
+    }
+    key.trim_start_matches("node_modules/").to_string()
 }
 
 fn extract_flags(pkg: &serde_json::Value) -> u16 {

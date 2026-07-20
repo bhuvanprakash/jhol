@@ -438,8 +438,8 @@ pub fn get_tarball(hash: &str) -> Option<Vec<u8>> {
     global_store().get_tarball(hash)
 }
 
-/// Download tarball and stream directly into JAGR-S objects + store_unpacked in one pass.
-/// No `.tgf` file is written to the flat store. Returns the content hash.
+/// Download tarball and stream directly into JAGR-S objects + full store_unpacked.
+/// One pass from memory — no selective loss into the content plane.
 pub fn download_and_stream_to_store(
     url: &str,
     cache_dir: &str,
@@ -447,41 +447,62 @@ pub fn download_and_stream_to_store(
 ) -> Result<String, String> {
     use sha2::{Digest, Sha256};
 
-    // Download into memory buffer
-    let bytes = crate::http_client::get(url)
-        .map_err(|e| format!("download: {}", e))?;
-
-    // Compute SHA256 hash
+    let bytes = crate::http_client::get(url).map_err(|e| format!("download: {}", e))?;
     let hash = format!("{:x}", Sha256::digest(&bytes));
 
-    // Store in JAGR-S objects log
     let store = global_store();
     store.store(&bytes)?;
 
-    // Extract to sharded store_unpacked/ab/<hash> for fast symlinks
-    // Write bytes to temp file for extraction API
     let shard = if hash.len() >= 2 { &hash[..2] } else { "xx" };
-    let unpacked = std::path::PathBuf::from(cache_dir).join("store_unpacked").join(shard).join(&hash);
+    let unpacked = std::path::PathBuf::from(cache_dir)
+        .join("store_unpacked")
+        .join(shard)
+        .join(&hash);
     if !unpacked.exists() {
         std::fs::create_dir_all(&unpacked).map_err(|e| format!("mkdir unpacked: {}", e))?;
-        let tmp_tar = std::path::PathBuf::from(cache_dir).join(format!("tmp-stream-{}.tgz", hash));
-        std::fs::write(&tmp_tar, &bytes).map_err(|e| format!("write temp: {}", e))?;
-        if let Err(e) = crate::selective_extract::extract_selective_to_path(&tmp_tar, &unpacked) {
+        // FULL extract into content plane (Soul Path quality)
+        if let Err(e) = crate::registry::extract_tarball_bytes_public(&bytes, &unpacked) {
             let _ = std::fs::remove_dir_all(&unpacked);
-            let _ = std::fs::remove_file(&tmp_tar);
             return Err(e);
         }
-        let _ = std::fs::remove_file(&tmp_tar);
     }
 
-    // Record alias
-    if let Some(at) = pkg_key.find('@') {
-        let name = &pkg_key[..at];
-        let version = &pkg_key[at + 1..];
+    // Also keep classic .tgz for tools that still open it
+    let store_file = std::path::PathBuf::from(cache_dir)
+        .join("store")
+        .join(format!("{}.tgz", hash));
+    if !store_file.exists() {
+        let _ = std::fs::create_dir_all(store_file.parent().unwrap_or(std::path::Path::new(".")));
+        let _ = std::fs::write(&store_file, &bytes);
+    }
+
+    if let Some((name, version)) = parse_pkg_key(pkg_key) {
         store.store_alias(name, version, &hash).ok();
     }
 
     Ok(hash)
+}
+
+fn parse_pkg_key(pkg_key: &str) -> Option<(&str, &str)> {
+    if pkg_key.starts_with('@') {
+        let rest = &pkg_key[1..];
+        let slash = rest.find('/')?;
+        let after = &rest[slash + 1..];
+        let at = after.rfind('@')?;
+        let name_end = 1 + slash + 1 + at;
+        let name = &pkg_key[..name_end];
+        let version = &pkg_key[name_end + 1..];
+        if version.is_empty() {
+            return None;
+        }
+        Some((name, version))
+    } else {
+        let at = pkg_key.rfind('@')?;
+        if at == 0 {
+            return None;
+        }
+        Some((&pkg_key[..at], &pkg_key[at + 1..]))
+    }
 }
 
 /// Check if a tarball exists in JAGR-S objects store.

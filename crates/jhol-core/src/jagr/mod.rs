@@ -1,4 +1,9 @@
-//! JAGR resolver — stub for compatibility.
+//! JAGR resolver — Layer 0 spectral pre-filter (Soul Path gate).
+//! Full three-layer resolver available via feature flag.
+
+pub mod resolution_differential;
+
+/// Compatibility stub for the full three-layer JAGR resolver.
 pub struct JagrResolver;
 impl JagrResolver {
     pub fn new() -> Self { Self }

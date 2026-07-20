@@ -28,7 +28,11 @@ fn cache_install_concurrency() -> usize {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .map(|n| n.clamp(1, 32))
-        .unwrap_or(1)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get().clamp(4, 32))
+                .unwrap_or(8)
+        })
 }
 
 fn worker_pool_sequential_threshold() -> usize {
@@ -226,12 +230,43 @@ impl ColdResolveStrategy for ManifestThenPackumentStrategy {
         }
 
         if !pending_packument.is_empty() {
+            // Soul Path: check zero-copy metadata store first (avoids network when
+            // another project already fetched this packument).
+            let mut zero_copy_hits: Vec<(String, ResolvedFetch)> = Vec::new();
+            let mut still_needed: Vec<(String, String, String)> = Vec::new();
+            for (pkg, base, version_req) in &pending_packument {
+                if let Some(meta) = crate::zero_copy_metadata::MmapMetadataStore::lookup_packument(base) {
+                    if let Some(version) = crate::soul_path::resolve_version_from_meta(version_req, &meta) {
+                        let version_str = version.to_string();
+                        let url = if meta.dist.tarball_url.is_empty() {
+                            lockfile::tarball_url_from_registry(base, &version_str)
+                        } else {
+                            meta.dist.tarball_url.clone()
+                        };
+                        zero_copy_hits.push((base.clone(), ResolvedFetch {
+                            pkg: pkg.clone(),
+                            url,
+                            integrity: meta.dist.integrity.clone(),
+                            version: version_str,
+                        }));
+                        continue;
+                    }
+                }
+                still_needed.push((pkg.clone(), base.clone(), version_req.clone()));
+            }
+
+            if !zero_copy_hits.is_empty() && still_needed.is_empty() {
+                // All resolved from zero-copy — skip network entirely
+                resolved_work.extend(zero_copy_hits.into_iter().map(|(_, rf)| rf));
+                return resolved_work;
+            }
+
             let cache_arc = Arc::new(Mutex::new(std::collections::HashMap::<
                 String,
                 serde_json::Value,
             >::new()));
 
-            let mut unique_names: Vec<String> = pending_packument
+            let mut unique_names: Vec<String> = still_needed
                 .iter()
                 .map(|(_, base, _)| base.clone())
                 .collect();
@@ -249,7 +284,7 @@ impl ColdResolveStrategy for ManifestThenPackumentStrategy {
                 }
             }
 
-            for (pkg, base, version_req) in pending_packument {
+            for (pkg, base, version_req) in still_needed {
                 let Some(meta) = meta_map.get(&base) else {
                     npm_fallback.push(pkg);
                     continue;
@@ -271,6 +306,8 @@ impl ColdResolveStrategy for ManifestThenPackumentStrategy {
                     version,
                 });
             }
+            // Add zero-copy hits
+            resolved_work.extend(zero_copy_hits.into_iter().map(|(_, rf)| rf));
         }
 
         resolved_work
@@ -439,10 +476,15 @@ fn version_supported_on_current_platform(metadata: &serde_json::Value, version: 
 fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>, String> {
     // Compatibility-first default: include at least one transitive layer for direct installs.
     // Keeps `axios -> follow-redirects` and similar chains correct without requiring env tuning.
+    // Soul Path: default full-depth when streaming; else depth 32 (was 2 — incomplete trees)
     let max_depth = std::env::var("JHOL_TRANSITIVE_DEPTH")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(2);
+        .unwrap_or(if crate::soul_path::stream_install_enabled() {
+            64
+        } else {
+            32
+        });
     let cache_key = {
         let mut specs: Vec<String> = packages.iter().map(|p| (*p).to_string()).collect();
         specs.sort();
@@ -799,7 +841,7 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
 }
 
 /// Read all installed packages from node_modules
-fn read_all_installed_packages(
+pub fn read_all_installed_packages(
     node_modules: &Path,
 ) -> Result<HashMap<String, crate::lockfile_write::ResolvedPackage>, String> {
     let mut packages = HashMap::new();
@@ -1248,6 +1290,12 @@ pub fn install_lockfile_only(_backend: Backend) -> Result<(), JholError> {
             std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
         )
     })?;
+    // Soul Path: record resolution in JMR + GRM + lattice
+    let fp = crate::resolution_mirror::fingerprint_deps(
+        &lockfile::read_package_json_deps(pj).unwrap_or_default(),
+    );
+    crate::resolution_mirror::record_resolution(fp, &tree);
+    crate::soul_path::remember_all_packages(&tree);
     Ok(())
 }
 
@@ -1275,6 +1323,13 @@ fn check_script_allowlist(
                 denied.join(", ")
             ),
         ))
+    }
+}
+
+/// Store currently installed packages in GRM + lattice memory.
+fn remember_installed_packages(node_modules: &Path) {
+    if let Ok(pkgs) = read_all_installed_packages(node_modules) {
+        crate::soul_path::remember_all_packages(&pkgs);
     }
 }
 
@@ -1410,12 +1465,40 @@ pub fn resolve_install_from_package_json(strict_lockfile: bool) -> Result<Vec<St
 pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<(), JholError> {
     let mut profiler = InstallProfiler::new();
     let download_conc = download_concurrency();
-    let cache_install_conc = cache_install_concurrency();
+    let cache_install_conc = cache_install_concurrency().max(1);
+    // Soul Path: warm cache install concurrency defaults higher (was 1)
+    let cache_install_conc = if cache_install_conc == 1
+        && std::env::var("JHOL_CACHE_INSTALL_CONCURRENCY").is_err()
+    {
+        std::thread::available_parallelism()
+            .map(|n| n.get().clamp(4, 32))
+            .unwrap_or(8)
+    } else {
+        cache_install_conc
+    };
     let worker_pool_seq_threshold = worker_pool_sequential_threshold();
     let legacy_chunk_scheduler = use_legacy_chunk_scheduler();
 
-    // Capsule fast-path: if .jhol.capsule exists and manifest hash matches,
-    // install directly from capsule — no lockfile parse, no resolution.
+    // Soul Path: migrate JAGR-S once; spectral capsule execute when possible.
+    crate::soul_path::ensure_jagrs_migrated();
+    if !options.lockfile_only && !options.no_cache {
+        match crate::soul_path::try_capsule_execute(Path::new("."), options.quiet) {
+            Ok(true) => {
+                profiler.mark("soul_capsule_execute");
+                sync_hidden_lockfile();
+                remember_installed_packages(Path::new("node_modules"));
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(e) => {
+                if !options.quiet {
+                    crate::utils::log(&format!("Soul Path capsule miss/fail: {}", e));
+                }
+            }
+        }
+    }
+
+    // Capsule fast-path (legacy path kept for hash-mismatch rebuilds)
     if !options.lockfile_only && !options.no_cache {
         let cap_path = crate::capsule::capsule_path(Path::new("."));
         if cap_path.exists() {
@@ -1426,18 +1509,57 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                             if !options.quiet {
                                 crate::utils::log("Capsule hit — installing from capsule");
                             }
-                            return crate::capsule::install_from_capsule(&view, Path::new("."))
+                            let result = crate::capsule::install_from_capsule(&view, Path::new("."))
                                 .map_err(|e| {
                                     crate::error_handling::utils::application_error(
                                         "capsule_install", Some("install_failed"), &e,
                                     )
                                 });
+                            if result.is_ok() {
+                                remember_installed_packages(Path::new("node_modules"));
+                            }
+                            return result;
                         }
                     }
                 }
                 Err(_) => {
                     if !options.quiet {
                         crate::utils::log("Capsule corrupt — falling back to lockfile");
+                    }
+                }
+            }
+        }
+    }
+
+    // Soul Path: GRM + lattice closed-world gate. If all root deps already
+    // resolved in cross-project memory, skip registry entirely.
+    if !options.from_lockfile && !options.lockfile_only {
+        let pj = Path::new("package.json");
+        if pj.exists() {
+            if let Some(deps) = lockfile::read_package_json_deps(pj) {
+                if let Some(resolved) = crate::soul_path::grm_lattice_assemble(&deps) {
+                    if !options.quiet {
+                        crate::utils::log(&format!(
+                            "Soul Path: GRM/lattice hit ({} roots) — skip registry",
+                            resolved.len()
+                        ));
+                    }
+                    let lock_path = Path::new("package-lock.json");
+                    if let Err(e) = crate::lockfile_write::write_package_lock(
+                        lock_path, pj, &resolved,
+                    ) {
+                        crate::utils::log(&format!(
+                            "Soul Path: GRM lockfile write failed (falling through): {}",
+                            e
+                        ));
+                    } else {
+                        let _ = crate::capsule::write_capsule_from_project(Path::new("."));
+                        sync_hidden_lockfile();
+                        // Record in JMR + GRM + lattice
+                        let fp = crate::resolution_mirror::fingerprint_deps(&deps);
+                        crate::resolution_mirror::record_resolution(fp, &resolved);
+                        crate::soul_path::remember_all_packages(&resolved);
+                        return Ok(());
                     }
                 }
             }
@@ -1480,7 +1602,8 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     if options.from_lockfile {
         if install_lockfile_layout(options)? {
             sync_hidden_lockfile();
-        let _ = crate::capsule::write_capsule_from_project(Path::new("."));
+            let _ = crate::capsule::write_capsule_from_project(Path::new("."));
+            remember_installed_packages(Path::new("node_modules"));
             return Ok(());
         }
     }
@@ -1561,35 +1684,10 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
             continue;
         }
 
-        // Markov predictive prefetch: check if model predicts next packages
-        // and start downloading them in background
-        if !options.offline && !options.no_cache {
+        // Soul Path predictive prefetch (once per batch, not O(n²) disk reads)
+        if !options.offline && !options.no_cache && seen_packages.len() == 2 {
             let history: Vec<String> = seen_packages.iter().cloned().collect();
-            if history.len() >= 2 {
-                let prev = &history[history.len() - 2];
-                let curr = &history[history.len() - 1];
-                let predicted = crate::second_order_markov::predict_with_context(prev, curr, 3);
-                for next_pkg in predicted {
-                    let cache_dir_for_lookup = std::path::PathBuf::from(utils::get_cache_dir());
-                    let store_index = utils::read_store_index();
-                    let cache_key = format!("{}@latest", next_pkg);
-                    if !store_index.contains_key(&cache_key)
-                        && !get_cached_tarball_fast(&next_pkg, &cache_dir_for_lookup, &store_index).is_some()
-                    {
-                        if !options.quiet {
-                            utils::log(&format!("Markov predicts {} — prefetching...", next_pkg));
-                        }
-                        std::thread::spawn(move || {
-                            let url = format!("https://registry.npmjs.org/{}", next_pkg.replace('/', "%2F"));
-                            let _ = crate::jagrs::download_and_stream_to_store(
-                                &url,
-                                &crate::utils::get_cache_dir(),
-                                &format!("{}@latest", next_pkg),
-                            );
-                        });
-                    }
-                }
-            }
+            crate::soul_path::predictive_prefetch(&history, 3);
         }
 
         if seen_packages.contains(base) {
@@ -2086,7 +2184,16 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         if !lock_path.exists() && pj_path.exists() {
             if let Ok(packages) = read_all_installed_packages(node_modules) {
                 let _ = crate::lockfile_write::write_package_lock(lock_path, pj_path, &packages);
+                // Soul Path: record resolution in JMR + GRM + lattice
+                let fp = crate::resolution_mirror::fingerprint_deps(
+                    &lockfile::read_package_json_deps(pj_path).unwrap_or_default(),
+                );
+                crate::resolution_mirror::record_resolution(fp, &packages);
+                crate::soul_path::remember_all_packages(&packages);
             }
+        } else {
+            // Always remember installed packages for GRM/lattice even when lockfile exists
+            remember_installed_packages(node_modules);
         }
         sync_hidden_lockfile();
         let _ = crate::capsule::write_capsule_from_project(Path::new("."));
@@ -2157,7 +2264,8 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                 }
                 let _ = bin_links::rebuild_bin_links(node_modules);
                 sync_hidden_lockfile();
-        let _ = crate::capsule::write_capsule_from_project(Path::new("."));
+                let _ = crate::capsule::write_capsule_from_project(Path::new("."));
+                remember_installed_packages(node_modules);
                 return Ok(());
             }
             Err(e) => {

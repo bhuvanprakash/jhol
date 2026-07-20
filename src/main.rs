@@ -385,16 +385,75 @@ fn daemon_serve() -> Result<(), String> {
     Ok(())
 }
 #[cfg(unix)]
+/// Try to install via daemon. On non-Unix, always returns error.
+fn daemon_try_install(
+    _cwd: &Path,
+    _packages: &[String],
+    _opts: &jhol_core::InstallOptions,
+    _auto_attach: bool,
+) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        install_via_daemon(_cwd, _packages, _opts, _auto_attach)
+    }
+    #[cfg(not(unix))]
+    {
+        Err("--daemon install is only supported on Unix".to_string())
+    }
+}
+
+/// Direct install (non-daemon path) with progress reporting.
+fn direct_install(
+    _cwd: &Path,
+    specs: &[String],
+    opts: &jhol_core::InstallOptions,
+    pkg_count: usize,
+    quiet: bool,
+    json_out: bool,
+) -> Result<(), String> {
+    let progress = InstallProgress::new(pkg_count, quiet, json_out);
+    let specs_owned: Vec<String> = specs.to_vec();
+    let opts_owned = opts.clone();
+    let (tx, rx) = mpsc::channel::<Result<(), String>>();
+    let worker = thread::spawn(move || {
+        let refs2: Vec<&str> = specs_owned.iter().map(|s| s.as_str()).collect();
+        let r = jhol_core::install_package(&refs2, &opts_owned)
+            .map_err(|e| e.to_string());
+        let _ = tx.send(r);
+    });
+    let install_result = loop {
+        match rx.recv_timeout(Duration::from_millis(70)) {
+            Ok(r) => break r,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let snap = jhol_core::progress_snapshot();
+                progress.render(&snap);
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                break Err("install worker terminated unexpectedly".to_string());
+            }
+        }
+    };
+    let _ = worker.join();
+    progress.finish();
+    install_result
+}
+
 fn install_via_daemon(
     cwd: &Path,
     packages: &[String],
     opts: &jhol_core::InstallOptions,
+    auto_attach: bool,
 ) -> Result<(), String> {
     let socket_path = daemon_socket_path();
 
-    // Try to connect — if fails, auto-start daemon
+    // Try to connect
     let stream_result = UnixStream::connect(&socket_path);
     if stream_result.is_err() {
+        if auto_attach {
+            // Safety gate: auto-attach only connects to existing socket.
+            // Don't start daemon (avoids capsule write race). Fall back.
+            return Err("no daemon socket found; falling back to direct install".to_string());
+        }
         if !opts.quiet {
             info("Daemon not running — auto-starting...");
         }
@@ -620,7 +679,7 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
                     }
                 }
             }
-            // Pre-warm CAS in background
+            // Pre-warm CAS + predictive prefetch in background
             let packages = packages.clone();
             let cwd = cwd.clone();
             std::thread::spawn(move || {
@@ -628,8 +687,17 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
                 if let Ok(bytes) = std::fs::read(&lock_path) {
                     if let Ok(lock) = serde_json::from_slice::<serde_json::Value>(&bytes) {
                         if let Some(pkgs) = lock.get("packages").and_then(|p| p.as_object()) {
+                            // Soul Path predictive prefetch from installed graph
+                            let all_pkgs: Vec<String> = pkgs
+                                .keys()
+                                .filter(|k| !k.is_empty())
+                                .map(|k| k.strip_prefix("node_modules/").unwrap_or(k).to_string())
+                                .collect();
+                            if all_pkgs.len() >= 2 {
+                                jhol_core::soul_path::predictive_prefetch(&all_pkgs, 3);
+                            }
+                            // Pre-warm CAS in background
                             for (key, pkg) in pkgs {
-                                if key.is_empty() { continue; }
                                 if let Some(resolved) = pkg.get("resolved").and_then(|r| r.as_str()) {
                                     let name = key.strip_prefix("node_modules/").unwrap_or(key);
                                     let version = pkg.get("version").and_then(|v| v.as_str()).unwrap_or("");
@@ -2188,9 +2256,79 @@ fn run() -> Result<(), String> {
         if packages.is_empty() {
             return Err("At least one package must be specified".to_string());
         }
+
+        // Soul Path: Jacobian conflict risk prediction before fetch.
+        // Compute ∂R/∂X against existing deps to warn if adding is high-risk.
+        let mut frontier_risk = -1.0f64;
+        let mut has_deps = false;
+        if let Ok(pj) = std::fs::read_to_string("package.json") {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&pj) {
+                let mut deps_map = std::collections::HashMap::new();
+                if let Some(deps) = json.get("dependencies").and_then(|v| v.as_object()) {
+                    for (k, v) in deps {
+                        deps_map.insert(k.clone(), v.as_str().unwrap_or("*").to_string());
+                    }
+                }
+                if let Some(deps) = json.get("devDependencies").and_then(|v| v.as_object()) {
+                    for (k, v) in deps {
+                        deps_map.entry(k.clone()).or_insert_with(|| v.as_str().unwrap_or("*").to_string());
+                    }
+                }
+                if !deps_map.is_empty() {
+                    has_deps = true;
+                    let add_strs: Vec<String> = packages.iter().map(|s| s.to_string()).collect();
+                    let risk = jhol_core::soul_path::add_conflict_risk(&deps_map, &add_strs);
+                    frontier_risk = risk;
+                    if risk > 0.5 && !quiet {
+                        println!(
+                            "{} Jacobian risk: {:.0}% — adding {} may cause conflicts",
+                            "⚠".yellow(),
+                            risk * 100.0,
+                            packages.join(", ")
+                        );
+                    } else if !quiet {
+                        println!(
+                            "{} Jacobian risk: {:.0}% — adding {} is low-risk",
+                            "✓".green(),
+                            risk * 100.0,
+                            packages.join(", ")
+                        );
+                    }
+                }
+            }
+        }
+
         let config = jhol_core::load_config(
             &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
         );
+
+        // Soul Path: low-risk add uses frontier-only append (homological delta).
+        // Skips full re-resolve; downloads frontier + projects into node_modules.
+        let use_frontier = has_deps && frontier_risk >= 0.0 && frontier_risk < 0.4
+            && jhol_core::soul_path::auto_daemon_enabled(); // gate: daemon keeps zero-copy hot
+        if use_frontier {
+            let add_strs: Vec<String> = packages.iter().map(|s| s.to_string()).collect();
+            match jhol_core::soul_path::frontier_add(&add_strs, quiet) {
+                Ok(()) => {
+                    success("Package(s) added (frontier delta).");
+                    return Ok(());
+                }
+                Err(e) => {
+                    if !quiet {
+                        println!("Frontier add failed ({}), falling back to full install", e);
+                    }
+                }
+            }
+        }
+
+        // Soul Path: high-risk add prefetches predicted conflict cluster first.
+        // Uses spectral conflict_risk to warm the cache for likely problem packages.
+        if has_deps && frontier_risk >= 0.5 && !quiet {
+            let add_strs: Vec<String> = packages.iter().map(|s| s.to_string()).collect();
+            // Prefetch using context (existing deps + adding packages)
+            jhol_core::soul_path::predictive_prefetch(&add_strs, 5);
+        }
+
         let opts = jhol_core::InstallOptions {
             no_cache: false,
             quiet,
@@ -2495,7 +2633,24 @@ fn run() -> Result<(), String> {
                 config.no_scripts.unwrap_or(true)
             };
 
-            let use_daemon = sub_m.get_flag("daemon");
+            let mut use_daemon = sub_m.get_flag("daemon");
+            let mut daemon_auto_attach = false;
+            if !use_daemon && jhol_core::soul_path::auto_daemon_enabled() {
+                #[cfg(unix)]
+                {
+                    // Safety gate: only connect to existing socket, don't auto-start
+                    let sock = daemon_socket_path();
+                    if sock.exists() {
+                        use_daemon = true;
+                        daemon_auto_attach = true;
+                        if !quiet {
+                            info("Soul Path: auto-daemon enabled");
+                        }
+                    }
+                }
+                #[cfg(not(unix))]
+                { /* daemon is Unix-only */ }
+            }
             if let Some(resolver) = sub_m.get_one::<String>("resolver") {
                 env::set_var("JHOL_RESOLVER", resolver);
             }
@@ -2645,42 +2800,20 @@ fn run() -> Result<(), String> {
                 let install_start = std::time::Instant::now();
                 let pkg_count = specs.len();
                 let install_result = if use_daemon {
-                    #[cfg(unix)]
-                    {
-                        install_via_daemon(root, &specs, &opts)
-                    }
-                    #[cfg(not(unix))]
-                    {
-                        Err("--daemon install is only supported on Unix".to_string())
+                    let dr = daemon_try_install(root, &specs, &opts, daemon_auto_attach);
+                    // Safety gate fallback: auto-attach with no socket → direct install
+                    if daemon_auto_attach && dr.is_err() {
+                        if !quiet {
+                            info("Daemon unavailable — falling back to direct install");
+                        }
+                        direct_install(root, &specs, &opts, pkg_count, quiet, json_out)
+                    } else {
+                        dr
                     }
                 } else {
-                    let progress = InstallProgress::new(pkg_count, quiet, json_out);
-                    let specs_owned: Vec<String> = specs.clone();
-                    let opts_owned = opts.clone();
-                    let (tx, rx) = mpsc::channel::<Result<(), String>>();
-                    let worker = thread::spawn(move || {
-                        let refs2: Vec<&str> = specs_owned.iter().map(|s| s.as_str()).collect();
-                        let r = jhol_core::install_package(&refs2, &opts_owned)
-                            .map_err(|e| e.to_string());
-                        let _ = tx.send(r);
-                    });
-                    let install_result_inner = loop {
-                        match rx.recv_timeout(Duration::from_millis(70)) {
-                            Ok(r) => break r,
-                            Err(mpsc::RecvTimeoutError::Timeout) => {
-                                let snap = jhol_core::progress_snapshot();
-                                progress.render(&snap);
-                            }
-                            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                                break Err("install worker terminated unexpectedly".to_string());
-                            }
-                        }
-                    };
-                    let _ = worker.join();
-                    progress.finish();
-                    install_result_inner
+                    direct_install(root, &specs, &opts, pkg_count, quiet, json_out)
                 };
-                install_result.as_ref().map_err(|e| e.clone())?;
+                install_result?;
                 let elapsed = install_start.elapsed();
                 print_install_summary(pkg_count, elapsed, quiet, json_out);
                 // Feature 6: post-install hook
