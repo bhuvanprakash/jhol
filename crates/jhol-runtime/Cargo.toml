@@ -1,0 +1,85 @@
+[package]
+name = "jhol-runtime"
+version = "1.0.2"
+edition = "2021"
+description = "Jhol JavaScript runtime — Node.js compatible, TypeScript & JSX built-in, hot reload"
+license-file = "../../LICENSE"
+repository = "https://github.com/bhuvanprakash/jhol"
+
+[features]
+default = ["native-engine", "mimalloc"]
+native-engine = ["dep:quickjs-rusty"]
+jsc-engine = ["dep:javascriptcore"]
+mimalloc = ["dep:mimalloc"]
+swc-transpile = ["dep:swc_core"]
+native-watcher = ["dep:notify"]
+http-server = ["dep:tiny_http"]
+websocket = ["dep:tungstenite"]
+sqlite = ["dep:rusqlite"]
+
+[dependencies]
+# JS Engine (QuickJS — lightweight, embeddable, no MSRV issues)
+quickjs-rusty = { version = "0.12", optional = true }
+
+# JavaScriptCore backend (Apple / WebKitGTK Linux; includes JIT)
+javascriptcore = { version = "0.0.6", optional = true }
+
+# Faster allocator for JS-heavy workloads
+mimalloc = { version = "0.1", optional = true }
+
+# TypeScript/JSX transpilation (optional — requires newer Rust)
+swc_core = { version = "71", default-features = false, features = [
+    "common",
+    "common_tty",
+    "ecma_ast",
+    "ecma_parser",
+    "ecma_parser_typescript",
+    "ecma_transforms",
+    "ecma_transforms_typescript",
+    "ecma_transforms_react",
+    "ecma_codegen",
+    "ecma_visit",
+    "ecma_minifier",
+], optional = true }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bincode = "1.3"
+
+# Concurrent maps + fast hashing
+dashmap = "5.5"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+# File watching (poll-based — custom, no native deps)
+# notify removed — replaced with mtime polling in watch.rs
+
+# Error handling
+thiserror = "2.0"
+
+# Hashing
+sha2 = "0.10"
+hmac = "0.12"
+
+# HTTP server + WebSocket + SQLite (optional)
+tiny_http = { version = "0.12", optional = true }
+tungstenite = { version = "0.24", features = ["handshake"], optional = true }
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+
+# Randomness
+rand = "0.8"
+
+# Regex
+regex-lite = "0.1"
+
+# Cache directory resolution
+dirs = "5.0"
+
+# Native file watching (optional)
+notify = { version = "6.1", optional = true }
+
+# Native HTTP (replace curl process spawn)
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+
+# Parallel module pre-fetch
+rayon = "1.8"

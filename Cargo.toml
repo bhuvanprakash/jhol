@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/jhol-core"]
+members = [".", "crates/jhol-core", "crates/jhol-runtime"]
 resolver = "2"
 
 [profile.release]
@@ -21,16 +21,24 @@ keywords = ["package-manager", "npm", "cache", "offline"]
 categories = ["command-line-utilities", "development-tools"]
 
 [features]
-default = ["http-reqwest"]
+default = ["http-reqwest", "runtime"]
 http-reqwest = ["jhol-core/http-reqwest"]
+runtime = ["jhol-runtime"]
+runtime-server = ["jhol-runtime", "jhol-runtime/http-server"]
+runtime-websocket = ["jhol-runtime", "jhol-runtime/websocket"]
+runtime-sqlite = ["jhol-runtime", "jhol-runtime/sqlite"]
 
 [dependencies]
 jhol-core = { version = "1.0.2", path = "crates/jhol-core" }
+jhol-runtime = { version = "1.0.2", path = "crates/jhol-runtime", optional = true }
 clap = { version = "4.5", features = ["cargo"] }
 clap_complete = "4"
 colored = "2.1"
 indicatif = "0.17"
 serde_json = "1.0"
+ratatui = { version = "0.26.3", default-features = false, features = ["crossterm"] }
+crossterm = "0.27"
+serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3"
