@@ -4,6 +4,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Result, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::{OnceLock, RwLock};
 use std::thread;
 use std::time::Duration;
 use chrono::Local;
@@ -229,7 +230,16 @@ pub fn read_fallback_telemetry() -> serde_json::Value {
     })
 }
 
-pub fn read_store_index() -> HashMap<String, String> {
+static STORE_INDEX_CACHE: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
+
+fn store_index_cache() -> &'static RwLock<HashMap<String, String>> {
+    STORE_INDEX_CACHE.get_or_init(|| {
+        let map = read_store_index_from_disk();
+        RwLock::new(map)
+    })
+}
+
+fn read_store_index_from_disk() -> HashMap<String, String> {
     let path = store_index_path();
     if !path.exists() {
         return HashMap::new();
@@ -241,11 +251,43 @@ pub fn read_store_index() -> HashMap<String, String> {
     serde_json::from_str(&s).unwrap_or_default()
 }
 
+pub fn read_store_index() -> HashMap<String, String> {
+    // Fast path: return cached copy (clone is cheap for HashMap<String,String>)
+    if let Ok(cache) = store_index_cache().read() {
+        return cache.clone();
+    }
+    read_store_index_from_disk()
+}
+
 pub fn write_store_index(map: &HashMap<String, String>) -> Result<()> {
+    // Write through: update both cache and disk
+    if let Ok(mut cache) = store_index_cache().write() {
+        *cache = map.clone();
+    }
     let path = store_index_path();
     let s = serde_json::to_string_pretty(map).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     fs::write(path, s)?;
+
+    // Also write to JAGR-S store for zero-lookup on next startup
+    if let Ok(map_read) = store_index_cache().read() {
+        for (key, hash) in map_read.iter() {
+            if let Some(at) = key.find('@') {
+                let name = &key[..at];
+                let version = &key[at + 1..];
+                let _ = crate::jagrs::store_alias(name, version, hash);
+            }
+        }
+        let _ = crate::jagrs::flush_store();
+    }
+
     Ok(())
+}
+
+/// Invalidate the store index cache (called when store directory changes externally).
+pub fn invalidate_store_index_cache() {
+    if let Ok(mut cache) = store_index_cache().write() {
+        *cache = read_store_index_from_disk();
+    }
 }
 
 pub fn manifest_signature(manifest_json: &str) -> Result<String> {

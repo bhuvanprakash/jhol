@@ -8,6 +8,7 @@ pub mod binary_cache;
 pub mod binary_manifest;
 pub mod bucket_vsids;
 pub mod capsule;
+pub mod jagrs;
 pub mod cas;
 pub mod cdn;
 pub mod config;
