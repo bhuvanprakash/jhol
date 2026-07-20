@@ -145,9 +145,17 @@ fn store_dir() -> PathBuf {
     cache_dir_path().join("store")
 }
 
-/// Unpacked store dir: cache_dir/store_unpacked/<hash>/ (one dir per tarball hash).
+/// Sharded store_unpacked dir: cache_dir/store_unpacked/ab/<hash>/
+/// First 2 hex chars of hash form the shard. Prevents O(n) readdir slowdown
+/// with 10K+ packages. Each shard caps at ~256 entries.
 pub fn store_unpacked_dir() -> PathBuf {
     cache_dir_path().join("store_unpacked")
+}
+
+/// Return sharded path for a given hash: store_unpacked/ab/<full_hash>
+pub fn sharded_unpacked_path(hash: &str) -> PathBuf {
+    let shard = if hash.len() >= 2 { &hash[..2] } else { "xx" };
+    cache_dir_path().join("store_unpacked").join(shard).join(hash)
 }
 
 /// Whether to use symlinks/junctions when installing from store (JHOL_LINK=0 to disable).

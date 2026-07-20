@@ -458,9 +458,10 @@ pub fn download_and_stream_to_store(
     let store = global_store();
     store.store(&bytes)?;
 
-    // Extract to store_unpacked/<hash> for fast symlinks
+    // Extract to sharded store_unpacked/ab/<hash> for fast symlinks
     // Write bytes to temp file for extraction API
-    let unpacked = std::path::PathBuf::from(cache_dir).join("store_unpacked").join(&hash);
+    let shard = if hash.len() >= 2 { &hash[..2] } else { "xx" };
+    let unpacked = std::path::PathBuf::from(cache_dir).join("store_unpacked").join(shard).join(&hash);
     if !unpacked.exists() {
         std::fs::create_dir_all(&unpacked).map_err(|e| format!("mkdir unpacked: {}", e))?;
         let tmp_tar = std::path::PathBuf::from(cache_dir).join(format!("tmp-stream-{}.tgz", hash));

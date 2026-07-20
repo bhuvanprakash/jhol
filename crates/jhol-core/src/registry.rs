@@ -1360,8 +1360,9 @@ pub fn download_tarball_to_store_hash_only(
             // JAGR-S: store tarball bytes in append-only log
             let _ = crate::jagrs::store_tarball(&tarball);
 
-            // Pre-populate unpacked store to avoid a second decompression pass in cold installs.
-            let unpacked = cache_dir.join("store_unpacked").join(&hash);
+            // Pre-populate sharded unpacked store to avoid a second decompression pass in cold installs.
+            let shard = if hash.len() >= 2 { &hash[..2] } else { "xx" };
+            let unpacked = cache_dir.join("store_unpacked").join(shard).join(&hash);
             if !unpacked.exists() {
                 let mut unpacked_ready = false;
                 if let Some(shared_unpacked) = ensure_shared_binary_unpacked(&hash, &tarball)? {
@@ -1410,13 +1411,14 @@ pub fn download_tarball_to_store_hash_only(
     Ok(hash)
 }
 
-/// Ensure the tarball is unpacked in store_unpacked/<hash>; return that path.
+/// Ensure the tarball is unpacked in sharded store_unpacked/ab/<hash>; return that path.
 pub fn ensure_unpacked_in_store(tarball_path: &Path, cache_dir: &Path) -> Result<PathBuf, String> {
     let hash = tarball_path
         .file_stem()
         .and_then(|s| s.to_str())
         .ok_or_else(|| "invalid store path".to_string())?;
-    let store_unpacked_base = cache_dir.join("store_unpacked");
+    let shard = if hash.len() >= 2 { &hash[..2] } else { "xx" };
+    let store_unpacked_base = cache_dir.join("store_unpacked").join(shard);
     let unpacked = store_unpacked_base.join(hash);
     if !unpacked.exists() {
         std::fs::create_dir_all(&unpacked).map_err(|e| e.to_string())?;

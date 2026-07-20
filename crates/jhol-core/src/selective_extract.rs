@@ -4,6 +4,7 @@
 //! This module extracts only what's needed for runtime
 
 use flate2::read::GzDecoder;
+use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::path::Path;
 use tar::Archive;
@@ -238,6 +239,73 @@ pub fn estimate_savings(tarball_path: &Path) -> Result<(u64, u64, f64), String> 
     };
 
     Ok((total_size, essential_size, savings))
+}
+
+/// Extract tarball from a reader (streaming — no temp file needed).
+/// Feeds reader through: gzip decompress → tar entry iteration → file writes.
+/// SHA256 hash computed inline during extraction.
+/// Returns (file_count, sha256_hex_hash).
+pub fn extract_tarball_from_reader<R: std::io::Read>(
+    reader: R,
+    dest_dir: &Path,
+) -> Result<(usize, String), String> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    let mut tee = TeeReader::new(reader, &mut hasher);
+
+    let decoder = GzDecoder::new(&mut tee);
+    let mut archive = Archive::new(decoder);
+
+    fs::create_dir_all(dest_dir).map_err(|e| format!("Failed to create dest dir: {}", e))?;
+
+    let mut count = 0usize;
+    for entry in archive.entries().map_err(|e| format!("Tar error: {}", e))? {
+        let mut entry = entry.map_err(|e| format!("Tar entry error: {}", e))?;
+        let path = entry.path().map_err(|e| format!("Tar path error: {}", e))?.to_path_buf();
+
+        // Security: prevent path traversal
+        if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            continue;
+        }
+
+        let dest = dest_dir.join(&path);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("mkdir: {}", e))?;
+        }
+
+        if entry.header().entry_type().is_dir() {
+            fs::create_dir_all(&dest).ok();
+        } else {
+            let mut out = fs::File::create(&dest).map_err(|e| format!("create: {}", e))?;
+            std::io::copy(&mut entry, &mut out).map_err(|e| format!("write: {}", e))?;
+        }
+        count += 1;
+    }
+
+    let hash = format!("{:x}", hasher.finalize());
+    Ok((count, hash))
+}
+
+/// A tee reader that feeds bytes to both output and a hash function.
+struct TeeReader<'a, R: std::io::Read> {
+    inner: R,
+    hasher: &'a mut Sha256,
+}
+
+impl<'a, R: std::io::Read> TeeReader<'a, R> {
+    fn new(inner: R, hasher: &'a mut Sha256) -> Self {
+        Self { inner, hasher }
+    }
+}
+
+impl<'a, R: std::io::Read> std::io::Read for TeeReader<'a, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        if n > 0 {
+            self.hasher.update(&buf[..n]);
+        }
+        Ok(n)
+    }
 }
 
 #[cfg(test)]
