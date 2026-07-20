@@ -215,7 +215,7 @@ mod tests {
         // Derive another assignment
         let incompat = Rc::new(Incompatibility::new(
             vec![],
-            super::incompatibility::Cause::Root,
+            super::super::Cause::Root,
         ));
         solution.derive(
             "pkg-b".to_string(),

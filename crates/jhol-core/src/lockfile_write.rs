@@ -1681,7 +1681,7 @@ mod tests {
     #[test]
     fn resolve_highest_satisfying_picks_max_common_version() {
         let meta = fake_meta(&["1.0.0", "1.1.0", "1.2.0", "2.0.0"]);
-        let specs = vec!["^1.0.0".to_string(), ">=1.1.0 <2.0.0".to_string()];
+        let specs = vec!["^1.0.0".to_string(), ">=1.1.0, <2.0.0".to_string()];
         let v = resolve_highest_satisfying(&meta, &specs);
         assert_eq!(v.as_deref(), Some("1.2.0"));
     }

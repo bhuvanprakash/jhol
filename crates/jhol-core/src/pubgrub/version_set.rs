@@ -95,15 +95,8 @@ fn parse_version_fast(version: &str) -> Option<[u64; 3]> {
         }
     }
 
-    if part_idx < 2 {
+    if part_idx < 3 {
         parts[part_idx] = current;
-    }
-
-    // Fill remaining parts with 0
-    for i in part_idx..3 {
-        if i == part_idx && part_idx < 2 {
-            parts[i] = current;
-        }
     }
 
     Some(parts)

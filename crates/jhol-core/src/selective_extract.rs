@@ -158,6 +158,10 @@ fn normalize_tarball_rel_path(path: &str) -> Option<String> {
 
 /// Check if path should be extracted
 fn should_extract(path: &str) -> bool {
+    if should_skip(path) {
+        return false;
+    }
+
     let path_lower = path.to_lowercase();
     
     // Always extract package.json
@@ -228,10 +232,12 @@ mod tests {
     #[test]
     fn test_should_skip() {
         assert!(should_skip("test/index.js"));
-        assert!(should_skip("README.md"));
-        assert!(should_skip("docs/api.md"));
+        assert!(should_skip("coverage/index.js"));
+        assert!(should_skip("docs/api.js"));
         assert!(!should_skip("dist/index.js"));
         assert!(!should_skip("package.json"));
+        assert!(should_skip("README.md"));
+        assert!(should_skip("index.d.ts"));
     }
 
     #[test]

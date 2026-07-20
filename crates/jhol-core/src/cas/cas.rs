@@ -137,18 +137,26 @@ impl ContentAddressableStore {
         
         let _guard = lock.lock().await;
         
-        // Check if already exists
+        // Extract data, then release the DashMap read guard before inserting.
+        // A read+write on the same shard can otherwise deadlock.
         if let Some(entry) = self.entries.get(&hash) {
-            // Update access time
-            let mut entry = entry.value().clone();
-            entry.last_accessed = Instant::now();
-            entry.access_count += 1;
-            self.entries.insert(hash.clone(), entry);
+            let mut updated = entry.value().clone();
+            drop(entry);
+            updated.last_accessed = Instant::now();
+            updated.access_count += 1;
+            self.entries.insert(hash.clone(), updated);
             return Ok(hash);
         }
         
         // Store the content
         let store_path = self.hash_to_path(&hash);
+
+        // Hashes use two shard levels; create only the path needed for this
+        // entry instead of eagerly allocating every possible shard directory.
+        if let Some(parent) = store_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create shard directory: {}", e))?;
+        }
         
         // Atomic write: write to temp file, then rename
         let temp_path = store_path.with_extension("tmp");
@@ -226,17 +234,20 @@ impl ContentAddressableStore {
 
     /// Get content by hash
     pub async fn get(&self, hash: &str) -> Result<Vec<u8>, String> {
-        let entry = self.entries.get(hash)
-            .ok_or_else(|| format!("Hash {} not found in store", hash))?;
-        
-        // Update access time
-        let mut entry_value = entry.value().clone();
-        entry_value.last_accessed = Instant::now();
-        entry_value.access_count += 1;
+        let (entry_value, store_path) = {
+            let entry = self.entries.get(hash)
+                .ok_or_else(|| format!("Hash {} not found in store", hash))?;
+            let mut entry_value = entry.value().clone();
+            let store_path = entry.store_path.clone();
+            drop(entry);
+            entry_value.last_accessed = Instant::now();
+            entry_value.access_count += 1;
+            (entry_value, store_path)
+        };
         self.entries.insert(hash.to_string(), entry_value);
         
         // Read content
-        let content = tokio::fs::read(&entry.store_path)
+        let content = tokio::fs::read(&store_path)
             .await
             .map_err(|e| format!("Failed to read store entry: {}", e))?;
         

@@ -196,8 +196,10 @@ mod tests {
     #[test]
     fn test_multiple_hashes() {
         let content = b"test content";
-        let sha256 = IntegrityHash::sha256(content).as_sri();
-        let sha512 = IntegrityHash::sha512(content).as_sri();
+        let sha256_hash = IntegrityHash::sha256(content);
+        let sha256 = sha256_hash.as_sri();
+        let sha512_hash = IntegrityHash::sha512(content);
+        let sha512 = sha512_hash.as_sri();
         
         // Multiple hashes (space-separated)
         let combined = format!("{} {}", sha256, sha512);
@@ -215,8 +217,8 @@ mod tests {
         // Same content, same hash
         assert!(compare_integrity(&sha256_1, &sha256_2));
         
-        // Different algorithms, same content
+        // Different algorithms encode different SRI digests.
         let sha512 = compute_integrity_sha512(content);
-        assert!(compare_integrity(&sha256_1, &sha512));
+        assert!(!compare_integrity(&sha256_1, &sha512));
     }
 }
