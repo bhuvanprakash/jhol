@@ -299,20 +299,17 @@ impl JagrsStore {
         Some((entry.offset as u64, entry.size))
     }
 
-    /// Flush pending writes.
+    /// Flush pending writes (best-effort, no fsync — mmap is our journal).
     pub fn flush(&self) -> Result<(), String> {
         if self.dirty.load(Ordering::Acquire) {
-            self.objects.sync_all().map_err(|e| format!("jagrs sync: {}", e))?;
-            self.aliases.sync_all().map_err(|e| format!("jagrs sync: {}", e))?;
-            // Update header in manifest
+            // Update header in manifest (mmap is already visible to this process)
             let hdr = unsafe { &mut *(self.manifest.as_ptr() as *mut ManifestHeader) };
             hdr.entry_count = self.count_entries();
             hdr.object_size = *self.objects_len.lock().map_err(|_| "lock".to_string())?;
             hdr.alias_count = *self.aliases_count.lock().map_err(|_| "lock".to_string())?;
-            // fsync manifest
-            let mf_path = self.root.join(MANIFEST_FILE);
-            let mf = fs::File::open(&mf_path).map_err(|e| format!("jagrs open manifest: {}", e))?;
-            mf.sync_all().map_err(|e| format!("jagrs sync manifest: {}", e))?;
+            // MmapMsync flushes kernel page cache without blocking on disk I/O.
+            // Full fsync is deferred to background or next startup.
+            let _ = self.manifest.flush_async();
             self.dirty.store(false, Ordering::Release);
         }
         Ok(())

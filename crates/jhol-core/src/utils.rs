@@ -316,7 +316,8 @@ pub fn write_store_index(map: &HashMap<String, String>) -> Result<()> {
                 let _ = crate::jagrs::store_alias(name, version, hash);
             }
         }
-        let _ = crate::jagrs::flush_store();
+        // Flush is deferred — a background thread or next startup will sync.
+        // Removing hot-path fsync which can hang under mmap contention.
     }
 
     use crate::file_lock::{AtomicWrite, FileLock};
