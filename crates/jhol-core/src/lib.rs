@@ -192,7 +192,7 @@ impl JagrAnalysisReport {
     pub fn derivation_nodes_for_graph_export(&self) -> Vec<String> { vec![] }
     pub fn derivation_edge_count_at(&self, _i: usize) -> usize { 0 }
     pub fn selection_with_explanations(&self) -> Vec<(String, String)> { vec![] }
-    pub fn high_risk_packages(&self, _threshold: f64) -> Vec<String> { vec![] }
+    pub fn high_risk_packages(&self, _threshold: f64) -> Vec<(String, f64)> { vec![] }
 }
 
 /// Analyze a project manifest and return a JAGR report.
@@ -227,8 +227,8 @@ pub fn jagr_analyze_project_manifest(path: &std::path::Path) -> Result<JagrAnaly
 
 pub fn jagr_analyze_project_manifest_with_resolver(
     _path: &std::path::Path,
-    _resolver: &crate::config::JagrConfig,
-    _cfg: &crate::config::Config,
+    _resolver: &crate::jagr::JagrResolver,
+    _cfg: &crate::config::JagrConfig,
 ) -> Result<JagrAnalysisReport, String> {
     jagr_analyze_project_manifest(_path)
 }
@@ -247,9 +247,9 @@ pub fn jagr_load_audit_trail(_path: &std::path::Path) -> Result<JagrAnalysisRepo
 
 pub fn jagr_compare_resolvers(
     _path: &std::path::Path,
-) -> Result<(JagrAnalysisReport, JagrAnalysisReport), String> {
+) -> Result<Vec<JagrAnalysisReport>, String> {
     let r = jagr_analyze_project_manifest(_path)?;
-    Ok((r.clone(), r))
+    Ok(vec![r.clone(), r])
 }
 
 pub fn jagr_diff_reports(

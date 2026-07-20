@@ -1951,13 +1951,7 @@ fn run() -> Result<(), String> {
         } else {
             (spec, None)
         };
-        let url = match jhol_core::esm_sh_url(name, version) {
-            Ok(u) => u,
-            Err(e) => {
-                eprintln!("Invalid package spec: {}", e);
-                std::process::exit(1);
-            }
-        };
+        let url = jhol_core::esm_sh_url(name, version);
         println!("{}", url);
         if let Some(out_path) = sub_m.get_one::<String>("output") {
             if let Err(e) = jhol_core::fetch_esm_to_file(&url, std::path::Path::new(out_path)) {
@@ -2023,10 +2017,8 @@ fn run() -> Result<(), String> {
                     .unwrap_or_else(|| "package.json".to_string()),
             );
             let paths =
-                jhol_core::jagr_why_package_deep(package, &manifest).map_err(|e| e.to_string())?;
-            for path in paths {
-                println!("{}", path);
-            }
+                jhol_core::jagr_why_package_deep(&manifest, package).map_err(|e| e.to_string())?;
+            println!("{}", paths);
         } else {
             let paths = jhol_core::why_package(package).map_err(|e| e.to_string())?;
             for path in paths {
@@ -2096,10 +2088,7 @@ fn run() -> Result<(), String> {
                             "  {:<14} Layer 3: {}  Layer 1: {}",
                             "",
                             report.layer3_kind,
-                            report
-                                .layer1_satisfiable
-                                .map(|b| if b { "satisfiable" } else { "UNSAT" })
-                                .unwrap_or("not invoked")
+                            if report.layer1_satisfiable { "satisfiable" } else { "not invoked" }
                         );
                         println!(
                             "  {:<14} Strategy: {}  Selection: {} packages",
@@ -2238,7 +2227,8 @@ fn run() -> Result<(), String> {
             .and_then(|n| n.as_str())
             .ok_or("Package name not found in package.json")?;
         // Validate package name to prevent path traversal
-        jhol_core::validate_package_name(name)?;
+        jhol_core::validate_package_name(name)
+            .ok_or_else(|| format!("invalid package name: {}", name))?;
         let node_modules = cwd.join("node_modules");
         fs::create_dir_all(&node_modules).map_err(|e| e.to_string())?;
         let link_path = if name.starts_with('@') {
@@ -2270,7 +2260,8 @@ fn run() -> Result<(), String> {
             .map(|s| s.as_str())
             .unwrap();
         // Validate package name to prevent path traversal
-        jhol_core::validate_package_name(package)?;
+        jhol_core::validate_package_name(package)
+            .ok_or_else(|| format!("invalid package name: {}", package))?;
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let node_modules = cwd.join("node_modules");
         let link_path = if package.starts_with('@') {
@@ -3315,10 +3306,11 @@ fn run() -> Result<(), String> {
                     "timestamp", "β₀", "β₁", "β₂", "snf", "strategy", "pkgs"
                 );
                 for e in to_show {
-                    let ts = if e.timestamp.len() > 26 {
-                        format!("{}…", &e.timestamp[..25])
+                    let ts_str = e.timestamp.to_string();
+                    let ts = if ts_str.len() > 26 {
+                        format!("{}…", &ts_str[..25])
                     } else {
-                        e.timestamp.clone()
+                        ts_str
                     };
                     println!(
                         "  {:<28} {:<8} {:<8} {:<8} {:<8} {:<10} {:<10}",
@@ -3842,17 +3834,17 @@ fn run() -> Result<(), String> {
                     println!("JAGR vs Legacy Resolvers — Side-by-Side");
                 }
                 println!(
-                    "{:<12} {:<12} {:<10} {:<10} extra",
+                    "{:<12} {:<12} {:<10} {:<10}",
                     "resolver", "time_ms", "sat", "pkgs"
                 );
                 for row in &rows {
+                    let time_ms = row.layer_times_ms.get("total").copied().unwrap_or(0.0);
                     println!(
-                        "{:<12} {:<12.4} {:<10} {:<10} {}",
-                        row.resolver,
-                        row.time_ms,
+                        "{:<12} {:<12.4} {:<10} {:<10}",
+                        row.strategy_used,
+                        time_ms,
                         if row.is_satisfiable { "yes" } else { "no" },
                         row.selection.len(),
-                        row.extra,
                     );
                 }
             }
