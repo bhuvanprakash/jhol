@@ -493,38 +493,25 @@ fn install_via_daemon(
     let mut stream = UnixStream::connect(&socket_path)
         .map_err(|e| format!("daemon unavailable at {}: {}", socket_path.display(), e))?;
 
-    let req = serde_json::json!({
-        "cwd": cwd.display().to_string(),
-        "packages": packages,
-        "quiet": opts.quiet,
-        "noCache": opts.no_cache,
-        "offline": opts.offline,
-        "strictLockfile": opts.strict_lockfile,
-        "strictPeerDeps": opts.strict_peer_deps,
-        "fromLockfile": opts.from_lockfile,
-        "lockfileOnly": opts.lockfile_only,
-        "nativeOnly": opts.native_only,
-        "noScripts": opts.no_scripts,
-    });
-    stream
-        .write_all(req.to_string().as_bytes())
+    // Packed struct — zero serde, zero alloc
+    let req = jhol_core::daemon_cache::DaemonRequest::new(
+        &cwd.display().to_string(),
+        packages,
+        opts.quiet, opts.no_cache, opts.offline,
+        opts.strict_lockfile, opts.strict_peer_deps, opts.from_lockfile,
+        opts.lockfile_only, opts.native_only, opts.no_scripts,
+    );
+    jhol_core::daemon_cache::write_request(&mut stream, &req)
         .map_err(|e| format!("daemon write failed: {}", e))?;
     let _ = stream.shutdown(std::net::Shutdown::Write);
 
-    let mut resp = String::new();
-    stream
-        .read_to_string(&mut resp)
+    let resp = jhol_core::daemon_cache::read_response(&mut stream)
         .map_err(|e| format!("daemon read failed: {}", e))?;
-    let parsed: serde_json::Value =
-        serde_json::from_str(&resp).map_err(|e| format!("invalid daemon response: {}", e))?;
-    if parsed.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if resp.ok == 0 {
         Ok(())
     } else {
-        Err(parsed
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("daemon install failed")
-            .to_string())
+        let msg = resp.error_str();
+        Err(if msg.is_empty() { "daemon install failed".to_string() } else { msg.to_string() })
     }
 }
 
@@ -541,94 +528,39 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
     use std::io::Write;
     const MAX_DAEMON_REQUEST_BYTES: usize = 64 * 1024;
 
-    let req_buf: String = {
-        let mut buf = Vec::with_capacity(MAX_DAEMON_REQUEST_BYTES);
-        let mut tmp = [0u8; 4096];
-        let mut too_large = false;
-        loop {
-            match stream.read(&mut tmp) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if buf.len() + n > MAX_DAEMON_REQUEST_BYTES {
-                        too_large = true;
-                        break;
-                    }
-                    buf.extend_from_slice(&tmp[..n]);
-                }
-                Err(_) => {
-                    too_large = true;
-                    break;
-                }
-            }
-        }
-        if too_large {
-            let _ = stream.write_all(br#"{"ok":false,"error":"request too large or invalid"}"#);
-            return Ok(());
-        }
-        match String::from_utf8(buf) {
-            Ok(s) => s,
-            Err(_) => {
-                let _ = stream.write_all(br#"{"ok":false,"error":"invalid utf8"}"#);
-                return Ok(());
-            }
-        }
-    };
-
-    let req: serde_json::Value = match serde_json::from_str(&req_buf) {
-        Ok(v) => v,
+    // Read packed request struct — single read, zero parse
+    let req = match jhol_core::daemon_cache::read_request(&mut stream) {
+        Ok(r) => r,
         Err(e) => {
-            let payload = serde_json::json!({"ok": false, "error": format!("invalid json: {}", e)});
-            let _ = stream.write_all(payload.to_string().as_bytes());
+            let resp = jhol_core::daemon_cache::DaemonResponse::error(&format!("read: {}", e));
+            let _ = jhol_core::daemon_cache::write_response(&mut stream, &resp);
             return Ok(());
         }
     };
 
-    // SNR query: read-only lookup in JMR for predicted resolution.
-    if let Some(action) = req.get("action").and_then(|v| v.as_str()) {
-        if action == "snr_query" || action == "snr" {
-            let fp = req.get("fingerprint").and_then(|v| v.as_u64()).unwrap_or(0);
-            let edit = req.get("edit").and_then(|v| v.as_str()).unwrap_or("");
-            if fp == 0 || edit.is_empty() {
-                let payload = serde_json::json!({"ok": false, "error": "snr_query requires fingerprint and edit"});
-                let _ = stream.write_all(payload.to_string().as_bytes());
-                return Ok(());
-            }
-            let result = jhol_core::resolution_mirror::snr_get(fp, edit);
-            let payload = match result {
-                Some(entries) => serde_json::json!({"ok": true, "hit": true, "entries": entries.len()}),
-                None => serde_json::json!({"ok": true, "hit": false}),
-            };
-            let _ = stream.write_all(payload.to_string().as_bytes());
-            return Ok(());
-        }
-    }
-
-    let cwd = req.get("cwd").and_then(|v| v.as_str()).unwrap_or(".").to_string();
-    if cwd.contains('\0') || cwd.len() > 4096 {
-        let payload = serde_json::json!({"ok": false, "error": "invalid cwd"});
-        let _ = stream.write_all(payload.to_string().as_bytes());
+    let cwd = req.cwd_str().to_string();
+    if cwd.is_empty() || cwd.len() > 4096 || cwd.contains('\0') {
+        let resp = jhol_core::daemon_cache::DaemonResponse::error("invalid cwd");
+        let _ = jhol_core::daemon_cache::write_response(&mut stream, &resp);
         return Ok(());
     }
 
-    let packages: Vec<String> = req.get("packages")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-        .unwrap_or_default();
+    let packages = req.packages();
     if packages.len() > 1000 {
-        let payload = serde_json::json!({"ok": false, "error": "too many packages"});
-        let _ = stream.write_all(payload.to_string().as_bytes());
+        let resp = jhol_core::daemon_cache::DaemonResponse::error("too many packages");
+        let _ = jhol_core::daemon_cache::write_response(&mut stream, &resp);
         return Ok(());
     }
 
-    let quiet = req.get("quiet").and_then(|v| v.as_bool()).unwrap_or(false);
-    let no_cache = req.get("noCache").and_then(|v| v.as_bool()).unwrap_or(false);
-    let offline = req.get("offline").and_then(|v| v.as_bool()).unwrap_or(false);
-    let strict_lockfile = req.get("strictLockfile").and_then(|v| v.as_bool()).unwrap_or(false);
-    let strict_peer_deps = req.get("strictPeerDeps").and_then(|v| v.as_bool()).unwrap_or(false);
-    let from_lockfile = req.get("fromLockfile").and_then(|v| v.as_bool()).unwrap_or(false);
-    let lockfile_only = req.get("lockfileOnly").and_then(|v| v.as_bool()).unwrap_or(false);
-    let native_only = req.get("nativeOnly").and_then(|v| v.as_bool()).unwrap_or(true);
-    let no_scripts = req.get("noScripts").and_then(|v| v.as_bool()).unwrap_or(true);
+    let quiet = req.quiet();
+    let no_cache = req.no_cache();
+    let offline = req.offline();
+    let strict_lockfile = req.strict_lockfile();
+    let strict_peer_deps = req.strict_peer_deps();
+    let from_lockfile = req.from_lockfile();
+    let lockfile_only = req.lockfile_only();
+    let native_only = req.native_only();
+    let no_scripts = req.no_scripts();
 
     let prev_cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let result = (|| -> Result<(), String> {
@@ -733,9 +665,7 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
             if cap_path.exists() {
                 if let Ok(view) = jhol_core::capsule::read_capsule(&cap_path) {
                     let hash = view.manifest_hash();
-                    // Store live capsule view for next request (avoids mmap)
                     jhol_core::daemon_cache::store_capsule_view(hash, view);
-                    // Pin capsule + store pages in kernel page cache for next CLI
                     jhol_core::daemon_cache::repin_install_artifacts(Path::new("."));
                     if let Some(tree) = jhol_core::lockfile::read_resolved_from_dir(Path::new(".")) {
                         let mut resolved = std::collections::HashMap::new();
@@ -791,11 +721,14 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
                     }
                 }
             });
-            serde_json::json!({"ok": true})
+            let resp = jhol_core::daemon_cache::DaemonResponse::success();
+            let _ = jhol_core::daemon_cache::write_response(&mut stream, &resp);
         }
-        Err(e) => serde_json::json!({"ok": false, "error": e}),
+        Err(e) => {
+            let resp = jhol_core::daemon_cache::DaemonResponse::error(&e);
+            let _ = jhol_core::daemon_cache::write_response(&mut stream, &resp);
+        }
     };
-    let _ = stream.write_all(payload.to_string().as_bytes());
     Ok(())
 }
 

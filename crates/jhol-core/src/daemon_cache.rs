@@ -328,6 +328,175 @@ pub fn can_skip_install_before_clap() -> bool {
     }
 }
 
+// ── Packed daemon protocol (zero-parse, zero-alloc) ─────────────────────────
+//
+// Replaces JSON-over-socket with fixed-size repr(C) structs.
+// Request: 1 write, 1 read. Response: 1 write, 1 read. No serde, no alloc.
+
+/// Max package names in a single request
+pub const DAEMON_MAX_PKGS: usize = 100;
+/// Max cwd path length
+pub const DAEMON_CWD_LEN: usize = 4096;
+/// Max package name length
+pub const DAEMON_PKG_NAME_LEN: usize = 64;
+/// Max error message length
+pub const DAEMON_ERR_LEN: usize = 256;
+
+/// Flag bits for DaemonRequest.flags
+const FLAG_QUIET: u32 = 1;
+const FLAG_NO_CACHE: u32 = 1 << 1;
+const FLAG_OFFLINE: u32 = 1 << 2;
+const FLAG_STRICT_LOCKFILE: u32 = 1 << 3;
+const FLAG_STRICT_PEER_DEPS: u32 = 1 << 4;
+const FLAG_FROM_LOCKFILE: u32 = 1 << 5;
+const FLAG_LOCKFILE_ONLY: u32 = 1 << 6;
+const FLAG_NATIVE_ONLY: u32 = 1 << 7;
+const FLAG_NO_SCRIPTS: u32 = 1 << 8;
+
+/// Packed request sent from CLI to daemon. ~10KB fixed-size.
+/// Read/written with a single read/write call — zero parse.
+#[repr(C, packed)]
+pub struct DaemonRequest {
+    pub magic: [u8; 8],          // "JHLREQ\0"
+    pub cwd: [u8; DAEMON_CWD_LEN],  // null-terminated
+    pub manifest_hash: [u8; 8],
+    pub flags: u32,
+    pub pkg_count: u32,
+    pub pkgs: [[u8; DAEMON_PKG_NAME_LEN]; DAEMON_MAX_PKGS],
+    // Total: 8 + 4096 + 8 + 4 + 4 + 64*100 = 10620 bytes
+}
+
+/// Packed response from daemon to CLI. Tiny — 1 byte for success.
+#[repr(C, packed)]
+pub struct DaemonResponse {
+    pub ok: u8,                   // 0=success, 1=error
+    pub error_msg: [u8; DAEMON_ERR_LEN], // null-terminated, valid when ok=1
+}
+
+impl DaemonRequest {
+    pub fn new(cwd: &str, packages: &[String], quiet: bool, no_cache: bool, offline: bool,
+               strict_lockfile: bool, strict_peer_deps: bool, from_lockfile: bool,
+               lockfile_only: bool, native_only: bool, no_scripts: bool) -> Self {
+        let mut req = Self {
+            magic: *b"JHLREQ\0\0",
+            cwd: [0u8; DAEMON_CWD_LEN],
+            manifest_hash: [0u8; 8],
+            flags: 0,
+            pkg_count: packages.len() as u32,
+            pkgs: [[0u8; DAEMON_PKG_NAME_LEN]; DAEMON_MAX_PKGS],
+        };
+        // Copy cwd
+        let cwd_bytes = cwd.as_bytes();
+        let len = cwd_bytes.len().min(DAEMON_CWD_LEN - 1);
+        req.cwd[..len].copy_from_slice(&cwd_bytes[..len]);
+        req.cwd[len] = 0;
+        // Set flags
+        if quiet { req.flags |= FLAG_QUIET; }
+        if no_cache { req.flags |= FLAG_NO_CACHE; }
+        if offline { req.flags |= FLAG_OFFLINE; }
+        if strict_lockfile { req.flags |= FLAG_STRICT_LOCKFILE; }
+        if strict_peer_deps { req.flags |= FLAG_STRICT_PEER_DEPS; }
+        if from_lockfile { req.flags |= FLAG_FROM_LOCKFILE; }
+        if lockfile_only { req.flags |= FLAG_LOCKFILE_ONLY; }
+        if native_only { req.flags |= FLAG_NATIVE_ONLY; }
+        if no_scripts { req.flags |= FLAG_NO_SCRIPTS; }
+        // Copy package names
+        for (i, pkg) in packages.iter().enumerate().take(DAEMON_MAX_PKGS) {
+            let pkg_bytes = pkg.as_bytes();
+            let plen = pkg_bytes.len().min(DAEMON_PKG_NAME_LEN - 1);
+            req.pkgs[i][..plen].copy_from_slice(&pkg_bytes[..plen]);
+            req.pkgs[i][plen] = 0;
+        }
+        req
+    }
+
+    pub fn cwd_str(&self) -> &str {
+        let end = self.cwd.iter().position(|&b| b == 0).unwrap_or(DAEMON_CWD_LEN - 1);
+        std::str::from_utf8(&self.cwd[..end]).unwrap_or(".")
+    }
+
+    pub fn packages(&self) -> Vec<String> {
+        let mut pkgs = Vec::with_capacity(self.pkg_count as usize);
+        for i in 0..(self.pkg_count as usize).min(DAEMON_MAX_PKGS) {
+            let end = self.pkgs[i].iter().position(|&b| b == 0).unwrap_or(DAEMON_PKG_NAME_LEN - 1);
+            if let Ok(s) = std::str::from_utf8(&self.pkgs[i][..end]) {
+                if !s.is_empty() {
+                    pkgs.push(s.to_string());
+                }
+            }
+        }
+        pkgs
+    }
+
+    pub fn quiet(&self) -> bool { self.flags & FLAG_QUIET != 0 }
+    pub fn no_cache(&self) -> bool { self.flags & FLAG_NO_CACHE != 0 }
+    pub fn offline(&self) -> bool { self.flags & FLAG_OFFLINE != 0 }
+    pub fn strict_lockfile(&self) -> bool { self.flags & FLAG_STRICT_LOCKFILE != 0 }
+    pub fn strict_peer_deps(&self) -> bool { self.flags & FLAG_STRICT_PEER_DEPS != 0 }
+    pub fn from_lockfile(&self) -> bool { self.flags & FLAG_FROM_LOCKFILE != 0 }
+    pub fn lockfile_only(&self) -> bool { self.flags & FLAG_LOCKFILE_ONLY != 0 }
+    pub fn native_only(&self) -> bool { self.flags & FLAG_NATIVE_ONLY != 0 }
+    pub fn no_scripts(&self) -> bool { self.flags & FLAG_NO_SCRIPTS != 0 }
+}
+
+impl DaemonResponse {
+    pub fn success() -> Self {
+        Self { ok: 0, error_msg: [0u8; DAEMON_ERR_LEN] }
+    }
+
+    pub fn error(msg: &str) -> Self {
+        let mut r = Self { ok: 1, error_msg: [0u8; DAEMON_ERR_LEN] };
+        let bytes = msg.as_bytes();
+        let len = bytes.len().min(DAEMON_ERR_LEN - 1);
+        r.error_msg[..len].copy_from_slice(&bytes[..len]);
+        r.error_msg[len] = 0;
+        r
+    }
+
+    pub fn error_str(&self) -> &str {
+        if self.ok == 0 { return ""; }
+        let end = self.error_msg.iter().position(|&b| b == 0).unwrap_or(DAEMON_ERR_LEN - 1);
+        std::str::from_utf8(&self.error_msg[..end]).unwrap_or("unknown error")
+    }
+}
+
+/// Size of the packed daemon request struct
+pub const DAEMON_REQUEST_SIZE: usize = std::mem::size_of::<DaemonRequest>();
+/// Size of the packed daemon response struct
+pub const DAEMON_RESPONSE_SIZE: usize = std::mem::size_of::<DaemonResponse>();
+
+/// Write a daemon request to a stream. Single write — zero serde.
+pub fn write_request(stream: &mut impl std::io::Write, req: &DaemonRequest) -> std::io::Result<()> {
+    let ptr = req as *const DaemonRequest as *const u8;
+    let slice = unsafe { std::slice::from_raw_parts(ptr, DAEMON_REQUEST_SIZE) };
+    stream.write_all(slice)
+}
+
+/// Read a daemon request from a stream. Single read — zero parse.
+pub fn read_request(stream: &mut impl std::io::Read) -> std::io::Result<DaemonRequest> {
+    let mut req: DaemonRequest = unsafe { std::mem::zeroed() };
+    let ptr = &mut req as *mut DaemonRequest as *mut u8;
+    let slice = unsafe { std::slice::from_raw_parts_mut(ptr, DAEMON_REQUEST_SIZE) };
+    stream.read_exact(slice)?;
+    Ok(req)
+}
+
+/// Write a daemon response to a stream. Single write — zero serde.
+pub fn write_response(stream: &mut impl std::io::Write, resp: &DaemonResponse) -> std::io::Result<()> {
+    let ptr = resp as *const DaemonResponse as *const u8;
+    let slice = unsafe { std::slice::from_raw_parts(ptr, DAEMON_RESPONSE_SIZE) };
+    stream.write_all(slice)
+}
+
+/// Read a daemon response from a stream. Single read — zero parse.
+pub fn read_response(stream: &mut impl std::io::Read) -> std::io::Result<DaemonResponse> {
+    let mut resp: DaemonResponse = unsafe { std::mem::zeroed() };
+    let ptr = &mut resp as *mut DaemonResponse as *mut u8;
+    let slice = unsafe { std::slice::from_raw_parts_mut(ptr, DAEMON_RESPONSE_SIZE) };
+    stream.read_exact(slice)?;
+    Ok(resp)
+}
+
 /// CLI: check status + .nm_fingerprint before clap. If hits, exit(0).
 /// Must be called from `fn main()` before any clap code.
 pub fn try_exit_before_clap() {
