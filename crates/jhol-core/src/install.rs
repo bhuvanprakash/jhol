@@ -1405,6 +1405,143 @@ fn kcc3_snr_enabled() -> bool {
         .unwrap_or(true)
 }
 
+/// Phase 5: DSSC-First Resolution — check pre-computed spectral certificates
+/// before running the full Knot/topological pipeline.
+///
+/// If ALL root packages have Stable DSSC certs, compute a quick spectral gap
+/// lower bound. If the bound is large enough (gap ≥ 0.5), the dependency graph
+/// is provably conflict-free and we can skip resolution entirely — just
+/// extract from cache or fetch + install directly.
+///
+/// This is the fastest install path: O(1) cert lookup + O(packages) cache check.
+/// No mmap, no Knot, no SAT, no topology.
+fn dssc_first_install(
+    packages: &[&str],
+    options: &InstallOptions,
+    profiler: &mut InstallProfiler,
+) -> Result<bool, JholError> {
+    // Only for empty-package (install from package.json) calls
+    if !packages.is_empty() {
+        return Ok(false);
+    }
+
+    let pj_path = Path::new("package.json");
+    if !pj_path.exists() {
+        return Ok(false);
+    }
+
+    let deps = match lockfile::read_package_json_deps(pj_path) {
+        Some(d) if !d.is_empty() => d,
+        _ => return Ok(false),
+    };
+
+    // Look up DSSC certs for all root packages
+    let (all_stable, quick_gap) =
+        crate::jagr::resolution_differential::dssc_all_stable(&deps);
+
+    if !all_stable {
+        return Ok(false);
+    }
+
+    // Quick spectral gap check: if gap ≥ 0.5, graph is provably stable
+    if quick_gap < 0.5 {
+        return Ok(false);
+    }
+
+    if !options.quiet {
+        crate::utils::log(&format!(
+            "DSSC First: all {} packages certified Stable (gap={:.3}) — greedy path",
+            deps.len(),
+            quick_gap
+        ));
+    }
+
+    // Check if ALL packages are in cache — if so, install directly
+    let cache_dir = std::path::PathBuf::from(utils::get_cache_dir());
+    let store_index = if options.no_cache {
+        HashMap::new()
+    } else {
+        utils::read_store_index()
+    };
+
+    let mut all_cached = true;
+    let mut cache_entries: Vec<(String, std::path::PathBuf)> = Vec::new(); // (spec, tarball_path)
+
+    for (name, spec) in &deps {
+        let base = if name.starts_with('@') {
+            let parts: Vec<&str> = name.split('/').collect();
+            if parts.len() >= 2 {
+                format!("{}/{}", parts[0], parts[1])
+            } else {
+                name.clone()
+            }
+        } else {
+            name.clone()
+        };
+        let spec_str = format!("{}@{}", base, spec);
+
+        if let Some(tarball) =
+            get_cached_tarball_fast(&spec_str, &cache_dir, &store_index)
+        {
+            cache_entries.push((spec_str, tarball));
+        } else if options.offline {
+            all_cached = false;
+            break;
+        } else {
+            // Not in cache — need to fetch
+            all_cached = false;
+            break;
+        }
+    }
+
+    if !all_cached {
+        // Some packages missing from cache — fall through to full pipeline
+        return Ok(false);
+    }
+
+    // All packages in cache — greedy extract
+    if !options.quiet {
+        crate::utils::log(&format!(
+            "DSSC First: {} packages all in cache — extracting",
+            cache_entries.len()
+        ));
+    }
+
+    let node_modules = Path::new("node_modules");
+    std::fs::create_dir_all(node_modules).map_err(|e| {
+        crate::error_handling::utils::io_error("dssc_first_install", Some("node_modules"), e)
+    })?;
+
+    for (spec, tarball) in &cache_entries {
+        let name = spec.split('@').next().unwrap_or(spec);
+        let pkg_dir = if name.starts_with('@') {
+            let parts: Vec<&str> = name.split('/').collect();
+            let scope_dir = node_modules.join(parts[0]);
+            std::fs::create_dir_all(&scope_dir).map_err(|e| {
+                crate::error_handling::utils::io_error("dssc_first_install", Some(&scope_dir.display().to_string()), e)
+            })?;
+            scope_dir.join(&parts[1..].join("/"))
+        } else {
+            node_modules.join(name)
+        };
+
+        if !pkg_dir.exists() {
+            let tarball_path = std::path::PathBuf::from(tarball);
+            selective_extract::extract_selective(&tarball_path, node_modules, name).map_err(|e| {
+                crate::error_handling::utils::application_error(
+                    "dssc_first_install",
+                    Some(&spec),
+                    &e,
+                )
+            })?;
+        }
+    }
+
+    profiler.mark("dssc_first_path");
+    write_install_markers();
+    Ok(true)
+}
+
 /// KCC³ classifier cascade: try fast paths first.
 /// Returns Ok(true) if a path succeeded, Ok(false) to fall through, Err(e) on failure.
 fn kcc3_cascade(
@@ -1692,6 +1829,24 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
             Err(e) => {
                 if !options.quiet {
                     crate::utils::log(&format!("Capsule fast path failed: {}", e));
+                }
+            }
+        }
+    }
+
+    // Phase 5: DSSC-First Resolution — check spectral certs before full pipeline.
+    // If all root packages are Stable-certified, skip Knot/SAT/topology entirely.
+    if !options.lockfile_only {
+        match dssc_first_install(packages, options, &mut profiler) {
+            Ok(true) => {
+                remember_installed_packages(Path::new("node_modules"));
+                write_install_markers();
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(e) => {
+                if !options.quiet {
+                    crate::utils::log(&format!("DSSC first path failed: {}", e));
                 }
             }
         }

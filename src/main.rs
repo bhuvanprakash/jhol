@@ -344,6 +344,106 @@ fn daemon_socket_path() -> std::path::PathBuf {
     std::env::temp_dir().join("jhol-install.sock")
 }
 
+/// Phase 2: Anticipatory Daemon — watches package.json, pre-fetches deps based
+/// on DSSC spectral certificates, and pre-builds capsule in background.
+///
+/// When package.json changes:
+/// 1. Read new deps
+/// 2. Look up DSSC certs for each dep
+/// 3. Prefetch tarballs for Stable-certified packages (skip Fragile ones)
+/// 4. Pre-build capsule in background for next install
+fn anticipatory_daemon_loop(cwd: &Path) {
+    let pj_path = cwd.join("package.json");
+    if !pj_path.exists() {
+        return;
+    }
+
+    let mut last_mtime = std::fs::metadata(&pj_path)
+        .ok()
+        .and_then(|m| m.modified().ok());
+
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        let current_mtime = std::fs::metadata(&pj_path)
+            .ok()
+            .and_then(|m| m.modified().ok());
+
+        if current_mtime == last_mtime {
+            continue;
+        }
+        last_mtime = current_mtime;
+
+        // package.json changed — trigger anticipatory prefetch
+        let deps = match jhol_core::lockfile::read_package_json_deps(&pj_path) {
+            Some(d) if !d.is_empty() => d,
+            _ => continue,
+        };
+
+        // Phase 5 DSSC check: only prefetch Stable-certified packages
+        let cache_dir = jhol_core::utils::get_cache_dir();
+
+        for (name, spec) in &deps {
+            // Skip if already in cache
+            let base = if name.starts_with('@' ) {
+                let parts: Vec<&str> = name.split('/').collect();
+                if parts.len() >= 2 {
+                    format!("{}/{}", parts[0], parts[1])
+                } else {
+                    name.clone()
+                }
+            } else {
+                name.clone()
+            };
+            let spec_str = format!("{}@{}", base, spec);
+
+            // Check if already cached by looking up the store index
+            let store_idx = jhol_core::utils::read_store_index();
+            if store_idx.contains_key(&spec_str) {
+                continue;
+            }
+
+            // DSSC cert check: prefetch if Stable, skip if Fragile
+            if let Some(cert) = jhol_core::jagr::resolution_differential::lookup_dssc_cert(name) {
+                if cert.stability == jhol_core::StabilityClass::Fragile {
+                    continue; // Skip fragile packages — too expensive to prefetch
+                }
+            }
+
+            // Prefetch in background (non-blocking)
+            let pkg_name = name.clone();
+            let pkg_spec = spec.clone();
+            let cache_dir_clone = cache_dir.clone();
+            std::thread::spawn(move || {
+                let url = format!("https://registry.npmjs.org/{}", pkg_name.replace('/', "%2F"));
+                if let Ok(bytes) = jhol_core::http_client::get(&url) {
+                    // Store in JAGR-S
+                    if let Ok(_hash) = jhol_core::jagrs::store_tarball(&bytes) {
+                        // Store alias
+                        let _ = jhol_core::jagrs::store_alias(&pkg_name, &pkg_spec, &_hash);
+                    }
+                    // Also store in classic cache for compatibility
+                    let _ = jhol_core::registry::download_tarball_to_store(
+                        &url,
+                        std::path::Path::new(&cache_dir_clone),
+                        &format!("{}@{}", pkg_name, pkg_spec),
+                        None,
+                        None,
+                    );
+                }
+            });
+        }
+
+        // Pre-build capsule in background for next install
+        let cwd_clone = cwd.to_path_buf();
+        std::thread::spawn(move || {
+            let _ = std::env::set_current_dir(&cwd_clone);
+            let _ = jhol_core::capsule::write_capsule_from_project(&cwd_clone);
+            let _ = jhol_core::capsule::write_cga_capsule_from_project(&cwd_clone);
+        });
+    }
+}
+
 #[cfg(unix)]
 fn daemon_serve() -> Result<(), String> {
     let socket_path = daemon_socket_path();
@@ -370,6 +470,14 @@ fn daemon_serve() -> Result<(), String> {
         socket_path.display()
     ));
 
+    // Phase 2: Anticipatory Daemon — background file watcher + DSSC prefetch.
+    // Watches package.json for changes; when changed, pre-fetches deps based on
+    // DSSC spectral certificates and pre-builds capsule in background.
+    let watcher_cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    std::thread::spawn(move || {
+        anticipatory_daemon_loop(&watcher_cwd);
+    });
+
     for stream in listener.incoming() {
         let stream = match stream {
             Ok(s) => s,
@@ -381,6 +489,9 @@ fn daemon_serve() -> Result<(), String> {
         // Hand off to the shared handler
         let _ = daemon_handle_one(stream);
     }
+
+    // Phase 3: flush JAGR-S store on daemon shutdown
+    let _ = jhol_core::jagrs::daemon_flush();
 
     Ok(())
 }
@@ -654,6 +765,8 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
             if cga_gate {
                 let _ = jhol_core::capsule::write_cga_capsule_from_project(Path::new("."));
             }
+            // Phase 3: populate JAGR-S daemon store from lockfile
+            let _ = jhol_core::jagrs::daemon_populate_from_lockfile(Path::new("."));
             // Write .nm_fingerprint so next request returns instantly
             // (also written by write_capsule_from_project in capsule.rs)
             if let Ok(hash) = jhol_core::capsule::compute_manifest_hash(Path::new(".")) {

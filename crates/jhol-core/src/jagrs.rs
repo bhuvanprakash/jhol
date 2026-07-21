@@ -572,6 +572,123 @@ pub fn v3_aliases_dir(cache_dir: &str) -> PathBuf {
     PathBuf::from(cache_dir).join(V3_DIR)
 }
 
+// ── Phase 3: JAGR-S Daemon Store ────────────────────────────────────────────────
+//
+// The daemon owns the JAGR-S store and populates it after each install.
+// CLI processes read the mmap'd files directly — zero-copy, zero I/O.
+// The store persists across daemon restarts (files on disk).
+
+/// Daemon: populate JAGR-S store from package-lock.json after successful install.
+/// Stores each resolved package's tarball + alias. Called by daemon after install.
+pub fn daemon_populate_from_lockfile(project_dir: &std::path::Path) -> Result<u32, String> {
+    let lock_path = project_dir.join("package-lock.json");
+    if !lock_path.exists() {
+        return Ok(0);
+    }
+
+    let bytes = std::fs::read(&lock_path).map_err(|e| format!("read lockfile: {}", e))?;
+    let lock: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("parse lockfile: {}", e))?;
+
+    let pkgs = match lock.get("packages").and_then(|p| p.as_object()) {
+        Some(p) => p,
+        None => return Ok(0),
+    };
+
+    let cache_dir = crate::utils::get_cache_dir();
+    let store = global_store();
+    let mut populated = 0u32;
+
+    for (key, pkg) in pkgs {
+        if key.is_empty() {
+            continue;
+        }
+        let name = key.strip_prefix("node_modules/").unwrap_or(key);
+        let version = pkg.get("version").and_then(|v| v.as_str()).unwrap_or("");
+        let resolved = pkg.get("resolved").and_then(|r| r.as_str());
+        let integrity = pkg.get("integrity").and_then(|i| i.as_str());
+
+        if version.is_empty() {
+            continue;
+        }
+
+        // Check if alias already exists
+        let alias_key = format!("{}@{}", name, version);
+        if store.lookup_alias(&alias_key).is_some() {
+            continue;
+        }
+
+        // Try to find the tarball in classic cache
+        if let Some(hash_hex) = integrity {
+            let hash_clean = if hash_hex.starts_with("sha512-") {
+                &hash_hex[7..]
+            } else if hash_hex.starts_with("sha256-") {
+                &hash_hex[7..]
+            } else {
+                hash_hex
+            };
+
+            // Check if already in JAGR-S
+            if store.has_hash(hash_clean) {
+                let _ = store.store_alias(name, version, hash_clean);
+                populated += 1;
+                continue;
+            }
+
+            // Try to read from classic store
+            let tarball_path = std::path::PathBuf::from(&cache_dir)
+                .join("store")
+                .join(format!("{}.tgz", hash_clean));
+            if tarball_path.exists() {
+                if let Ok(data) = std::fs::read(&tarball_path) {
+                    if let Ok(stored_hash) = store.store(&data) {
+                        let _ = store.store_alias(name, version, &stored_hash);
+                        populated += 1;
+                    }
+                }
+            }
+        }
+
+        // If no integrity, try to find by resolved URL hash
+        if let Some(url) = resolved {
+            use sha2::{Digest, Sha256};
+            let url_hash = format!("{:x}", Sha256::digest(url.as_bytes()));
+            if store.has_hash(&url_hash) {
+                let _ = store.store_alias(name, version, &url_hash);
+                populated += 1;
+            }
+        }
+    }
+
+    store.flush()?;
+    Ok(populated)
+}
+
+/// Daemon: flush JAGR-S store to disk. Called on daemon shutdown.
+pub fn daemon_flush() -> Result<(), String> {
+    global_store().flush()
+}
+
+/// Daemon: get JAGR-S store statistics.
+pub struct JagrsStats {
+    pub entry_count: u32,
+    pub alias_count: u32,
+    pub object_size: u64,
+}
+
+pub fn daemon_stats() -> JagrsStats {
+    let store = global_store();
+    let entries = store.entries_slice();
+    let entry_count = entries.iter().filter(|e| e.kind == 1).count() as u32;
+    let alias_count = entries.iter().filter(|e| e.kind == 2).count() as u32;
+    let object_size = store.objects_len.lock().map(|l| *l).unwrap_or(0);
+    JagrsStats {
+        entry_count,
+        alias_count,
+        object_size,
+    }
+}
+
 // ── Git-style object store (filesystem IS the hash table) ─────────────────────────
 //
 // Alternative backend to the mmap'd hash table. Uses objects/ab/cd/<hash> layout.
