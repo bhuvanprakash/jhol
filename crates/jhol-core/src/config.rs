@@ -79,45 +79,61 @@ pub struct JholrcRegistryConfig {
 
 /// Load the `.jholrc` registry section from `dir`, then `~/.jholrc`.
 pub fn load_jholrc_registry(dir: &Path) -> Option<JholrcRegistryConfig> {
+    static CACHE: std::sync::OnceLock<std::sync::RwLock<Option<(std::time::SystemTime, JholrcRegistryConfig)>>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::RwLock::new(None));
+
     let home = dirs_home();
     let candidates = [
         dir.join(".jholrc"),
         home.map(|h| h.join(".jholrc"))
             .unwrap_or_else(|| dir.join(".none")),
     ];
-    for path in &candidates {
-        if path.is_file() {
-            if let Ok(s) = std::fs::read_to_string(path) {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
-                    if let Some(reg) = v.get("registry").and_then(|x| x.as_object()) {
-                        let mut out = JholrcRegistryConfig::default();
-                        if let Some(d) = reg.get("default").and_then(|x| x.as_str()) {
-                            out.default = Some(d.trim_end_matches('/').to_string());
-                        }
-                        if let Some(scopes) = reg.get("scopes").and_then(|x| x.as_object()) {
-                            for (k, v) in scopes {
-                                if let Some(url) = v.as_str() {
-                                    out.scopes
-                                        .insert(k.clone(), url.trim_end_matches('/').to_string());
-                                }
-                            }
-                        }
-                        if let Some(tokens) = reg.get("authTokens").and_then(|x| x.as_object()) {
-                            for (host, tok_val) in tokens {
-                                if let Some(raw) = tok_val.as_str() {
-                                    let resolved = interpolate_env_vars(raw);
-                                    out.auth_tokens.insert(host.clone(), resolved);
-                                }
-                            }
-                        }
-                        return Some(out);
-                    }
-                }
+
+    // Find first existing candidate and its mtime
+    let (path, mtime) = match candidates.iter().find_map(|p| {
+        let m = std::fs::metadata(p).ok()?.modified().ok()?;
+        Some((p.clone(), m))
+    }) {
+        Some(v) => v,
+        None => return None,
+    };
+
+    // Check cache
+    if let Ok(guard) = cache.read() {
+        if let Some((cached_mtime, ref cached)) = *guard {
+            if cached_mtime == mtime {
+                return Some(cached.clone());
             }
-            break;
         }
     }
-    None
+
+    // Read and parse
+    let s = std::fs::read_to_string(&path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&s).ok()?;
+    let reg = v.get("registry")?.as_object()?;
+    let mut out = JholrcRegistryConfig::default();
+    if let Some(d) = reg.get("default").and_then(|x| x.as_str()) {
+        out.default = Some(d.trim_end_matches('/').to_string());
+    }
+    if let Some(scopes) = reg.get("scopes").and_then(|x| x.as_object()) {
+        for (k, v) in scopes {
+            if let Some(url) = v.as_str() {
+                out.scopes.insert(k.clone(), url.trim_end_matches('/').to_string());
+            }
+        }
+    }
+    if let Some(tokens) = reg.get("authTokens").and_then(|x| x.as_object()) {
+        for (host, tok_val) in tokens {
+            if let Some(raw) = tok_val.as_str() {
+                let resolved = interpolate_env_vars(raw);
+                out.auth_tokens.insert(host.clone(), resolved);
+            }
+        }
+    }
+    if let Ok(mut guard) = cache.write() {
+        *guard = Some((mtime, out.clone()));
+    }
+    Some(out)
 }
 
 /// Interpolate `${VAR_NAME}` patterns in a string with environment variable values.

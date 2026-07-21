@@ -12,20 +12,18 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 fn download_concurrency() -> usize {
-    std::env::var("JHOL_DOWNLOAD_CONCURRENCY")
-        .ok()
+    crate::utils::cached_env_var("JHOL_DOWNLOAD_CONCURRENCY")
         .and_then(|v| v.parse::<usize>().ok())
-        .map(|n| n.clamp(1, 128)) // Increased to 128 for maximum parallelism
+        .map(|n| n.clamp(1, 128))
         .unwrap_or_else(|| {
             std::thread::available_parallelism()
-                .map(|n| (n.get() * 4).clamp(32, 128)) // 4x cores, max 128
-                .unwrap_or(64) // Default to 64 (was 8)
+                .map(|n| (n.get() * 4).clamp(32, 128))
+                .unwrap_or(64)
         })
 }
 
 fn cache_install_concurrency() -> usize {
-    std::env::var("JHOL_CACHE_INSTALL_CONCURRENCY")
-        .ok()
+    crate::utils::cached_env_var("JHOL_CACHE_INSTALL_CONCURRENCY")
         .and_then(|v| v.parse::<usize>().ok())
         .map(|n| n.clamp(1, 32))
         .unwrap_or_else(|| {
@@ -36,15 +34,14 @@ fn cache_install_concurrency() -> usize {
 }
 
 fn worker_pool_sequential_threshold() -> usize {
-    std::env::var("JHOL_WORKER_POOL_SEQUENTIAL_THRESHOLD")
-        .ok()
+    crate::utils::cached_env_var("JHOL_WORKER_POOL_SEQUENTIAL_THRESHOLD")
         .and_then(|v| v.parse::<usize>().ok())
         .map(|n| n.clamp(1, 64))
         .unwrap_or(1)
 }
 
 fn use_legacy_chunk_scheduler() -> bool {
-    std::env::var("JHOL_LEGACY_CHUNK_SCHEDULER")
+    crate::utils::cached_env_var("JHOL_LEGACY_CHUNK_SCHEDULER")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
 }

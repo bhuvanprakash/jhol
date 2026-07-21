@@ -405,40 +405,53 @@ pub fn lockfile_integrity_complete(dir: &Path) -> bool {
 /// For package-lock.json: uses `packages` entries with `version`.
 /// For bun.lock: uses parsed resolved name/version pairs.
 pub fn read_all_resolved_specs_from_dir(dir: &Path) -> Option<Vec<String>> {
+    static CACHE: std::sync::OnceLock<std::sync::RwLock<Option<(std::time::SystemTime, Vec<String>)>>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::RwLock::new(None));
+
+    // Find the actual lockfile path and its mtime
     let npm_shrinkwrap = dir.join("npm-shrinkwrap.json");
     let npm_lock = dir.join("package-lock.json");
     let bun_lock = dir.join("bun.lock");
-    if npm_shrinkwrap.exists() {
-        let resolved = read_lockfile_resolved(&npm_shrinkwrap)?;
-        let mut specs: Vec<String> = resolved
-            .into_iter()
-            .map(|(name, version)| format!("{}@{}", name, version))
-            .collect();
-        specs.sort();
-        specs.dedup();
-        return Some(specs);
+
+    let target = if npm_shrinkwrap.exists() { Some(npm_shrinkwrap) }
+        else if npm_lock.exists() { Some(npm_lock) }
+        else if bun_lock.exists() { Some(bun_lock) }
+        else { None };
+    let (target_path, mtime) = match target {
+        Some(p) => {
+            let m = std::fs::metadata(&p).ok()?.modified().ok()?;
+            (p, m)
+        }
+        None => return None,
+    };
+
+    // Check cache
+    if let Ok(guard) = cache.read() {
+        if let Some((cached_mtime, ref cached)) = *guard {
+            if cached_mtime == mtime {
+                return Some(cached.clone());
+            }
+        }
     }
-    if npm_lock.exists() {
-        let resolved = read_lockfile_resolved(&npm_lock)?;
-        let mut specs: Vec<String> = resolved
-            .into_iter()
-            .map(|(name, version)| format!("{}@{}", name, version))
-            .collect();
-        specs.sort();
-        specs.dedup();
-        return Some(specs);
+
+    // Read and cache
+    let resolved = if target_path.to_string_lossy().contains("shrinkwrap") || target_path.to_string_lossy().contains("package-lock") {
+        read_lockfile_resolved(&target_path)?
+    } else {
+        read_bun_lock_resolved(&target_path)?
+    };
+    let mut specs: Vec<String> = resolved
+        .into_iter()
+        .map(|(name, version)| format!("{}@{}", name, version))
+        .collect();
+    specs.sort();
+    specs.dedup();
+
+    if let Ok(mut guard) = cache.write() {
+        *guard = Some((mtime, specs.clone()));
     }
-    if bun_lock.exists() {
-        let resolved = read_bun_lock_resolved(&bun_lock)?;
-        let mut specs: Vec<String> = resolved
-            .into_iter()
-            .map(|(name, version)| format!("{}@{}", name, version))
-            .collect();
-        specs.sort();
-        specs.dedup();
-        return Some(specs);
-    }
-    None
+
+    Some(specs)
 }
 
 

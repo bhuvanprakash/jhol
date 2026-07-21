@@ -65,14 +65,17 @@ pub fn get_cache_dir() -> String {
 }
 
 pub fn init_cache() -> Result<()> {
+    static INIT: OnceLock<()> = OnceLock::new();
+    if INIT.get().is_some() {
+        return Ok(());
+    }
     let cache_dir = get_cache_dir();
     fs::create_dir_all(&cache_dir)?;
-
     let log_path = PathBuf::from(format!("{}/{}", cache_dir, LOG_FILE));
     if !log_path.exists() {
         File::create(&log_path)?;
     }
-
+    let _ = INIT.get_or_init(|| ());
     Ok(())
 }
 
