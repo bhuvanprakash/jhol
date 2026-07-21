@@ -587,10 +587,11 @@ pub fn pbf_from_deps(deps: &std::collections::HashMap<String, String>) -> u64 {
     hasher.finish()
 }
 
-/// PBF negative filter: returns false if PBF mismatch (fast reject before knot fp check).
-/// True means "PBF is compatible — proceed to exact knot fp check".
-pub fn pbf_filter(deps_fp: u64, candidate_pbf: u64) -> bool {
-    deps_fp == candidate_pbf
+/// PBF negative filter: compare **stored** capsule PBF vs **current** deps PBF.
+/// True means compatible — proceed. False = fast reject.
+/// Never compare deps_fp (knot fingerprint) to pbf — different hash domains.
+pub fn pbf_filter(stored_pbf: u64, current_pbf: u64) -> bool {
+    stored_pbf == current_pbf
 }
 
 #[cfg(test)]

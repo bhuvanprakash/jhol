@@ -1415,6 +1415,12 @@ fn kcc3_cascade(
     options: &InstallOptions,
     profiler: &mut InstallProfiler,
 ) -> Result<bool, JholError> {
+    let cap_path = crate::capsule::capsule_path(Path::new("."));
+    let lockfile_present = Path::new("package-lock.json").exists() || Path::new("bun.lock").exists();
+    if !cap_path.exists() && !lockfile_present {
+        return Ok(false);
+    }
+
     let pj_path = Path::new("package.json");
     if !pj_path.exists() {
         return Ok(false);
@@ -1429,58 +1435,48 @@ fn kcc3_cascade(
 
     // Compute knot fingerprint from deps for classifier lookup
     let deps_fp = crate::resolution_mirror::fingerprint_deps(&deps);
+    let current_pbf = crate::jagr::resolution_differential::pbf_from_deps(&deps);
 
-    // PBF filter: quick spectral barcode check before expensive ops
-    let pbf = crate::jagr::resolution_differential::pbf_from_deps(&deps);
-
-    // Path 0: CGA capsule — check if capsule exists with matching knot fingerprint
-    if kcc3_cga_enabled() {
+    // Path 0 (KPSL): knot_fp match → optional PBF trailer → manifest hash → project links
+    if kcc3_cga_enabled() && cap_path.exists() {
         if let Some(view) = crate::capsule::classifier_lookup(Path::new("."), deps_fp) {
-            // PBF negative filter: reject if PBF mismatches before GFP validation
-            if !crate::jagr::resolution_differential::pbf_filter(deps_fp, pbf) {
+            let pbf_ok = match view.pbf() {
+                Some(stored) => {
+                    crate::jagr::resolution_differential::pbf_filter(stored, current_pbf)
+                }
+                // Legacy capsules without trailer: knot_fp already matched
+                None => true,
+            };
+            if !pbf_ok {
                 if !options.quiet {
                     crate::utils::log("KCC³ Path 0: PBF mismatch — capsule dropped");
                 }
             } else {
-                let lockfile_entries = lockfile::read_all_resolved_specs_from_dir(Path::new("."))
-                    .unwrap_or_default();
-                if !lockfile_entries.is_empty() {
-                    let lockfile_map: std::collections::HashMap<String, String> = lockfile_entries
-                        .iter()
-                        .filter_map(|s| {
-                            let parts: Vec<&str> = s.splitn(2, '@').collect();
-                            if parts.len() == 2 {
-                                Some((parts[0].to_string(), parts[1].to_string()))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-
-                    if let Ok(request) = build_resolve_request_from_deps(&deps) {
-                        if let Ok(g) = crate::jagr::knot::build_knot_graph(&request) {
-                            if crate::jagr::knot::knot_validate_lockfile(&lockfile_map, &g).is_ok()
-                            {
-                                if !options.quiet {
-                                    crate::utils::log(
-                                        "KCC³ Path 0: CGA capsule validated — installing",
-                                    );
-                                }
-                                let result =
-                                    crate::capsule::install_from_capsule(&view, Path::new("."))
-                                        .map_err(|e| {
-                                            crate::error_handling::utils::application_error(
-                                                "kcc3_cga_install",
-                                                Some("install_failed"),
-                                                &e,
-                                            )
-                                        });
-                                if result.is_ok() {
-                                    profiler.mark("kcc3_path0_cga");
-                                    return Ok(true);
-                                }
-                            }
-                        }
+                // Manifest match when lock present; if lock deleted (warm reinstall),
+                // knot_fp + PBF alone authorize KPSL projection.
+                let lock_present = Path::new("package-lock.json").exists();
+                let manifest_ok = if lock_present {
+                    crate::capsule::compute_manifest_hash(Path::new("."))
+                        .map(|h| view.manifest_hash() == h)
+                        .unwrap_or(false)
+                } else {
+                    true
+                };
+                if manifest_ok {
+                    if !options.quiet {
+                        crate::utils::log("KCC³ Path 0: KPSL projection — installing");
+                    }
+                    let result = crate::capsule::install_from_capsule(&view, Path::new("."))
+                        .map_err(|e| {
+                            crate::error_handling::utils::application_error(
+                                "kcc3_cga_install",
+                                Some("install_failed"),
+                                &e,
+                            )
+                        });
+                    if result.is_ok() {
+                        profiler.mark("kcc3_path0_cga");
+                        return Ok(true);
                     }
                 }
             }
@@ -1488,7 +1484,7 @@ fn kcc3_cascade(
     }
 
     // Path S: SNR — check JMR for this edit descriptor (add/update/remove)
-    if kcc3_snr_enabled() && packages.len() <= 5 {
+    if kcc3_snr_enabled() && packages.len() <= 5 && crate::daemon_mode() {
         let edit_desc = if packages.is_empty() || packages[0].contains("remove") {
             format!("remove:{}", packages.first().unwrap_or(&""))
         } else {
@@ -1617,8 +1613,10 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     let legacy_chunk_scheduler = use_legacy_chunk_scheduler();
 
     // KCC³ Classifier Cascade: try Path 0 (CGA capsule), Path S (SNR), then fall through.
+    let mut kcc3_capsule_installed = false;
     if !options.lockfile_only && !options.no_cache {
         if let Ok(cascade_result) = kcc3_cascade(packages, options, &mut profiler) {
+            kcc3_capsule_installed = cascade_result;
             if cascade_result {
                 // Write CGA capsule on Path 0 success
                 if kcc3_cga_enabled() {
@@ -1633,7 +1631,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
 
     // Soul Path: migrate JAGR-S once; spectral capsule execute when possible.
     crate::soul_path::ensure_jagrs_migrated();
-    if !options.lockfile_only && !options.no_cache {
+    if !kcc3_capsule_installed && !options.lockfile_only && !options.no_cache {
         match crate::soul_path::try_capsule_execute(Path::new("."), options.quiet) {
             Ok(true) => {
                 profiler.mark("soul_capsule_execute");

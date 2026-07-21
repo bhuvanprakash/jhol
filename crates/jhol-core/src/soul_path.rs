@@ -133,12 +133,32 @@ pub fn try_capsule_execute(project_dir: &Path, quiet: bool) -> Result<bool, Stri
         Ok(v) => v,
         Err(_) => return Ok(false),
     };
-    let hash = match capsule::compute_manifest_hash(project_dir) {
-        Ok(h) => h,
-        Err(_) => return Ok(false),
-    };
-    if view.manifest_hash() != hash {
-        return Ok(false);
+    let lock_present = project_dir.join("package-lock.json").exists();
+    if lock_present {
+        let hash = match capsule::compute_manifest_hash(project_dir) {
+            Ok(h) => h,
+            Err(_) => return Ok(false),
+        };
+        if view.manifest_hash() != hash {
+            return Ok(false);
+        }
+    } else {
+        // Lock deleted (warm reinstall): authorize via package.json deps fingerprint.
+        let deps = match crate::lockfile::read_package_json_deps(&project_dir.join("package.json"))
+        {
+            Some(d) => d,
+            None => return Ok(false),
+        };
+        let fp = crate::resolution_mirror::fingerprint_deps(&deps);
+        if view.knot_fingerprint() != 0 && view.knot_fingerprint() != fp {
+            return Ok(false);
+        }
+        if let Some(stored) = view.pbf() {
+            let cur = crate::jagr::resolution_differential::pbf_from_deps(&deps);
+            if !crate::jagr::resolution_differential::pbf_filter(stored, cur) {
+                return Ok(false);
+            }
+        }
     }
     if !quiet {
         utils::log("Soul Path: Spectral Stable — capsule execute (zero resolve)");
@@ -469,10 +489,44 @@ pub fn project_package(
         }
     }
 
+    // KPSL: project topology — one dir link/clone, not O(files) copy.
+    if utils::link_package_from_store(&unpacked, node_modules, name).is_ok() {
+        let _ = crate::bin_links::link_bins_for_package(node_modules, name);
+        return Ok(());
+    }
+    // clonefile whole-dir when symlink blocked (macOS APFS)
+    if project_package_clonefile(&unpacked, &pkg_dir).is_ok() {
+        let _ = crate::bin_links::link_bins_for_package(node_modules, name);
+        return Ok(());
+    }
+
     let sheaf = FeatureSheaf::from_env();
     selective_extract::project_from_store(&unpacked, &pkg_dir, sheaf)?;
     let _ = crate::bin_links::link_bins_for_package(node_modules, name);
     Ok(())
+}
+
+/// Whole-directory COW clone when available (APFS/Btrfs). Falls back to Err.
+fn project_package_clonefile(src: &Path, dest: &Path) -> Result<(), String> {
+    if dest.exists() {
+        let _ = std::fs::remove_dir_all(dest);
+        let _ = std::fs::remove_file(dest);
+    }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    match crate::cas::link_package(src, dest) {
+        Ok(_) if dest.exists() => Ok(()),
+        _ => {
+            // File-level link_package may not handle directories; try reflink crate on file tree root.
+            #[cfg(unix)]
+            {
+                // Best-effort: recursive hardlink tree via cas helpers is slow; skip.
+                let _ = src;
+            }
+            Err("clonefile unavailable for directory".into())
+        }
+    }
 }
 
 fn package_dir(node_modules: &Path, name: &str) -> PathBuf {

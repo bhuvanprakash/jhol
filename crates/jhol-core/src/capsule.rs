@@ -75,6 +75,8 @@ pub struct CapsuleView {
     pkg_count: usize,
     str_len: usize,
     dep_count: usize,
+    /// Optional PBF trailer (after dep edges).
+    pbf: Option<u64>,
 }
 
 // Safety: CapsuleView is Send+Sync because Mmap is Send+Sync and the raw pointers
@@ -120,6 +122,15 @@ impl CapsuleView {
         let string_table = unsafe { mmap.as_ptr().add(str_start) };
         let dep_edges = unsafe { mmap.as_ptr().add(deps_start) as *const DepEdge };
 
+        // Optional 8-byte PBF trailer after dep edges (KPSL).
+        let pbf = if mmap.len() >= deps_end + 8 {
+            let mut b = [0u8; 8];
+            b.copy_from_slice(&mmap[deps_end..deps_end + 8]);
+            Some(u64::from_le_bytes(b))
+        } else {
+            None
+        };
+
         Ok(Self {
             _mmap: mmap,
             header,
@@ -129,6 +140,7 @@ impl CapsuleView {
             pkg_count,
             str_len,
             dep_count,
+            pbf,
         })
     }
 
@@ -156,6 +168,11 @@ impl CapsuleView {
 
     pub fn knot_fingerprint(&self) -> u64 {
         unsafe { (*self.header).knot_fingerprint }
+    }
+
+    /// Persistence barcode fingerprint stored in capsule trailer (if present).
+    pub fn pbf(&self) -> Option<u64> {
+        self.pbf
     }
 
     pub fn entry(&self, idx: usize) -> &PackageEntry {
@@ -248,6 +265,9 @@ pub struct CapsuleBuilder {
     spectral_gap: f64,
     predicted_beta1: u64,
     knot_fingerprint: u64,
+    /// Persistence barcode fingerprint (PBF) trailer — written after dep edges.
+    pbf: u64,
+    has_pbf: bool,
 }
 
 impl CapsuleBuilder {
@@ -264,6 +284,8 @@ impl CapsuleBuilder {
             spectral_gap: 1.0,
             predicted_beta1: 0,
             knot_fingerprint: 0,
+            pbf: 0,
+            has_pbf: false,
         }
     }
 
@@ -349,6 +371,11 @@ impl CapsuleBuilder {
         // Dep edges
         buf.extend_from_slice(&self.dep_edges);
 
+        // Optional PBF trailer (8 bytes). Old readers ignore trailing bytes.
+        if self.has_pbf {
+            buf.extend_from_slice(&self.pbf.to_le_bytes());
+        }
+
         buf
     }
 
@@ -359,6 +386,11 @@ impl CapsuleBuilder {
 
     pub fn set_knot_fingerprint(&mut self, fp: u64) {
         self.knot_fingerprint = fp;
+    }
+
+    pub fn set_pbf(&mut self, pbf: u64) {
+        self.pbf = pbf;
+        self.has_pbf = true;
     }
 
     pub fn package_count(&self) -> usize {
@@ -671,7 +703,7 @@ pub fn write_capsule_from_project(project_dir: &Path) -> Result<(), String> {
         }
     }
 
-    // Compute knot fingerprint from package.json deps for classifier
+    // Knot fingerprint + PBF trailer for KPSL classifier
     if let Ok(pj_bytes) = std::fs::read(project_dir.join("package.json")) {
         if let Ok(pj) = serde_json::from_slice::<serde_json::Value>(&pj_bytes) {
             if let Some(deps_obj) = pj.get("dependencies").and_then(|d| d.as_object()) {
@@ -681,6 +713,8 @@ pub fn write_capsule_from_project(project_dir: &Path) -> Result<(), String> {
                     .collect();
                 let fp = crate::resolution_mirror::fingerprint_deps(&deps_map);
                 builder.set_knot_fingerprint(fp);
+                let pbf = crate::jagr::resolution_differential::pbf_from_deps(&deps_map);
+                builder.set_pbf(pbf);
             }
         }
     }

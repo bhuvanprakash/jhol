@@ -99,7 +99,9 @@ pub fn project_from_store(
     if !store_unpacked.exists() {
         return Err(format!("store unpacked missing: {}", store_unpacked.display()));
     }
-    if sheaf == FeatureSheaf::Full {
+    // KPSL default: whole-dir link for Full and Default (warm path speed).
+    // Minimal still filters files for size-sensitive installs.
+    if sheaf == FeatureSheaf::Full || sheaf == FeatureSheaf::Default {
         return link_or_copy_tree(store_unpacked, package_root);
     }
 
