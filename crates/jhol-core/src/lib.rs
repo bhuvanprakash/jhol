@@ -106,7 +106,27 @@ pub use prefetch::prefetch_from_lockfile;
 /// Check whether the current lockfile + package.json fingerprint matches
 /// the last-recorded install fingerprint (fast no-op path).
 pub fn lockfile_fingerprint_matches() -> bool {
-    std::path::Path::new("node_modules").exists()
+    let cwd = std::path::Path::new(".");
+    let nm = cwd.join("node_modules");
+    if !nm.exists() {
+        return false;
+    }
+    let fp_path = nm.join(".nm_fingerprint");
+    let Ok(stored) = std::fs::read(&fp_path) else {
+        return false;
+    };
+    if stored.len() < 8 {
+        return false;
+    }
+    let mut stored_arr = [0u8; 8];
+    stored_arr.copy_from_slice(&stored[..8]);
+
+    let computed = crate::capsule::compute_manifest_hash(cwd).unwrap_or_else(|_| {
+        // Fallback when there is no lockfile: hash package.json alone.
+        let bytes = std::fs::read(cwd.join("package.json")).unwrap_or_default();
+        xxhash_rust::xxh3::xxh3_64(&bytes).to_le_bytes()
+    });
+    stored_arr == computed
 }
 
 /// Check whether a jhol-specific lockfile exists.

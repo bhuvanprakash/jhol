@@ -232,48 +232,73 @@ pub fn clear_config_cache() {
     }
 }
 
-// ── Global status mmap (zero-binary-startup check) ─────────────────────────
+// ── Project-local status file (zero-binary-startup check) ──────────────────
 //
-// Daemon writes status to /tmp/jhol-status.bin after install.
-// CLI reads it BEFORE clap init. If nm_fresh=1 + hash matches .nm_fingerprint
-// in cwd, CLI exits(0) immediately — zero binary startup cost.
+// Daemon writes status to <project>/.jhol/status.bin after install.
+// CLI reads it BEFORE clap init. If nm_fresh=1 and the recorded mtimes/sizes
+// of package.json, package-lock.json, and node_modules still match, exit(0).
+// No hashing, no JSON parsing, no args() syscall.
 
-#[repr(C)]
+#[repr(C, packed)]
 struct StatusFile {
     magic: [u8; 8],          // "JHLSTAT\0"
     nm_fresh: u8,            // 1 = node_modules verified correct
-    last_hash: [u8; 8],      // manifest hash of last install
-    cwd: [u8; 4096],         // project dir of last install
-    daemon_pid: u32,
+    pj_mtime_sec: u64,
+    pj_mtime_nsec: u32,
+    pj_size: u64,
+    pl_mtime_sec: u64,
+    pl_mtime_nsec: u32,
+    pl_size: u64,
+    nm_mtime_sec: u64,
+    nm_mtime_nsec: u32,
     _pad: [u8; 64],
 }
 
-const STATUS_PATH: &str = "/tmp/jhol-status.bin";
+const STATUS_NAME: &str = "status.bin";
 
-fn status_path() -> std::path::PathBuf {
+fn status_path(project_dir: &std::path::Path) -> std::path::PathBuf {
     std::env::var("JHOL_STATUS_FILE")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from(STATUS_PATH))
+        .unwrap_or_else(|_| project_dir.join(".jhol").join(STATUS_NAME))
+}
+
+fn file_mtime_size(p: &std::path::Path) -> Option<(u64, u32, u64)> {
+    let meta = std::fs::metadata(p).ok()?;
+    let mtime = meta.modified().ok()?;
+    let dur = mtime.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    Some((dur.as_secs(), dur.subsec_nanos(), meta.len()))
 }
 
 /// Daemon: write status after successful install.
-pub fn write_status(hash: [u8; 8], project_dir: &std::path::Path) {
+pub fn write_status(_hash: [u8; 8], project_dir: &std::path::Path) {
     use std::io::Write;
-    let p = status_path();
+    let pj = project_dir.join("package.json");
+    let pl = project_dir.join("package-lock.json");
+    let nm = project_dir.join("node_modules");
+
+    let (pj_sec, pj_nsec, pj_size) = file_mtime_size(&pj).unwrap_or((0, 0, 0));
+    let (pl_sec, pl_nsec, pl_size) = file_mtime_size(&pl).unwrap_or((0, 0, 0));
+    let (nm_sec, nm_nsec, _nm_size) = file_mtime_size(&nm).unwrap_or((0, 0, 0));
+
+    let status = StatusFile {
+        magic: *b"JHLSTAT\0",
+        nm_fresh: 1,
+        pj_mtime_sec: pj_sec,
+        pj_mtime_nsec: pj_nsec,
+        pj_size,
+        pl_mtime_sec: pl_sec,
+        pl_mtime_nsec: pl_nsec,
+        pl_size,
+        nm_mtime_sec: nm_sec,
+        nm_mtime_nsec: nm_nsec,
+        _pad: [0u8; 64],
+    };
+
+    let p = status_path(project_dir);
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     if let Ok(mut f) = std::fs::File::create(&p) {
-        let cwd_bytes = project_dir.to_string_lossy().as_bytes().to_vec();
-        let mut cwd_arr = [0u8; 4096];
-        let len = cwd_bytes.len().min(4095);
-        cwd_arr[..len].copy_from_slice(&cwd_bytes[..len]);
-        cwd_arr[len] = 0;
-        let status = StatusFile {
-            magic: *b"JHLSTAT\0",
-            nm_fresh: 1,
-            last_hash: hash,
-            cwd: cwd_arr,
-            daemon_pid: std::process::id(),
-            _pad: [0u8; 64],
-        };
         let bytes = unsafe {
             std::slice::from_raw_parts(
                 &status as *const StatusFile as *const u8,
@@ -282,46 +307,51 @@ pub fn write_status(hash: [u8; 8], project_dir: &std::path::Path) {
         };
         let _ = f.write_all(bytes);
         let _ = f.sync_all();
-        // Pin in page cache
         drop(f);
         pin_file_in_page_cache(&p);
     }
 }
 
 /// CLI: quick check before clap init. Returns true if install can be skipped.
+/// Reads <cwd>/.jhol/status.bin and compares recorded mtimes/sizes against the
+/// current package.json, package-lock.json, and node_modules. No hashing.
 pub fn can_skip_install_before_clap() -> bool {
-    use std::io::{Read, Seek, SeekFrom};
-    let p = status_path();
+    use std::io::Read;
+
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    let p = status_path(&cwd);
     let mut f = match std::fs::File::open(&p) {
         Ok(f) => f,
         Err(_) => return false,
     };
-    // Read magic(8) + nm_fresh(1) + last_hash(8) = 17 bytes
-    let mut hdr = [0u8; 17];
-    if f.read_exact(&mut hdr).is_err() { return false; }
-    if &hdr[..8] != b"JHLSTAT\0" { return false; }
-    if hdr[8] != 1 { return false; } // nm_fresh
-    let mut hash_buf = [0u8; 8];
-    hash_buf.copy_from_slice(&hdr[9..17]);
 
-    // Read cwd (offset 17, 4096 bytes)
-    let mut cwd_buf = [0u8; 4096];
-    if f.read_exact(&mut cwd_buf).is_err() { return false; }
-    let cwd_len = cwd_buf.iter().position(|&b| b == 0).unwrap_or(4096);
-    let stored_cwd = std::str::from_utf8(&cwd_buf[..cwd_len]).unwrap_or("");
-    if stored_cwd.is_empty() { return false; }
+    // magic(8) + nm_fresh(1) + 3 × (mtime_sec(8) + mtime_nsec(4) + size(8)) = 61 bytes
+    let mut buf = [0u8; 61];
+    if f.read_exact(&mut buf).is_err() { return false; }
+    if &buf[..8] != b"JHLSTAT\0" { return false; }
+    if buf[8] != 1 { return false; }
 
-    let cur = match std::env::current_dir() {
-        Ok(d) => d,
-        Err(_) => return false,
-    };
-    let stored = std::path::Path::new(stored_cwd);
-    if cur != stored { return false; }
+    let u64_at = |off: usize| u64::from_le_bytes(buf[off..off + 8].try_into().unwrap_or([0; 8]));
+    let u32_at = |off: usize| u32::from_le_bytes(buf[off..off + 4].try_into().unwrap_or([0; 4]));
 
-    // Status says nm_fresh=1 and cwd matches last_hash.
-    // node_modules/.nm_fingerprint is logically guaranteed to match.
-    // No need to read it — one fewer syscall.
-    true
+    let stored_pj = (u64_at(9), u32_at(17), u64_at(21));
+    let stored_pl = (u64_at(29), u32_at(37), u64_at(41));
+    let stored_nm = (u64_at(49), u32_at(57), 0u64);
+
+    let pj = cwd.join("package.json");
+    let pl = cwd.join("package-lock.json");
+    let nm = cwd.join("node_modules");
+
+    if !nm.exists() { return false; }
+
+    let cur_pj = file_mtime_size(&pj).unwrap_or((0, 0, 0));
+    let cur_pl = file_mtime_size(&pl).unwrap_or((0, 0, 0));
+    let cur_nm = file_mtime_size(&nm).unwrap_or((0, 0, 0));
+
+    stored_pj == cur_pj && stored_pl == cur_pl && stored_nm.0 == cur_nm.0 && stored_nm.1 == cur_nm.1
 }
 
 // ── Packed daemon protocol (zero-parse, zero-alloc) ─────────────────────────

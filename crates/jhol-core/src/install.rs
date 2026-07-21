@@ -1086,7 +1086,7 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
 
     if concurrency <= 1 || to_fetch.len() <= 1 {
         for entry in &to_fetch {
-            let hash = registry::download_tarball_to_store_hash_only(
+            let (hash, _unpacked) = registry::download_unpack_to_store_unpacked(
                 &entry.resolved,
                 &cache_dir,
                 &entry.spec,
@@ -1094,7 +1094,7 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
             )
             .map_err(|e| {
                 crate::error_handling::utils::registry_error_with_package(
-                    "download_tarball_to_store_hash_only",
+                    "download_unpack_to_store_unpacked",
                     &entry.spec,
                     None,
                     &e,
@@ -1617,12 +1617,56 @@ fn write_install_markers() {
     }
 }
 
+/// Capsule-first fast path: if the project capsule exists and its manifest hash
+/// matches the current package.json + package-lock.json, install directly from
+/// it. This is the single warm path; KCC³ / Soul Path / GRM are kept off the
+/// hot install path.
+fn try_capsule_install(project_dir: &Path, quiet: bool) -> Result<bool, JholError> {
+    let cap_path = crate::capsule::capsule_path(project_dir);
+    if !cap_path.exists() {
+        return Ok(false);
+    }
+    let view = match crate::capsule::read_capsule(&cap_path) {
+        Ok(v) => v,
+        Err(_) => return Ok(false),
+    };
+    let hash = match crate::capsule::compute_manifest_hash(project_dir) {
+        Ok(h) => h,
+        Err(_) => return Ok(false),
+    };
+    if view.manifest_hash() != hash {
+        return Ok(false);
+    }
+    if !quiet {
+        crate::utils::log("Capsule hit — installing from capsule");
+    }
+    crate::capsule::install_from_capsule(&view, project_dir).map_err(|e| {
+        crate::error_handling::utils::application_error("capsule_install", Some("install_failed"), &e)
+    })?;
+    // Write project-local status so next install exits before binary loads.
+    crate::daemon_cache::write_status(hash, project_dir);
+    crate::daemon_cache::store_last_hash(hash);
+    let nm = project_dir.join("node_modules");
+    if nm.exists() {
+        let _ = std::fs::write(nm.join(".nm_fingerprint"), &hash);
+    }
+    Ok(true)
+}
+
 /// Install packages. Uses parallel validation, cache (content-addressable), native registry with backend fallback.
 pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<(), JholError> {
     let mut profiler = InstallProfiler::new();
+
+    // Lane 0: zero-work warm bypass via project-local status file.
+    // main.rs already checks this before clap; this guard covers daemon/direct calls.
+    if packages.is_empty() && !options.lockfile_only && crate::daemon_cache::can_skip_install_before_clap() {
+        profiler.mark("lane0_warm_bypass");
+        return Ok(());
+    }
+
     let download_conc = download_concurrency();
     let cache_install_conc = cache_install_concurrency().max(1);
-    // Soul Path: warm cache install concurrency defaults higher (was 1)
+    // Warm cache install concurrency defaults higher (was 1)
     let cache_install_conc = if cache_install_conc == 1
         && std::env::var("JHOL_CACHE_INSTALL_CONCURRENCY").is_err()
     {
@@ -1635,31 +1679,11 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     let worker_pool_seq_threshold = worker_pool_sequential_threshold();
     let legacy_chunk_scheduler = use_legacy_chunk_scheduler();
 
-    // KCC³ Classifier Cascade: try Path 0 (CGA capsule), Path S (SNR), then fall through.
-    let mut kcc3_capsule_installed = false;
+    // Capsule-first fast path: mmap'd zero-parse graph → install.
     if !options.lockfile_only && !options.no_cache {
-        if let Ok(cascade_result) = kcc3_cascade(packages, options, &mut profiler) {
-            kcc3_capsule_installed = cascade_result;
-            if cascade_result {
-                // Write CGA capsule on Path 0 success
-                if kcc3_cga_enabled() {
-                    let _ = crate::capsule::write_cga_capsule_from_project(Path::new("."));
-                }
-                sync_hidden_lockfile();
-                remember_installed_packages(Path::new("node_modules"));
-                write_install_markers();
-                return Ok(());
-            }
-        }
-    }
-
-    // Soul Path: migrate JAGR-S once; spectral capsule execute when possible.
-    crate::soul_path::ensure_jagrs_migrated();
-    if !kcc3_capsule_installed && !options.lockfile_only && !options.no_cache {
-        match crate::soul_path::try_capsule_execute(Path::new("."), options.quiet) {
+        match try_capsule_install(Path::new("."), options.quiet) {
             Ok(true) => {
-                profiler.mark("soul_capsule_execute");
-                sync_hidden_lockfile();
+                profiler.mark("capsule_fast_path");
                 remember_installed_packages(Path::new("node_modules"));
                 write_install_markers();
                 return Ok(());
@@ -1667,77 +1691,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
             Ok(false) => {}
             Err(e) => {
                 if !options.quiet {
-                    crate::utils::log(&format!("Soul Path capsule miss/fail: {}", e));
-                }
-            }
-        }
-    }
-
-    // Capsule fast-path (legacy path kept for hash-mismatch rebuilds)
-    if !options.lockfile_only && !options.no_cache {
-        let cap_path = crate::capsule::capsule_path(Path::new("."));
-        if cap_path.exists() {
-            match crate::capsule::read_capsule(&cap_path) {
-                Ok(view) => {
-                    if let Ok(hash) = crate::capsule::compute_manifest_hash(Path::new(".")) {
-                        if view.manifest_hash() == hash {
-                            if !options.quiet {
-                                crate::utils::log("Capsule hit — installing from capsule");
-                            }
-                            let result = crate::capsule::install_from_capsule(&view, Path::new("."))
-                                .map_err(|e| {
-                                    crate::error_handling::utils::application_error(
-                                        "capsule_install", Some("install_failed"), &e,
-                                    )
-                                });
-                            if result.is_ok() {
-                                remember_installed_packages(Path::new("node_modules"));
-                                write_install_markers();
-                            }
-                            return result;
-                        }
-                    }
-                }
-                Err(_) => {
-                    if !options.quiet {
-                        crate::utils::log("Capsule corrupt — falling back to lockfile");
-                    }
-                }
-            }
-        }
-    }
-
-    // Soul Path: GRM + lattice closed-world gate. If all root deps already
-    // resolved in cross-project memory, skip registry entirely.
-    if !options.from_lockfile && !options.lockfile_only {
-        let pj = Path::new("package.json");
-        if pj.exists() {
-            if let Some(deps) = lockfile::read_package_json_deps(pj) {
-                if let Some(resolved) = crate::soul_path::grm_lattice_assemble(&deps) {
-                    if !options.quiet {
-                        crate::utils::log(&format!(
-                            "Soul Path: GRM/lattice hit ({} roots) — skip registry",
-                            resolved.len()
-                        ));
-                    }
-                    let lock_path = Path::new("package-lock.json");
-                    if let Err(e) = crate::lockfile_write::write_package_lock(
-                        lock_path, pj, &resolved,
-                    ) {
-                        crate::utils::log(&format!(
-                            "Soul Path: GRM lockfile write failed (falling through): {}",
-                            e
-                        ));
-                    } else {
-                        let _ = crate::capsule::write_capsule_from_project(Path::new("."));
-                        sync_hidden_lockfile();
-                        // Record in JMR + GRM + lattice
-                        let fp = crate::resolution_mirror::fingerprint_deps(&deps);
-                        crate::resolution_mirror::record_resolution(fp, &resolved);
-                        crate::soul_path::remember_all_packages(&resolved);
-                        write_install_markers();
-                        return Ok(());
-                    }
+                    crate::utils::log(&format!("Capsule fast path failed: {}", e));
                 }
             }
         }

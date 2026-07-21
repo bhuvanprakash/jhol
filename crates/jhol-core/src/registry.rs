@@ -1463,6 +1463,128 @@ pub fn download_tarball_to_store_hash_only(
     Ok(hash)
 }
 
+/// Decompress gzip data with libdeflate. Uses the gzip ISIZE trailer as the
+/// initial output size and grows on InsufficientSpace.
+fn decompress_gzip_libdeflate(gz: &[u8]) -> Result<Vec<u8>, String> {
+    let mut decompressor = libdeflater::Decompressor::new();
+    let initial_size = if gz.len() >= 4 {
+        let last4 = &gz[gz.len() - 4..];
+        u32::from_le_bytes([last4[0], last4[1], last4[2], last4[3]]) as usize
+    } else {
+        gz.len().saturating_mul(4)
+    };
+    let mut out = vec![0u8; initial_size.max(4096)];
+    loop {
+        match decompressor.gzip_decompress(gz, &mut out) {
+            Ok(n) => {
+                out.truncate(n);
+                return Ok(out);
+            }
+            Err(libdeflater::DecompressionError::InsufficientSpace) => {
+                out.resize(out.len().saturating_mul(2), 0);
+            }
+            Err(libdeflater::DecompressionError::BadData) => {
+                return Err("libdeflate: bad gzip data".to_string());
+            }
+        }
+    }
+}
+
+/// Extract a pre-decompressed tar archive to a directory, stripping the top-level
+/// directory entry (package/... -> ...).
+fn extract_tar_from_bytes(decompressed: &[u8], dest_dir: &Path) -> Result<(), String> {
+    use std::io::Cursor;
+    let mut archive = tar::Archive::new(Cursor::new(decompressed));
+    for entry in archive.entries().map_err(|e| e.to_string())? {
+        let mut entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path().map_err(|e| e.to_string())?;
+        let path_str = path.to_string_lossy();
+        let parts: Vec<&str> = path_str.split('/').filter(|s| !s.is_empty()).collect();
+        if parts.len() <= 1 {
+            continue;
+        }
+        let rel = parts[1..].join(std::path::MAIN_SEPARATOR_STR);
+        if rel.is_empty() {
+            continue;
+        }
+        let out_path = dest_dir.join(&rel);
+        if entry.header().entry_type().is_dir() {
+            std::fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
+        } else {
+            if let Some(p) = out_path.parent() {
+                std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+            }
+            entry.unpack(&out_path).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Single-pass cold download → unpack.
+///
+/// Downloads the tarball, verifies SRI integrity inline, computes the SHA-256
+/// content hash, decompresses with libdeflate, extracts directly to
+/// store_unpacked/<shard>/<hash>/, and keeps the original .tgz in store/.
+/// Returns (hash, unpacked_path).
+pub fn download_unpack_to_store_unpacked(
+    url: &str,
+    cache_dir: &Path,
+    pkg_key: &str,
+    expected_integrity: Option<&str>,
+) -> Result<(String, PathBuf), String> {
+    // Prefer pre-built binary package if available (exact spec only).
+    if let Some((package, version)) = parse_exact_package_spec(pkg_key) {
+        if let Ok(Some(tarball)) = load_binary_tarball(&package, &version) {
+            if let Some(sri) = expected_integrity {
+                if !crate::utils::verify_sri_bytes(&tarball, sri) {
+                    return Err(format!("Integrity check failed for {}", pkg_key));
+                }
+            }
+            let hash = format!("{:x}", Sha256::digest(&tarball));
+            let shard = if hash.len() >= 2 { &hash[..2] } else { "xx" };
+            let unpacked = cache_dir.join("store_unpacked").join(shard).join(&hash);
+            if !unpacked.exists() {
+                std::fs::create_dir_all(&unpacked).map_err(|e| e.to_string())?;
+                extract_tar_from_bytes(&tarball, &unpacked)?;
+            }
+            let store_file = cache_dir.join("store").join(format!("{}.tgz", hash));
+            if !store_file.exists() {
+                let _ = std::fs::write(&store_file, &tarball);
+            }
+            return Ok((hash, unpacked));
+        }
+    }
+
+    let token = registry_auth_token();
+    let bytes = crate::http_client::get_bytes_with_bearer(url, token.as_deref())
+        .map_err(|e| format!("download: {}", e))?;
+
+    if let Some(sri) = expected_integrity {
+        if !crate::utils::verify_sri_bytes(&bytes, sri) {
+            return Err(format!("Integrity check failed for {}", pkg_key));
+        }
+    }
+
+    let hash = format!("{:x}", Sha256::digest(&bytes));
+    let shard = if hash.len() >= 2 { &hash[..2] } else { "xx" };
+    let unpacked = cache_dir.join("store_unpacked").join(shard).join(&hash);
+    if !unpacked.exists() {
+        std::fs::create_dir_all(&unpacked).map_err(|e| e.to_string())?;
+        let decompressed = decompress_gzip_libdeflate(&bytes)?;
+        extract_tar_from_bytes(&decompressed, &unpacked)?;
+    }
+
+    let store_file = cache_dir.join("store").join(format!("{}.tgz", hash));
+    if !store_file.exists() {
+        if let Some(parent) = store_file.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&store_file, &bytes);
+    }
+
+    Ok((hash, unpacked))
+}
+
 /// Ensure the tarball is unpacked in sharded store_unpacked/ab/<hash>; return that path.
 pub fn ensure_unpacked_in_store(tarball_path: &Path, cache_dir: &Path) -> Result<PathBuf, String> {
     let hash = tarball_path
@@ -1485,73 +1607,17 @@ pub fn extract_tarball_bytes_public(tarball_data: &[u8], dest_dir: &Path) -> Res
 }
 
 fn extract_tarball_bytes_to_dir(tarball_data: &[u8], dest_dir: &Path) -> Result<(), String> {
-    use flate2::read::GzDecoder;
-    use tar::Archive;
-
-    let dec = GzDecoder::new(std::io::Cursor::new(tarball_data));
-    let mut archive = Archive::new(dec);
-
     std::fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
-
-    for entry in archive.entries().map_err(|e| e.to_string())? {
-        let mut entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path().map_err(|e| e.to_string())?;
-        let path_str = path.to_string_lossy();
-        let parts: Vec<&str> = path_str.split('/').filter(|s| !s.is_empty()).collect();
-        if parts.is_empty() {
-            continue;
-        }
-        let rel: String = parts[1..].join(std::path::MAIN_SEPARATOR_STR);
-        if rel.is_empty() {
-            continue;
-        }
-        let out_path = dest_dir.join(&rel);
-        if entry.header().entry_type().is_dir() {
-            std::fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
-        } else {
-            if let Some(p) = out_path.parent() {
-                std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
-            }
-            entry.unpack(&out_path).map_err(|e| e.to_string())?;
-        }
-    }
-    Ok(())
+    let decompressed = decompress_gzip_libdeflate(tarball_data)?;
+    extract_tar_from_bytes(&decompressed, dest_dir)
 }
 
 /// Extract .tgz into dest_dir, stripping one top-level directory from tarball.
 pub fn extract_tarball_to_dir(tarball_path: &Path, dest_dir: &Path) -> Result<(), String> {
-    use flate2::read::GzDecoder;
-    use tar::Archive;
-
-    let f = File::open(tarball_path).map_err(|e| e.to_string())?;
-    let dec = GzDecoder::new(BufReader::new(f));
-    let mut archive = Archive::new(dec);
-
     std::fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
-
-    for entry in archive.entries().map_err(|e| e.to_string())? {
-        let mut entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path().map_err(|e| e.to_string())?;
-        let path_str = path.to_string_lossy();
-        let parts: Vec<&str> = path_str.split('/').filter(|s| !s.is_empty()).collect();
-        if parts.is_empty() {
-            continue;
-        }
-        let rel: String = parts[1..].join(std::path::MAIN_SEPARATOR_STR);
-        if rel.is_empty() {
-            continue;
-        }
-        let out_path = dest_dir.join(&rel);
-        if entry.header().entry_type().is_dir() {
-            std::fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
-        } else {
-            if let Some(p) = out_path.parent() {
-                std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
-            }
-            entry.unpack(&out_path).map_err(|e| e.to_string())?;
-        }
-    }
-    Ok(())
+    let data = std::fs::read(tarball_path).map_err(|e| e.to_string())?;
+    let decompressed = decompress_gzip_libdeflate(&data)?;
+    extract_tar_from_bytes(&decompressed, dest_dir)
 }
 
 /// Extract .tgz to node_modules/<package_name>. Strips one top-level directory.
