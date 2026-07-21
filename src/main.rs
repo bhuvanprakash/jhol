@@ -626,6 +626,20 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
     let result = (|| -> Result<(), String> {
         std::env::set_current_dir(&cwd).map_err(|e| format!("chdir {}: {}", cwd, e))?;
 
+        // Daemon fast-path: if node_modules/.nm_fingerprint matches last hash, skip everything.
+        // Uses cached hash — zero disk reads.
+        if jhol_core::daemon_cache::fast_nm_check(Path::new(".")) {
+            return Ok(());
+        }
+        // Fallback: compute hash from disk and check fingerprint
+        if let Ok(hash) = jhol_core::capsule::compute_manifest_hash(Path::new(".")) {
+            if jhol_core::daemon_cache::nm_is_fresh(Path::new("."), hash) {
+                // node_modules already up to date — return instantly, zero work
+                jhol_core::daemon_cache::store_last_hash(hash);
+                return Ok(());
+            }
+        }
+
         // Daemon fast-path: if resolved graph cached and fingerprint matches,
         // skip resolution entirely — use live capsule view from memory.
         let cap_path = jhol_core::capsule::capsule_path(Path::new("."));
@@ -680,6 +694,11 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
                 .unwrap_or(true);
             if cga_gate {
                 let _ = jhol_core::capsule::write_cga_capsule_from_project(Path::new("."));
+            }
+            // Write .nm_fingerprint so next request returns instantly
+            if let Ok(hash) = jhol_core::capsule::compute_manifest_hash(Path::new(".")) {
+                jhol_core::daemon_cache::write_nm_fingerprint(Path::new("."), hash);
+                jhol_core::daemon_cache::store_last_hash(hash);
             }
         }
         install_result

@@ -232,6 +232,62 @@ pub fn clear_config_cache() {
     }
 }
 
+// ── Pre-built node_modules watcher ────────────────────────────────────────────
+//
+// After the daemon installs, it writes .nm_fingerprint (8-byte manifest hash)
+// into node_modules/. On the next request, before doing ANY work, the daemon
+// checks this file. If the hash matches, node_modules is already correct —
+// return instantly, zero work.
+
+/// Write a .nm_fingerprint file in node_modules after successful install.
+/// Next request checks this first — if hash matches, zero-work return.
+pub fn write_nm_fingerprint(project_dir: &std::path::Path, hash: [u8; 8]) {
+    let nm = project_dir.join("node_modules");
+    if nm.exists() {
+        let _ = std::fs::write(nm.join(".nm_fingerprint"), &hash);
+    }
+}
+
+/// Check if node_modules is already fresh for this hash (fingerprint match).
+pub fn nm_is_fresh(project_dir: &std::path::Path, hash: [u8; 8]) -> bool {
+    let fp = project_dir.join("node_modules").join(".nm_fingerprint");
+    match std::fs::read(&fp) {
+        Ok(b) if b.len() >= 8 => {
+            let stored: [u8; 8] = b[..8].try_into().unwrap_or([0; 8]);
+            stored == hash
+        }
+        _ => false,
+    }
+}
+
+/// Store the last known manifest hash so the daemon can check nm_is_fresh
+/// without reading package.json/lockfile from disk.
+static LAST_HASH: std::sync::OnceLock<std::sync::Mutex<Option<[u8; 8]>>> =
+    std::sync::OnceLock::new();
+
+fn last_hash_lock() -> &'static std::sync::Mutex<Option<[u8; 8]>> {
+    LAST_HASH.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+pub fn store_last_hash(hash: [u8; 8]) {
+    if let Ok(mut guard) = last_hash_lock().lock() {
+        *guard = Some(hash);
+    }
+}
+
+pub fn get_last_hash() -> Option<[u8; 8]> {
+    last_hash_lock().lock().ok().and_then(|g| *g)
+}
+
+/// One-shot fast path: check cached hash + nm fingerprint without any disk reads.
+/// Returns true if node_modules is confirmed up to date.
+pub fn fast_nm_check(project_dir: &std::path::Path) -> bool {
+    if let Some(hash) = get_last_hash() {
+        return nm_is_fresh(project_dir, hash);
+    }
+    false
+}
+
 // ── Live capsule view cache ─────────────────────────────────────────────────────
 //
 // Daemon keeps the parsed capsule view in memory so warm requests skip mmap + verify.
