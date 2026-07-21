@@ -38,7 +38,7 @@ pub struct CapsuleHeader {
     pub total_unpacked_bytes: u64,
     pub spectral_gap: f64,
     pub predicted_beta1: u64,
-    _reserved: [u8; 8],
+    pub knot_fingerprint: u64,
 }
 
 #[repr(C)]
@@ -154,6 +154,10 @@ impl CapsuleView {
         unsafe { (*self.header).predicted_beta1 }
     }
 
+    pub fn knot_fingerprint(&self) -> u64 {
+        unsafe { (*self.header).knot_fingerprint }
+    }
+
     pub fn entry(&self, idx: usize) -> &PackageEntry {
         assert!(idx < self.pkg_count, "capsule entry idx {} >= {}", idx, self.pkg_count);
         unsafe { &*self.entries.add(idx) }
@@ -243,6 +247,7 @@ pub struct CapsuleBuilder {
     manifest_hash: [u8; 8],
     spectral_gap: f64,
     predicted_beta1: u64,
+    knot_fingerprint: u64,
 }
 
 impl CapsuleBuilder {
@@ -258,6 +263,7 @@ impl CapsuleBuilder {
             manifest_hash,
             spectral_gap: 1.0,
             predicted_beta1: 0,
+            knot_fingerprint: 0,
         }
     }
 
@@ -332,7 +338,7 @@ impl CapsuleBuilder {
         buf.extend_from_slice(&self.total_unpacked.to_le_bytes());
         buf.extend_from_slice(&self.spectral_gap.to_le_bytes());
         buf.extend_from_slice(&self.predicted_beta1.to_le_bytes());
-        buf.extend_from_slice(&[0u8; 8]); // reserved
+        buf.extend_from_slice(&self.knot_fingerprint.to_le_bytes());
 
         // Entries
         buf.extend_from_slice(&self.entries);
@@ -349,6 +355,10 @@ impl CapsuleBuilder {
     pub fn set_spectral(&mut self, spectral_gap: f64, predicted_beta1: u64) {
         self.spectral_gap = spectral_gap;
         self.predicted_beta1 = predicted_beta1;
+    }
+
+    pub fn set_knot_fingerprint(&mut self, fp: u64) {
+        self.knot_fingerprint = fp;
     }
 
     pub fn package_count(&self) -> usize {
@@ -661,6 +671,20 @@ pub fn write_capsule_from_project(project_dir: &Path) -> Result<(), String> {
         }
     }
 
+    // Compute knot fingerprint from package.json deps for classifier
+    if let Ok(pj_bytes) = std::fs::read(project_dir.join("package.json")) {
+        if let Ok(pj) = serde_json::from_slice::<serde_json::Value>(&pj_bytes) {
+            if let Some(deps_obj) = pj.get("dependencies").and_then(|d| d.as_object()) {
+                let deps_map: std::collections::HashMap<String, String> = deps_obj
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("*").to_string()))
+                    .collect();
+                let fp = crate::resolution_mirror::fingerprint_deps(&deps_map);
+                builder.set_knot_fingerprint(fp);
+            }
+        }
+    }
+
     // Add packages in ordered_names order so indices match name_idx
     for name in &ordered_names {
         let key = name_to_key.get(name).unwrap();
@@ -759,6 +783,88 @@ fn resolve_tarball_hash(
         }
     }
     [0u8; 32]
+}
+
+/// Classifier: look up capsule by knot fingerprint AND manifest hash.
+/// Returns Some(CapsuleView) if fingerprint matches, None otherwise.
+pub fn classifier_lookup(
+    project_dir: &Path,
+    knot_fp: u64,
+) -> Option<CapsuleView> {
+    let cap_path = capsule_path(project_dir);
+    if !cap_path.exists() {
+        return None;
+    }
+    let view = CapsuleView::open(&cap_path).ok()?;
+    if view.knot_fingerprint() != knot_fp {
+        return None;
+    }
+    view.verify().ok()?;
+    Some(view)
+}
+
+/// Write CGA capsule (git-committable) — includes knot fingerprint for classifier.
+/// Writes to `.jhol/capsule.bin` path (git-friendly).
+pub fn write_cga_capsule(
+    project_dir: &Path,
+    builder: CapsuleBuilder,
+) -> Result<(), String> {
+    let cap_path = cga_capsule_path(project_dir);
+    if let Some(parent) = cap_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("cga mkdir: {}", e))?;
+    }
+    write_capsule(&cap_path, builder)
+}
+
+/// Build and write a CGA capsule from the current project state.
+/// Convenience wrapper around write_capsule_from_project + .jhol/capsule.bin.
+pub fn write_cga_capsule_from_project(project_dir: &Path) -> Result<(), String> {
+    // Build regular capsule first
+    write_capsule_from_project(project_dir)?;
+    // Copy to CGA path if it doesn't exist already
+    let src = capsule_path(project_dir);
+    let dst = cga_capsule_path(project_dir);
+    if src != dst && src.exists() {
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("cga mkdir: {}", e))?;
+        }
+        fs::copy(&src, &dst).map_err(|e| format!("cga copy: {}", e))?;
+    }
+    Ok(())
+}
+
+/// Path to the CGA capsule artifact (`.jhol/capsule.bin`).
+pub fn cga_capsule_path(project_dir: &Path) -> PathBuf {
+    project_dir.join(".jhol").join("capsule.bin")
+}
+
+/// Try to install from CGA capsule at `.jhol/capsule.bin`.
+/// Validates knot fingerprint + manifest hash before installing.
+pub fn try_git_capsule_install(
+    project_dir: &Path,
+    knot_fp: u64,
+    manifest_hash: [u8; 8],
+    quiet: bool,
+) -> Result<bool, String> {
+    let cap_path = cga_capsule_path(project_dir);
+    if !cap_path.exists() {
+        return Ok(false);
+    }
+    let view = CapsuleView::open(&cap_path)?;
+    // Check manifest hash (fast)
+    if view.manifest_hash() != manifest_hash {
+        return Ok(false);
+    }
+    // Check knot fingerprint (cohomology match)
+    if view.knot_fingerprint() != knot_fp {
+        return Ok(false);
+    }
+    view.verify()?;
+    if !quiet {
+        crate::utils::log("KCC³: CGA capsule hit — installing from .jhol/capsule.bin");
+    }
+    install_from_capsule(&view, project_dir)?;
+    Ok(true)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────────

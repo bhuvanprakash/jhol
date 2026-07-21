@@ -256,6 +256,36 @@ pub fn record_resolution(
     global_mirror().store_section(fingerprint, entries);
 }
 
+/// SNR: store a speculative neighbor resolution.
+/// Keyed by (parent_fingerprint, edit_descriptor).
+/// edit_descriptor describes the change (e.g., "add:react@^18", "update:lodash@^5").
+pub fn snr_put(
+    parent_fp: u64,
+    edit: &str,
+    entries: HashMap<String, MirrorEntry>,
+) {
+    // Store under a composite key: hash(parent_fp || edit)
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    parent_fp.hash(&mut hasher);
+    edit.hash(&mut hasher);
+    let composite_fp = Hasher::finish(&hasher);
+    global_mirror().store_section(composite_fp, entries);
+}
+
+/// SNR: retrieve a speculative neighbor resolution.
+pub fn snr_get(
+    parent_fp: u64,
+    edit: &str,
+) -> Option<HashMap<String, MirrorEntry>> {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    parent_fp.hash(&mut hasher);
+    edit.hash(&mut hasher);
+    let composite_fp = Hasher::finish(&hasher);
+    global_mirror().get_section(composite_fp)
+}
+
 fn dep_signature(deps: &HashMap<String, String>) -> String {
     use std::hash::{Hash, Hasher};
     let mut pairs: Vec<_> = deps.iter().collect();

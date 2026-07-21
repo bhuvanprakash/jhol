@@ -364,3 +364,100 @@ pub fn get_cached_capsule(hash: [u8; 8]) -> Option<Arc<CapsuleView>> {
     }
     Some(snap.view.clone())
 }
+
+/// SNR speculation: after a successful install, pre-compute resolutions for
+/// likely next user actions (add popular deps, update majors, remove deps).
+/// Results go into JMR via snr_put so the next user command finds them.
+/// Uses real knot_solve_star per edit when JAGR knot is available.
+pub fn speculate_neighborhoods(
+    project_dir: &Path,
+    current_deps: &std::collections::HashMap<String, String>,
+    knot_fp: u64,
+) {
+    use crate::jagr::knot::{knot_solve_star, KnotRequest};
+    use crate::resolution_mirror::{snr_put, MirrorEntry};
+    use std::collections::HashMap;
+
+    let snr_enabled = std::env::var("JHOL_SNR")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(true);
+    if !snr_enabled {
+        return;
+    }
+
+    let top_k = std::env::var("JHOL_SNR_TOP_K")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(10);
+
+    // Build knot request from current deps
+    let mut available: HashMap<String, Vec<String>> = HashMap::new();
+    let mut deps_map: HashMap<(String, String), Vec<(String, Vec<String>)>> = HashMap::new();
+    for (name, spec) in current_deps {
+        available.insert(name.clone(), vec![spec.clone()]);
+        deps_map.insert(
+            (name.clone(), spec.clone()),
+            vec![(name.clone(), vec![spec.clone()])],
+        );
+    }
+    let base_request = KnotRequest {
+        root_package: "root".into(),
+        root_version: "0.0.0".into(),
+        available_versions: available,
+        dependencies: deps_map,
+        conflicts: vec![],
+    };
+
+    let mut edits = Vec::new();
+
+    // Edit 1: simulate removing each direct dep
+    for (name, _) in current_deps.iter().take(top_k) {
+        edits.push(("remove".to_string(), name.clone(), String::new()));
+    }
+
+    // Edit 2: simulate bumping each dep to next major
+    for (name, spec) in current_deps.iter().take(top_k) {
+        let next = if spec.starts_with('^') || spec.starts_with('~') {
+            format!("~{}", &spec[1..])
+        } else {
+            format!("^{}", spec)
+        };
+        edits.push(("update".to_string(), name.clone(), next));
+    }
+
+    // Compute star-delta for each edit using knot_solve_star
+    for (op, name, spec) in edits {
+        let edit_desc = if op == "remove" {
+            format!("remove:{}", name)
+        } else {
+            format!("update:{}@{}", name, spec)
+        };
+        let changed = vec![name.clone()];
+        // knot_solve_star returns HashMap<String,String> directly
+        let result = knot_solve_star(knot_fp, &changed, &base_request);
+        let entries: HashMap<String, MirrorEntry> = match result {
+            Ok(map) if !map.is_empty() => {
+                let mut m = HashMap::new();
+                for (pkg, ver) in &map {
+                    m.insert(
+                        pkg.clone(),
+                        MirrorEntry {
+                            package: pkg.clone(),
+                            version: ver.clone(),
+                            resolved_version: ver.clone(),
+                            integrity: None,
+                            resolved_url: None,
+                            tarball_url: None,
+                            deps: HashMap::new(),
+                            dependencies: HashMap::new(),
+                            dep_signature: String::new(),
+                        },
+                    );
+                }
+                m
+            }
+            _ => HashMap::new(),
+        };
+        snr_put(knot_fp, &edit_desc, entries);
+    }
+}

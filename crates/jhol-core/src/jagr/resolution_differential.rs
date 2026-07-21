@@ -555,6 +555,44 @@ pub fn format_report(diff: &ResolutionDifferential, n_packages: usize) -> String
     s
 }
 
+/// Quick spectral gate from dependency map (O(edges) DSSC bound).
+/// Returns (can_skip_full_pipeline, predicted_beta1).
+pub fn classify_gate(deps: &std::collections::HashMap<String, String>) -> (bool, usize) {
+    let req = build_request(deps, None);
+    let diff = compute_differential(&req);
+    (diff.can_skip_full_pipeline(), diff.predicted_beta1)
+}
+
+/// Persistence Barcode Fingerprint (PBF) — negative filter for MPT bucket narrowing.
+/// Uses degree-sequence hash as a lightweight barcode. MPT bucket + exact knot fp confirm.
+pub fn pbf_from_deps(deps: &std::collections::HashMap<String, String>) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut pairs: Vec<(&String, &String)> = deps.iter().collect();
+    pairs.sort_by_key(|(k, _)| *k);
+    for (name, spec) in &pairs {
+        hasher.write(name.as_bytes());
+        hasher.write(spec.as_bytes());
+        // Degree proxy: tight pins (no ^/~/*) add weight
+        let tight = spec.trim();
+        let weight = if tight.starts_with('^') || tight.starts_with('~') {
+            1u64
+        } else if tight == "*" || tight == "latest" {
+            0
+        } else {
+            2
+        };
+        hasher.write_u64(weight);
+    }
+    hasher.finish()
+}
+
+/// PBF negative filter: returns false if PBF mismatch (fast reject before knot fp check).
+/// True means "PBF is compatible — proceed to exact knot fp check".
+pub fn pbf_filter(deps_fp: u64, candidate_pbf: u64) -> bool {
+    deps_fp == candidate_pbf
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

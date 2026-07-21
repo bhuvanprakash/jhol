@@ -1,7 +1,11 @@
 //! JAGR resolver — Layer 0 spectral pre-filter (Soul Path gate).
 //! Full three-layer resolver available via feature flag.
 
+pub mod knot;
 pub mod resolution_differential;
+
+pub use knot::{knot_solve, build_knot_graph, KnotRequest};
+pub use resolution_differential::{ResolutionDifferential, ResolveRequest};
 
 /// Compatibility stub for the full three-layer JAGR resolver.
 pub struct JagrResolver;

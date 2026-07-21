@@ -575,6 +575,26 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
         }
     };
 
+    // SNR query: read-only lookup in JMR for predicted resolution.
+    if let Some(action) = req.get("action").and_then(|v| v.as_str()) {
+        if action == "snr_query" || action == "snr" {
+            let fp = req.get("fingerprint").and_then(|v| v.as_u64()).unwrap_or(0);
+            let edit = req.get("edit").and_then(|v| v.as_str()).unwrap_or("");
+            if fp == 0 || edit.is_empty() {
+                let payload = serde_json::json!({"ok": false, "error": "snr_query requires fingerprint and edit"});
+                let _ = stream.write_all(payload.to_string().as_bytes());
+                return Ok(());
+            }
+            let result = jhol_core::resolution_mirror::snr_get(fp, edit);
+            let payload = match result {
+                Some(entries) => serde_json::json!({"ok": true, "hit": true, "entries": entries.len()}),
+                None => serde_json::json!({"ok": true, "hit": false}),
+            };
+            let _ = stream.write_all(payload.to_string().as_bytes());
+            return Ok(());
+        }
+    }
+
     let cwd = req.get("cwd").and_then(|v| v.as_str()).unwrap_or(".").to_string();
     if cwd.contains('\0') || cwd.len() > 4096 {
         let payload = serde_json::json!({"ok": false, "error": "invalid cwd"});
@@ -645,7 +665,24 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
         };
         jhol_core::set_daemon_mode(true);
         jhol_core::set_transitive_depth(2);
-        jhol_core::install_package(&refs, &opts).map_err(|e| e.to_string())
+        let install_result = jhol_core::install_package(&refs, &opts).map_err(|e| e.to_string());
+        // SNR speculation: after successful install, pre-compute neighbor resolutions
+        if install_result.is_ok() && !packages.is_empty() {
+            if let Some(deps) = jhol_core::lockfile::read_package_json_deps(Path::new("package.json")) {
+                let fp = jhol_core::resolution_mirror::fingerprint_deps(&deps);
+                jhol_core::daemon_cache::speculate_neighborhoods(Path::new("."), &deps, fp);
+            }
+        }
+        // CGA capsule write after successful install
+        if install_result.is_ok() {
+            let cga_gate = std::env::var("JHOL_CGA")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(true);
+            if cga_gate {
+                let _ = jhol_core::capsule::write_cga_capsule_from_project(Path::new("."));
+            }
+        }
+        install_result
     })();
     let _ = std::env::set_current_dir(prev_cwd);
 

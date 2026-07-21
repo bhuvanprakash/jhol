@@ -2,5 +2,5 @@
 
 mod tests;
 
-// Re-export ContentHash for innovation modules
-pub use tests::ContentHash;
+// Re-export types for innovation modules and classifier
+pub use tests::{ContentHash, GraphNode, MPTMerkleNode, MPTStore, PackageRef, ResolvedGraph};
