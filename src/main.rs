@@ -4190,12 +4190,6 @@ fn run() -> Result<(), String> {
 }
 
 fn main() {
-    // ── Zero-binary-startup fast path ───────────────────────────────
-    // Before ANY clap parsing, check daemon status mmap + .nm_fingerprint.
-    // If node_modules is fresh, exit(0) immediately — zero work.
-    #[cfg(unix)]
-    jhol_core::daemon_cache::try_exit_before_clap();
-
     if !use_color() {
         colored::control::set_override(false);
     }

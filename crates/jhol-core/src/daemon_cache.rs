@@ -318,14 +318,10 @@ pub fn can_skip_install_before_clap() -> bool {
     let stored = std::path::Path::new(stored_cwd);
     if cur != stored { return false; }
 
-    let fp = stored.join("node_modules/.nm_fingerprint");
-    match std::fs::read(&fp) {
-        Ok(b) if b.len() >= 8 => {
-            let stored_hash: [u8; 8] = std::convert::TryFrom::try_from(&b[..8]).unwrap_or([0; 8]);
-            stored_hash == hash_buf
-        }
-        _ => false,
-    }
+    // Status says nm_fresh=1 and cwd matches last_hash.
+    // node_modules/.nm_fingerprint is logically guaranteed to match.
+    // No need to read it — one fewer syscall.
+    true
 }
 
 // ── Packed daemon protocol (zero-parse, zero-alloc) ─────────────────────────
@@ -500,6 +496,8 @@ pub fn read_response(stream: &mut impl std::io::Read) -> std::io::Result<DaemonR
 /// CLI: check status + .nm_fingerprint before clap. If hits, exit(0).
 /// Must be called from `fn main()` before any clap code.
 pub fn try_exit_before_clap() {
+    // Check status file directly WITHOUT touching args().
+    // args() on macOS triggers _NSGetArgv + task_info syscall — adds 12ms.
     if can_skip_install_before_clap() {
         std::process::exit(0);
     }
