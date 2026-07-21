@@ -1,0 +1,9 @@
+{
+  "max_total_fallbacks": 0,
+  "min_fixture_valid_ratio": 1.0,
+  "required_benchmark_metrics": [
+    "jhol_cold_install",
+    "jhol_warm_install",
+    "jhol_offline_install"
+  ]
+}

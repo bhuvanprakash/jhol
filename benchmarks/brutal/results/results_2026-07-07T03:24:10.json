@@ -1,0 +1,4 @@
+
+{"tool":"jhol","project":"simple","phase":"static","metric":"binary_size","value":9291360,"unit":"bytes"}
+{"tool":"jhol","project":"simple","phase":"static","metric":"version","value":0,"unit":"string"}
+{"tool":"jhol","project":"simple","phase":"static","metric":"version_str","value":"jhol 1.0.2"}

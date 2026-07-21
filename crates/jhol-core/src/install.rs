@@ -1594,6 +1594,32 @@ pub fn resolve_install_from_package_json(strict_lockfile: bool) -> Result<Vec<St
     Ok(lockfile::resolve_deps_for_install(&deps, resolved.as_ref()))
 }
 
+/// Write install markers for zero-binary-startup fast path.
+/// Called before every `return Ok(())` in `install_package`.
+fn write_install_markers() {
+    // Try capsule first (fast, no disk reads)
+    let hash = {
+        let cap_path = crate::capsule::capsule_path(std::path::Path::new("."));
+        if cap_path.exists() {
+            crate::capsule::read_capsule(&cap_path)
+                .ok()
+                .map(|v| v.manifest_hash())
+        } else {
+            // Lockfile + capsule may not exist yet on first cold install.
+            // That's fine — second run will have them.
+            crate::capsule::compute_manifest_hash(std::path::Path::new(".")).ok()
+        }
+    };
+    if let Some(h) = hash {
+        let nm = std::path::Path::new("node_modules");
+        if nm.exists() {
+            let _ = std::fs::write(nm.join(".nm_fingerprint"), &h);
+        }
+        crate::daemon_cache::store_last_hash(h);
+        crate::daemon_cache::write_status(h, std::path::Path::new("."));
+    }
+}
+
 /// Install packages. Uses parallel validation, cache (content-addressable), native registry with backend fallback.
 pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<(), JholError> {
     let mut profiler = InstallProfiler::new();
@@ -1624,6 +1650,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                 }
                 sync_hidden_lockfile();
                 remember_installed_packages(Path::new("node_modules"));
+                write_install_markers();
                 return Ok(());
             }
         }
@@ -1637,6 +1664,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                 profiler.mark("soul_capsule_execute");
                 sync_hidden_lockfile();
                 remember_installed_packages(Path::new("node_modules"));
+                write_install_markers();
                 return Ok(());
             }
             Ok(false) => {}
@@ -1667,6 +1695,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                                 });
                             if result.is_ok() {
                                 remember_installed_packages(Path::new("node_modules"));
+                                write_install_markers();
                             }
                             return result;
                         }
@@ -1709,6 +1738,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                         let fp = crate::resolution_mirror::fingerprint_deps(&deps);
                         crate::resolution_mirror::record_resolution(fp, &resolved);
                         crate::soul_path::remember_all_packages(&resolved);
+                        write_install_markers();
                         return Ok(());
                     }
                 }
@@ -2355,7 +2385,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                 crate::second_order_markov::learn_from_install(&names);
             }
         }
-
+        write_install_markers();
         return Ok(());
     }
 

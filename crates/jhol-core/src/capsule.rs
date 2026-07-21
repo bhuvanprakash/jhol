@@ -758,6 +758,12 @@ pub fn write_capsule_from_project(project_dir: &Path) -> Result<(), String> {
 
     let cap_path = capsule_path(project_dir);
     write_capsule(&cap_path, builder)?;
+
+    // Write install markers for zero-binary-startup fast path
+    crate::daemon_cache::write_nm_fingerprint(project_dir, manifest_hash);
+    crate::daemon_cache::store_last_hash(manifest_hash);
+    crate::daemon_cache::write_status(manifest_hash, project_dir);
+
     Ok(())
 }
 

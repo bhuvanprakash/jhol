@@ -1,0 +1,64 @@
+[package]
+name = "jhol-bundle"
+version = "1.0.2"
+edition = "2021"
+description = "Jhol bundler — TypeScript, JSX, React & CSS bundling for browser, Node.js, and Jhol"
+license-file = "../../LICENSE"
+repository = "https://github.com/bhuvanprakash/jhol"
+
+[features]
+default = ["native-node"]
+swc-backend = ["dep:swc_core"]
+lightningcss = ["dep:lightningcss"]
+native-node = []
+
+[dependencies]
+# Parser & transforms (optional — use for full TS/JSX support)
+swc_core = { version = "71", default-features = false, features = [
+    "ecma_parser",
+    "ecma_transforms",
+    "ecma_codegen",
+    "ecma_minifier",
+], optional = true }
+
+# CSS bundling (optional)
+lightningcss = { version = "1.0.0-alpha.71", optional = true }
+
+# Source maps — tiny hand-rolled VLQ, no heavy deps
+
+# File watching
+notify = "8"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Regex for import/export parsing
+# (inline module used in parser.rs)
+
+# Base64
+base64 = "0.22"
+
+# Error handling
+thiserror = "2.0"
+
+# Hashing
+sha2 = "0.10"
+hex = "0.4"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+# Memory-mapped file reads (zero-copy for hot files)
+memmap2 = "0.9"
+
+# Async runtime
+tokio = { version = "1", features = ["rt", "fs", "io-util", "sync", "time", "macros"] }
+
+# Module resolution
+glob = "0.3"
+semver = "1.0"
+
+# Parallelism
+rayon = "1.8"
+
+# Logging
+log = "0.4"

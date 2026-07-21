@@ -435,6 +435,14 @@ fn direct_install(
     };
     let _ = worker.join();
     progress.finish();
+    // Write install markers for zero-binary-startup fast path
+    if install_result.is_ok() {
+        if let Ok(hash) = jhol_core::capsule::compute_manifest_hash(Path::new(".")) {
+            jhol_core::daemon_cache::write_nm_fingerprint(Path::new("."), hash);
+            jhol_core::daemon_cache::store_last_hash(hash);
+            jhol_core::daemon_cache::write_status(hash, Path::new("."));
+        }
+    }
     install_result
 }
 
@@ -626,16 +634,24 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
     let result = (|| -> Result<(), String> {
         std::env::set_current_dir(&cwd).map_err(|e| format!("chdir {}: {}", cwd, e))?;
 
+        // Helper: write fingerprint + status after any successful install.
+        let write_install_markers = || {
+            if let Ok(hash) = jhol_core::capsule::compute_manifest_hash(Path::new(".")) {
+                jhol_core::daemon_cache::write_nm_fingerprint(Path::new("."), hash);
+                jhol_core::daemon_cache::store_last_hash(hash);
+                jhol_core::daemon_cache::write_status(hash, Path::new("."));
+            }
+        };
+
         // Daemon fast-path: if node_modules/.nm_fingerprint matches last hash, skip everything.
-        // Uses cached hash — zero disk reads.
         if jhol_core::daemon_cache::fast_nm_check(Path::new(".")) {
             return Ok(());
         }
         // Fallback: compute hash from disk and check fingerprint
         if let Ok(hash) = jhol_core::capsule::compute_manifest_hash(Path::new(".")) {
             if jhol_core::daemon_cache::nm_is_fresh(Path::new("."), hash) {
-                // node_modules already up to date — return instantly, zero work
                 jhol_core::daemon_cache::store_last_hash(hash);
+                jhol_core::daemon_cache::write_status(hash, Path::new("."));
                 return Ok(());
             }
         }
@@ -646,8 +662,10 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
         if let Ok(hash) = jhol_core::capsule::compute_manifest_hash(Path::new(".")) {
             // Check live in-memory capsule first (avoids mmap + verify)
             if let Some(view) = jhol_core::daemon_cache::get_cached_capsule(hash) {
-                return jhol_core::capsule::install_from_capsule(&view, Path::new("."))
+                let r = jhol_core::capsule::install_from_capsule(&view, Path::new("."))
                     .map_err(|e| e.to_string());
+                if r.is_ok() { write_install_markers(); }
+                return r;
             }
             // Fallback: check disk capsule
             if let Some(_cached) = jhol_core::daemon_cache::get_resolved_graph(hash) {
@@ -658,6 +676,7 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
                                 .map_err(|e| e.to_string());
                             if result.is_ok() {
                                 jhol_core::daemon_cache::store_capsule_view(hash, view);
+                                write_install_markers();
                             }
                             return result;
                         }
@@ -696,9 +715,11 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
                 let _ = jhol_core::capsule::write_cga_capsule_from_project(Path::new("."));
             }
             // Write .nm_fingerprint so next request returns instantly
+            // (also written by write_capsule_from_project in capsule.rs)
             if let Ok(hash) = jhol_core::capsule::compute_manifest_hash(Path::new(".")) {
                 jhol_core::daemon_cache::write_nm_fingerprint(Path::new("."), hash);
                 jhol_core::daemon_cache::store_last_hash(hash);
+                jhol_core::daemon_cache::write_status(hash, Path::new("."));
             }
         }
         install_result
@@ -2403,6 +2424,12 @@ fn run() -> Result<(), String> {
         };
         let refs: Vec<&str> = packages;
         jhol_core::install_package(&refs, &opts).map_err(|e| e.to_string())?;
+        // Write install markers for zero-binary-startup fast path
+        if let Ok(hash) = jhol_core::capsule::compute_manifest_hash(Path::new(".")) {
+            jhol_core::daemon_cache::write_nm_fingerprint(Path::new("."), hash);
+            jhol_core::daemon_cache::store_last_hash(hash);
+            jhol_core::daemon_cache::write_status(hash, Path::new("."));
+        }
         success("Package(s) added.");
         return Ok(());
     }
@@ -2562,6 +2589,12 @@ fn run() -> Result<(), String> {
                 telemetry: jhol_core::telemetry_enabled(&config),
             };
             jhol_core::install_package(&refs, &opts).map_err(|e| e.to_string())?;
+            // Write install markers for zero-binary-startup fast path
+            if let Ok(hash) = jhol_core::capsule::compute_manifest_hash(Path::new(".")) {
+                jhol_core::daemon_cache::write_nm_fingerprint(Path::new("."), hash);
+                jhol_core::daemon_cache::store_last_hash(hash);
+                jhol_core::daemon_cache::write_status(hash, Path::new("."));
+            }
 
             if jagr_check {
                 // After install, run JAGR three-layer analysis on the manifest
@@ -2984,6 +3017,12 @@ fn run() -> Result<(), String> {
                             }
                         }
                         jhol_core::install_package(&refs, &opts).map_err(|e| e.to_string())?;
+                        // Write install markers for zero-binary-startup fast path
+                        if let Ok(hash) = jhol_core::capsule::compute_manifest_hash(Path::new(".")) {
+                            jhol_core::daemon_cache::write_nm_fingerprint(Path::new("."), hash);
+                            jhol_core::daemon_cache::store_last_hash(hash);
+                            jhol_core::daemon_cache::write_status(hash, Path::new("."));
+                        }
                         if let Some(ref hook) = config_hook_post {
                             if let Err(e) = std::process::Command::new("sh")
                                 .arg("-c")
@@ -4218,6 +4257,12 @@ fn run() -> Result<(), String> {
 }
 
 fn main() {
+    // ── Zero-binary-startup fast path ───────────────────────────────
+    // Before ANY clap parsing, check daemon status mmap + .nm_fingerprint.
+    // If node_modules is fresh, exit(0) immediately — zero work.
+    #[cfg(unix)]
+    jhol_core::daemon_cache::try_exit_before_clap();
+
     if !use_color() {
         colored::control::set_override(false);
     }

@@ -232,6 +232,110 @@ pub fn clear_config_cache() {
     }
 }
 
+// ── Global status mmap (zero-binary-startup check) ─────────────────────────
+//
+// Daemon writes status to /tmp/jhol-status.bin after install.
+// CLI reads it BEFORE clap init. If nm_fresh=1 + hash matches .nm_fingerprint
+// in cwd, CLI exits(0) immediately — zero binary startup cost.
+
+#[repr(C)]
+struct StatusFile {
+    magic: [u8; 8],          // "JHLSTAT\0"
+    nm_fresh: u8,            // 1 = node_modules verified correct
+    last_hash: [u8; 8],      // manifest hash of last install
+    cwd: [u8; 4096],         // project dir of last install
+    daemon_pid: u32,
+    _pad: [u8; 64],
+}
+
+const STATUS_PATH: &str = "/tmp/jhol-status.bin";
+
+fn status_path() -> std::path::PathBuf {
+    std::env::var("JHOL_STATUS_FILE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from(STATUS_PATH))
+}
+
+/// Daemon: write status after successful install.
+pub fn write_status(hash: [u8; 8], project_dir: &std::path::Path) {
+    use std::io::Write;
+    let p = status_path();
+    if let Ok(mut f) = std::fs::File::create(&p) {
+        let cwd_bytes = project_dir.to_string_lossy().as_bytes().to_vec();
+        let mut cwd_arr = [0u8; 4096];
+        let len = cwd_bytes.len().min(4095);
+        cwd_arr[..len].copy_from_slice(&cwd_bytes[..len]);
+        cwd_arr[len] = 0;
+        let status = StatusFile {
+            magic: *b"JHLSTAT\0",
+            nm_fresh: 1,
+            last_hash: hash,
+            cwd: cwd_arr,
+            daemon_pid: std::process::id(),
+            _pad: [0u8; 64],
+        };
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                &status as *const StatusFile as *const u8,
+                std::mem::size_of::<StatusFile>(),
+            )
+        };
+        let _ = f.write_all(bytes);
+        let _ = f.sync_all();
+        // Pin in page cache
+        drop(f);
+        pin_file_in_page_cache(&p);
+    }
+}
+
+/// CLI: quick check before clap init. Returns true if install can be skipped.
+pub fn can_skip_install_before_clap() -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    let p = status_path();
+    let mut f = match std::fs::File::open(&p) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    // Read magic(8) + nm_fresh(1) + last_hash(8) = 17 bytes
+    let mut hdr = [0u8; 17];
+    if f.read_exact(&mut hdr).is_err() { return false; }
+    if &hdr[..8] != b"JHLSTAT\0" { return false; }
+    if hdr[8] != 1 { return false; } // nm_fresh
+    let mut hash_buf = [0u8; 8];
+    hash_buf.copy_from_slice(&hdr[9..17]);
+
+    // Read cwd (offset 17, 4096 bytes)
+    let mut cwd_buf = [0u8; 4096];
+    if f.read_exact(&mut cwd_buf).is_err() { return false; }
+    let cwd_len = cwd_buf.iter().position(|&b| b == 0).unwrap_or(4096);
+    let stored_cwd = std::str::from_utf8(&cwd_buf[..cwd_len]).unwrap_or("");
+    if stored_cwd.is_empty() { return false; }
+
+    let cur = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    let stored = std::path::Path::new(stored_cwd);
+    if cur != stored { return false; }
+
+    let fp = stored.join("node_modules/.nm_fingerprint");
+    match std::fs::read(&fp) {
+        Ok(b) if b.len() >= 8 => {
+            let stored_hash: [u8; 8] = std::convert::TryFrom::try_from(&b[..8]).unwrap_or([0; 8]);
+            stored_hash == hash_buf
+        }
+        _ => false,
+    }
+}
+
+/// CLI: check status + .nm_fingerprint before clap. If hits, exit(0).
+/// Must be called from `fn main()` before any clap code.
+pub fn try_exit_before_clap() {
+    if can_skip_install_before_clap() {
+        std::process::exit(0);
+    }
+}
+
 // ── Pre-built node_modules watcher ────────────────────────────────────────────
 //
 // After the daemon installs, it writes .nm_fingerprint (8-byte manifest hash)

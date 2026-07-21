@@ -1,0 +1,10 @@
+{
+  "minPassRate": 1.0,
+  "minFixtureCount": 8,
+  "requiredEdgeTypes": [
+    "peer",
+    "optional",
+    "overrides",
+    "workspaces"
+  ]
+}

@@ -1,0 +1,92 @@
+[package]
+name = "jhol-core"
+version = "1.0.1"
+edition = "2021"
+description = "Core logic for Jhol: cache, install, doctor, registry, lockfile"
+license-file = "../../LICENSE"
+repository = "https://github.com/bhuvanprakash/jhol"
+build = "build.rs"  # Build script for bundled packages
+
+[features]
+default = ["http-reqwest", "simd"]  # Enable SIMD by default
+http-reqwest = ["dep:reqwest", "dep:tokio"]
+simd = []  # SIMD optimizations enabled by default
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = "0.4"
+ureq = "2.10"
+tar = "0.4"
+flate2 = "1.0"
+sha2 = "0.10"
+semver = "1.0"
+base64 = "0.21"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "json", "blocking"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "fs", "io-util", "time"], optional = true }
+rand = "0.8"
+lazy_static = "1.4"
+
+# JAGR-2: PubGrub algorithm dependencies
+dashmap = "5.5"
+rayon = "1.8"  # Work-stealing parallelism (replaces crossbeam)
+ahash = "0.8"
+smallvec = { version = "1.13", features = ["union"] }
+
+# JAGR-2: SIMD JSON parsing (optional, enable with --features simd)
+simd-json = "0.13"
+
+# JAGR-2: Memory-efficient data structures
+bumpalo = "3.14"
+
+# JAGR-2: Reflink for copy-on-write (Linux/macOS)
+reflink-copy = "0.1"
+
+# JAGR-2: CPU detection for parallelism
+num_cpus = "1.16"
+
+# JHOL Global Cache - Memory-mapped files
+memmap2 = "0.9"
+dirs = "5.0"
+
+# JHOL: Faster decompression (like Bun uses libdeflate)
+libdeflater = "1.24"
+
+# 2025 Research: Directory walking for extracted store
+walkdir = "2.4"
+
+# 2025 Research: Faster hashing for cache keys (10x faster than SHA256)
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+# 2025 Research: Faster synchronization primitives (2-3x faster than std::sync)
+parking_lot = "0.12"
+
+# 2025 Research: Binary serialization for MPT nodes
+bincode = "1.3"
+zstd = "0.13"
+
+# 2025 Research: Hex encoding for content hashes
+hex = "0.4"
+
+# 2025 Research: Better error messages
+thiserror = "1.0"
+
+[build-dependencies]
+serde_json = "1.0"
+
+# New dependencies for advanced features
+rayon = "1.8"  # Parallel processing
+memmap2 = "0.9"  # Memory-mapped files
+zstd = "0.13"  # Compression
+
+# Phase 1: Exploit Rust Brutally
+simd-json = "0.13"  # SIMD-accelerated JSON (4x faster)
+memmap2 = "0.9"     # Memory-mapped files (zero-copy)
+xxhash-rust = { version = "0.8", features = ["xxh3", "xxh64"] }  # 15x faster hashing
+crossbeam = "0.8"   # Lock-free data structures
+
+# Phase 1: Exploit Rust Brutally
+simd-json = "0.13"
+memmap2 = "0.9"
+xxhash-rust = { version = "0.8", features = ["xxh3", "xxh64"] }
+crossbeam = "0.8"

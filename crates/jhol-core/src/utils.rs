@@ -49,20 +49,19 @@ pub const FALLBACK_TELEMETRY_NAME: &str = "fallback_telemetry.json";
 /// Returns the path to the cache directory. Uses JHOL_CACHE_DIR if set;
 /// otherwise Windows: %USERPROFILE%\.jhol-cache, Unix: $HOME/.jhol-cache
 pub fn get_cache_dir() -> String {
-    if let Ok(dir) = env::var("JHOL_CACHE_DIR") {
-        return dir;
-    }
-    let base = if cfg!(target_os = "windows") {
-        env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string())
-    } else {
-        env::var("HOME").unwrap_or_else(|_| ".".to_string())
-    };
-    let sep = if cfg!(target_os = "windows") {
-        "\\"
-    } else {
-        "/"
-    };
-    format!("{}{}.jhol-cache", base, sep)
+    static CACHE: OnceLock<String> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        if let Ok(dir) = env::var("JHOL_CACHE_DIR") {
+            return dir;
+        }
+        let base = if cfg!(target_os = "windows") {
+            env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string())
+        } else {
+            env::var("HOME").unwrap_or_else(|_| ".".to_string())
+        };
+        let sep = if cfg!(target_os = "windows") { "\\" } else { "/" };
+        format!("{}{}.jhol-cache", base, sep)
+    }).clone()
 }
 
 pub fn init_cache() -> Result<()> {

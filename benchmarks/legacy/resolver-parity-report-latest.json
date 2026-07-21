@@ -1,0 +1,843 @@
+{
+  "schemaVersion": "1",
+  "generatedAtUtc": "2026-02-15T21:12:28.933321+00:00",
+  "fixturesDir": "tests/fixtures",
+  "snapshotsDir": "tests/resolver-snapshots",
+  "totals": {
+    "fixtureCount": 13,
+    "passed": 13,
+    "failed": 0,
+    "passRate": 1.0
+  },
+  "coverage": {
+    "edgeTypeCounts": {
+      "peer": 1,
+      "optional": 1,
+      "overrides": 1,
+      "workspaces": 2
+    },
+    "missingEdgeCoverage": []
+  },
+  "semantic": {
+    "matched": 13,
+    "mismatched": 0,
+    "matchRate": 1.0
+  },
+  "fixtures": [
+    {
+      "name": "expo-app",
+      "path": "tests/fixtures/expo-app",
+      "packageJsonPath": "tests/fixtures/expo-app/package.json",
+      "snapshotPath": "tests/resolver-snapshots/expo-app.json",
+      "packageJsonValid": true,
+      "snapshotPresent": true,
+      "snapshotValid": true,
+      "edgeTypes": [],
+      "actualGraph": {
+        "root": {
+          "name": "jhol-fixture-expo-app",
+          "version": "1.0.0"
+        },
+        "edges": [
+          {
+            "from": "$root",
+            "to": "expo",
+            "spec": "51.0.22",
+            "type": "dependencies"
+          },
+          {
+            "from": "$root",
+            "to": "react",
+            "spec": "18.2.0",
+            "type": "dependencies"
+          },
+          {
+            "from": "$root",
+            "to": "react-native",
+            "spec": "0.74.5",
+            "type": "dependencies"
+          }
+        ],
+        "overrides": {},
+        "workspaces": []
+      },
+      "semanticDiff": {
+        "matches": true,
+        "reason": null,
+        "root": {
+          "expected": {
+            "name": "jhol-fixture-expo-app",
+            "version": "1.0.0"
+          },
+          "actual": {
+            "name": "jhol-fixture-expo-app",
+            "version": "1.0.0"
+          },
+          "matches": true
+        },
+        "edges": {
+          "missing": [],
+          "extra": []
+        },
+        "overrides": {
+          "missing": {},
+          "extra": {}
+        },
+        "workspaces": {
+          "missing": [],
+          "extra": []
+        }
+      },
+      "pass": true
+    },
+    {
+      "name": "express-app",
+      "path": "tests/fixtures/express-app",
+      "packageJsonPath": "tests/fixtures/express-app/package.json",
+      "snapshotPath": "tests/resolver-snapshots/express-app.json",
+      "packageJsonValid": true,
+      "snapshotPresent": true,
+      "snapshotValid": true,
+      "edgeTypes": [],
+      "actualGraph": {
+        "root": {
+          "name": "jhol-fixture-express-app",
+          "version": "1.0.0"
+        },
+        "edges": [
+          {
+            "from": "$root",
+            "to": "express",
+            "spec": "4.18.2",
+            "type": "dependencies"
+          },
+          {
+            "from": "$root",
+            "to": "nodemon",
+            "spec": "3.0.2",
+            "type": "devDependencies"
+          }
+        ],
+        "overrides": {},
+        "workspaces": []
+      },
+      "semanticDiff": {
+        "matches": true,
+        "reason": null,
+        "root": {
+          "expected": {
+            "name": "jhol-fixture-express-app",
+            "version": "1.0.0"
+          },
+          "actual": {
+            "name": "jhol-fixture-express-app",
+            "version": "1.0.0"
+          },
+          "matches": true
+        },
+        "edges": {
+          "missing": [],
+          "extra": []
+        },
+        "overrides": {
+          "missing": {},
+          "extra": {}
+        },
+        "workspaces": {
+          "missing": [],
+          "extra": []
+        }
+      },
+      "pass": true
+    },
+    {
+      "name": "nest-app",
+      "path": "tests/fixtures/nest-app",
+      "packageJsonPath": "tests/fixtures/nest-app/package.json",
+      "snapshotPath": "tests/resolver-snapshots/nest-app.json",
+      "packageJsonValid": true,
+      "snapshotPresent": true,
+      "snapshotValid": true,
+      "edgeTypes": [],
+      "actualGraph": {
+        "root": {
+          "name": "jhol-fixture-nest-app",
+          "version": "1.0.0"
+        },
+        "edges": [
+          {
+            "from": "$root",
+            "to": "@nestjs/common",
+            "spec": "10.4.2",
+            "type": "dependencies"
+          },
+          {
+            "from": "$root",
+            "to": "@nestjs/core",
+            "spec": "10.4.2",
+            "type": "dependencies"
+          },
+          {
+            "from": "$root",
+            "to": "reflect-metadata",
+            "spec": "0.2.2",
+            "type": "dependencies"
+          },
+          {
+            "from": "$root",
+            "to": "rxjs",
+            "spec": "7.8.1",
+            "type": "dependencies"
+          }
+        ],
+        "overrides": {},
+        "workspaces": []
+      },
+      "semanticDiff": {
+        "matches": true,
+        "reason": null,
+        "root": {
+          "expected": {
+            "name": "jhol-fixture-nest-app",
+            "version": "1.0.0"
+          },
+          "actual": {
+            "name": "jhol-fixture-nest-app",
+            "version": "1.0.0"
+          },
+          "matches": true
+        },
+        "edges": {
+          "missing": [],
+          "extra": []
+        },
+        "overrides": {
+          "missing": {},
+          "extra": {}
+        },
+        "workspaces": {
+          "missing": [],
+          "extra": []
+        }
+      },
+      "pass": true
+    },
+    {
+      "name": "next-app",
+      "path": "tests/fixtures/next-app",
+      "packageJsonPath": "tests/fixtures/next-app/package.json",
+      "snapshotPath": "tests/resolver-snapshots/next-app.json",
+      "packageJsonValid": true,
+      "snapshotPresent": true,
+      "snapshotValid": true,
+      "edgeTypes": [],
+      "actualGraph": {
+        "root": {
+          "name": "jhol-fixture-next-app",
+          "version": "1.0.0"
+        },
+        "edges": [
+          {
+            "from": "$root",
+            "to": "next",
+            "spec": "14.2.5",
+            "type": "dependencies"
+          },
+          {
+            "from": "$root",
+            "to": "react",
+            "spec": "18.2.0",
+            "type": "dependencies"
+          },
+          {
+            "from": "$root",
+            "to": "react-dom",
+            "spec": "18.2.0",
+            "type": "dependencies"
+          }
+        ],
+        "overrides": {},
+        "workspaces": []
+      },
+      "semanticDiff": {
+        "matches": true,
+        "reason": null,
+        "root": {
+          "expected": {
+            "name": "jhol-fixture-next-app",
+            "version": "1.0.0"
+          },
+          "actual": {
+            "name": "jhol-fixture-next-app",
+            "version": "1.0.0"
+          },
+          "matches": true
+        },
+        "edges": {
+          "missing": [],
+          "extra": []
+        },
+        "overrides": {
+          "missing": {},
+          "extra": {}
+        },
+        "workspaces": {
+          "missing": [],
+          "extra": []
+        }
+      },
+      "pass": true
+    },
+    {
+      "name": "nuxt-app",
+      "path": "tests/fixtures/nuxt-app",
+      "packageJsonPath": "tests/fixtures/nuxt-app/package.json",
+      "snapshotPath": "tests/resolver-snapshots/nuxt-app.json",
+      "packageJsonValid": true,
+      "snapshotPresent": true,
+      "snapshotValid": true,
+      "edgeTypes": [],
+      "actualGraph": {
+        "root": {
+          "name": "jhol-fixture-nuxt-app",
+          "version": "1.0.0"
+        },
+        "edges": [
+          {
+            "from": "$root",
+            "to": "nuxt",
+            "spec": "3.12.4",
+            "type": "dependencies"
+          }
+        ],
+        "overrides": {},
+        "workspaces": []
+      },
+      "semanticDiff": {
+        "matches": true,
+        "reason": null,
+        "root": {
+          "expected": {
+            "name": "jhol-fixture-nuxt-app",
+            "version": "1.0.0"
+          },
+          "actual": {
+            "name": "jhol-fixture-nuxt-app",
+            "version": "1.0.0"
+          },
+          "matches": true
+        },
+        "edges": {
+          "missing": [],
+          "extra": []
+        },
+        "overrides": {
+          "missing": {},
+          "extra": {}
+        },
+        "workspaces": {
+          "missing": [],
+          "extra": []
+        }
+      },
+      "pass": true
+    },
+    {
+      "name": "optional-deps-app",
+      "path": "tests/fixtures/optional-deps-app",
+      "packageJsonPath": "tests/fixtures/optional-deps-app/package.json",
+      "snapshotPath": "tests/resolver-snapshots/optional-deps-app.json",
+      "packageJsonValid": true,
+      "snapshotPresent": true,
+      "snapshotValid": true,
+      "edgeTypes": [
+        "optional"
+      ],
+      "actualGraph": {
+        "root": {
+          "name": "jhol-fixture-optional-deps-app",
+          "version": "1.0.0"
+        },
+        "edges": [
+          {
+            "from": "$root",
+            "to": "is-number",
+            "spec": "7.0.0",
+            "type": "dependencies"
+          },
+          {
+            "from": "$root",
+            "to": "fsevents",
+            "spec": "2.3.3",
+            "type": "optionalDependencies"
+          }
+        ],
+        "overrides": {},
+        "workspaces": []
+      },
+      "semanticDiff": {
+        "matches": true,
+        "reason": null,
+        "root": {
+          "expected": {
+            "name": "jhol-fixture-optional-deps-app",
+            "version": "1.0.0"
+          },
+          "actual": {
+            "name": "jhol-fixture-optional-deps-app",
+            "version": "1.0.0"
+          },
+          "matches": true
+        },
+        "edges": {
+          "missing": [],
+          "extra": []
+        },
+        "overrides": {
+          "missing": {},
+          "extra": {}
+        },
+        "workspaces": {
+          "missing": [],
+          "extra": []
+        }
+      },
+      "pass": true
+    },
+    {
+      "name": "overrides-app",
+      "path": "tests/fixtures/overrides-app",
+      "packageJsonPath": "tests/fixtures/overrides-app/package.json",
+      "snapshotPath": "tests/resolver-snapshots/overrides-app.json",
+      "packageJsonValid": true,
+      "snapshotPresent": true,
+      "snapshotValid": true,
+      "edgeTypes": [
+        "overrides"
+      ],
+      "actualGraph": {
+        "root": {
+          "name": "jhol-fixture-overrides-app",
+          "version": "1.0.0"
+        },
+        "edges": [
+          {
+            "from": "$root",
+            "to": "is-odd",
+            "spec": "3.0.1",
+            "type": "dependencies"
+          }
+        ],
+        "overrides": {
+          "is-number": "7.0.0"
+        },
+        "workspaces": []
+      },
+      "semanticDiff": {
+        "matches": true,
+        "reason": null,
+        "root": {
+          "expected": {
+            "name": "jhol-fixture-overrides-app",
+            "version": "1.0.0"
+          },
+          "actual": {
+            "name": "jhol-fixture-overrides-app",
+            "version": "1.0.0"
+          },
+          "matches": true
+        },
+        "edges": {
+          "missing": [],
+          "extra": []
+        },
+        "overrides": {
+          "missing": {},
+          "extra": {}
+        },
+        "workspaces": {
+          "missing": [],
+          "extra": []
+        }
+      },
+      "pass": true
+    },
+    {
+      "name": "peer-conflict",
+      "path": "tests/fixtures/peer-conflict",
+      "packageJsonPath": "tests/fixtures/peer-conflict/package.json",
+      "snapshotPath": "tests/resolver-snapshots/peer-conflict.json",
+      "packageJsonValid": true,
+      "snapshotPresent": true,
+      "snapshotValid": true,
+      "edgeTypes": [],
+      "actualGraph": {
+        "root": {
+          "name": "jhol-fixture-peer-conflict",
+          "version": "1.0.0"
+        },
+        "edges": [
+          {
+            "from": "$root",
+            "to": "eslint",
+            "spec": "9.0.0",
+            "type": "dependencies"
+          },
+          {
+            "from": "$root",
+            "to": "eslint-plugin-react",
+            "spec": "7.33.2",
+            "type": "dependencies"
+          }
+        ],
+        "overrides": {},
+        "workspaces": []
+      },
+      "semanticDiff": {
+        "matches": true,
+        "reason": null,
+        "root": {
+          "expected": {
+            "name": "jhol-fixture-peer-conflict",
+            "version": "1.0.0"
+          },
+          "actual": {
+            "name": "jhol-fixture-peer-conflict",
+            "version": "1.0.0"
+          },
+          "matches": true
+        },
+        "edges": {
+          "missing": [],
+          "extra": []
+        },
+        "overrides": {
+          "missing": {},
+          "extra": {}
+        },
+        "workspaces": {
+          "missing": [],
+          "extra": []
+        }
+      },
+      "pass": true
+    },
+    {
+      "name": "peer-deps-app",
+      "path": "tests/fixtures/peer-deps-app",
+      "packageJsonPath": "tests/fixtures/peer-deps-app/package.json",
+      "snapshotPath": "tests/resolver-snapshots/peer-deps-app.json",
+      "packageJsonValid": true,
+      "snapshotPresent": true,
+      "snapshotValid": true,
+      "edgeTypes": [
+        "peer"
+      ],
+      "actualGraph": {
+        "root": {
+          "name": "jhol-fixture-peer-deps-app",
+          "version": "1.0.0"
+        },
+        "edges": [
+          {
+            "from": "$root",
+            "to": "react",
+            "spec": "18.2.0",
+            "type": "dependencies"
+          },
+          {
+            "from": "$root",
+            "to": "react-dom",
+            "spec": "^18.0.0",
+            "type": "peerDependencies"
+          }
+        ],
+        "overrides": {},
+        "workspaces": []
+      },
+      "semanticDiff": {
+        "matches": true,
+        "reason": null,
+        "root": {
+          "expected": {
+            "name": "jhol-fixture-peer-deps-app",
+            "version": "1.0.0"
+          },
+          "actual": {
+            "name": "jhol-fixture-peer-deps-app",
+            "version": "1.0.0"
+          },
+          "matches": true
+        },
+        "edges": {
+          "missing": [],
+          "extra": []
+        },
+        "overrides": {
+          "missing": {},
+          "extra": {}
+        },
+        "workspaces": {
+          "missing": [],
+          "extra": []
+        }
+      },
+      "pass": true
+    },
+    {
+      "name": "react-app",
+      "path": "tests/fixtures/react-app",
+      "packageJsonPath": "tests/fixtures/react-app/package.json",
+      "snapshotPath": "tests/resolver-snapshots/react-app.json",
+      "packageJsonValid": true,
+      "snapshotPresent": true,
+      "snapshotValid": true,
+      "edgeTypes": [],
+      "actualGraph": {
+        "root": {
+          "name": "jhol-fixture-react-app",
+          "version": "1.0.0"
+        },
+        "edges": [
+          {
+            "from": "$root",
+            "to": "react",
+            "spec": "18.2.0",
+            "type": "dependencies"
+          },
+          {
+            "from": "$root",
+            "to": "react-dom",
+            "spec": "18.2.0",
+            "type": "dependencies"
+          },
+          {
+            "from": "$root",
+            "to": "vite",
+            "spec": "5.0.0",
+            "type": "devDependencies"
+          }
+        ],
+        "overrides": {},
+        "workspaces": []
+      },
+      "semanticDiff": {
+        "matches": true,
+        "reason": null,
+        "root": {
+          "expected": {
+            "name": "jhol-fixture-react-app",
+            "version": "1.0.0"
+          },
+          "actual": {
+            "name": "jhol-fixture-react-app",
+            "version": "1.0.0"
+          },
+          "matches": true
+        },
+        "edges": {
+          "missing": [],
+          "extra": []
+        },
+        "overrides": {
+          "missing": {},
+          "extra": {}
+        },
+        "workspaces": {
+          "missing": [],
+          "extra": []
+        }
+      },
+      "pass": true
+    },
+    {
+      "name": "turbo-app",
+      "path": "tests/fixtures/turbo-app",
+      "packageJsonPath": "tests/fixtures/turbo-app/package.json",
+      "snapshotPath": "tests/resolver-snapshots/turbo-app.json",
+      "packageJsonValid": true,
+      "snapshotPresent": true,
+      "snapshotValid": true,
+      "edgeTypes": [
+        "workspaces"
+      ],
+      "actualGraph": {
+        "root": {
+          "name": "jhol-fixture-turbo-app",
+          "version": "1.0.0"
+        },
+        "edges": [
+          {
+            "from": "$root",
+            "to": "turbo",
+            "spec": "2.0.6",
+            "type": "devDependencies"
+          }
+        ],
+        "overrides": {},
+        "workspaces": [
+          "apps/*",
+          "packages/*"
+        ]
+      },
+      "semanticDiff": {
+        "matches": true,
+        "reason": null,
+        "root": {
+          "expected": {
+            "name": "jhol-fixture-turbo-app",
+            "version": "1.0.0"
+          },
+          "actual": {
+            "name": "jhol-fixture-turbo-app",
+            "version": "1.0.0"
+          },
+          "matches": true
+        },
+        "edges": {
+          "missing": [],
+          "extra": []
+        },
+        "overrides": {
+          "missing": {},
+          "extra": {}
+        },
+        "workspaces": {
+          "missing": [],
+          "extra": []
+        }
+      },
+      "pass": true
+    },
+    {
+      "name": "typescript-app",
+      "path": "tests/fixtures/typescript-app",
+      "packageJsonPath": "tests/fixtures/typescript-app/package.json",
+      "snapshotPath": "tests/resolver-snapshots/typescript-app.json",
+      "packageJsonValid": true,
+      "snapshotPresent": true,
+      "snapshotValid": true,
+      "edgeTypes": [],
+      "actualGraph": {
+        "root": {
+          "name": "jhol-fixture-typescript-app",
+          "version": "1.0.0"
+        },
+        "edges": [
+          {
+            "from": "$root",
+            "to": "lodash",
+            "spec": "4.17.21",
+            "type": "dependencies"
+          },
+          {
+            "from": "$root",
+            "to": "typescript",
+            "spec": "5.4.5",
+            "type": "devDependencies"
+          }
+        ],
+        "overrides": {},
+        "workspaces": []
+      },
+      "semanticDiff": {
+        "matches": true,
+        "reason": null,
+        "root": {
+          "expected": {
+            "name": "jhol-fixture-typescript-app",
+            "version": "1.0.0"
+          },
+          "actual": {
+            "name": "jhol-fixture-typescript-app",
+            "version": "1.0.0"
+          },
+          "matches": true
+        },
+        "edges": {
+          "missing": [],
+          "extra": []
+        },
+        "overrides": {
+          "missing": {},
+          "extra": {}
+        },
+        "workspaces": {
+          "missing": [],
+          "extra": []
+        }
+      },
+      "pass": true
+    },
+    {
+      "name": "workspace-app",
+      "path": "tests/fixtures/workspace-app",
+      "packageJsonPath": "tests/fixtures/workspace-app/package.json",
+      "snapshotPath": "tests/resolver-snapshots/workspace-app.json",
+      "packageJsonValid": true,
+      "snapshotPresent": true,
+      "snapshotValid": true,
+      "edgeTypes": [
+        "workspaces"
+      ],
+      "actualGraph": {
+        "root": {
+          "name": "jhol-fixture-workspace-app",
+          "version": "1.0.0"
+        },
+        "edges": [
+          {
+            "from": "$root",
+            "to": "lodash",
+            "spec": "4.17.21",
+            "type": "dependencies"
+          }
+        ],
+        "overrides": {},
+        "workspaces": [
+          "packages/*"
+        ]
+      },
+      "semanticDiff": {
+        "matches": true,
+        "reason": null,
+        "root": {
+          "expected": {
+            "name": "jhol-fixture-workspace-app",
+            "version": "1.0.0"
+          },
+          "actual": {
+            "name": "jhol-fixture-workspace-app",
+            "version": "1.0.0"
+          },
+          "matches": true
+        },
+        "edges": {
+          "missing": [],
+          "extra": []
+        },
+        "overrides": {
+          "missing": {},
+          "extra": {}
+        },
+        "workspaces": {
+          "missing": [],
+          "extra": []
+        }
+      },
+      "pass": true
+    }
+  ],
+  "guardrails": {
+    "minPassRate": 1.0,
+    "minFixtureCount": 8,
+    "requiredEdgeTypes": [
+      "peer",
+      "optional",
+      "overrides",
+      "workspaces"
+    ]
+  },
+  "failures": [],
+  "status": "pass"
+}
