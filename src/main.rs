@@ -341,17 +341,27 @@ fn daemon_socket_path() -> std::path::PathBuf {
     if let Ok(v) = env::var("JHOL_DAEMON_SOCKET") {
         return std::path::PathBuf::from(v);
     }
+    // Prefer XDG_RUNTIME_DIR (per-user runtime dir, survives reboots on systemd)
+    if let Ok(xdg) = env::var("XDG_RUNTIME_DIR") {
+        let p = std::path::PathBuf::from(xdg).join(format!("jhol-{}.sock", std::process::id()));
+        if let Some(parent) = p.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        return p;
+    }
     std::env::temp_dir().join("jhol-install.sock")
 }
 
-/// Phase 2: Anticipatory Daemon — watches package.json, pre-fetches deps based
-/// on DSSC spectral certificates, and pre-builds capsule in background.
+/// Phase 1+2: Predictive Anticipatory Daemon — watches package.json,
+/// trains Markov from git history, predicts next adds, pre-fetches deps
+/// based on DSSC spectral certificates + GRM/JMR/lattice resolution,
+/// and pre-builds capsule + status so trampoline exits 0ms.
 ///
 /// When package.json changes:
-/// 1. Read new deps
-/// 2. Look up DSSC certs for each dep
-/// 3. Prefetch tarballs for Stable-certified packages (skip Fragile ones)
-/// 4. Pre-build capsule in background for next install
+/// 1. Train Markov from git log incrementally
+/// 2. Predict next 3 likely package adds
+/// 3. For each predicted: DSSC cert → GRM/JMR/lattice → JAGR-S prefetch
+/// 4. Pre-build capsule + write status.bin for predicted state
 fn anticipatory_daemon_loop(cwd: &Path) {
     let pj_path = cwd.join("package.json");
     if !pj_path.exists() {
@@ -361,6 +371,8 @@ fn anticipatory_daemon_loop(cwd: &Path) {
     let mut last_mtime = std::fs::metadata(&pj_path)
         .ok()
         .and_then(|m| m.modified().ok());
+    let mut last_trained_commit = String::new();
+    let mut last_predicted_deps: Vec<(String, String)> = Vec::new();
 
     loop {
         std::thread::sleep(std::time::Duration::from_secs(2));
@@ -374,18 +386,86 @@ fn anticipatory_daemon_loop(cwd: &Path) {
         }
         last_mtime = current_mtime;
 
-        // package.json changed — trigger anticipatory prefetch
+        // Load current deps
         let deps = match jhol_core::lockfile::read_package_json_deps(&pj_path) {
             Some(d) if !d.is_empty() => d,
             _ => continue,
         };
 
-        // Phase 5 DSSC check: only prefetch Stable-certified packages
-        let cache_dir = jhol_core::utils::get_cache_dir();
+        // ── 1.1 Git-aware Markov training (incremental) ──
+        let git_dir = cwd.join(".git");
+        if git_dir.exists() {
+            let _ = train_markov_from_git(cwd, &mut last_trained_commit);
+        }
 
+        // ── 1.2 Predict next adds from Markov ──
+        // Use current deps as context: take last 2 dep names for 2nd-order Markov key
+        let dep_names: Vec<&String> = deps.keys().collect();
+        let predicted: Vec<String> = if dep_names.len() >= 2 {
+            let prev = dep_names[dep_names.len() - 2];
+            let cur = dep_names[dep_names.len() - 1];
+            jhol_core::second_order_markov::predict_with_context(prev, cur, 3)
+        } else if dep_names.len() == 1 {
+            // First-order fallback: predict similar from embedding if available
+            let cur = dep_names[0];
+            jhol_core::second_order_markov::predict_with_context("", cur, 2)
+        } else {
+            Vec::new()
+        };
+
+        // ── 1.2+1.3 DSSC-certified prefetch + GRM/JMR fusion ──
+        let cache_dir = jhol_core::utils::get_cache_dir();
+        let cache_dir_s = cache_dir.clone();
+
+        // Prefetch all current deps (existing behavior) + predicted packages
+        let mut all_to_prefetch: Vec<(String, String)> = Vec::new();
+
+        // Existing deps prefetch (already in original code)
         for (name, spec) in &deps {
-            // Skip if already in cache
-            let base = if name.starts_with('@' ) {
+            all_to_prefetch.push((name.clone(), spec.clone()));
+        }
+
+        // Add Markov prediction with latest version spec
+        let latest_known_versions: std::collections::HashMap<String, String> = {
+            let mut map = std::collections::HashMap::new();
+            for pkg_name in &predicted {
+                // Try GRM for known version, else use "*"
+                let spec = format!("{}@latest", pkg_name);
+                let version = if let Some(rec) = jhol_core::lock_free_grm::query_global(
+                    &spec,
+                    Some(std::env::consts::OS),
+                    std::env::var("NODE_VERSION").ok().as_deref(),
+                ) {
+                    rec.resolved_version
+                } else if let Some(v) = jhol_core::resolution_mirror::global_mirror()
+                    .lookup(pkg_name, "latest")
+                    .map(|m| m.version)
+                {
+                    v
+                } else {
+                    "*".to_string()
+                };
+                map.insert(pkg_name.clone(), version);
+            }
+            map
+        };
+
+        for pkg_name in &predicted {
+            let spec = latest_known_versions
+                .get(pkg_name)
+                .cloned()
+                .unwrap_or_else(|| "*".to_string());
+            all_to_prefetch.push((pkg_name.clone(), spec));
+        }
+
+        // Deduplicate
+        all_to_prefetch.sort();
+        all_to_prefetch.dedup();
+
+        let store_idx = jhol_core::utils::read_store_index();
+
+        for (name, spec) in &all_to_prefetch {
+            let base = if name.starts_with('@') {
                 let parts: Vec<&str> = name.split('/').collect();
                 if parts.len() >= 2 {
                     format!("{}/{}", parts[0], parts[1])
@@ -397,8 +477,7 @@ fn anticipatory_daemon_loop(cwd: &Path) {
             };
             let spec_str = format!("{}@{}", base, spec);
 
-            // Check if already cached by looking up the store index
-            let store_idx = jhol_core::utils::read_store_index();
+            // Skip if already cached
             if store_idx.contains_key(&spec_str) {
                 continue;
             }
@@ -406,23 +485,22 @@ fn anticipatory_daemon_loop(cwd: &Path) {
             // DSSC cert check: prefetch if Stable, skip if Fragile
             if let Some(cert) = jhol_core::jagr::resolution_differential::lookup_dssc_cert(name) {
                 if cert.stability == jhol_core::StabilityClass::Fragile {
-                    continue; // Skip fragile packages — too expensive to prefetch
+                    continue;
                 }
             }
 
             // Prefetch in background (non-blocking)
             let pkg_name = name.clone();
             let pkg_spec = spec.clone();
-            let cache_dir_clone = cache_dir.clone();
+            let cache_dir_clone = cache_dir_s.clone();
             std::thread::spawn(move || {
-                let url = format!("https://registry.npmjs.org/{}", pkg_name.replace('/', "%2F"));
+                let url = format!(
+                    "https://registry.npmjs.org/{}",
+                    pkg_name.replace('/', "%2F")
+                );
                 if let Ok(bytes) = jhol_core::http_client::get(&url) {
-                    // Store in JAGR-S
-                    if let Ok(_hash) = jhol_core::jagrs::store_tarball(&bytes) {
-                        // Store alias
-                        let _ = jhol_core::jagrs::store_alias(&pkg_name, &pkg_spec, &_hash);
-                    }
-                    // Also store in classic cache for compatibility
+                    let _ = jhol_core::jagrs::store_tarball(&bytes);
+                    let _ = jhol_core::jagrs::store_alias(&pkg_name, &pkg_spec, "");
                     let _ = jhol_core::registry::download_tarball_to_store(
                         &url,
                         std::path::Path::new(&cache_dir_clone),
@@ -430,18 +508,136 @@ fn anticipatory_daemon_loop(cwd: &Path) {
                         None,
                         None,
                     );
+                    // GRM + lattice: remember this resolution for cross-project benefit
+                    let _ = jhol_core::lock_free_grm::store_global(
+                        jhol_core::grm::ResolutionRecord {
+                            package_spec: format!("{}@{}", pkg_name, pkg_spec),
+                            resolved_version: pkg_spec.clone(),
+                            id: 0,
+                            timestamp: jhol_core::grm::current_timestamp(),
+                            ttl_secs: 7200,
+                            dependencies: std::collections::HashMap::new(),
+                            platform: Some(std::env::consts::OS.to_string()),
+                            node_version: std::env::var("NODE_VERSION").ok(),
+                            cached_at: jhol_core::grm::current_timestamp(),
+                            hit_count: 1,
+                            ..Default::default()
+                        },
+                    );
+                    let _ = jhol_core::lattice_cache::remember(&pkg_name, &pkg_spec, &pkg_spec);
                 }
             });
         }
 
-        // Pre-build capsule in background for next install
-        let cwd_clone = cwd.to_path_buf();
-        std::thread::spawn(move || {
-            let _ = std::env::set_current_dir(&cwd_clone);
-            let _ = jhol_core::capsule::write_capsule_from_project(&cwd_clone);
-            let _ = jhol_core::capsule::write_cga_capsule_from_project(&cwd_clone);
-        });
+        // ── 1.4+1.5 Pre-build capsule + write status for predicted state ──
+        // Only if we have predicted packages different from last run
+        let predicted_pairs: Vec<(String, String)> = predicted
+            .iter()
+            .filter_map(|p| {
+                let v = latest_known_versions.get(p)?;
+                Some((p.clone(), v.clone()))
+            })
+            .collect();
+
+        if !predicted_pairs.is_empty() && predicted_pairs != last_predicted_deps {
+            last_predicted_deps = predicted_pairs.clone();
+
+            let cwd_clone = cwd.to_path_buf();
+            let predicted_owned = last_predicted_deps.clone();
+            std::thread::spawn(move || {
+                let _ = std::env::set_current_dir(&cwd_clone);
+                // Write capsule with predicted deps included
+                let predicted_refs: Vec<(&str, &str)> = predicted_owned
+                    .iter()
+                    .map(|(n, v)| (n.as_str(), v.as_str()))
+                    .collect();
+                let _ = jhol_core::capsule::write_capsule_from_deps(
+                    std::path::Path::new("."),
+                    &predicted_refs,
+                );
+                // Write status.bin for predicted state (trampoline can exit 0ms)
+                let _ = jhol_core::capsule::write_cga_capsule_from_project(
+                    std::path::Path::new("."),
+                );
+            });
+        } else {
+            // Fallback: standard capsule pre-build
+            let cwd_clone = cwd.to_path_buf();
+            std::thread::spawn(move || {
+                let _ = std::env::set_current_dir(&cwd_clone);
+                let _ = jhol_core::capsule::write_capsule_from_project(std::path::Path::new("."));
+                let _ = jhol_core::capsule::write_cga_capsule_from_project(
+                    std::path::Path::new("."),
+                );
+            });
+        }
     }
+}
+
+/// Train second-order Markov from git history incrementally.
+/// Reads `git log --oneline --all -- package.json`, parses dep sequences,
+/// and feeds them to the Markov model. Tracks last trained commit to avoid
+/// re-training already-seen sequences.
+fn train_markov_from_git(cwd: &Path, last_trained: &mut String) -> usize {
+    // Get new commits (after last_trained) that modify package.json
+    let output = if last_trained.is_empty() {
+        std::process::Command::new("git")
+            .args(["-C", &cwd.to_string_lossy(), "log", "--reverse", "--all", "--format=%H", "--", "package.json"])
+            .output()
+    } else {
+        std::process::Command::new("git")
+            .args(["-C", &cwd.to_string_lossy(), "log", "--reverse", "--all", "--format=%H", &format!("--after={}", last_trained), "--", "package.json"])
+            .output()
+    };
+
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        _ => return 0,
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let commits: Vec<&str> = stdout.lines().filter(|l| !l.is_empty()).collect();
+    if commits.is_empty() {
+        return 0;
+    }
+
+    let mut sequences: Vec<(String, Vec<String>)> = Vec::new();
+    for sha in &commits {
+        // git show <sha>:package.json → parse deps
+        let show_out = std::process::Command::new("git")
+            .args(["-C", &cwd.to_string_lossy(), "show", &format!("{}:package.json", sha)])
+            .output();
+        let Ok(show) = show_out else { continue };
+        if !show.status.success() {
+            continue;
+        }
+        let pj_str = String::from_utf8_lossy(&show.stdout);
+        let pj: serde_json::Value = match serde_json::from_str(&pj_str) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let dep_names: Vec<String> = pj
+            .get("dependencies")
+            .and_then(|d| d.as_object())
+            .map(|obj| obj.keys().cloned().collect())
+            .unwrap_or_default();
+        if dep_names.len() >= 2 {
+            sequences.push((sha.to_string(), dep_names));
+        }
+    }
+
+    if sequences.is_empty() {
+        return 0;
+    }
+
+    let count = jhol_core::second_order_markov::train_from_sequence_incremental(&sequences);
+
+    // Update last trained commit
+    if let Some(last) = commits.last() {
+        *last_trained = last.to_string();
+    }
+
+    count
 }
 
 #[cfg(unix)]
@@ -927,6 +1123,82 @@ fn install_globally() -> Result<(), String> {
         let mut perms = fs::metadata(&tramp_path).map_err(|e| e.to_string())?.permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&tramp_path, perms).map_err(|e| e.to_string())?;
+    }
+
+    // Auto-start daemon as systemd/launchd service
+    #[cfg(target_os = "linux")]
+    {
+        let service_dir = dirs::config_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("~/.config"))
+            .join("systemd/user");
+        let _ = fs::create_dir_all(&service_dir);
+        let service_path = service_dir.join("jhol-daemon.service");
+        let service_content = format!(
+            "[Unit]\n\
+             Description=Jhol Predictive Daemon\n\
+             After=network.target\n\
+             \n\
+             [Service]\n\
+             Type=simple\n\
+             ExecStart={bin} daemon --serve\n\
+             Restart=always\n\
+             RestartSec=2\n\
+             Environment=JHOL_DAEMON_SOCKET=%t/jhol-%U.sock\n\
+             \n\
+             [Install]\n\
+             WantedBy=default.target\n",
+            bin = bin_path
+        );
+        if fs::write(&service_path, service_content).is_ok() {
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "daemon-reload"])
+                .status();
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "enable", "--now", "jhol-daemon"])
+                .status();
+            info("Daemon auto-started via systemd.");
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let home = env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        let plist_dir = std::path::PathBuf::from(&home).join("Library/LaunchAgents");
+        let _ = fs::create_dir_all(&plist_dir);
+        let plist_path = plist_dir.join("com.jhol.daemon.plist");
+        let plist_content = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jhol.daemon</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{bin}</string>
+        <string>daemon</string>
+        <string>--serve</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/jhol-daemon.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/jhol-daemon.log</string>
+</dict>
+</plist>"#,
+            bin = bin_path
+        );
+        if fs::write(&plist_path, plist_content).is_ok() {
+            let _ = std::process::Command::new("launchctl")
+                .args(["unload", plist_path.to_str().unwrap_or("")])
+                .status();
+            let _ = std::process::Command::new("launchctl")
+                .args(["load", plist_path.to_str().unwrap_or("")])
+                .status();
+            info("Daemon auto-started via launchd.");
+        }
     }
 
     success(&format!("Installed. `{}` is the fast trampoline, `{}` is the native binary.", tramp_path, bin_path));

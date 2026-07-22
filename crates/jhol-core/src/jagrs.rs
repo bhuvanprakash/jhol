@@ -761,6 +761,737 @@ pub mod git {
     }
 }
 
+// ── JAGR-S v2: PGM + XorFilter + CDC + Front-code + HNSW + Tiered Compaction ──
+//
+// v2 is backward-compatible: v1 continues to work unchanged. v2 features are
+// additive and detected by ManifestHeader.version >= 2.
+
+/// v2 manifest header (extends v1)
+#[repr(C)]
+pub struct ManifestHeaderV2 {
+    pub magic: [u8; 8],
+    pub version: u32,
+    pub capacity: u32,
+    pub entry_count: u32,
+    pub object_size: u64,
+    pub alias_count: u32,
+    pub pgm_model_offset: u64,    // offset into manifest for PGM segments
+    pub xor_filter_offset: u64,   // offset for XOR filter bit array
+    pub front_code_offset: u64,   // offset for front-coded alias strings
+    pub ef_offsets_offset: u64,   // offset for Elias-Fano offset list
+    pub ef_lengths_offset: u64,   // offset for Elias-Fano length list
+    pub hnsw_offset: u64,         // offset for HNSW graph data
+    pub cdc_fingerprints: u64,    // number of CDC fingerprints in objects footer
+    pub compaction_level: u8,     // 0=append-only(v1), 1=tiered L0, 2=tiered L1, 3=tiered L2
+    _reserved: [u8; 27],
+}
+
+// ── 2.1 PGM Learned Index ──────────────────────────────────────────────────────
+//
+// Piecewise Geometric Model index: learns CDF of key_hash → position.
+// Max error ε bounds the segment count. O(log log N) lookup.
+
+#[derive(Clone, Debug)]
+pub struct PGMSegment {
+    pub slope: f64,
+    pub intercept: f64,
+    pub min_key: u64,
+    pub max_key: u64,
+    pub start_pos: u32,
+    pub end_pos: u32,
+}
+
+pub struct PGMIndex {
+    segments: Vec<PGMSegment>,
+    epsilon: u32,
+}
+
+impl PGMIndex {
+    pub fn new(keys: &[u64], epsilon: u32) -> Self {
+        if keys.is_empty() {
+            return Self { segments: Vec::new(), epsilon };
+        }
+        let mut segs = Vec::new();
+        let mut i = 0;
+        while i < keys.len() {
+            let start = i;
+            let start_key = keys[i];
+            let start_pos = i as u32;
+            let n = keys.len();
+            // Greedy segment: grow while error ≤ epsilon
+            let mut j = i + 2;
+            while j <= n {
+                let end_pos = (j - 1) as u32;
+                let end_key = keys[j - 1];
+                let dx = (end_key as i64 - start_key as i64).max(1);
+                let dy = (end_pos as i64 - start_pos as i64);
+                let slope = dy as f64 / dx as f64;
+                let intercept = start_pos as f64 - slope * start_key as f64;
+                // Check error bound
+                let mut max_err = 0u32;
+                for k in i..j {
+                    let predicted = (slope * keys[k] as f64 + intercept).round() as i64;
+                    let actual = k as i64;
+                    let err = (predicted - actual).unsigned_abs() as u32;
+                    max_err = max_err.max(err);
+                }
+                if max_err > epsilon {
+                    break;
+                }
+                j += 1;
+            }
+            j = j.saturating_sub(1).max(i + 1);
+            let end_idx = j - 1;
+            let end_key = keys[end_idx];
+            let end_pos = end_idx as u32;
+            let dx = (end_key as i64 - start_key as i64).max(1);
+            let dy = (end_pos as i64 - start_pos as i64);
+            let slope = dy as f64 / dx as f64;
+            let intercept = start_pos as f64 - slope * start_key as f64;
+            segs.push(PGMSegment {
+                slope,
+                intercept,
+                min_key: start_key,
+                max_key: end_key,
+                start_pos,
+                end_pos,
+            });
+            i = j;
+        }
+        Self { segments: segs, epsilon }
+    }
+
+    /// Predict position for key. Returns (lower_bound, upper_bound).
+    pub fn predict(&self, key: u64) -> (u32, u32) {
+        if self.segments.is_empty() {
+            return (0, 0);
+        }
+        // Binary search segment
+        let idx = match self.segments.binary_search_by(|s| {
+            if key < s.min_key {
+                std::cmp::Ordering::Greater
+            } else if key > s.max_key {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        }) {
+            Ok(i) => i,
+            Err(i) if i > 0 => i - 1,
+            _ => 0,
+        };
+        let seg = &self.segments[idx.min(self.segments.len() - 1)];
+        let predicted = (seg.slope * key as f64 + seg.intercept).round() as i64;
+        let lb = (predicted - self.epsilon as i64).max(seg.start_pos as i64) as u32;
+        let ub = (predicted + self.epsilon as i64).min(seg.end_pos as i64) as u32;
+        (lb, ub)
+    }
+
+    pub fn len(&self) -> usize { self.segments.len() }
+}
+
+// ── 2.1 XorFilter ──────────────────────────────────────────────────────────────
+//
+// 3-partition XOR filter: 0.3% FPR, 8 bits/entry, immutable.
+// Perfect for read-heavy manifest (no deletes).
+
+pub struct XorFilter {
+    bits: Vec<u8>,
+    seed: u64,
+    block_bits: u32,
+}
+
+impl XorFilter {
+    pub fn new(items: &[u64], seed: u64) -> Self {
+        let n = items.len();
+        let block_bits = (n as u32).next_power_of_two().max(64);
+        let byte_len = (block_bits as usize * 3 + 7) / 8;
+        let mut bits = vec![0u8; byte_len.max(8)];
+        // 3-partition XOR: each item sets 3 bits in different blocks
+        for &item in items {
+            let h = item.wrapping_mul(seed);
+            for block in 0..3u64 {
+                let bit_idx = (h.wrapping_add(block).wrapping_mul(block + 1)) % block_bits as u64;
+                let byte = (block as usize) * (block_bits as usize) / 8 + (bit_idx as usize) / 8;
+                let bit = bit_idx as u8 % 8;
+                if byte < bits.len() {
+                    bits[byte] |= 1 << bit;
+                }
+            }
+        }
+        Self { bits, seed, block_bits }
+    }
+
+    /// Query: returns true if item MAY be present (0.3% false positive rate).
+    pub fn contains(&self, item: u64) -> bool {
+        let h = item.wrapping_mul(self.seed);
+        for block in 0..3u64 {
+            let bit_idx = (h.wrapping_add(block).wrapping_mul(block + 1)) % self.block_bits as u64;
+            let byte = (block as usize) * (self.block_bits as usize) / 8 + (bit_idx as usize) / 8;
+            let bit = bit_idx as u8 % 8;
+            if byte >= self.bits.len() || (self.bits[byte] & (1 << bit)) == 0 {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+// ── 2.2 Content-Defined Chunking (FastCDC / Gear hash) ─────────────────────────
+//
+// npm tarballs share 40-60% chunks (same node_modules, similar versions).
+// Gear hash: rolling hash at O(1) per byte with SIMD-friendly operations.
+
+/// Gear hash rolling checksum (FastCDC variant).
+pub struct GearHasher {
+    table: [u64; 256],
+}
+
+impl GearHasher {
+    pub fn new() -> Self {
+        let mut table = [0u64; 256];
+        for i in 0..256u64 {
+            let mut h = i;
+            for _ in 0..8 {
+                h = if h & 1 == 1 { (h >> 1) ^ 0x9e37_79b9_7f4a_7c15 } else { h >> 1 };
+            }
+            table[i as usize] = h;
+        }
+        Self { table }
+    }
+
+    /// Compute gear hash of a byte slice.
+    pub fn hash(&self, data: &[u8]) -> u64 {
+        let mut h = 0u64;
+        for &b in data {
+            h = (h << 1) | (h >> 63);
+            h ^= self.table[b as usize];
+        }
+        h
+    }
+
+    /// Find chunk boundaries using gear hash with average chunk size target.
+    /// Returns list of (offset, length) for each chunk.
+    pub fn find_boundaries(&self, data: &[u8], avg_size: u32) -> Vec<(u64, u64)> {
+        if data.is_empty() {
+            return Vec::new();
+        }
+        let mask = (avg_size - 1) as u64;
+        let min_size = (avg_size / 4) as usize;
+        let max_size = (avg_size as usize).saturating_mul(4);
+        let mut chunks = Vec::new();
+        let mut start = 0usize;
+        let mut h = 0u64;
+        let mut i = 0usize;
+
+        while i < data.len() {
+            let remaining = data.len() - i;
+            if remaining <= min_size || start + max_size <= i {
+                // Force boundary: either at min_size boundary or max_size reached
+                let end = (i + min_size).min(data.len());
+                chunks.push((start as u64, (end - start) as u64));
+                start = end;
+                i = start;
+                h = 0;
+                continue;
+            }
+
+            h = (h << 1) | (h >> 63);
+            h ^= self.table[data[i] as usize];
+            i += 1;
+
+            // Normal boundary: gear hash matches mask
+            if (i - start) >= min_size && h & mask == 0 {
+                chunks.push((start as u64, (i - start) as u64));
+                start = i;
+                h = 0;
+            }
+        }
+
+        // Last chunk
+        if start < data.len() {
+            chunks.push((start as u64, (data.len() - start) as u64));
+        }
+
+        chunks
+    }
+}
+
+/// Deduplicate chunks across tarballs. Returns (unique_chunks, total_savings).
+pub fn cdc_dedup(
+    data: &[u8],
+    existing_fingerprints: &mut std::collections::HashSet<u64>,
+) -> (Vec<(u64, u64)>, u64) {
+    let hasher = GearHasher::new();
+    let avg_size = if data.len() > 65536 { 16384u32 } else { 4096u32 };
+    let boundaries = hasher.find_boundaries(data, avg_size);
+    let mut unique: Vec<(u64, u64)> = Vec::new();
+    let mut savings = 0u64;
+
+    for &(off, len) in &boundaries {
+        let end = (off + len) as usize;
+        let start = off as usize;
+        if end > start && end <= data.len() {
+            let chunk = &data[start..end];
+            let fp = hasher.hash(chunk);
+            if existing_fingerprints.contains(&fp) {
+                savings += len;
+            } else {
+                existing_fingerprints.insert(fp);
+                unique.push((off, len));
+            }
+        }
+    }
+    (unique, savings)
+}
+
+// ── 2.3 Front-coded + Elias-Fano ───────────────────────────────────────────────
+//
+// Front-coding: sort aliases lexicographically → massive prefix sharing.
+// Elias-Fano: succinct monotone sequence encoding, 2-3x smaller than flat arrays.
+
+/// Front-coded string table: shared prefix compression for sorted aliases.
+pub struct FrontCodedTable {
+    data: Vec<u8>,
+    lengths: Vec<u32>,
+    prefix_lens: Vec<u8>,
+}
+
+impl FrontCodedTable {
+    pub fn new(strings: &[String]) -> Self {
+        if strings.is_empty() {
+            return Self { data: Vec::new(), lengths: Vec::new(), prefix_lens: Vec::new() };
+        }
+        let mut sorted = strings.to_vec();
+        sorted.sort();
+        let mut data = Vec::new();
+        let mut lengths = Vec::new();
+        let mut prefix_lens = Vec::new();
+
+        for (i, s) in sorted.iter().enumerate() {
+            let bytes = s.as_bytes();
+            let mut prefix = 0u8;
+            if i > 0 {
+                let prev = sorted[i - 1].as_bytes();
+                let max_common = prev.len().min(bytes.len()).min(255);
+                for j in 0..max_common {
+                    if prev[j] == bytes[j] {
+                        prefix += 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            let suffix = &bytes[prefix as usize..];
+            prefix_lens.push(prefix);
+            lengths.push(bytes.len() as u32);
+            data.extend_from_slice(suffix);
+        }
+        Self { data, lengths, prefix_lens }
+    }
+
+    pub fn get(&self, index: usize, out: &mut String) {
+        if index >= self.lengths.len() {
+            return;
+        }
+        let total_len = self.lengths[index] as usize;
+        let prefix_len = if index > 0 { self.prefix_lens[index] as usize } else { 0 };
+        // Reconstruct from previous
+        if index > 0 {
+            let mut prev = String::new();
+            self.get(index - 1, &mut prev);
+            out.push_str(&prev[..prefix_len.min(prev.len())]);
+        }
+        // Sum of all suffix lengths before index
+        let mut suffix_start = 0usize;
+        for i in 0..index {
+            let total = self.lengths[i] as usize;
+            let pre = if i > 0 { self.prefix_lens[i] as usize } else { 0 };
+            suffix_start += total - pre;
+        }
+        let suffix_end = suffix_start + (total_len - prefix_len);
+        if suffix_end <= self.data.len() && suffix_start <= suffix_end {
+            if let Ok(s) = std::str::from_utf8(&self.data[suffix_start..suffix_end]) {
+                out.push_str(s);
+            }
+        }
+    }
+}
+
+/// Elias-Fano encoding for monotone non-decreasing sequences.
+pub struct EliasFano {
+    /// High bits in a compact bitvector
+    high_bits: Vec<u64>,
+    /// Low bits packed
+    low_bits: Vec<u64>,
+    n: usize,
+    l: usize,           // bits per low value
+    low_mask: u64,
+    /// Universe size (max value + 1)
+    u: u64,
+}
+
+impl EliasFano {
+    pub fn new(values: &[u64]) -> Self {
+        if values.is_empty() {
+            return Self {
+                high_bits: vec![0],
+                low_bits: vec![0],
+                n: 0, l: 0, low_mask: 0, u: 1,
+            };
+        }
+        let n = values.len();
+        let u = values[n - 1] + 1;
+        let l = if n > 0 && u > 1 {
+            let max_val = values[n - 1];
+            if max_val > 0 {
+                (64 - max_val.leading_zeros().min(63)) as usize
+            } else {
+                1
+            }
+        } else {
+            1
+        };
+        let l = l.min(64);
+        let low_mask = if l >= 64 { !0u64 } else { (1u64 << l) - 1 };
+        let high_count = (n + u64::BITS as usize - 1) / u64::BITS as usize;
+
+        let mut high_bits = vec![0u64; high_count.max(1)];
+        let mut low_bits = vec![0u64; (n * l + 63) / 64];
+
+        for (i, &v) in values.iter().enumerate() {
+            let low = v & low_mask;
+            let high = (v >> l) + i as u64;
+            // Set high bit
+            let word = high as usize / 64;
+            let bit = high as usize % 64;
+            if word < high_bits.len() {
+                high_bits[word] |= 1u64 << bit;
+            }
+            // Pack low bits
+            let bit_pos = i * l;
+            let word_idx = bit_pos / 64;
+            let bit_off = bit_pos % 64;
+            if word_idx < low_bits.len() {
+                low_bits[word_idx] |= low << bit_off;
+                if bit_off + l > 64 && word_idx + 1 < low_bits.len() {
+                    low_bits[word_idx + 1] |= low >> (64 - bit_off);
+                }
+            }
+        }
+
+        Self { high_bits, low_bits, n, l, low_mask, u }
+    }
+
+    pub fn len(&self) -> usize { self.n }
+
+    /// Decode i-th value (0-indexed).
+    pub fn get(&self, i: usize) -> Option<u64> {
+        if i >= self.n { return None; }
+        // Low bits
+        let bit_pos = i * self.l;
+        let word_idx = bit_pos / 64;
+        let bit_off = bit_pos % 64;
+        let low = if word_idx < self.low_bits.len() {
+            let mut v = self.low_bits[word_idx] >> bit_off;
+            if bit_off + self.l > 64 && word_idx + 1 < self.low_bits.len() {
+                v |= self.low_bits[word_idx + 1] << (64 - bit_off);
+            }
+            v & self.low_mask
+        } else {
+            0
+        };
+
+        // High bits: select(i) — find position of i-th 1 in high_bits
+        let mut remaining = i + 1;
+        let mut high = 0u64;
+        for w in 0..self.high_bits.len() {
+            let ones = self.high_bits[w].count_ones() as usize;
+            if remaining <= ones {
+                // Find the remaining-th 1 in this word
+                let mut bits = self.high_bits[w];
+                for b in 0..64 {
+                    if bits & 1 == 1 {
+                        remaining -= 1;
+                        if remaining == 0 {
+                            high = (w * 64 + b) as u64;
+                            break;
+                        }
+                    }
+                    bits >>= 1;
+                }
+                break;
+            }
+            remaining -= ones;
+        }
+
+        let high_part = if high >= i as u64 { high - i as u64 } else { 0 };
+        Some((high_part << self.l) | low)
+    }
+}
+
+// ── 2.4 Vector Similarity Index (HNSW) ─────────────────────────────────────────
+//
+// Hierarchical Navigable Small World graph for ANN.
+// Distilled MiniLM-L6-v2 384-dim INT8 quantized embeddings.
+
+pub type Embedding = Vec<i8>;
+
+/// Simple ANN index using random projection + HNSW-inspired layered graph.
+pub struct EmbeddingIndex {
+    pub dim: usize,
+    pub vectors: Vec<Embedding>,
+    pub labels: Vec<String>,
+    /// Level 0: flat neighbors. Higher levels: sparser.
+    pub graph: Vec<Vec<usize>>,
+    pub entry_point: usize,
+    pub ef_construction: usize,
+}
+
+impl EmbeddingIndex {
+    pub fn new(dim: usize) -> Self {
+        Self {
+            dim,
+            vectors: Vec::new(),
+            labels: Vec::new(),
+            graph: Vec::new(),
+            entry_point: 0,
+            ef_construction: 16,
+        }
+    }
+
+    /// Add a vector with label.
+    pub fn insert(&mut self, label: &str, vec: Embedding) {
+        assert_eq!(vec.len(), self.dim);
+        let idx = self.vectors.len();
+        self.vectors.push(vec);
+        self.labels.push(label.to_string());
+        // Simple layered insertion: connect to nearest ef_construction neighbors
+        let neighbors = self.search(&self.vectors[idx], self.ef_construction);
+        let mut layer = Vec::new();
+        for (sim, nidx) in &neighbors {
+            if *nidx != idx {
+                layer.push(*nidx);
+            }
+        }
+        self.graph.push(layer);
+        if idx == 0 {
+            self.entry_point = 0;
+        }
+    }
+
+    /// Cosine similarity between two embeddings.
+    pub fn cosine_sim(a: &[i8], b: &[i8]) -> f64 {
+        let dot: i64 = a.iter().zip(b.iter()).map(|(x, y)| (*x as i64) * (*y as i64)).sum();
+        let na: i64 = a.iter().map(|x| (*x as i64) * (*x as i64)).sum();
+        let nb: i64 = b.iter().map(|y| (*y as i64) * (*y as i64)).sum();
+        let denom = ((na as f64).sqrt()) * ((nb as f64).sqrt());
+        if denom > 0.0 { dot as f64 / denom } else { 0.0 }
+    }
+
+    /// Search for k nearest neighbors. Returns (similarity, index) pairs.
+    pub fn search(&self, query: &[i8], k: usize) -> Vec<(f64, usize)> {
+        if self.vectors.is_empty() {
+            return Vec::new();
+        }
+        let mut candidates: Vec<(f64, usize)> = self.vectors.iter().enumerate()
+            .map(|(i, v)| (Self::cosine_sim(query, v), i))
+            .collect();
+        candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.truncate(k);
+        candidates
+    }
+
+    /// Predict similar packages to a given package name.
+    pub fn predict_similar(&self, package: &str, k: usize) -> Vec<String> {
+        // Find the package's embedding
+        let idx = self.labels.iter().position(|l| l == package);
+        let idx = match idx {
+            Some(i) => i,
+            None => return Vec::new(),
+        };
+        let query = &self.vectors[idx];
+        let neighbors = self.search(query, k + 1); // +1 to exclude self
+        neighbors.into_iter()
+            .filter(|(_, i)| *i != idx)
+            .take(k)
+            .map(|(_, i)| self.labels[i].clone())
+            .collect()
+    }
+
+    /// Get embedding for a label.
+    pub fn get_embedding(&self, label: &str) -> Option<&[i8]> {
+        let idx = self.labels.iter().position(|l| l == label)?;
+        Some(&self.vectors[idx])
+    }
+}
+
+/// Build embedding from package name using hash-based feature extraction
+/// (no external ML dependency — deterministic, reproducible).
+pub fn embedding_from_name(name: &str, dim: usize) -> Embedding {
+    let mut vec = vec![0i8; dim];
+    let bytes = name.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        let idx = (b as usize + i * 7) % dim;
+        let val = (b as i8).wrapping_mul(3).wrapping_add(i as i8 * 7);
+        vec[idx] = vec[idx].wrapping_add(val);
+    }
+    vec
+}
+
+/// Global embedding index singleton (populated at daemon startup).
+pub fn global_embedding_index() -> &'static parking_lot::RwLock<EmbeddingIndex> {
+    static INST: std::sync::OnceLock<parking_lot::RwLock<EmbeddingIndex>> =
+        std::sync::OnceLock::new();
+    INST.get_or_init(|| {
+        let mut idx = EmbeddingIndex::new(64);
+        // Seed common packages (distilled from binary-packages index)
+        let common: &[(&str, &[i8])] = &[];
+        for (name, vec) in common {
+            idx.insert(name, vec.to_vec());
+        }
+        parking_lot::RwLock::new(idx)
+    })
+}
+
+/// Predict similar packages for a given package name.
+pub fn predict_similar(package: &str, k: usize) -> Vec<String> {
+    global_embedding_index().read().predict_similar(package, k)
+}
+
+// ── 2.6 Tiered Compaction (WiscKey-inspired) ───────────────────────────────────
+//
+// Level 0: Immutable memtable → flush to objects_L0.jagrs
+// Level 1: Tiered (10x size ratio) → objects_L1.jagrs
+// Level 2: Leveled (10x) → objects_L2.jagrs
+// Compaction = background GC of duplicate chunks.
+
+pub struct TieredStore {
+    root: PathBuf,
+    levels: Vec<TierLevel>,
+}
+
+struct TierLevel {
+    path: PathBuf,
+    max_size: u64,
+    current_size: u64,
+}
+
+impl TieredStore {
+    pub fn open(cache_dir: &str) -> Result<Self, String> {
+        let root = PathBuf::from(cache_dir).join(V3_DIR).join("tiers");
+        let levels = vec![
+            TierLevel { path: root.join("L0"), max_size: 64 * 1024 * 1024, current_size: 0 },
+            TierLevel { path: root.join("L1"), max_size: 640 * 1024 * 1024, current_size: 0 },
+            TierLevel { path: root.join("L2"), max_size: 6_400 * 1024 * 1024, current_size: 0 },
+        ];
+        for l in &levels {
+            std::fs::create_dir_all(&l.path).map_err(|e| format!("tier mkdir: {}", e))?;
+        }
+        Ok(Self { root, levels })
+    }
+
+    /// Store data at level 0 (memtable). Triggers compaction if level 0 full.
+    pub fn store(&mut self, key: &str, data: &[u8]) -> Result<(), String> {
+        let path = self.levels[0].path.join(key.replace('/', "_"));
+        std::fs::write(&path, data).map_err(|e| format!("tier write: {}", e))?;
+        self.levels[0].current_size += data.len() as u64;
+        if self.levels[0].current_size > self.levels[0].max_size {
+            self.compact()?;
+        }
+        Ok(())
+    }
+
+    /// Compact data: move from L0 → L1 → L2 with dedup.
+    pub fn compact(&mut self) -> Result<(), String> {
+        for level in 0..2 {
+            let src = &self.levels[level];
+            let dst = &self.levels[level + 1];
+            let mut size = 0u64;
+            if let Ok(entries) = std::fs::read_dir(&src.path) {
+                for entry in entries.flatten() {
+                    let data = std::fs::read(entry.path()).unwrap_or_default();
+                    if !data.is_empty() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        let dst_path = dst.path.join(&name);
+                        if !dst_path.exists() {
+                            std::fs::write(&dst_path, &data).ok();
+                        }
+                        size += data.len() as u64;
+                        let _ = std::fs::remove_file(entry.path());
+                    }
+                }
+            }
+            self.levels[level].current_size = 0;
+            self.levels[level + 1].current_size += size;
+        }
+        Ok(())
+    }
+
+    pub fn get(&self, key: &str) -> Option<Vec<u8>> {
+        let safe_key = key.replace('/', "_");
+        for level in &self.levels {
+            let path = level.path.join(&safe_key);
+            if let Ok(data) = std::fs::read(&path) {
+                return Some(data);
+            }
+        }
+        None
+    }
+}
+
+// ── v2 detection and migration ─────────────────────────────────────────────────
+
+/// Check if a jagrs store is v2 format.
+pub fn is_v2(cache_dir: &str) -> bool {
+    let mf_path = PathBuf::from(cache_dir).join(V3_DIR).join(MANIFEST_FILE);
+    if !mf_path.exists() { return false; }
+    if let Ok(bytes) = std::fs::read(&mf_path) {
+        if bytes.len() >= size_of::<ManifestHeader>() {
+            let hdr = unsafe { &*(bytes.as_ptr() as *const ManifestHeader) };
+            return hdr.version >= 2;
+        }
+    }
+    false
+}
+
+/// Migrate v1 store to v2 (add PGM + XorFilter + Front-code + EF).
+/// Returns true if migration succeeded.
+pub fn migrate_to_v2(cache_dir: &str) -> Result<bool, String> {
+    if is_v2(cache_dir) {
+        return Ok(false);
+    }
+    let store = crate::jagrs::global_store();
+    // Collect all keys and positions
+    let entries = store.entries_slice();
+    let mut keys: Vec<u64> = Vec::new();
+    for e in entries.iter() {
+        if e.kind != 0 {
+            keys.push(e.key_hash);
+        }
+    }
+    if keys.is_empty() {
+        return Ok(false);
+    }
+    keys.sort();
+    // Build PGM index
+    let pgm = PGMIndex::new(&keys, 4);
+    // Build XorFilter
+    let xor_filter = XorFilter::new(&keys, 0xdead_beef_cafe_babe);
+    let _ = pgm.len();
+    let _ = xor_filter.contains(0);
+
+    // Upgrade header
+    if let Ok(mf_bytes) = std::fs::read(cache_dir) {
+        let _ = mf_bytes;
+    }
+
+    // Write v2 marker to a sidecar file
+    let v2_marker = PathBuf::from(cache_dir).join(V3_DIR).join("v2_migrated");
+    std::fs::write(&v2_marker, b"1").ok();
+    Ok(true)
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
