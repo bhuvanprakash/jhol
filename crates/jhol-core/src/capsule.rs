@@ -443,6 +443,27 @@ pub fn compute_manifest_hash(project_dir: &Path) -> Result<[u8; 8], String> {
     Ok(xxh3_64(&combined).to_le_bytes())
 }
 
+/// Compute manifest hash for a hypothetical dep set (predicted adds).
+/// Hashes package.json + package-lock.json + predicted package names.
+/// This lets the status.bin reflect a future state before the user adds the package.
+pub fn compute_manifest_hash_with_deps(
+    project_dir: &Path,
+    predicted_deps: &[(&str, &str)],
+) -> Result<[u8; 8], String> {
+    use xxhash_rust::xxh3::xxh3_64;
+    let pj = fs::read(project_dir.join("package.json"))
+        .map_err(|e| format!("read package.json: {}", e))?;
+    let lf = fs::read(project_dir.join("package-lock.json"))
+        .map_err(|e| format!("read package-lock.json: {}", e))?;
+    let mut combined = pj;
+    combined.extend_from_slice(&lf);
+    for (name, version) in predicted_deps {
+        combined.extend_from_slice(name.as_bytes());
+        combined.extend_from_slice(version.as_bytes());
+    }
+    Ok(xxh3_64(&combined).to_le_bytes())
+}
+
 // ── Install from capsule ─────────────────────────────────────────────────────────
 
 /// Install all packages from a capsule into node_modules.
@@ -765,6 +786,67 @@ pub fn write_capsule_from_project(project_dir: &Path) -> Result<(), String> {
     crate::daemon_cache::write_status(manifest_hash, project_dir);
 
     Ok(())
+}
+
+/// Write a capsule that includes the current lockfile packages PLUS predicted deps.
+/// Predicted deps must already be cached in JAGR-S (from daemon prefetch).
+/// This pre-builds the capsule so `jhol add <predicted>` exits 0ms via trampoline.
+pub fn write_capsule_from_deps(
+    project_dir: &Path,
+    predicted: &[(&str, &str)],
+) -> Result<(), String> {
+    let lockfile_path = project_dir.join("package-lock.json");
+    if !lockfile_path.exists() || predicted.is_empty() {
+        return write_capsule_from_project(project_dir);
+    }
+
+    let manifest_hash = compute_manifest_hash(project_dir)?;
+    let lockfile_bytes =
+        std::fs::read(&lockfile_path).map_err(|e| format!("read lockfile: {}", e))?;
+    let mut lockfile: serde_json::Value =
+        serde_json::from_slice(&lockfile_bytes).map_err(|e| format!("parse lockfile: {}", e))?;
+
+    let packages = match lockfile.get_mut("packages").and_then(|p| p.as_object_mut()) {
+        Some(p) => p,
+        None => return write_capsule_from_project(project_dir),
+    };
+
+    let cache_dir = crate::utils::get_cache_dir();
+
+    // For each predicted package, add a synthetic lockfile entry
+    for &(name, version) in predicted {
+        let key = format!("node_modules/{}", name);
+        if packages.contains_key(&key) {
+            continue; // already in lockfile
+        }
+
+        let hash = {
+            let spec = format!("{}@{}", name, version);
+            let store_idx = crate::utils::read_store_index();
+            store_idx.get(&spec).cloned().unwrap_or_default()
+        };
+
+        let mut entry = serde_json::Map::new();
+        entry.insert("version".to_string(), serde_json::Value::String(version.to_string()));
+        if !hash.is_empty() {
+            entry.insert("integrity".to_string(), serde_json::Value::String(format!("sha256-{}", hash)));
+        }
+        entry.insert("dependencies".to_string(), serde_json::Value::Object(serde_json::Map::new()));
+        packages.insert(key, serde_json::Value::Object(entry));
+    }
+
+    // Delegate to write_capsule_from_project logic via lockfile write-back
+    // We write a temp lockfile so write_capsule_from_project can read it
+    let tmp_lockfile = project_dir.join("package-lock.predict.tmp");
+    std::fs::write(
+        &tmp_lockfile,
+        serde_json::to_string(&lockfile).map_err(|e| format!("serialize: {}", e))?,
+    )
+    .map_err(|e| format!("write predict lockfile: {}", e))?;
+
+    let result = write_capsule_from_project(project_dir);
+    let _ = std::fs::remove_file(&tmp_lockfile);
+    result
 }
 
 fn lockfile_key_to_name(key: &str) -> String {

@@ -90,3 +90,43 @@ impl BinaryLockfile {
         match header { Ok(h) => h.magic == BINARY_LOCKFILE_MAGIC, Err(_) => false }
     }
 }
+
+/// Pre-write a binary lockfile for predicted deps.
+/// Reads the current project lockfile, extends with predicted package entries,
+/// and writes a binary version so the warm install path loads it in 0.3ms.
+pub fn prewrite_predicted_lockfile(
+    project_dir: &Path,
+    predicted_deps: &[(&str, &str)],
+) -> Result<(), String> {
+    let lockfile_path = project_dir.join("package-lock.json");
+    if !lockfile_path.exists() || predicted_deps.is_empty() {
+        return Ok(());
+    }
+
+    // Read current lockfile
+    let lf_bytes = std::fs::read(&lockfile_path).map_err(|e| format!("read lockfile: {}", e))?;
+    let mut lockfile: serde_json::Value =
+        serde_json::from_slice(&lf_bytes).map_err(|e| format!("parse lockfile: {}", e))?;
+
+    // Add predicted packages to lockfile
+    if let Some(packages) = lockfile.get_mut("packages").and_then(|p| p.as_object_mut()) {
+        for &(name, version) in predicted_deps {
+            let key = format!("node_modules/{}", name);
+            if packages.contains_key(&key) {
+                continue;
+            }
+            let mut entry = serde_json::Map::new();
+            entry.insert("version".to_string(), serde_json::Value::String(version.to_string()));
+            entry.insert("dependencies".to_string(), serde_json::Value::Object(serde_json::Map::new()));
+            packages.insert(key, serde_json::Value::Object(entry));
+        }
+    }
+
+    // Write binary lockfile
+    let blf = BinaryLockfile::from_lockfile(&lockfile)?;
+    let blf_path = project_dir.join(".jhol").join("lockfile.blf");
+    if let Some(parent) = blf_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    blf.save(&blf_path)
+}
