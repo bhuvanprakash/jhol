@@ -176,6 +176,56 @@ pub fn lookup_lattice(package: &str, constraint: &str) -> Option<String> {
     best.map(|v| v.to_string())
 }
 
+/// Batch lattice lookup: returns resolved versions for multiple packages at once.
+/// Returns a map of package → version for every package that has a lattice hit.
+/// Uses GRM first, then lattice, then falls through (caller handles network miss).
+pub fn lookup_lattice_batch(
+    deps: &[(&str, &str)],
+) -> std::collections::HashMap<String, String> {
+    let g = global().read();
+    let mut results = std::collections::HashMap::new();
+    for &(package, constraint) in deps {
+        // Try GRM first (cross-project memory) — query by package@constraint
+        let pkg_spec = format!("{}@{}", package, constraint);
+        if let Some(rec) = crate::lock_free_grm::query_global(
+            &pkg_spec,
+            Some(std::env::consts::OS),
+            std::env::var("NODE_VERSION").ok().as_deref(),
+        ) {
+            if crate::registry::version_satisfies(constraint, &rec.resolved_version) {
+                results.insert(package.to_string(), rec.resolved_version.clone());
+                continue;
+            }
+        }
+        // Try exact match
+        let list = match g.by_pkg.get(package) {
+            Some(l) => l,
+            None => continue,
+        };
+        let req = semver::VersionReq::parse(constraint.trim()).ok();
+        let mut best: Option<semver::Version> = None;
+        for e in list {
+            let Ok(ver) = semver::Version::parse(&e.version) else {
+                continue;
+            };
+            let ok = if let Some(ref req) = req {
+                req.matches(&ver)
+            } else {
+                constraint == "latest" || constraint == "*" || constraint.is_empty()
+            };
+            if ok {
+                if best.as_ref().map(|b| &ver > b).unwrap_or(true) {
+                    best = Some(ver);
+                }
+            }
+        }
+        if let Some(v) = best {
+            results.insert(package.to_string(), v.to_string());
+        }
+    }
+    results
+}
+
 /// Batch remember after a full resolve.
 pub fn remember_many(resolved: &[(String, String, String)]) {
     // (package, constraint, version)
