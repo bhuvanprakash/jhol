@@ -226,6 +226,54 @@ pub struct InstallReport {
     pub skipped_features: Vec<String>,
 }
 
+/// Predict which features a package is likely to need based on its name
+/// and the context of existing dependencies. Uses simple heuristics:
+/// - @scoped packages often need the "core" feature
+/// - well-known packages have known feature patterns
+pub fn predict_features(
+    package: &str,
+    existing_deps: &[String],
+) -> Vec<String> {
+    let mut features = Vec::new();
+    
+    // Scoped packages: core feature by default
+    if package.starts_with('@') {
+        features.push("core".to_string());
+    }
+
+    // Well-known package feature patterns
+    let known: std::collections::HashMap<&'static str, Vec<&'static str>> = [
+        ("react", vec!["client", "jsx-runtime"]),
+        ("react-dom", vec!["client", "server"]),
+        ("next", vec!["app", "router"]),
+        ("vue", vec!["compiler-sfc", "runtime-dom"]),
+        ("@angular/core", vec!["common", "compiler"]),
+        ("lodash", vec!["array", "collection", "object", "string"]),
+        ("express", vec!["static", "json", "urlencoded"]),
+        ("typescript", vec!["lib", "utils"]),
+    ].into_iter().collect();
+
+    if let Some(predicted) = known.get(package) {
+        features.extend(predicted.iter().map(|s| s.to_string()));
+    }
+
+    // If any existing dep starts with same scope/organization, add common features
+    let scope = if package.starts_with('@') {
+        package.split('/').next().map(|s| s.to_string())
+    } else {
+        None
+    };
+    if let Some(ref s) = scope {
+        if existing_deps.iter().any(|d| d.starts_with(s) && d != package) {
+            features.push("shared".to_string());
+        }
+    }
+
+    features.sort();
+    features.dedup();
+    features
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

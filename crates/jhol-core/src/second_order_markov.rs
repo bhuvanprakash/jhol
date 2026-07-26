@@ -64,6 +64,20 @@ pub fn learn_from_install(packages: &[String]) {
     global_markov().write().learn_from_sequence(packages);
 }
 
+/// Train from git history incrementally: only processes new commits since last known SHA.
+/// Returns the number of new sequences trained.
+pub fn train_from_sequence_incremental(commits: &[(String, Vec<String>)]) -> usize {
+    let mut g = global_markov().write();
+    let mut count = 0;
+    for (_sha, packages) in commits {
+        if packages.len() >= 2 {
+            g.learn_from_sequence(packages);
+            count += 1;
+        }
+    }
+    count
+}
+
 pub fn predict_with_context(previous: &str, current: &str, n: usize) -> Vec<String> {
     global_markov().read().predict_top(previous, current, n)
 }
