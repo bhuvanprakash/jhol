@@ -780,10 +780,9 @@ pub fn write_capsule_from_project(project_dir: &Path) -> Result<(), String> {
     let cap_path = capsule_path(project_dir);
     write_capsule(&cap_path, builder)?;
 
-    // Write install markers for zero-binary-startup fast path
-    crate::daemon_cache::write_nm_fingerprint(project_dir, manifest_hash);
-    crate::daemon_cache::store_last_hash(manifest_hash);
-    crate::daemon_cache::write_status(manifest_hash, project_dir);
+    // Install markers are written by the install pipeline (write_install_markers).
+    // This function only writes the capsule — the single marker write happens in
+    // install_package after all fast paths and the full pipeline complete.
 
     Ok(())
 }

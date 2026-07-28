@@ -160,37 +160,32 @@ fn generate_dssc_certs(binary_dir: &Path) {
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     entries.dedup_by(|a, b| a.0 == b.0);
 
-    let mut rust_code = String::from(
-        "use std::sync::LazyLock;\n\n",
-    );
+    let mut rust_code = String::new();
 
-    // Generate a sorted static array for binary search + a LazyLock HashMap for O(1) lookup
-    rust_code.push_str("static CERT_ENTRIES: &[(&str, u8, u32, u32)] = &[\n");
+    // Generate a sorted static array of DsscCert structs for binary search
+    rust_code.push_str("static CERT_ENTRIES: &[DsscCert] = &[\n");
     for (name, stability, tight, degree) in &entries {
+        let stab_name = match stability {
+            0 => "crate::StabilityClass::Stable",
+            1 => "crate::StabilityClass::Marginal",
+            2 => "crate::StabilityClass::Fragile",
+            _ => "crate::StabilityClass::Degenerate",
+        };
         rust_code.push_str(&format!(
-            "    (\"{}\", {}, {}, {}),\n",
+            "    DsscCert {{ name: \"{}\", stability: {}, tight_constraints: {}, max_degree: {} }},\n",
             name.replace('\\', "\\\\").replace('"', "\\\""),
-            stability,
+            stab_name,
             tight,
-            degree
+            degree,
         ));
     }
     rust_code.push_str("];\n\n");
 
     rust_code.push_str(
-        "pub static DSSC_CERTS: LazyLock<HashMap<&'static str, DsscCert>> = LazyLock::new(|| {\n\
-         \x20   let mut m = HashMap::with_capacity(CERT_ENTRIES.len());\n\
-         \x20   for &(name, stability, tight, degree) in CERT_ENTRIES {\n\
-         \x20       let stability = match stability {\n\
-         \x20           0 => crate::StabilityClass::Stable,\n\
-         \x20           1 => crate::StabilityClass::Marginal,\n\
-         \x20           2 => crate::StabilityClass::Fragile,\n\
-         \x20           _ => crate::StabilityClass::Degenerate,\n\
-         \x20       };\n\
-         \x20       m.insert(name, DsscCert { stability, tight_constraints: tight, max_degree: degree });\n\
-         \x20   }\n\
-         \x20   m\n\
-         });\n",
+        "pub fn lookup_dssc_cert(name: &str) -> Option<&'static DsscCert> {\n\
+         \x20   let idx = CERT_ENTRIES.binary_search_by(|c| c.name.as_bytes().cmp(name.as_bytes())).ok()?;\n\
+         \x20   Some(&CERT_ENTRIES[idx])\n\
+         }\n",
     );
 
     fs::write(&dest_path, rust_code).expect("Failed to write DSSC certs code");
@@ -269,21 +264,12 @@ fn generate_stub_dssc_certs() {
     let dest_path = Path::new(&out_dir).join("dssc_certs_data.rs");
 
     let rust_code = r#"
-use std::collections::HashMap;
-use std::sync::LazyLock;
+// Stub: no binary-packages/index.json found at build time.
+static CERT_ENTRIES: &[DsscCert] = &[];
 
-#[derive(Debug, Clone, Copy)]
-pub struct DsscCert {
-    pub stability: crate::StabilityClass,
-    pub tight_constraints: u32,
-    pub max_degree: u32,
+pub fn lookup_dssc_cert(_name: &str) -> Option<&'static DsscCert> {
+    None
 }
-
-static CERT_ENTRIES: &[(&str, u8, u32, u32)] = &[];
-
-pub static DSSC_CERTS: LazyLock<HashMap<&'static str, DsscCert>> = LazyLock::new(|| {
-    HashMap::new()
-});
 "#;
 
     fs::write(&dest_path, rust_code).expect("Failed to write stub DSSC certs code");

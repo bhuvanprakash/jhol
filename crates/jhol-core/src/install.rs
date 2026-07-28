@@ -1538,7 +1538,7 @@ fn dssc_first_install(
     }
 
     profiler.mark("dssc_first_path");
-    write_install_markers();
+    // Markers written by the caller (install_package) via write_install_markers().
     Ok(true)
 }
 
@@ -1780,13 +1780,8 @@ fn try_capsule_install(project_dir: &Path, quiet: bool) -> Result<bool, JholErro
     crate::capsule::install_from_capsule(&view, project_dir).map_err(|e| {
         crate::error_handling::utils::application_error("capsule_install", Some("install_failed"), &e)
     })?;
-    // Write project-local status so next install exits before binary loads.
-    crate::daemon_cache::write_status(hash, project_dir);
-    crate::daemon_cache::store_last_hash(hash);
-    let nm = project_dir.join("node_modules");
-    if nm.exists() {
-        let _ = std::fs::write(nm.join(".nm_fingerprint"), &hash);
-    }
+    // Markers (write_status, store_last_hash, fingerprint) are written by the
+    // caller (install_package) via write_install_markers() — single write.
     Ok(true)
 }
 
@@ -1795,8 +1790,9 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     let mut profiler = InstallProfiler::new();
 
     // Lane 0: zero-work warm bypass via project-local status file.
-    // main.rs already checks this before clap; this guard covers daemon/direct calls.
-    if packages.is_empty() && !options.lockfile_only && crate::daemon_cache::can_skip_install_before_clap() {
+    // main.rs already checks the global status file before clap (no current_dir());
+    // this guard covers daemon/direct calls that are already chdir'd.
+    if packages.is_empty() && !options.lockfile_only && crate::daemon_cache::can_skip_install_for_dir(std::path::Path::new(".")) {
         profiler.mark("lane0_warm_bypass");
         return Ok(());
     }

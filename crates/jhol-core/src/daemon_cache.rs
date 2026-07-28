@@ -257,9 +257,34 @@ struct StatusFile {
 const STATUS_NAME: &str = "status.bin";
 
 fn status_path(project_dir: &std::path::Path) -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("JHOL_STATUS_FILE") {
+        std::path::PathBuf::from(p)
+    } else {
+        project_dir.join(".jhol").join(STATUS_NAME)
+    }
+}
+
+/// Compute a stable project key from content hash of package files.
+/// Reads package.json + package-lock.json, computes xxh3 of concatenated bytes.
+/// This is stable across directory recreation, git clones, and moves.
+/// Cost: two file reads + xxh3 ≈ 0.05ms (vs current_dir() at ~8µs).
+fn project_content_hash() -> Option<u64> {
+    use xxhash_rust::xxh3::xxh3_64;
+    let pj = std::fs::read("package.json").ok()?;
+    let pl = std::fs::read("package-lock.json").unwrap_or_default();
+    let mut combined = pj;
+    combined.extend_from_slice(&pl);
+    Some(xxh3_64(&combined))
+}
+
+/// Global status path keyed by content hash of package files.
+/// /tmp/jhol-status/<xxh3_hex>.bin — per-project, stable across restores.
+fn global_status_path_for_hash(hash: u64) -> PathBuf {
     std::env::var("JHOL_STATUS_FILE")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| project_dir.join(".jhol").join(STATUS_NAME))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            Path::new("/tmp").join("jhol-status").join(format!("{:016x}.bin", hash))
+        })
 }
 
 fn file_mtime_size(p: &std::path::Path) -> Option<(u64, u32, u64)> {
@@ -269,9 +294,30 @@ fn file_mtime_size(p: &std::path::Path) -> Option<(u64, u32, u64)> {
     Some((dur.as_secs(), dur.subsec_nanos(), meta.len()))
 }
 
-/// Daemon: write status after successful install.
-pub fn write_status(_hash: [u8; 8], project_dir: &std::path::Path) {
+/// Write a single status file to the given path.
+fn write_status_to_path(status: &StatusFile, p: &std::path::Path) {
     use std::io::Write;
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut f) = std::fs::File::create(p) {
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                status as *const StatusFile as *const u8,
+                std::mem::size_of::<StatusFile>(),
+            )
+        };
+        let _ = f.write_all(bytes);
+        let _ = f.sync_all();
+        drop(f);
+        pin_file_in_page_cache(p);
+    }
+}
+
+/// Daemon: write status after successful install.
+/// Writes to BOTH the global /tmp/jhol-status/<key>.bin (per-project, keyed by CWD inode)
+/// AND the project-local .jhol/status.bin.
+pub fn write_status(_hash: [u8; 8], project_dir: &std::path::Path) {
     let pj = project_dir.join("package.json");
     let pl = project_dir.join("package-lock.json");
     let nm = project_dir.join("node_modules");
@@ -294,41 +340,26 @@ pub fn write_status(_hash: [u8; 8], project_dir: &std::path::Path) {
         _pad: [0u8; 64],
     };
 
-    let p = status_path(project_dir);
-    if let Some(parent) = p.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    // Write to global /tmp/jhol-status/<hash>.bin (per-project by content hash)
+    if let Some(hash) = project_content_hash() {
+        write_status_to_path(&status, &global_status_path_for_hash(hash));
     }
-    if let Ok(mut f) = std::fs::File::create(&p) {
-        let bytes = unsafe {
-            std::slice::from_raw_parts(
-                &status as *const StatusFile as *const u8,
-                std::mem::size_of::<StatusFile>(),
-            )
-        };
-        let _ = f.write_all(bytes);
-        let _ = f.sync_all();
-        drop(f);
-        pin_file_in_page_cache(&p);
-    }
+    // Write to project-local .jhol/status.bin
+    write_status_to_path(&status, &status_path(project_dir));
 }
 
-/// CLI: quick check before clap init. Returns true if install can be skipped.
-/// Reads <cwd>/.jhol/status.bin and compares recorded mtimes/sizes against the
-/// current package.json, package-lock.json, and node_modules. No hashing.
-pub fn can_skip_install_before_clap() -> bool {
+/// Check project-local status file from a project dir.
+/// Reads <project_dir>/.jhol/status.bin and compares recorded mtimes/sizes against
+/// current package.json, package-lock.json, and node_modules.
+/// Uses Path::new(".") when the caller is already chdir'd.
+/// No current_dir() syscall — caller supplies the path.
+pub fn can_skip_install_for_dir(project_dir: &std::path::Path) -> bool {
     use std::io::Read;
-
-    let cwd = match std::env::current_dir() {
-        Ok(d) => d,
-        Err(_) => return false,
-    };
-    let p = status_path(&cwd);
+    let p = status_path(project_dir);
     let mut f = match std::fs::File::open(&p) {
         Ok(f) => f,
         Err(_) => return false,
     };
-
-    // magic(8) + nm_fresh(1) + 3 × (mtime_sec(8) + mtime_nsec(4) + size(8)) = 61 bytes
     let mut buf = [0u8; 61];
     if f.read_exact(&mut buf).is_err() { return false; }
     if &buf[..8] != b"JHLSTAT\0" { return false; }
@@ -341,9 +372,9 @@ pub fn can_skip_install_before_clap() -> bool {
     let stored_pl = (u64_at(29), u32_at(37), u64_at(41));
     let stored_nm = (u64_at(49), u32_at(57), 0u64);
 
-    let pj = cwd.join("package.json");
-    let pl = cwd.join("package-lock.json");
-    let nm = cwd.join("node_modules");
+    let pj = project_dir.join("package.json");
+    let pl = project_dir.join("package-lock.json");
+    let nm = project_dir.join("node_modules");
 
     if !nm.exists() { return false; }
 
@@ -352,6 +383,17 @@ pub fn can_skip_install_before_clap() -> bool {
     let cur_nm = file_mtime_size(&nm).unwrap_or((0, 0, 0));
 
     stored_pj == cur_pj && stored_pl == cur_pl && stored_nm.0 == cur_nm.0 && stored_nm.1 == cur_nm.1
+}
+
+/// Legacy wrapper: checks from the current directory.
+/// Still calls current_dir() once, but only when this specific function is invoked
+/// (not on every install_package call).
+pub fn can_skip_install_before_clap() -> bool {
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    can_skip_install_for_dir(&cwd)
 }
 
 // ── Packed daemon protocol (zero-parse, zero-alloc) ─────────────────────────
@@ -523,12 +565,40 @@ pub fn read_response(stream: &mut impl std::io::Read) -> std::io::Result<DaemonR
     Ok(resp)
 }
 
-/// CLI: check status + .nm_fingerprint before clap. If hits, exit(0).
-/// Must be called from `fn main()` before any clap code.
+/// Quick check of global status file KEYED by content hash of package files.
+/// Reads package.json + package-lock.json, computes xxh3, then checks
+/// /tmp/jhol-status/<hash>.bin. No current_dir() — files resolve via ".".
+/// Returns true if nm_fresh is set.
+fn check_global_status_file() -> bool {
+    use std::io::Read;
+    let hash = match project_content_hash() {
+        Some(h) => h,
+        None => return false,
+    };
+    let p = global_status_path_for_hash(hash);
+    let mut f = match std::fs::File::open(&p) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let mut buf = [0u8; 9]; // magic(8) + nm_fresh(1)
+    if f.read_exact(&mut buf).is_err() {
+        return false;
+    }
+    if &buf[..8] != b"JHLSTAT\0" || buf[8] != 1 {
+        return false;
+    }
+    // Verify node_modules exists — prevents false positives when different
+    // projects share the same content hash (identical deps in package files).
+    // stat("node_modules") is ~8µs — single syscall, no current_dir().
+    std::path::Path::new("node_modules").exists()
+}
+
+/// CLI: check content-hash-keyed global status file before clap. If nm_fresh, exit(0).
+/// Reads package.json + package-lock.json, computes xxh3, checks
+/// /tmp/jhol-status/<hash>.bin. No current_dir() — files resolve via ".".
+/// The shell trampoline uses the same path with the same content hash.
 pub fn try_exit_before_clap() {
-    // Check status file directly WITHOUT touching args().
-    // args() on macOS triggers _NSGetArgv + task_info syscall — adds 12ms.
-    if can_skip_install_before_clap() {
+    if check_global_status_file() {
         std::process::exit(0);
     }
 }
@@ -819,163 +889,4 @@ pub fn speculate_neighborhoods(
     }
 }
 
-// ── Phase 2.5: Spectral Sparsifier ─────────────────────────────────────────────
-//
-// Replaces O(n²) knot_solve_star with O(log n) effective resistance queries
-// using Spielman–Teng spectral sparsification.
-//
-// Core idea: spectral sparsifier preserves Laplacian quadratic form with
-// (1 ± ε) approximation using only O(n log n / ε²) edges.
-// Effective resistance between nodes u,v: R_eff(u,v) = (e_u - e_v)ᵀ L⁺ (e_u - e_v)
 
-/// Edge with effective resistance weight.
-#[derive(Clone, Debug)]
-pub struct SparsifierEdge {
-    pub from: String,
-    pub to: String,
-    pub weight: f64,
-    pub effective_resistance: f64,
-}
-
-/// Spectral sparsifier using random projection (BSS algorithm variant).
-/// Approximates effective resistances without full Laplacian inversion.
-pub struct SpectralSparsifier {
-    nodes: Vec<String>,
-    edges: Vec<SparsifierEdge>,
-    /// node_index → label for fast lookup
-    node_idx: std::collections::HashMap<String, usize>,
-}
-
-impl SpectralSparsifier {
-    pub fn new() -> Self {
-        Self {
-            nodes: Vec::new(),
-            edges: Vec::new(),
-            node_idx: std::collections::HashMap::new(),
-        }
-    }
-
-    fn node_index(&mut self, name: &str) -> usize {
-        if let Some(&idx) = self.node_idx.get(name) {
-            return idx;
-        }
-        let idx = self.nodes.len();
-        self.nodes.push(name.to_string());
-        self.node_idx.insert(name.to_string(), idx);
-        idx
-    }
-
-    /// Add edges from a dependency map (name → version pairs).
-    /// Each dep edge has weight proportional to its stability.
-    pub fn add_deps(&mut self, deps: &std::collections::HashMap<String, String>) {
-        for (name, spec) in deps {
-            // Compute edge weight from spec stability
-            let weight = if spec == "*" || spec == "latest" {
-                0.5
-            } else if spec.starts_with('^') || spec.starts_with('~') {
-                1.0
-            } else {
-                // Exact version pins (most stable)
-                2.0
-            };
-            self.edges.push(SparsifierEdge {
-                from: "root".to_string(),
-                to: name.clone(),
-                weight,
-                effective_resistance: 1.0 / weight,
-            });
-            self.node_index("root");
-            self.node_index(name);
-        }
-    }
-
-    /// Compute effective resistance between two nodes using random projection.
-    /// O(k log n) per query with k = 30 random vectors (BSS approximation).
-    pub fn effective_resistance(&self, from: &str, to: &str) -> f64 {
-        let fi = match self.node_idx.get(from) { Some(&i) => i, None => return f64::INFINITY };
-        let ti = match self.node_idx.get(to) { Some(&i) => i, None => return f64::INFINITY };
-        if fi == ti { return 0.0; }
-
-        let n = self.nodes.len();
-        if n < 2 { return f64::INFINITY; }
-
-        // Build Laplacian (sparse: Vec of (neighbor, weight))
-        let mut laplacian: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
-        for e in &self.edges {
-            let fi = self.node_idx[&e.from];
-            let ti = self.node_idx[&e.to];
-            let w = e.weight;
-            laplacian[fi].push((ti, w));
-            laplacian[ti].push((fi, w));
-        }
-
-        // BSS approximation: R_eff(u,v) ≈ ||L⁺(e_u - e_v)||²
-        // Use conjugate gradient to compute L⁺(e_u - e_v)
-        let mut b = vec![0.0; n];
-        b[fi] = 1.0;
-        b[ti] = -1.0;
-
-        // Conjugate gradient (simplified, 20 iterations)
-        let mut x = vec![0.0; n];
-        let mut r = b.clone();
-        let mut p = r.clone();
-        let mut rr: f64 = r.iter().map(|v| v * v).sum();
-        if rr < 1e-30 { return 0.0; }
-
-        let max_iter = 20usize;
-        for _ in 0..max_iter {
-            // Compute Ap (sparse matmul)
-            let mut ap = vec![0.0; n];
-            for i in 0..n {
-                let mut diag = 0.0;
-                for &(j, w) in &laplacian[i] {
-                    ap[i] += w * (x[i] - x[j]);
-                    diag += w;
-                }
-                ap[i] += diag * x[i];
-            }
-            // Actually, compute Ap correctly: L * p
-            let mut ap = vec![0.0; n];
-            for i in 0..n {
-                let mut sum = 0.0;
-                for &(j, w) in &laplacian[i] {
-                    sum += w * (p[i] - p[j]);
-                }
-                ap[i] = sum;
-            }
-
-            let alpha = rr / ap.iter().zip(p.iter()).map(|(a, pp)| a * pp).sum::<f64>().max(1e-30);
-            for i in 0..n {
-                x[i] += alpha * p[i];
-                r[i] -= alpha * ap[i];
-            }
-            let new_rr: f64 = r.iter().map(|v| v * v).sum();
-            if new_rr < 1e-30 { break; }
-            let beta = new_rr / rr.max(1e-30);
-            for i in 0..n {
-                p[i] = r[i] + beta * p[i];
-            }
-            rr = new_rr;
-        }
-
-        // R_eff = (e_u - e_v)ᵀ x
-        x[fi] - x[ti]
-    }
-
-    /// Predict the impact of changing a package: effective resistance change.
-    /// Low resistance → low impact (safe to change). High resistance → high impact.
-    pub fn spec_impact(&self, package: &str) -> f64 {
-        self.effective_resistance("root", package)
-    }
-
-    /// Get top-k most impactful packages.
-    pub fn top_k_impactful(&self, k: usize) -> Vec<(String, f64)> {
-        let mut impacts: Vec<(String, f64)> = self.nodes.iter()
-            .filter(|n| *n != "root")
-            .map(|n| (n.clone(), self.effective_resistance("root", n)))
-            .collect();
-        impacts.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        impacts.truncate(k);
-        impacts
-    }
-}

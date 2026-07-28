@@ -14,9 +14,13 @@ use std::io::IsTerminal;
 #[cfg(unix)]
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+
+// Global guard: lazy init for anticipatory watcher (spawned once after first install with >3 deps)
+static ANTI_WATCHER_STARTED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -666,13 +670,8 @@ fn daemon_serve() -> Result<(), String> {
         socket_path.display()
     ));
 
-    // Phase 2: Anticipatory Daemon — background file watcher + DSSC prefetch.
-    // Watches package.json for changes; when changed, pre-fetches deps based on
-    // DSSC spectral certificates and pre-builds capsule in background.
-    let watcher_cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    std::thread::spawn(move || {
-        anticipatory_daemon_loop(&watcher_cwd);
-    });
+    // Anticipatory watcher is LAZY: spawned after first successful install with >3 deps,
+    // not at daemon boot. See daemon_handle_one success path.
 
     for stream in listener.incoming() {
         let stream = match stream {
@@ -742,14 +741,8 @@ fn direct_install(
     };
     let _ = worker.join();
     progress.finish();
-    // Write install markers for zero-binary-startup fast path
-    if install_result.is_ok() {
-        if let Ok(hash) = jhol_core::capsule::compute_manifest_hash(Path::new(".")) {
-            jhol_core::daemon_cache::write_nm_fingerprint(Path::new("."), hash);
-            jhol_core::daemon_cache::store_last_hash(hash);
-            jhol_core::daemon_cache::write_status(hash, Path::new("."));
-        }
-    }
+    // Markers (write_status, store_last_hash, fingerprint) are written by
+    // install_package via write_install_markers() — single write.
     install_result
 }
 
@@ -887,8 +880,8 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
             jhol_core::daemon_cache::write_status(hash, Path::new("."));
             Ok(())
         };
-        // Silent fallback: try to write markers even from fast paths.
-        let _ = write_install_markers();
+        // Markers are written at each exit point (nm_is_fresh, capsule, full install).
+        // No early write — we only write after a successful fast path or full install.
 
         // Daemon fast-path: if node_modules/.nm_fingerprint matches last hash, skip everything.
         if jhol_core::daemon_cache::fast_nm_check(Path::new(".")) {
@@ -946,11 +939,19 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
         jhol_core::set_daemon_mode(true);
         jhol_core::set_transitive_depth(2);
         let install_result = jhol_core::install_package(&refs, &opts).map_err(|e| e.to_string());
-        // SNR speculation: after successful install, pre-compute neighbor resolutions
+        // SNR speculation: after successful install, pre-compute neighbor resolutions.
+        // Gated behind JHOL_ANTICIPATORY=1 AND >3 deps (small projects don't need speculation).
         if install_result.is_ok() && !packages.is_empty() {
-            if let Some(deps) = jhol_core::lockfile::read_package_json_deps(Path::new("package.json")) {
-                let fp = jhol_core::resolution_mirror::fingerprint_deps(&deps);
-                jhol_core::daemon_cache::speculate_neighborhoods(Path::new("."), &deps, fp);
+            let ant_gate = std::env::var("JHOL_ANTICIPATORY")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            if ant_gate {
+                if let Some(deps) = jhol_core::lockfile::read_package_json_deps(Path::new("package.json")) {
+                    if deps.len() > 3 {
+                        let fp = jhol_core::resolution_mirror::fingerprint_deps(&deps);
+                        jhol_core::daemon_cache::speculate_neighborhoods(Path::new("."), &deps, fp);
+                    }
+                }
             }
         }
         // CGA capsule write after successful install
@@ -963,13 +964,7 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
             }
             // Phase 3: populate JAGR-S daemon store from lockfile
             let _ = jhol_core::jagrs::daemon_populate_from_lockfile(Path::new("."));
-            // Write .nm_fingerprint so next request returns instantly
-            // (also written by write_capsule_from_project in capsule.rs)
-            if let Ok(hash) = jhol_core::capsule::compute_manifest_hash(Path::new(".")) {
-                jhol_core::daemon_cache::write_nm_fingerprint(Path::new("."), hash);
-                jhol_core::daemon_cache::store_last_hash(hash);
-                jhol_core::daemon_cache::write_status(hash, Path::new("."));
-            }
+            // Markers written by install_package via write_install_markers().
         }
         install_result
     })();
@@ -977,18 +972,26 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
 
     let payload = match result {
         Ok(_) => {
-            // After any successful daemon install, ensure capsule + markers exist.
-            // Fast paths (KCC3, soul, capsule) return before writing them.
-            // Write capsule from project (creates lockfile + capsule if missing)
+            // Ensure capsule + CGA capsule exist for next fast-path boot.
+            // Markers are written by the inner install handler.
             let _ = jhol_core::capsule::write_capsule_from_project(Path::new("."));
             let _ = jhol_core::capsule::write_cga_capsule_from_project(Path::new("."));
-            // Write markers from capsule (avoids disk reads)
-            let cap_path = jhol_core::capsule::capsule_path(Path::new("."));
-            if let Ok(view) = jhol_core::capsule::read_capsule(&cap_path) {
-                let h = view.manifest_hash();
-                jhol_core::daemon_cache::write_nm_fingerprint(Path::new("."), h);
-                jhol_core::daemon_cache::store_last_hash(h);
-                jhol_core::daemon_cache::write_status(h, Path::new("."));
+            // Lazy spawn anticipatory watcher (once) if JHOL_ANTICIPATORY=1 and >3 deps.
+            if ANTI_WATCHER_STARTED
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+                && std::env::var("JHOL_ANTICIPATORY")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false)
+            {
+                if let Some(deps) = jhol_core::lockfile::read_package_json_deps(Path::new("package.json")) {
+                    if deps.len() > 3 {
+                        let wc: std::path::PathBuf = cwd.clone().into();
+                        std::thread::spawn(move || {
+                            anticipatory_daemon_loop(&wc);
+                        });
+                    }
+                }
             }
             // Store resolved graph + pin artifacts
             let cap_path = jhol_core::capsule::capsule_path(Path::new("."));
@@ -2798,12 +2801,8 @@ fn run() -> Result<(), String> {
         };
         let refs: Vec<&str> = packages;
         jhol_core::install_package(&refs, &opts).map_err(|e| e.to_string())?;
-        // Write install markers for zero-binary-startup fast path
-        if let Ok(hash) = jhol_core::capsule::compute_manifest_hash(Path::new(".")) {
-            jhol_core::daemon_cache::write_nm_fingerprint(Path::new("."), hash);
-            jhol_core::daemon_cache::store_last_hash(hash);
-            jhol_core::daemon_cache::write_status(hash, Path::new("."));
-        }
+        // Markers (write_status, store_last_hash, fingerprint) are written by
+        // install_package via write_install_markers() — single write.
         success("Package(s) added.");
         return Ok(());
     }
@@ -2963,12 +2962,8 @@ fn run() -> Result<(), String> {
                 telemetry: jhol_core::telemetry_enabled(&config),
             };
             jhol_core::install_package(&refs, &opts).map_err(|e| e.to_string())?;
-            // Write install markers for zero-binary-startup fast path
-            if let Ok(hash) = jhol_core::capsule::compute_manifest_hash(Path::new(".")) {
-                jhol_core::daemon_cache::write_nm_fingerprint(Path::new("."), hash);
-                jhol_core::daemon_cache::store_last_hash(hash);
-                jhol_core::daemon_cache::write_status(hash, Path::new("."));
-            }
+            // Markers (write_status, store_last_hash, fingerprint) are written by
+            // install_package via write_install_markers() — single write.
 
             if jagr_check {
                 // After install, run JAGR three-layer analysis on the manifest
@@ -3391,12 +3386,8 @@ fn run() -> Result<(), String> {
                             }
                         }
                         jhol_core::install_package(&refs, &opts).map_err(|e| e.to_string())?;
-                        // Write install markers for zero-binary-startup fast path
-                        if let Ok(hash) = jhol_core::capsule::compute_manifest_hash(Path::new(".")) {
-                            jhol_core::daemon_cache::write_nm_fingerprint(Path::new("."), hash);
-                            jhol_core::daemon_cache::store_last_hash(hash);
-                            jhol_core::daemon_cache::write_status(hash, Path::new("."));
-                        }
+                        // Markers (write_status, store_last_hash, fingerprint) are written by
+                        // install_package via write_install_markers() — single write.
                         if let Some(ref hook) = config_hook_post {
                             if let Err(e) = std::process::Command::new("sh")
                                 .arg("-c")

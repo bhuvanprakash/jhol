@@ -57,6 +57,7 @@ pub mod second_order_markov;
 pub mod lattice_cache;
 pub mod sat_resolver;
 pub mod feature_graph;
+pub mod spectral_sparsifier;
 
 #[cfg(target_os = "linux")]
 pub mod fuse_mount;
