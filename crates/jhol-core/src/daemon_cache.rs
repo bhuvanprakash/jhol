@@ -596,10 +596,53 @@ fn check_global_status_file() -> bool {
 /// CLI: check content-hash-keyed global status file before clap. If nm_fresh, exit(0).
 /// Reads package.json + package-lock.json, computes xxh3, checks
 /// /tmp/jhol-status/<hash>.bin. No current_dir() — files resolve via ".".
-/// The shell trampoline uses the same path with the same content hash.
+///
+/// Guards: skips all I/O unless argv[1] is an install subcommand.
+/// Uses macOS libc _NSGetArgv (0.001ms, no lazy init) — avoids the 12ms
+/// std::env::args() tax on non-install commands like --version / --help.
 pub fn try_exit_before_clap() {
+    // Raw argv check: only install-like commands trigger I/O.
+    // On macOS _NSGetArgv is a function call, not lazy init.
+    let arg1 = get_argv1();
+    let is_install = matches!(arg1.as_deref(),
+        Some("install" | "i" | "add" | "ci" | "remove" | "uninstall" | "update")
+    );
+    if !is_install {
+        return;
+    }
     if check_global_status_file() {
         std::process::exit(0);
+    }
+}
+
+/// Get argv[1] via raw libc — no std::env init, no allocation.
+/// Returns None for argc < 2 or unsupported platform.
+fn get_argv1() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" {
+            fn _NSGetArgv(argc: *mut i32, argv: *mut *mut *mut i8) -> i32;
+        }
+        let mut argc: i32 = 0;
+        let mut argv: *mut *mut i8 = std::ptr::null_mut();
+        let result = unsafe { _NSGetArgv(&mut argc as *mut i32, &mut argv as *mut *mut *mut i8) };
+        if result != 0 { return None; }
+        if argc < 2 { return None; }
+        let arg1 = unsafe { std::ffi::CStr::from_ptr(*argv.offset(1)) };
+        arg1.to_str().ok().map(|s| s.to_string())
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        // Linux: /proc/self/cmdline — no libc globals, one read.
+        let cmdline = std::fs::read("/proc/self/cmdline").ok()?;
+        let mut parts = cmdline.split(|&b| b == 0);
+        let _exe = parts.next()?; // argv[0]
+        let arg1 = parts.next()?; // argv[1]
+        std::str::from_utf8(arg1).ok().map(|s| s.to_string())
+    }
+    #[cfg(not(unix))]
+    {
+        None
     }
 }
 
