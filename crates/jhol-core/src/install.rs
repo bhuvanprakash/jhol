@@ -1731,19 +1731,8 @@ pub fn resolve_install_from_package_json(strict_lockfile: bool) -> Result<Vec<St
 /// Write install markers for zero-binary-startup fast path.
 /// Called before every `return Ok(())` in `install_package`.
 fn write_install_markers() {
-    // Try capsule first (fast, no disk reads)
-    let hash = {
-        let cap_path = crate::capsule::capsule_path(std::path::Path::new("."));
-        if cap_path.exists() {
-            crate::capsule::read_capsule(&cap_path)
-                .ok()
-                .map(|v| v.manifest_hash())
-        } else {
-            // Lockfile + capsule may not exist yet on first cold install.
-            // That's fine — second run will have them.
-            crate::capsule::compute_manifest_hash(std::path::Path::new(".")).ok()
-        }
-    };
+    let hash = crate::capsule::compute_manifest_hash(std::path::Path::new(".")).ok();
+
     if let Some(h) = hash {
         let nm = std::path::Path::new("node_modules");
         if nm.exists() {
@@ -1751,6 +1740,17 @@ fn write_install_markers() {
         }
         crate::daemon_cache::store_last_hash(h);
         crate::daemon_cache::write_status(h, std::path::Path::new("."));
+    }
+
+    let cap_path = crate::capsule::capsule_path(std::path::Path::new("."));
+    let needs_write = !cap_path.exists()
+        || hash.is_none()
+        || crate::capsule::read_capsule(&cap_path)
+            .ok()
+            .map(|v| v.manifest_hash() != hash.unwrap())
+            .unwrap_or(true);
+    if needs_write {
+        let _ = crate::capsule::write_capsule_from_project(std::path::Path::new("."));
     }
 }
 
@@ -2175,8 +2175,14 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     profiler.mark("install_from_cache");
 
     if to_fetch.is_empty() {
+        if Path::new("package.json").exists() {
+            if let Ok(packages) = read_all_installed_packages(Path::new("node_modules")) {
+                let _ = crate::lockfile_write::write_package_lock(
+                    Path::new("package-lock.json"), Path::new("package.json"), &packages);
+            }
+        }
         sync_hidden_lockfile();
-        let _ = crate::capsule::write_capsule_from_project(Path::new("."));
+        write_install_markers();
         return Ok(());
     }
 
@@ -2466,27 +2472,25 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         if !lock_path.exists() && pj_path.exists() {
             if let Ok(packages) = read_all_installed_packages(node_modules) {
                 let _ = crate::lockfile_write::write_package_lock(lock_path, pj_path, &packages);
-                // Soul Path: record resolution in JMR + GRM + lattice
-                let fp = crate::resolution_mirror::fingerprint_deps(
-                    &lockfile::read_package_json_deps(pj_path).unwrap_or_default(),
-                );
-                crate::resolution_mirror::record_resolution(fp, &packages);
-                crate::soul_path::remember_all_packages(&packages);
+                // Non-critical post-install work in background thread
+                let pj_buf = pj_path.to_path_buf();
+                std::thread::spawn(move || {
+                    let fp = crate::resolution_mirror::fingerprint_deps(
+                        &lockfile::read_package_json_deps(&pj_buf).unwrap_or_default(),
+                    );
+                    crate::resolution_mirror::record_resolution(fp, &packages);
+                    crate::soul_path::remember_all_packages(&packages);
+                    let names: Vec<String> = packages.keys().cloned().collect();
+                    if names.len() >= 3 {
+                        crate::second_order_markov::learn_from_install(&names);
+                    }
+                });
             }
         } else {
             // Always remember installed packages for GRM/lattice even when lockfile exists
             remember_installed_packages(node_modules);
         }
         sync_hidden_lockfile();
-        let _ = crate::capsule::write_capsule_from_project(Path::new("."));
-
-        // Train Markov model with installed packages for future predictions
-        if let Ok(pkgs) = read_all_installed_packages(node_modules) {
-            let names: Vec<String> = pkgs.keys().cloned().collect();
-            if names.len() >= 3 {
-                crate::second_order_markov::learn_from_install(&names);
-            }
-        }
         write_install_markers();
         return Ok(());
     }
