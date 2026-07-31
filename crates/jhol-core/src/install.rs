@@ -196,6 +196,17 @@ impl ColdResolveStrategy for ManifestThenPackumentStrategy {
                 }
             }
 
+            // Lattice cache: skip all network if previously resolved
+            if let Some(lv) = crate::lattice_cache::lookup_lattice(&base, &version_req) {
+                resolved_work.push(ResolvedFetch {
+                    pkg: pkg.clone(),
+                    url: lockfile::tarball_url_from_registry(&base, &lv),
+                    integrity: None,
+                    version: lv,
+                });
+                continue;
+            }
+
             let req_id = idx.to_string();
             manifest_requests.push((req_id.clone(), base.clone(), version_req.clone()));
             request_meta.insert(req_id, (pkg.clone(), base, version_req));
@@ -213,6 +224,7 @@ impl ColdResolveStrategy for ManifestThenPackumentStrategy {
 
             match result {
                 Ok(Some((version, url, integrity))) => {
+                    crate::lattice_cache::remember(&base, &version_req, &version);
                     resolved_work.push(ResolvedFetch {
                         pkg,
                         url,
@@ -240,6 +252,7 @@ impl ColdResolveStrategy for ManifestThenPackumentStrategy {
                         } else {
                             meta.dist.tarball_url.clone()
                         };
+                        crate::lattice_cache::remember(base, version_req, &version_str);
                         zero_copy_hits.push((base.clone(), ResolvedFetch {
                             pkg: pkg.clone(),
                             url,
@@ -296,6 +309,7 @@ impl ColdResolveStrategy for ManifestThenPackumentStrategy {
                     continue;
                 };
                 let integrity = registry::get_integrity_for_version(meta, &version);
+                crate::lattice_cache::remember(&base, &version_req, &version);
                 resolved_work.push(ResolvedFetch {
                     pkg,
                     url,

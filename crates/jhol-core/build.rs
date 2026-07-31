@@ -19,6 +19,8 @@ fn main() {
         generate_bundled_packages_from_binary(&binary_packages_dir);
         // Generate DSSC spectral certificates
         generate_dssc_certs(&binary_packages_dir);
+        // Generate resolution seed from binary-packages index
+        generate_resolution_seed(&binary_packages_dir);
         return;
     }
 
@@ -26,6 +28,7 @@ fn main() {
     println!("cargo:warning=No binary-packages directory - generating stub data");
     generate_stub_bundled_packages();
     generate_stub_dssc_certs();
+    generate_stub_resolution_seed();
 }
 
 fn workspace_binary_packages_dir() -> PathBuf {
@@ -273,4 +276,76 @@ pub fn lookup_dssc_cert(_name: &str) -> Option<&'static DsscCert> {
 "#;
 
     fs::write(&dest_path, rust_code).expect("Failed to write stub DSSC certs code");
+}
+
+fn parse_pkg_spec(spec: &str) -> (&str, &str) {
+    if let Some(at_pos) = spec.rfind('@') {
+        if at_pos > 0 {
+            (&spec[..at_pos], &spec[at_pos + 1..])
+        } else {
+            (spec, "")
+        }
+    } else {
+        (spec, "")
+    }
+}
+
+fn generate_resolution_seed(binary_dir: &Path) {
+    let index_path = binary_dir.join("index.json");
+    if !index_path.exists() {
+        generate_stub_resolution_seed();
+        return;
+    }
+
+    let index_content = fs::read_to_string(&index_path).expect("Failed to read index.json");
+    let index: serde_json::Value =
+        serde_json::from_str(&index_content).expect("Failed to parse index.json");
+
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+    let dest_path = Path::new(&out_dir).join("resolution_seed_data.rs");
+
+    // Collect unique (name, version) pairs from index.json keys
+    let mut entries: Vec<(String, String)> = Vec::new();
+    if let Some(obj) = index.as_object() {
+        for pkg_spec in obj.keys() {
+            let (name, version) = parse_pkg_spec(pkg_spec);
+            if !version.is_empty() {
+                entries.push((name.to_string(), version.to_string()));
+            }
+        }
+    }
+
+    // Sort and dedup (some packages may appear with multiple versions)
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries.dedup();
+
+    let mut rust_code = String::new();
+    rust_code.push_str("pub fn load_seed_entries(store: &mut LatticeStore) {\n");
+    for (name, version) in &entries {
+        let escaped_name = name.replace('\\', "\\\\").replace('"', "\\\"");
+        let escaped_version = version.replace('\\', "\\\\").replace('"', "\\\"");
+        rust_code.push_str(&format!(
+            "    store.by_pkg.entry(\"{}\".to_string()).or_default().push(LatticeEntry {{ constraint: \"*\".to_string(), version: \"{}\".to_string(), hits: 1 }});\n",
+            escaped_name, escaped_version
+        ));
+    }
+    rust_code.push_str("}\n");
+
+    fs::write(&dest_path, rust_code).expect("Failed to write resolution seed data");
+    println!(
+        "cargo:warning=Resolution seed generated for {} packages",
+        entries.len()
+    );
+}
+
+fn generate_stub_resolution_seed() {
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+    let dest_path = Path::new(&out_dir).join("resolution_seed_data.rs");
+
+    let rust_code = r#"
+// Stub: no binary-packages/index.json found at build time.
+pub fn load_seed_entries(_store: &mut LatticeStore) {}
+"#;
+
+    fs::write(&dest_path, rust_code).expect("Failed to write stub resolution seed data");
 }

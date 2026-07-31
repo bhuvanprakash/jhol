@@ -11,6 +11,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+// Include build-time resolution seed from binary-packages index.
+#[cfg(not(test))]
+include!(concat!(env!("OUT_DIR"), "/resolution_seed_data.rs"));
+
 #[derive(Clone, Debug)]
 struct LatticeEntry {
     constraint: String,
@@ -36,6 +40,10 @@ fn global() -> &'static RwLock<LatticeStore> {
     G.get_or_init(|| {
         let mut store = LatticeStore::new();
         load_disk(&mut store);
+        // Load build-time resolution seed so the truly-first cold install
+        // avoids packument fetches for common packages.
+        #[cfg(not(test))]
+        load_seed_entries(&mut store);
         RwLock::new(store)
     })
 }
