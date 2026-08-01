@@ -7,7 +7,7 @@ use crate::selective_extract; // JHOL Selective Extraction
 use crate::utils::{self, NPM_SHOW_TIMEOUT_SECS};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
@@ -98,6 +98,89 @@ fn transitive_cache_enabled() -> bool {
 fn transitive_memo_cache() -> &'static Mutex<HashMap<String, Vec<String>>> {
     static CACHE: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn trans_expansion_cache_dir() -> Result<std::path::PathBuf, String> {
+    let cache_dir = crate::utils::get_cache_dir();
+    let dir = std::path::PathBuf::from(cache_dir).join("expansion_cache");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create expansion cache dir: {}", e))?;
+    Ok(dir)
+}
+
+fn trans_expansion_cache_key_hash(key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(key.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+fn save_trans_expansion_cache(cache_key: &str, result: &[String]) {
+    if let Ok(dir) = trans_expansion_cache_dir() {
+        let hash = trans_expansion_cache_key_hash(cache_key);
+        let path = dir.join(format!("{}.json", hash));
+        if let Ok(content) = serde_json::to_string(result) {
+            let _ = std::fs::write(&path, content);
+        }
+    }
+}
+
+fn load_trans_expansion_cache(cache_key: &str) -> Option<Vec<String>> {
+    if let Ok(dir) = trans_expansion_cache_dir() {
+        let hash = trans_expansion_cache_key_hash(cache_key);
+        let path = dir.join(format!("{}.json", hash));
+        if path.exists() {
+            let content = std::fs::read_to_string(path).ok()?;
+            return serde_json::from_str(&content).ok();
+        }
+    }
+    None
+}
+
+// ── Single-pass decode cache: extract → node_modules from cached bytes ────
+// get_bundled_tarball caches the decoded gzip tarball bytes per-package in a
+// process-global Mutex<HashMap>.  When the install phase needs to materialise
+// a bundled package, it checks this cache: on hit, it extracts directly from
+// the in-memory bytes to node_modules (zero decompression, zero store I/O).
+// On miss (e.g. cross-project), it falls through to the normal store path.
+
+/// Install a bundled package's tarball directly from the decode cache,
+/// bypassing the store entirely.  Returns true on success (cache hit + extract).
+/// Also writes to the store as a side-effect so future runs hit the index.
+fn try_install_bundled_from_cache(pkg: &str, base: &str, node_modules: &Path) -> bool {
+    let cache = crate::registry::get_bundled_cache();
+    let tgz = match cache.lock().unwrap().get(pkg) {
+        Some(b) => b.clone(),
+        None => return false,
+    };
+    let install_path = node_modules.join(base);
+    if install_path.exists() {
+        let _ = std::fs::remove_dir_all(&install_path);
+    }
+    if let Some(parent) = install_path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            return false;
+        }
+    }
+    use flate2::read::GzDecoder;
+    use tar::Archive;
+    let decoder = GzDecoder::new(std::io::Cursor::new(&tgz));
+    let mut archive = Archive::new(decoder);
+    if archive.unpack(&install_path).is_err() {
+        return false;
+    }
+    // Also write to store for future cross-project runs
+    use sha2::{Digest, Sha256};
+    let hash = hex::encode(Sha256::digest(&tgz));
+    let store_dir = std::path::Path::new(&crate::utils::get_cache_dir()).join("store");
+    let store_file = store_dir.join(format!("{}.tgz", hash));
+    if !store_file.exists() {
+        let _ = std::fs::create_dir_all(&store_dir);
+        let _ = std::fs::write(&store_file, &tgz);
+        let mut index = crate::utils::read_store_index();
+        index.insert(pkg.to_string(), hash);
+        let _ = crate::utils::write_store_index(&index);
+    }
+    true
 }
 
 fn transitive_metadata_snapshot() -> &'static Mutex<HashMap<String, serde_json::Value>> {
@@ -502,6 +585,12 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
         format!("d{}:{}", max_depth, specs.join(","))
     };
 
+    // Persistent expansion cache: avoid re-reading every tarball's package.json
+    // across installs. Survives process restarts.
+    if let Some(hit) = load_trans_expansion_cache(&cache_key) {
+        return Ok(hit);
+    }
+
     if transitive_cache_enabled() {
         if let Ok(cache) = transitive_memo_cache().lock() {
             if let Some(hit) = cache.get(&cache_key) {
@@ -548,6 +637,9 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
                         if let Some(required_deps) =
                             registry::binary_package_dependencies(&name, &binary_version)
                         {
+                            // binary_package_dependencies calls get_bundled_tarball
+                            // which caches the decoded gzip bytes automatically.
+                            // The install phase reuses that cache directly.
                             for (dep_name, dep_spec) in required_deps {
                                 let dep_constraints =
                                     constraints.entry(dep_name.clone()).or_default();
@@ -843,6 +935,7 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
         .map(|(name, version)| format!("{}@{}", name, version))
         .collect();
     specs.sort();
+    save_trans_expansion_cache(&cache_key, &specs);
     if transitive_cache_enabled() {
         if let Ok(mut cache) = transitive_memo_cache().lock() {
             cache.insert(cache_key, specs.clone());
@@ -991,6 +1084,31 @@ fn get_cached_tarball_fast(
         }
     }
 
+    // ── Bundled package materialisation ──────────────────────────────────
+    // If the package@version is one of the 200 pre-packed binary packages,
+    // materialise it to the store on first access.  This avoids downloading
+    // from npm and populates the store for subsequent runs.
+    if !package.contains('/') || package.starts_with('@') {
+        for candidate in [normalized_key.as_str(), package.as_str()] {
+            if let Some(tgz) = crate::registry::get_bundled_tarball(candidate) {
+                use sha2::{Digest, Sha256};
+                let hash = hex::encode(Sha256::digest(&tgz));
+                let store_file = store_dir.join(format!("{}.tgz", hash));
+                if !store_file.exists() {
+                    if let Some(parent) = store_file.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if std::fs::write(&store_file, tgz).is_ok() {
+                        let mut index = crate::utils::read_store_index();
+                        index.insert(candidate.to_string(), hash);
+                        let _ = crate::utils::write_store_index(&index);
+                    }
+                }
+                return Some(store_file);
+            }
+        }
+    }
+
     // Legacy fallback: pkg-version.tgz files in cache root.
     let legacy_exact = cache_dir.join(format!("{}.tgz", utils::format_cache_name(&package)));
     if legacy_exact.exists() {
@@ -1069,9 +1187,22 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
     }
 
     let mut install_entry = |entry: &crate::lockfile::LockfileInstallEntry,
-                             tarball_path: &Path|
+                              tarball_path: &Path|
      -> Result<(), String> {
         let install_path = Path::new(&entry.install_path);
+        let spec = format!("{}@{}", entry.package, entry.version);
+
+        // Single-pass decode cache: if the bundled tarball was decoded during
+        // expansion, extract directly from cached bytes — zero decompression,
+        // zero store I/O.  Falls through to the store path on miss.
+        if try_install_bundled_from_cache(&spec, &entry.package, node_modules) {
+            if entry.top_level {
+                let _ = bin_links::link_bins_for_package(node_modules, &entry.package);
+            }
+            return Ok(());
+        }
+
+        // Normal path: extract from store tarball
         if install_path.exists() {
             std::fs::remove_dir_all(install_path).map_err(|e| e.to_string())?;
         }
@@ -1811,6 +1942,11 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         return Ok(());
     }
 
+    // Phase 4: Pre-seed store_index with all 200 bundled package hashes.
+    // This lets get_cached_tarball_fast return hits immediately for any
+    // bundled package without going through the lazy materialisation path.
+    crate::registry::preseed_store_index();
+
     let download_conc = download_concurrency();
     let cache_install_conc = cache_install_concurrency().max(1);
     // Warm cache install concurrency defaults higher (was 1)
@@ -1969,6 +2105,42 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         std::collections::HashSet::new()
     };
 
+    // Fast batch path: when all packages are exact-version specs (already resolved
+    // by expansion cache) and the store index is populated, resolve them in a tight
+    // HashMap::get + stat check without per-package normalization/fallback overhead.
+    // If all are present, skip the full sequential classification loop entirely.
+    let batch_ok = !options.no_cache && !store_index.is_empty()
+        && requested_packages.iter().all(|p| {
+            p.rfind('@').map_or(false, |idx| {
+                idx > 0 && p[idx + 1..].starts_with(|c: char| c.is_ascii_digit())
+            })
+        });
+    if batch_ok {
+        let store_dir = cache_dir_for_lookup.join("store");
+        let mut all_present = true;
+        let mut batch = Vec::with_capacity(requested_packages.len());
+        for spec in &requested_packages {
+            if let Some(hash) = store_index.get(spec) {
+                let store_file = store_dir.join(format!("{}.tgz", hash));
+                if store_file.exists() {
+                    batch.push((spec.to_string(), store_file));
+                    seen_packages.insert(base_name(spec).to_string());
+                    continue;
+                }
+            }
+            all_present = false;
+            break;
+        }
+        if all_present {
+            to_install_from_cache = batch;
+            profiler.mark("classify_cache_vs_fetch");
+        } else {
+            // Batch path failed mid-way; fall through to sequential loop
+            seen_packages.clear();
+        }
+    }
+
+    if to_install_from_cache.is_empty() {
     for package in &requested_packages {
         let base = base_name(package);
 
@@ -2033,6 +2205,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         to_fetch.extend(missing_for_offline.iter().cloned());
     }
     profiler.mark("classify_cache_vs_fetch");
+    }
 
     // Skip npm show when we trust the lockfile or frozen (zero packument)
     if !to_fetch.is_empty()
@@ -2087,10 +2260,16 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                     let tx = tx.clone();
                     thread::spawn(move || {
                         let base = base_name(&pkg).to_string();
-                        let ok = match registry::ensure_unpacked_in_store(&tarball_path, &cache_dir)
-                        {
-                            Ok(unpacked) => {
-                                utils::link_package_from_store(&unpacked, &node_modules, &base)
+                        // Single-pass decode cache: extract from cached bytes
+                        let ok = try_install_bundled_from_cache(&pkg, &base, &node_modules)
+                            || {
+                            match registry::ensure_unpacked_in_store(&tarball_path, &cache_dir) {
+                                Ok(unpacked) => {
+                                    utils::link_package_from_store(
+                                        &unpacked,
+                                        &node_modules,
+                                        &base,
+                                    )
                                     .is_ok()
                                     || selective_extract::extract_selective(
                                         &tarball_path,
@@ -2098,8 +2277,9 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                                         &base,
                                     )
                                     .is_ok()
+                                }
+                                Err(_) => false,
                             }
-                            Err(_) => false,
                         };
                         let _ = tx.send((pkg, tarball_path, ok));
                     });
@@ -2119,17 +2299,26 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                 worker_pool_seq_threshold,
                 move |(pkg, tarball_path)| {
                     let base = base_name(&pkg).to_string();
-                    let ok = match registry::ensure_unpacked_in_store(&tarball_path, &cache_dir) {
-                        Ok(unpacked) => {
-                            utils::link_package_from_store(&unpacked, &node_modules, &base).is_ok()
+                    // Single-pass decode cache: extract from cached bytes
+                    let ok = try_install_bundled_from_cache(&pkg, &base, &node_modules)
+                        || {
+                        match registry::ensure_unpacked_in_store(&tarball_path, &cache_dir) {
+                            Ok(unpacked) => {
+                                utils::link_package_from_store(
+                                    &unpacked,
+                                    &node_modules,
+                                    &base,
+                                )
+                                .is_ok()
                                 || selective_extract::extract_selective(
                                     &tarball_path,
                                     &node_modules,
                                     &base,
                                 )
                                 .is_ok()
+                            }
+                            Err(_) => false,
                         }
-                        Err(_) => false,
                     };
                     (pkg, tarball_path, ok)
                 },

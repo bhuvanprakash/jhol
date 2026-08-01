@@ -39,11 +39,13 @@ fn global() -> &'static RwLock<LatticeStore> {
     static G: OnceLock<RwLock<LatticeStore>> = OnceLock::new();
     G.get_or_init(|| {
         let mut store = LatticeStore::new();
-        load_disk(&mut store);
-        // Load build-time resolution seed so the truly-first cold install
-        // avoids packument fetches for common packages.
         #[cfg(not(test))]
-        load_seed_entries(&mut store);
+        {
+            load_disk(&mut store);
+            // Load build-time resolution seed so the truly-first cold install
+            // avoids packument fetches for common packages.
+            load_seed_entries(&mut store);
+        }
         RwLock::new(store)
     })
 }

@@ -53,28 +53,59 @@ fn generate_bundled_packages_from_binary(binary_dir: &Path) {
     let index: serde_json::Value =
         serde_json::from_str(&index_content).expect("Failed to parse index.json");
 
-    // Generate Rust code for bundled packages
-    let mut rust_code = String::new();
-    rust_code.push_str("use std::collections::HashMap;\n\n");
-    rust_code.push_str("pub fn get_bundled_package_data() -> HashMap<String, Box<[u8]>> {\n");
-    rust_code.push_str("    let mut packages = HashMap::new();\n");
-
+    // Collect and sort entries so we can binary-search at runtime
+    let mut entries: Vec<(&str, String)> = Vec::new();
     if let Some(obj) = index.as_object() {
         for (pkg_spec, hash_value) in obj {
             let hash = hash_value.as_str().unwrap_or("");
             let bin_path = binary_dir.join(format!("{}.jhol", hash));
-
             if bin_path.exists() {
                 let escaped_path = bin_path.display().to_string().replace('\\', "\\\\");
-                rust_code.push_str(&format!(
-                    "    packages.insert(\"{}\".to_string(), Box::<[u8]>::from(&include_bytes!(r#\"{}\"#)[..]));\n",
-                    pkg_spec, escaped_path
-                ));
+                entries.push((pkg_spec.as_str(), escaped_path));
             }
         }
     }
+    entries.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-    rust_code.push_str("    packages\n");
+    // Generate a sorted function — zero heap allocation at runtime.
+    // Returns a reference to a function-static array so include_bytes!
+    // is evaluated at compile time in a valid item-position context.
+    let mut rust_code = String::new();
+    rust_code.push_str("#[doc(hidden)]\n");
+    rust_code.push_str("pub fn get_bundled_package_data() -> &'static [(&'static str, &'static [u8])] {\n");
+    rust_code.push_str("    static DATA: &[(&str, &[u8])] = &[\n");
+    for (pkg_spec, escaped_path) in &entries {
+        // include_bytes! at item level (inside static) is const-evaluable
+        rust_code.push_str(&format!(
+            "        (\"{}\", include_bytes!(r#\"{}\"#)),\n",
+            pkg_spec.replace('\\', "\\\\").replace('"', "\\\""),
+            escaped_path
+        ));
+    }
+    rust_code.push_str("    ];\n");
+    rust_code.push_str("    DATA\n");
+    rust_code.push_str("}\n\n");
+
+    // Generate a separate function returning (spec, sha256_hash) pairs.
+    // The hash is the SHA256 of the decoded gzip tarball (same as the
+    // .jhol filename without extension).  Used to pre-seed the store
+    // index at startup without needing to decode any archive.
+    rust_code.push_str("#[doc(hidden)]\n");
+    rust_code.push_str("pub fn get_bundled_hashes() -> &'static [(&'static str, &'static str)] {\n");
+    rust_code.push_str("    static HASHES: &[(&str, &str)] = &[\n");
+    for (pkg_spec, escaped_path) in &entries {
+        let hash = std::path::Path::new(&escaped_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        rust_code.push_str(&format!(
+            "        (\"{}\", \"{}\"),\n",
+            pkg_spec.replace('\\', "\\\\").replace('"', "\\\""),
+            hash
+        ));
+    }
+    rust_code.push_str("    ];\n");
+    rust_code.push_str("    HASHES\n");
     rust_code.push_str("}\n");
 
     // Write generated code
@@ -89,15 +120,14 @@ fn generate_stub_bundled_packages() {
     let dest_path = Path::new(&out_dir).join("bundled_packages_data.rs");
 
     let rust_code = r#"
-use std::collections::HashMap;
+#[doc(hidden)]
+pub fn get_bundled_package_data() -> &'static [(&'static str, &'static [u8])] {
+    &[]
+}
 
-pub fn get_bundled_package_data() -> HashMap<String, Box<[u8]>> {
-    let mut packages = HashMap::new();
-
-    // Stub data - actual tarballs will be populated when binary-packages/ exists
-    // This allows compilation without network access
-
-    packages
+#[doc(hidden)]
+pub fn get_bundled_hashes() -> &'static [(&'static str, &'static str)] {
+    &[]
 }
 "#;
 

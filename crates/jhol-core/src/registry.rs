@@ -1226,8 +1226,23 @@ pub fn binary_package_dependencies(
         }
     }
 
+    // Try in-memory bundled tarball first (200 pre-packed packages, no disk I/O)
+    if let Some(tgz) = get_bundled_tarball(&spec_key) {
+        if let Some(deps) = read_deps_from_tarball_bytes(&tgz) {
+            return Some(deps);
+        }
+    }
+
     let tarball = load_binary_tarball(package, version).ok().flatten()?;
-    let dec = flate2::read::GzDecoder::new(std::io::Cursor::new(tarball));
+    if let Some(deps) = read_deps_from_tarball_bytes(&tarball) {
+        return Some(deps);
+    }
+    None
+}
+
+/// Parse dependencies from raw gzip tarball bytes (decompress, find package.json, read deps).
+fn read_deps_from_tarball_bytes(tgz: &[u8]) -> Option<HashMap<String, String>> {
+    let dec = flate2::read::GzDecoder::new(std::io::Cursor::new(tgz));
     let mut archive = tar::Archive::new(dec);
     for entry in archive.entries().ok()? {
         let mut entry = entry.ok()?;
@@ -1686,4 +1701,76 @@ pub fn install_package_native(
         crate::utils::log(&format!("Installed {}@{} (native)", base_name, version));
     }
     Ok(())
+}
+
+// ── Bundled (embedded) tarball cache ────────────────────────────────────────
+// The build script generates bundled_packages_data.rs which embeds .jhol
+// archives for 200 popular packages.  We wrap in a private module to avoid
+// import conflicts with this file's own `use std::collections::HashMap`.
+mod bundled_data {
+    include!(concat!(env!("OUT_DIR"), "/bundled_packages_data.rs"));
+}
+
+/// Per-package decode cache: once a bundled .jhol is decoded to gzip tarball
+/// bytes, the result is cached so the install phase doesn't re-decode.
+/// This is the key optimisation that eliminates the redundant second
+/// decompression described in the single-pass expansion extraction plan.
+static BUNDLED_DECODE_CACHE: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
+
+/// Return the decoded gzip tarball bytes for a bundled package `name@version`.
+/// The result is cached per-package so that expansion and install share the
+/// same decompressed bytes — the install path never re-decodes.
+pub fn get_bundled_tarball(spec: &str) -> Option<Vec<u8>> {
+    // Fast path: cached from a previous decode (e.g. during expansion).
+    let cache = BUNDLED_DECODE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(cached) = cache.lock().unwrap().get(spec) {
+        return Some(cached.clone());
+    }
+    // Cold path: binary-search the sorted static array, decode one .jhol.
+    let entries = bundled_data::get_bundled_package_data();
+    let idx = entries
+        .binary_search_by(|(key, _)| key.as_bytes().cmp(spec.as_bytes()))
+        .ok()?;
+    let (_, archive) = entries[idx];
+    let bytes = decode_binary_package_archive(archive).ok()?;
+    // Cache so the next caller (install phase) doesn't re-decode.
+    cache.lock().unwrap().insert(spec.to_string(), bytes.clone());
+    Some(bytes)
+}
+
+/// Expose the decode cache for the install phase to check without calling
+/// `get_bundled_tarball` again (avoids the HashMap lookup inside the cache).
+pub fn get_bundled_cache() -> &'static Mutex<HashMap<String, Vec<u8>>> {
+    BUNDLED_DECODE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Pre-seed the store index with all 200 bundled package hashes at startup.
+/// Uses the pre-computed hashes from build time so no .jhol decoding is needed.
+/// This lets `get_cached_tarball_fast` immediately find bundled packages
+/// without falling through to the materialisation path.
+pub fn preseed_store_index() {
+    let hashes = bundled_data::get_bundled_hashes();
+    if hashes.is_empty() {
+        return;
+    }
+    let mut index = crate::utils::read_store_index();
+    let mut changed = false;
+    for (spec, hash) in hashes {
+        if !index.contains_key(*spec) {
+            index.insert(spec.to_string(), hash.to_string());
+            changed = true;
+        }
+    }
+    if changed {
+        let _ = crate::utils::write_store_index(&index);
+    }
+}
+
+/// Check if a spec key exists in the build-time bundled hash table.
+/// O(log n) binary search — roughly matches how `get_bundled_tarball` would find it.
+pub fn is_bundled_spec(spec: &str) -> bool {
+    let hashes = bundled_data::get_bundled_hashes();
+    hashes
+        .binary_search_by(|(key, _)| key.as_bytes().cmp(spec.as_bytes()))
+        .is_ok()
 }
