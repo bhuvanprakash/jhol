@@ -40,75 +40,25 @@ fn workspace_binary_packages_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("binary-packages"))
 }
 
-fn generate_bundled_packages_from_binary(binary_dir: &Path) {
-    let index_path = binary_dir.join("index.json");
-    if !index_path.exists() {
-        println!("cargo:warning=No index.json found - using stub data");
-        generate_stub_bundled_packages();
-        return;
-    }
-
-    // Read index
-    let index_content = fs::read_to_string(&index_path).expect("Failed to read index.json");
-    let index: serde_json::Value =
-        serde_json::from_str(&index_content).expect("Failed to parse index.json");
-
-    // Collect and sort entries so we can binary-search at runtime
-    let mut entries: Vec<(&str, String)> = Vec::new();
-    if let Some(obj) = index.as_object() {
-        for (pkg_spec, hash_value) in obj {
-            let hash = hash_value.as_str().unwrap_or("");
-            let bin_path = binary_dir.join(format!("{}.jhol", hash));
-            if bin_path.exists() {
-                let escaped_path = bin_path.display().to_string().replace('\\', "\\\\");
-                entries.push((pkg_spec.as_str(), escaped_path));
-            }
-        }
-    }
-    entries.sort_by(|(a, _), (b, _)| a.cmp(b));
-
-    // Generate a sorted function — zero heap allocation at runtime.
-    // Returns a reference to a function-static array so include_bytes!
-    // is evaluated at compile time in a valid item-position context.
+/// PRW (Parallel Resolution Wave): the 318MB embedded tarball bundle is
+/// intentionally NOT compiled into the binary. Speed now comes from parallel
+/// network waves + the self-building persistent mirror (~/.jhol-cache store +
+/// ~/.jhol-store CAS), not from stored bytes. We emit EMPTY bundled-data /
+/// bundled-hashes tables so the runtime bundle paths are inert (return None),
+/// and keep only the tiny KB-scale resolution seed.
+fn generate_bundled_packages_from_binary(_binary_dir: &Path) {
+    println!("cargo:warning=PRW mode: embedding NO tarballs (binary stays small)");
     let mut rust_code = String::new();
     rust_code.push_str("#[doc(hidden)]\n");
     rust_code.push_str("pub fn get_bundled_package_data() -> &'static [(&'static str, &'static [u8])] {\n");
-    rust_code.push_str("    static DATA: &[(&str, &[u8])] = &[\n");
-    for (pkg_spec, escaped_path) in &entries {
-        // include_bytes! at item level (inside static) is const-evaluable
-        rust_code.push_str(&format!(
-            "        (\"{}\", include_bytes!(r#\"{}\"#)),\n",
-            pkg_spec.replace('\\', "\\\\").replace('"', "\\\""),
-            escaped_path
-        ));
-    }
-    rust_code.push_str("    ];\n");
+    rust_code.push_str("    static DATA: &[(&str, &[u8])] = &[];\n");
     rust_code.push_str("    DATA\n");
     rust_code.push_str("}\n\n");
-
-    // Generate a separate function returning (spec, sha256_hash) pairs.
-    // The hash is the SHA256 of the decoded gzip tarball (same as the
-    // .jhol filename without extension).  Used to pre-seed the store
-    // index at startup without needing to decode any archive.
     rust_code.push_str("#[doc(hidden)]\n");
     rust_code.push_str("pub fn get_bundled_hashes() -> &'static [(&'static str, &'static str)] {\n");
-    rust_code.push_str("    static HASHES: &[(&str, &str)] = &[\n");
-    for (pkg_spec, escaped_path) in &entries {
-        let hash = std::path::Path::new(&escaped_path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
-        rust_code.push_str(&format!(
-            "        (\"{}\", \"{}\"),\n",
-            pkg_spec.replace('\\', "\\\\").replace('"', "\\\""),
-            hash
-        ));
-    }
-    rust_code.push_str("    ];\n");
+    rust_code.push_str("    static HASHES: &[(&str, &str)] = &[];\n");
     rust_code.push_str("    HASHES\n");
     rust_code.push_str("}\n");
-
-    // Write generated code
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("bundled_packages_data.rs");
     fs::write(&dest_path, rust_code).expect("Failed to write generated code");

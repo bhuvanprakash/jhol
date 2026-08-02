@@ -783,14 +783,24 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
             continue;
         };
 
-        let version =
+        // PRW: consult the build-time resolution seed (lattice) FIRST so the
+        // most common packages resolve zero-network to their seeded version,
+        // instead of fetching network metadata and pinning the highest version.
+        // The seed version always satisfies the constraint by construction.
+        let seeded = pkg_constraints
+            .first()
+            .and_then(|c| crate::lattice_cache::lookup_lattice(name, c));
+        let version = if let Some(v) = seeded {
+            v
+        } else {
             resolve_version_for_constraints(metadata, pkg_constraints).ok_or_else(|| {
                 format!(
                     "Dependency conflict for {} (constraints: {})",
                     name,
                     pkg_constraints.join(", ")
                 )
-            })?;
+            })?
+        };
 
         let is_required = *required.get(name).unwrap_or(&true);
         if !version_supported_on_current_platform(metadata, &version) {

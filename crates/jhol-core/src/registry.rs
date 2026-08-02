@@ -1216,27 +1216,12 @@ fn load_binary_tarball(package: &str, version: &str) -> Result<Option<Vec<u8>>, 
 }
 
 pub fn binary_package_dependencies(
-    package: &str,
-    version: &str,
+    _package: &str,
+    _version: &str,
 ) -> Option<HashMap<String, String>> {
-    let spec_key = format!("{}@{}", package, version);
-    if let Some(index) = binary_package_deps_index() {
-        if let Some(deps) = index.get(&spec_key) {
-            return Some(deps.clone());
-        }
-    }
-
-    // Try in-memory bundled tarball first (200 pre-packed packages, no disk I/O)
-    if let Some(tgz) = get_bundled_tarball(&spec_key) {
-        if let Some(deps) = read_deps_from_tarball_bytes(&tgz) {
-            return Some(deps);
-        }
-    }
-
-    let tarball = load_binary_tarball(package, version).ok().flatten()?;
-    if let Some(deps) = read_deps_from_tarball_bytes(&tarball) {
-        return Some(deps);
-    }
+    // PRW: bundle-backed dependency lookup is retired. Transitive dependency
+    // discovery now happens through the parallel network resolution wave +
+    // persistent mirror, not from embedded/stored tarballs.
     None
 }
 
@@ -1363,30 +1348,13 @@ pub fn best_binary_version(package: &str) -> Option<String> {
 }
 
 /// Best binary version satisfying all constraints (semver ranges / exacts).
-pub fn best_binary_version_matching(package: &str, constraints: &[String]) -> Option<String> {
-    let index = binary_package_index()?;
-    let mut best: Option<semver::Version> = None;
-    for key in index.keys() {
-        let at = key.rfind('@')?;
-        if at == 0 {
-            continue;
-        }
-        let name = &key[..at];
-        if name != package {
-            continue;
-        }
-        let ver = &key[at + 1..];
-        let Ok(parsed) = semver::Version::parse(ver) else {
-            continue;
-        };
-        if !version_matches_all_constraints(&parsed, constraints) {
-            continue;
-        }
-        if best.as_ref().map(|b| &parsed > b).unwrap_or(true) {
-            best = Some(parsed);
-        }
-    }
-    best.map(|v| v.to_string())
+///
+/// PRW: the embedded/local bundle is intentionally gone. Resolution now comes
+/// from parallel network packument fetches (see `parallel_resolve_tarballs_via_manifest`)
+/// + the persistent mirror. This returns `None` so the resolver always takes the
+/// network/mirror path — no stored bytes.
+pub fn best_binary_version_matching(_package: &str, _constraints: &[String]) -> Option<String> {
+    None
 }
 
 /// Download tarball to store and return hash. Does not update the store index.
