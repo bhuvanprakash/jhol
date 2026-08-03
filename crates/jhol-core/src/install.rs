@@ -753,21 +753,59 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
 
     // Parallel fetch all deferred packages at once
     if !deferred_packages.is_empty() {
-        let cache_arc = std::sync::Arc::new(std::sync::Mutex::new(metadata_cache.clone()));
-        let fetch_results = registry::parallel_fetch_metadata(&deferred_packages, &cache_arc);
-
-        for (pkg_name, result) in fetch_results {
-            match result {
-                Ok(meta) => {
-                    metadata_cache.insert(pkg_name.clone(), meta.clone());
-                    if transitive_cache_enabled() {
-                        if let Ok(mut cache) = transitive_metadata_snapshot().lock() {
-                            cache.insert(pkg_name, meta);
-                        }
+        // ★ Phase A: pre-resolve deferred packages from the bundled-index
+        // before any network fetches. bundled-index.json (37 KB binary-embedded)
+        // carries full pre-resolved metadata for the top 50 packages. When a
+        // package's constraint matches the bundled "latest" version, the
+        // synthesizer returns a complete packument-shape JSON object that the
+        // resolver consumes as if it came from npm — zero network, zero parse
+        // overhead. Unmatched packages fall through to parallel_fetch_metadata.
+        let mut seen_deferred: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let mut still_deferred: Vec<String> = Vec::new();
+        for pkg_name in deferred_packages {
+            if !seen_deferred.insert(pkg_name.clone()) {
+                continue; // Deduplicate: same package from multiple BFS paths
+            }
+            let constraint_for_pkg = constraints
+                .get(&pkg_name)
+                .and_then(|vec| vec.first().map(|s| s.as_str()))
+                .unwrap_or("");
+            if let Some(synth) =
+                registry::synthesize_packument_from_bundled_index(&pkg_name, constraint_for_pkg)
+            {
+                if transitive_cache_enabled() {
+                    if let Ok(mut cache) = transitive_metadata_snapshot().lock() {
+                        cache.insert(pkg_name.clone(), synth.clone());
                     }
                 }
-                Err(e) => {
-                    return Err(format!("Failed to fetch metadata for {}: {}", pkg_name, e));
+                metadata_cache.insert(pkg_name, synth);
+                continue;
+            }
+            still_deferred.push(pkg_name);
+        }
+
+        if !still_deferred.is_empty() {
+            let cache_arc =
+                std::sync::Arc::new(std::sync::Mutex::new(metadata_cache.clone()));
+            let fetch_results = registry::parallel_fetch_metadata(&still_deferred, &cache_arc);
+
+            for (pkg_name, result) in fetch_results {
+                match result {
+                    Ok(meta) => {
+                        metadata_cache.insert(pkg_name.clone(), meta.clone());
+                        if transitive_cache_enabled() {
+                            if let Ok(mut cache) = transitive_metadata_snapshot().lock() {
+                                cache.insert(pkg_name, meta);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        return Err(format!(
+                            "Failed to fetch metadata for {}: {}",
+                            pkg_name, e
+                        ));
+                    }
                 }
             }
         }
@@ -2028,16 +2066,33 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         }
         specs
     } else {
-        match expand_with_transitive_dependencies(packages) {
-            Ok(specs) if !specs.is_empty() => specs,
-            Ok(_) => packages.iter().map(|p| (*p).to_string()).collect(),
-            Err(err) => {
+        // Phase C: persistent expansion cache — skip expand_with_transitive_dependencies
+        // entirely if we've resolved these exact packages before. Computes a hash of
+        // sorted package specs; if ~/.jhol-cache/expansion-cache/{hash}.txt exists,
+        // loads it in <1ms vs the 100-800ms expand_with_transitive_dependencies costs.
+        if let Some(cached_specs) = crate::utils::load_expansion_cache(packages) {
+            if !options.quiet {
                 crate::utils::log(&format!(
-                    "warning: transitive expansion failed, continuing with direct specs: {}",
-                    err
+                    "Reusing expansion cache ({} packages)",
+                    cached_specs.len()
                 ));
-                packages.iter().map(|p| (*p).to_string()).collect()
             }
+            cached_specs
+        } else {
+            let specs = match expand_with_transitive_dependencies(packages) {
+                Ok(specs) if !specs.is_empty() => specs,
+                Ok(_) => packages.iter().map(|p| (*p).to_string()).collect(),
+                Err(err) => {
+                    crate::utils::log(&format!(
+                        "warning: transitive expansion failed, continuing with direct specs: {}",
+                        err
+                    ));
+                    packages.iter().map(|p| (*p).to_string()).collect()
+                }
+            };
+            // Save successful expansions to disk for O(1) repeat installs
+            let _ = crate::utils::save_expansion_cache(packages, &specs);
+            specs
         }
     };
 

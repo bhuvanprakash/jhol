@@ -1,4 +1,5 @@
 use chrono::Local;
+use hex;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::env;
@@ -958,4 +959,59 @@ mod tests {
     fn test_sanitize_package_name_rejects_double_slashes() {
         assert!(validate_package_name("foo//bar").is_none());
     }
+}
+
+/// Persistent expansion cache: stores resolved package specs to disk,
+/// keyed by a hash of the input package list. Enables O(1) repeat installs
+/// by skipping expand_with_transitive_dependencies entirely when the cache hits.
+///
+/// Cache path: ~/.jhol-cache/expansion-cache/{hash}.txt (newline-separated specs)
+
+fn expansion_cache_dir() -> PathBuf {
+    PathBuf::from(get_cache_dir()).join("expansion-cache")
+}
+
+fn expansion_cache_path(hash: &str) -> PathBuf {
+    expansion_cache_dir().join(format!("{}.txt", hash))
+}
+
+fn compute_expansion_cache_key(packages: &[&str]) -> String {
+    let mut sorted: Vec<&str> = packages.to_vec();
+    sorted.sort();
+    let input = sorted.join(",");
+    let hash = Sha256::digest(input.as_bytes());
+    hex::encode(&hash[..8])
+}
+
+pub fn load_expansion_cache(packages: &[&str]) -> Option<Vec<String>> {
+    if packages.is_empty() {
+        return None;
+    }
+    let key = compute_expansion_cache_key(packages);
+    let path = expansion_cache_path(&key);
+    let content = std::fs::read_to_string(&path).ok()?;
+    let specs: Vec<String> = content
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+    if specs.is_empty() {
+        None
+    } else {
+        Some(specs)
+    }
+}
+
+pub fn save_expansion_cache(packages: &[&str], specs: &[String]) -> std::result::Result<(), String> {
+    if packages.is_empty() || specs.is_empty() {
+        return Ok(());
+    }
+    let key = compute_expansion_cache_key(packages);
+    let path = expansion_cache_path(&key);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let content = specs.join("\n");
+    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    Ok(())
 }
