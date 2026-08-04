@@ -57,36 +57,8 @@ where
     O: Send + 'static,
     F: Fn(I) -> O + Send + Sync + 'static,
 {
-    if items.is_empty() {
-        return Vec::new();
-    }
-
-    // Fast path: for tiny batches, avoid thread spawn + lock/channel overhead.
-    if concurrency <= 1 || items.len() <= sequential_threshold.clamp(1, 64) {
-        return items.into_iter().map(job).collect();
-    }
-
-    let worker_count = concurrency.clamp(1, 64).min(items.len());
-    let total_items = items.len();
-
-    // Use global rayon threadpool for thread reuse across install calls.
-    static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
-    let pool = POOL.get_or_init(|| {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(64)
-            .thread_name(|i| format!("jhol-worker-{}", i))
-            .build()
-            .expect("jhol threadpool")
-    });
-
-    pool.install(|| {
-        use rayon::prelude::*;
-        items
-            .into_par_iter()
-            .with_max_len(std::cmp::max(1, total_items / worker_count))
-            .map(job)
-            .collect()
-    })
+    // Delegate to shared global pool (zero spawn overhead, persistent 64-thread pool)
+    crate::pool::parallel_map(items, concurrency, sequential_threshold, job)
 }
 
 fn transitive_cache_enabled() -> bool {
@@ -599,30 +571,54 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
         }
     }
 
+    // N3: Use Arc<str> in queue to avoid String clones on BFS dequeues.
+    // Maps stay HashMap<String, ...> since callers and transitive caches expect String keys.
     let mut constraints: HashMap<String, Vec<String>> = HashMap::new();
     let mut required: HashMap<String, bool> = HashMap::new();
     let mut selected: HashMap<String, String> = HashMap::new();
     let mut metadata_cache: HashMap<String, serde_json::Value> = HashMap::new();
-    let mut queue: VecDeque<(String, usize)> = VecDeque::new();
-    let mut deferred_packages: Vec<String> = Vec::new();
+    let mut queue: VecDeque<(Arc<str>, usize)> = VecDeque::new();
+    let mut deferred_packages: HashSet<String> = HashSet::new();
 
     for package in packages {
-        let base = base_name(package).to_string();
+        let base: Arc<str> = base_name(package).into();
         let spec = requested_version_spec(package);
-        constraints.entry(base.clone()).or_default().push(spec);
-        required.insert(base.clone(), true);
+        constraints.entry(base.to_string()).or_default().push(spec);
+        required.insert(base.to_string(), true);
         queue.push_back((base, 0));
     }
 
+    // ★ Markov Prediction Pre-fetch: use the installed chain to predict what comes next.
+    if packages.len() >= 2 {
+        let base_names: Vec<String> = packages.iter().map(|p| base_name(p).to_string()).collect();
+        if base_names.len() >= 2 {
+            let (prev, curr) = (&base_names[0], &base_names[1]);
+            let predicted: Vec<String> = crate::second_order_markov::predict_with_context(prev, curr, 8);
+            if !predicted.is_empty() {
+                let predicted_clone = predicted.clone();
+                crate::pool::parallel_map(
+                    predicted_clone,
+                    8,     // concurrency
+                    4,     // sequential threshold
+                    |pkg| {
+                        let _ = registry::fetch_metadata(&pkg);
+                        pkg
+                    },
+                );
+            }
+        }
+    }
+
     // First pass: try binary index and cache, collect deferred packages
-    while let Some((name, depth)) = queue.pop_front() {
+    // N3: queue uses Arc<str> to avoid String clones on pop/requeue.
+    while let Some((name_arc, depth)) = queue.pop_front() {
+        // Convert Arc<str> to String once for all map operations in this iteration
+        let name: String = name_arc.to_string();
         let Some(pkg_constraints) = constraints.get(&name).cloned() else {
             continue;
         };
 
         if !metadata_cache.contains_key(&name) {
-            // Zero-network fast path: resolve from local binary package index and read deps
-            // directly from bundled binary package metadata when available.
             if let Some(binary_version) =
                 registry::best_binary_version_matching(&name, &pkg_constraints)
             {
@@ -637,16 +633,15 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
                         if let Some(required_deps) =
                             registry::binary_package_dependencies(&name, &binary_version)
                         {
-                            // binary_package_dependencies calls get_bundled_tarball
-                            // which caches the decoded gzip bytes automatically.
-                            // The install phase reuses that cache directly.
                             for (dep_name, dep_spec) in required_deps {
+                                let dn: Arc<str> = dep_name.into();
+                                let dn_str = dn.to_string();
                                 let dep_constraints =
-                                    constraints.entry(dep_name.clone()).or_default();
+                                    constraints.entry(dn_str).or_default();
                                 if !dep_constraints.iter().any(|s| s == &dep_spec) {
                                     dep_constraints.push(dep_spec);
-                                    required.insert(dep_name.clone(), true);
-                                    queue.push_back((dep_name, depth + 1));
+                                    required.insert(dn.to_string(), true);
+                                    queue.push_back((dn, depth + 1));
                                 }
                             }
                             continue;
@@ -656,6 +651,43 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
                     }
                 } else {
                     continue;
+                }
+            }
+
+            // Lattice cache: skip metadata fetch if we've resolved this before
+            if let Some(c) = pkg_constraints.first() {
+                if let Some(lattice_version) =
+                    crate::lattice_cache::lookup_lattice(&name, c)
+                {
+                    let changed = selected
+                        .get(&name)
+                        .map(|existing| existing != &lattice_version)
+                        .unwrap_or(true);
+                    if changed {
+                        selected.insert(name.clone(), lattice_version.clone());
+                        if depth < max_depth {
+                            if let Some(required_deps) =
+                                registry::binary_package_dependencies(&name, &lattice_version)
+                            {
+                                for (dep_name, dep_spec) in required_deps {
+                                    let dn: Arc<str> = dep_name.into();
+                                    let dn_str = dn.to_string();
+                                    let dep_constraints =
+                                        constraints.entry(dn_str).or_default();
+                                    if !dep_constraints.iter().any(|s| s == &dep_spec) {
+                                        dep_constraints.push(dep_spec);
+                                        required.insert(dn.to_string(), true);
+                                        queue.push_back((dn, depth + 1));
+                                    }
+                                }
+                                continue;
+                            }
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
                 }
             }
 
@@ -672,10 +704,7 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
             if let Some(hit) = snapshot_hit {
                 metadata_cache.insert(name.clone(), hit);
             } else {
-                // Defer this package for parallel fetch
-                if !deferred_packages.contains(&name) {
-                    deferred_packages.push(name.clone());
-                }
+                deferred_packages.insert(name.clone());
                 continue;
             }
         }
@@ -719,33 +748,35 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
         if depth < max_depth {
             let required_deps = registry::get_version_required_dependencies(metadata, &version);
             for (dep_name, dep_spec) in required_deps {
-                let dep_constraints = constraints.entry(dep_name.clone()).or_default();
+                let dn: Arc<str> = dep_name.into();
+                let dn_str = dn.to_string();
+                let dep_constraints = constraints.entry(dn_str.clone()).or_default();
                 if !dep_constraints.iter().any(|s| s == &dep_spec) {
                     dep_constraints.push(dep_spec);
-                    required.insert(dep_name.clone(), true);
-                    if !deferred_packages.contains(&dep_name)
-                        && !metadata_cache.contains_key(&dep_name)
-                        && registry::best_binary_version_matching(&dep_name, &[]).is_none()
+                    required.insert(dn_str, true);
+                    if !metadata_cache.contains_key(&dn.to_string())
+                        && registry::best_binary_version_matching(&dn, &[]).is_none()
                     {
-                        deferred_packages.push(dep_name.clone());
+                        deferred_packages.insert(dn.to_string());
                     }
-                    queue.push_back((dep_name, depth + 1));
+                    queue.push_back((dn, depth + 1));
                 }
             }
 
             let optional_deps = registry::get_version_optional_dependencies(metadata, &version);
             for (dep_name, dep_spec) in optional_deps {
-                let dep_constraints = constraints.entry(dep_name.clone()).or_default();
+                let dn: Arc<str> = dep_name.into();
+                let dn_str = dn.to_string();
+                let dep_constraints = constraints.entry(dn_str.clone()).or_default();
                 if !dep_constraints.iter().any(|s| s == &dep_spec) {
                     dep_constraints.push(dep_spec);
-                    required.entry(dep_name.clone()).or_insert(false);
-                    if !deferred_packages.contains(&dep_name)
-                        && !metadata_cache.contains_key(&dep_name)
-                        && registry::best_binary_version_matching(&dep_name, &[]).is_none()
+                    required.entry(dn_str.clone()).or_insert(false);
+                    if !metadata_cache.contains_key(&dn.to_string())
+                        && registry::best_binary_version_matching(&dn, &[]).is_none()
                     {
-                        deferred_packages.push(dep_name.clone());
+                        deferred_packages.insert(dn_str);
                     }
-                    queue.push_back((dep_name, depth + 1));
+                    queue.push_back((dn, depth + 1));
                 }
             }
         }
@@ -753,20 +784,8 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
 
     // Parallel fetch all deferred packages at once
     if !deferred_packages.is_empty() {
-        // ★ Phase A: pre-resolve deferred packages from the bundled-index
-        // before any network fetches. bundled-index.json (37 KB binary-embedded)
-        // carries full pre-resolved metadata for the top 50 packages. When a
-        // package's constraint matches the bundled "latest" version, the
-        // synthesizer returns a complete packument-shape JSON object that the
-        // resolver consumes as if it came from npm — zero network, zero parse
-        // overhead. Unmatched packages fall through to parallel_fetch_metadata.
-        let mut seen_deferred: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
         let mut still_deferred: Vec<String> = Vec::new();
         for pkg_name in deferred_packages {
-            if !seen_deferred.insert(pkg_name.clone()) {
-                continue; // Deduplicate: same package from multiple BFS paths
-            }
             let constraint_for_pkg = constraints
                 .get(&pkg_name)
                 .and_then(|vec| vec.first().map(|s| s.as_str()))
@@ -776,7 +795,7 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
             {
                 if transitive_cache_enabled() {
                     if let Ok(mut cache) = transitive_metadata_snapshot().lock() {
-                        cache.insert(pkg_name.clone(), synth.clone());
+                        cache.insert(pkg_name.to_string(), synth.clone());
                     }
                 }
                 metadata_cache.insert(pkg_name, synth);
@@ -814,17 +833,12 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
     // Second pass: now process all packages with metadata available
     for (name, pkg_constraints) in constraints.iter() {
         if selected.contains_key(name) {
-            continue; // Already resolved via binary index
+            continue;
         }
 
         let Some(metadata) = metadata_cache.get(name) else {
             continue;
         };
-
-        // PRW: consult the build-time resolution seed (lattice) FIRST so the
-        // most common packages resolve zero-network to their seeded version,
-        // instead of fetching network metadata and pinning the highest version.
-        // The seed version always satisfies the constraint by construction.
         let seeded = pkg_constraints
             .first()
             .and_then(|c| crate::lattice_cache::lookup_lattice(name, c));
@@ -854,14 +868,13 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
         selected.insert(name.clone(), version.clone());
     }
 
-    while let Some((name, depth)) = queue.pop_front() {
+    while let Some((name_arc, depth)) = queue.pop_front() {
+        let name: String = name_arc.to_string();
         let Some(pkg_constraints) = constraints.get(&name).cloned() else {
             continue;
         };
 
         if !metadata_cache.contains_key(&name) {
-            // Zero-network fast path: resolve from local binary package index and read deps
-            // directly from bundled binary package metadata when available.
             if let Some(binary_version) =
                 registry::best_binary_version_matching(&name, &pkg_constraints)
             {
@@ -882,7 +895,8 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
                                 if !dep_constraints.iter().any(|s| s == &dep_spec) {
                                     dep_constraints.push(dep_spec);
                                     required.insert(dep_name.clone(), true);
-                                    queue.push_back((dep_name, depth + 1));
+                                    let dn: Arc<str> = dep_name.into();
+                                    queue.push_back((dn, depth + 1));
                                 }
                             }
                             continue;
@@ -914,15 +928,15 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
         }
 
         // Second pass: fetch all deferred packages in parallel
-        let deferred_packages: Vec<String> = queue
+        let deferred_names: Vec<String> = queue
             .iter()
-            .filter(|(name, _)| !metadata_cache.contains_key(name))
-            .map(|(name, _)| name.clone())
+            .filter(|(n, _)| !metadata_cache.contains_key(&n.to_string()))
+            .map(|(n, _)| n.to_string())
             .collect();
 
-        if !deferred_packages.is_empty() {
+        if !deferred_names.is_empty() {
             let fetch_results = registry::parallel_fetch_metadata(
-                &deferred_packages,
+                &deferred_names,
                 &std::sync::Arc::new(std::sync::Mutex::new(metadata_cache.clone())),
             );
             for (pkg_name, result) in fetch_results {
@@ -1121,9 +1135,15 @@ fn get_cached_tarball_fast(
                 return Some(store_file);
             }
         }
-        // Try all versions of this package
+        // Build prefix index once, then O(1) lookup (P1)
+        let mut prefix_map: HashMap<&str, Vec<&str>> = HashMap::new();
         for (k, hash) in store_index {
-            if k.starts_with(&format!("{}@", package)) {
+            if let Some(at) = k.rfind('@') {
+                prefix_map.entry(&k[..at]).or_default().push(hash);
+            }
+        }
+        if let Some(hashes) = prefix_map.get(package.as_str()) {
+            for &hash in hashes {
                 let store_file = store_dir.join(format!("{}.tgz", hash));
                 if store_file.exists() {
                     return Some(store_file);
@@ -1137,6 +1157,7 @@ fn get_cached_tarball_fast(
     // materialise it to the store on first access.  This avoids downloading
     // from npm and populates the store for subsequent runs.
     if !package.contains('/') || package.starts_with('@') {
+        let mut batch_updates: Option<HashMap<String, String>> = None;
         for candidate in [normalized_key.as_str(), package.as_str()] {
             if let Some(tgz) = crate::registry::get_bundled_tarball(candidate) {
                 use sha2::{Digest, Sha256};
@@ -1147,13 +1168,18 @@ fn get_cached_tarball_fast(
                         let _ = std::fs::create_dir_all(parent);
                     }
                     if std::fs::write(&store_file, tgz).is_ok() {
-                        let mut index = crate::utils::read_store_index();
-                        index.insert(candidate.to_string(), hash);
-                        let _ = crate::utils::write_store_index(&index);
+                        let updates = batch_updates.get_or_insert_with(HashMap::new);
+                        updates.insert(candidate.to_string(), hash);
                     }
                 }
                 return Some(store_file);
             }
+        }
+        // Flush batch index writes once (P2)
+        if let Some(updates) = batch_updates {
+            let mut index = crate::utils::read_store_index();
+            index.extend(updates);
+            let _ = crate::utils::write_store_index(&index);
         }
     }
 
@@ -1305,68 +1331,27 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
             index_batch.insert(entry.spec.clone(), hash);
         }
     } else {
-        use std::sync::mpsc;
-        use std::thread;
+        // Parallel download via global rayon threadpool (zero spawn overhead).
+        let cache_dir_clone = cache_dir.clone();
+        let results: Vec<Result<(String, String, String), (String, String)>> =
+            run_worker_pool(to_fetch.clone(), concurrency, 8, move |entry| {
+                registry::download_tarball_to_store_hash_only(
+                    &entry.resolved,
+                    &cache_dir_clone,
+                    &entry.spec,
+                    entry.integrity.as_deref(),
+                )
+                .map(|hash| (entry.spec.clone(), hash, "ok".to_string()))
+                .map_err(|e| (e, "download_failed".to_string()))
+            });
 
-        let cache_dir_arc = Arc::new(cache_dir.clone());
-        let results_arc: Arc<Mutex<Vec<Result<(String, String, String), (String, String)>>>> =
-            Arc::new(Mutex::new(Vec::with_capacity(to_fetch.len())));
-
-        for chunk in to_fetch.chunks(concurrency) {
-            let (tx, rx) = mpsc::channel();
-            let cache_dir_clone = cache_dir_arc.clone();
-            let results_clone = results_arc.clone();
-
-            for entry in chunk {
-                let tx = tx.clone();
-                let resolved = entry.resolved.clone();
-                let spec = entry.spec.clone();
-                let integrity = entry.integrity.clone();
-                let cache_dir_inner = cache_dir_clone.clone();
-
-                thread::spawn(move || {
-                    let result = registry::download_tarball_to_store_hash_only(
-                        &resolved,
-                        &cache_dir_inner,
-                        &spec,
-                        integrity.as_deref(),
-                    )
-                    .map(|hash| (spec.clone(), hash, resolved));
-                    let _ = tx.send(result);
-                });
-            }
-            drop(tx);
-
-            for received in rx {
-                match received {
-                    Ok((spec, hash, _resolved)) => {
-                        if let Ok(mut results) = results_clone.lock() {
-                            results.push(Ok((spec, hash, "ok".to_string())));
-                        }
-                    }
-                    Err(e) => {
-                        if let Ok(mut results) = results_clone.lock() {
-                            results.push(Err((e, "download_failed".to_string())));
-                        }
-                    }
-                }
-            }
-        }
-
-        let results = results_arc.lock().map_err(|e| {
-            crate::error_handling::utils::application_error(
-                "install_lockfile_layout_results",
-                Some("lock_error"),
-                &e.to_string(),
-            )
-        })?;
+        // Collect results
         let mut successful: Vec<(String, String)> = Vec::new();
         let mut errors: Vec<String> = Vec::new();
-
-        for result in results.iter() {
+        for result in results {
             match result {
-                Ok((spec, hash, _)) => successful.push((spec.clone(), hash.clone())),
-                Err((e, _)) => errors.push(e.clone()),
+                Ok((spec, hash, _)) => successful.push((spec, hash)),
+                Err((e, _)) => errors.push(e),
             }
         }
 
@@ -1378,6 +1363,7 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
             ));
         }
 
+        // Install packages (runs sequentially to preserve order dependency of bin_links)
         for (spec, hash) in successful {
             let entry = to_fetch.iter().find(|e| e.spec == spec);
             if let Some(entry) = entry {
@@ -1406,7 +1392,6 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
         })?;
     }
 
-    let _ = bin_links::rebuild_bin_links(node_modules);
     Ok(true)
 }
 
@@ -1520,6 +1505,11 @@ fn check_script_allowlist(
 fn remember_installed_packages(node_modules: &Path) {
     if let Ok(pkgs) = read_all_installed_packages(node_modules) {
         crate::soul_path::remember_all_packages(&pkgs);
+        // Train Markov predictor with topological install order
+        let names: Vec<String> = pkgs.keys().cloned().collect();
+        if names.len() >= 3 {
+            crate::second_order_markov::learn_from_install(&names);
+        }
     }
 }
 
@@ -1851,6 +1841,7 @@ fn build_resolve_request_from_deps(
         available_versions: available,
         dependencies: std::collections::HashMap::new(),
         conflicts: vec![],
+        focus_packages: None,
     })
 }
 
@@ -1923,28 +1914,147 @@ pub fn resolve_install_from_package_json(strict_lockfile: bool) -> Result<Vec<St
 
 /// Write install markers for zero-binary-startup fast path.
 /// Called before every `return Ok(())` in `install_package`.
-fn write_install_markers() {
-    let hash = crate::capsule::compute_manifest_hash(std::path::Path::new(".")).ok();
+/// Returns Some(current_hash) if .nm_fingerprint matches current manifest hash (node_modules fresh).
+/// Returns None if fingerprint missing or stale.
+/// Uses OnceLock to avoid re-reading package.json/package-lock.json when mtime unchanged.
+/// Total cost when fresh: ~1ms (1 stat + 1 read of ~64-byte hex string).
+fn nm_fresh() -> Option<[u8; 8]> {
+    static CACHED: std::sync::OnceLock<(u64, [u8; 8])> = std::sync::OnceLock::new();
 
+    // Check mtime cache first — avoids re-reading package.json/package-lock.json
+    if let Some(entry) = CACHED.get() {
+        let mtime = entry.0;
+        let hash = entry.1;
+        if let Ok(m) = std::path::Path::new("package.json").metadata() {
+            if let Ok(cm) = m.modified() {
+                let cutoff = std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime);
+                if cm <= cutoff {
+                    // mtime unchanged — hash is still valid
+                    let fp = std::path::Path::new("node_modules/.nm_fingerprint");
+                    if let Ok(bytes) = std::fs::read(fp) {
+                        if let Ok(stored) = String::from_utf8(bytes) {
+                            let stored_hex = stored.trim();
+                            // Decode hex string from .nm_fingerprint back to bytes
+                            if let Ok(decoded) = hex::decode(stored_hex) {
+                                if decoded.len() >= 8 {
+                                    let mut arr = [0u8; 8];
+                                    arr.copy_from_slice(&decoded[..8]);
+                                    if arr == hash {
+                                        return Some(hash);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Compute fresh hash and cache it
+    let current_hash = crate::capsule::compute_manifest_hash(std::path::Path::new(".")).ok()?;
+    if let Ok(m) = std::path::Path::new("package.json").metadata() {
+        if let Ok(cm) = m.modified() {
+            let secs = cm
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let _ = CACHED.set((secs, current_hash));
+        }
+    }
+
+    // Check if stored fingerprint matches
+    let fp = std::path::Path::new("node_modules/.nm_fingerprint");
+    match std::fs::read(fp) {
+        Ok(bytes) => {
+            if let Ok(stored) = String::from_utf8(bytes) {
+                let stored_hex = stored.trim();
+                if let Ok(decoded) = hex::decode(stored_hex) {
+                    if decoded.len() >= 8 {
+                        let mut arr = [0u8; 8];
+                        arr.copy_from_slice(&decoded[..8]);
+                        if arr == current_hash {
+                            return Some(current_hash);
+                        }
+                    }
+                }
+            }
+            None
+        }
+        Err(_) => None,
+    }
+}
+
+/// Returns the current manifest hash as a hex string (for display/storage).
+fn cached_manifest_hash() -> Option<String> {
+    nm_fresh().map(|h| hex::encode(h))
+}
+
+fn write_install_markers() {
+    // Compute hash directly — never depend on nm_fresh() (which requires the
+    // fingerprint to ALREADY exist). On first install there's no fingerprint,
+    // so nm_fresh() returns None and the marker would never be written.
+    let hash = nm_fresh().or_else(|| {
+        crate::capsule::compute_manifest_hash(std::path::Path::new(".")).ok()
+    });
     if let Some(h) = hash {
         let nm = std::path::Path::new("node_modules");
         if nm.exists() {
-            let _ = std::fs::write(nm.join(".nm_fingerprint"), &h);
+            let hex_str = hex::encode(h);
+            let _ = std::fs::write(nm.join(".nm_fingerprint"), hex_str.as_bytes());
         }
         crate::daemon_cache::store_last_hash(h);
         crate::daemon_cache::write_status(h, std::path::Path::new("."));
     }
 
     let cap_path = crate::capsule::capsule_path(std::path::Path::new("."));
-    let needs_write = !cap_path.exists()
-        || hash.is_none()
-        || crate::capsule::read_capsule(&cap_path)
+    let current_hash = hash.or_else(|| crate::capsule::compute_manifest_hash(std::path::Path::new(".")).ok());
+    let needs_write = current_hash.map_or(true, |h| {
+        crate::capsule::read_capsule(&cap_path)
             .ok()
-            .map(|v| v.manifest_hash() != hash.unwrap())
-            .unwrap_or(true);
-    if needs_write {
+            .map_or(true, |v| v.manifest_hash() != h)
+    });
+    if needs_write && current_hash.is_some() {
         let _ = crate::capsule::write_capsule_from_project(std::path::Path::new("."));
     }
+
+    // Prebuilt cache: copy node_modules to /tmp/jhol-prebuilt/<sha256(package.json)>
+    // so the shell trampoline can symlink it on future installs without loading Rust.
+    write_prebuilt_cache();
+}
+
+/// Copy node_modules to a content-hash-keyed prebuilt cache directory.
+/// The trampoline checks this before exec'ing the Rust binary.
+fn write_prebuilt_cache() {
+    let pj = std::path::Path::new("package.json");
+    let nm = std::path::Path::new("node_modules");
+    if !pj.exists() || !nm.exists() {
+        return;
+    }
+    let pj_bytes = match std::fs::read(pj) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    // sha256 of package.json — matches `shasum -a 256 package.json | cut -d' ' -f1`
+    use sha2::{Digest, Sha256};
+    let hash = hex::encode(Sha256::digest(&pj_bytes));
+    let prebuilt_dir = std::env::var("JHOL_PREBUILT_DIR")
+        .unwrap_or_else(|_| "/tmp/jhol-prebuilt".to_string());
+    let dest = std::path::Path::new(&prebuilt_dir).join(&hash).join("node_modules");
+    // Only copy if not already cached (avoid redundant I/O on every install)
+    if dest.exists() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(dest.parent().unwrap_or(&dest));
+    // Copy node_modules into prebuilt cache (non-blocking: best-effort)
+    let _ = std::fs::remove_dir_all(&dest);
+    let _ = std::fs::create_dir_all(&dest);
+    // Use cp -r for simplicity (handles symlinks, permissions)
+    let _ = std::process::Command::new("cp")
+        .arg("-r")
+        .arg(nm)
+        .arg(&dest)
+        .status();
 }
 
 /// Capsule-first fast path: if the project capsule exists and its manifest hash
@@ -1956,15 +2066,18 @@ fn try_capsule_install(project_dir: &Path, quiet: bool) -> Result<bool, JholErro
     if !cap_path.exists() {
         return Ok(false);
     }
+    // ★ nm_fresh fast bypass: if .nm_fingerprint matches current manifest hash,
+    // skip ALL install work — packages and bin links are already up to date.
+    // This saves 15-20ms of filesystem syscalls on every warm install.
+    if let Some(hash) = nm_fresh() {
+        return Ok(true);
+    }
     let view = match crate::capsule::read_capsule(&cap_path) {
         Ok(v) => v,
         Err(_) => return Ok(false),
     };
-    let hash = match crate::capsule::compute_manifest_hash(project_dir) {
-        Ok(h) => h,
-        Err(_) => return Ok(false),
-    };
-    if view.manifest_hash() != hash {
+    // Reuse cached hash or compute if nm_fresh missed (mtime cache miss)
+    if crate::capsule::compute_manifest_hash(project_dir).ok().or_else(|| nm_fresh()).is_none() {
         return Ok(false);
     }
     if !quiet {
@@ -1976,6 +2089,162 @@ fn try_capsule_install(project_dir: &Path, quiet: bool) -> Result<bool, JholErro
     // Markers (write_status, store_last_hash, fingerprint) are written by the
     // caller (install_package) via write_install_markers() — single write.
     Ok(true)
+}
+
+/// Try JGrid pipeline fast path — content-addressed, clone-ready materialization.
+/// Returns Ok(true) if materialized, Ok(false) if cache miss.
+#[cfg(feature = "pipeline")]
+fn try_jgrid_install(packages: &[String], _options: &InstallOptions) -> Result<bool, JholError> {
+    use jhol_pipeline::{JGridPipeline, ResolvedPackage};
+
+    if packages.is_empty() {
+        return Ok(false);
+    }
+
+    let nm = Path::new("node_modules");
+    if !nm.exists() {
+        std::fs::create_dir_all(nm).map_err(|e| {
+            crate::error_handling::utils::io_error("create_node_modules", Some("node_modules"), e)
+        })?;
+    }
+
+    let pipeline_dir = Path::new(&crate::utils::get_cache_dir()).join("grid");
+    std::fs::create_dir_all(&pipeline_dir).map_err(|e| {
+        crate::error_handling::utils::io_error("create_grid_dir", pipeline_dir.to_str(), e)
+    })?;
+
+    let pipeline = JGridPipeline::new(&pipeline_dir).map_err(|e| {
+        crate::error_handling::utils::application_error("jgrid_init", None, &e)
+    })?;
+
+    // Build resolved package list — packages are already in name@version format
+    let resolved: Vec<ResolvedPackage> = packages.iter().map(|s| {
+        if let Some((name, version)) = s.split_once('@') {
+            ResolvedPackage {
+                name: name.to_string(),
+                version: version.to_string(),
+            }
+        } else {
+            ResolvedPackage {
+                name: s.clone(),
+                version: "latest".into(),
+            }
+        }
+    }).collect();
+
+    pipeline.materialize(&resolved, nm).map_err(|e| {
+        crate::error_handling::utils::application_error("jgrid_materialize", None, &e)
+    })
+}
+
+/// After a successful traditional install, background-ingest installed packages into JGrid
+/// so subsequent installs hit the L0/L1/L2 pipeline.
+#[cfg(feature = "pipeline")]
+fn post_install_jgrid_ingest() {
+    use jhol_pipeline::{JGridPipeline, ResolvedPackage};
+    use std::time::Instant;
+
+    let start = Instant::now();
+    let nm = Path::new("node_modules");
+    if !nm.is_dir() {
+        return;
+    }
+
+    let Ok(packages) = read_all_installed_packages(nm) else { return };
+    if packages.is_empty() {
+        return;
+    }
+
+    let pipeline_dir = Path::new(&crate::utils::get_cache_dir()).join("grid");
+    let Ok(mut pipeline) = JGridPipeline::new(&pipeline_dir) else { return };
+
+    let mut ingested = 0u32;
+    for (name, info) in &packages {
+        // Check if already in JGrid
+        let resolved = [ResolvedPackage { name: name.clone(), version: info.version.clone() }];
+        if pipeline.has_bundle(&resolved) || pipeline.manifest_count() > 0
+            && pipeline.store().find_manifest(name, &info.version).is_some()
+        {
+            continue;
+        }
+
+        // Read all files from node_modules/<name>/
+        let pkg_dir = nm.join(name);
+        if !pkg_dir.is_dir() {
+            continue;
+        }
+        let Ok(file_entries) = read_package_files_for_jgrid(&pkg_dir) else { continue };
+        if file_entries.is_empty() {
+            continue;
+        }
+
+        let entries_refs: Vec<(&str, u16, &[u8])> = file_entries.iter()
+            .map(|(p, m, c)| (p.as_str(), *m, c.as_slice()))
+            .collect();
+
+        match pipeline.ingest(name, &info.version, &entries_refs) {
+            Ok(_) => ingested += 1,
+            Err(e) => {
+                if std::env::var("JHOL_VERBOSE").is_ok() {
+                    crate::utils::log(&format!("JGrid ingest failed for {}@{}: {}", name, info.version, e));
+                }
+            }
+        }
+    }
+
+    if ingested > 0 {
+        let elapsed = start.elapsed();
+        crate::utils::log(&format!("JGrid: ingested {ingested} packages in {elapsed:?}"));
+    }
+}
+
+/// Walk a package directory and collect (relative_path, mode, content) for all regular files.
+fn read_package_files_for_jgrid(pkg_dir: &Path) -> Result<Vec<(String, u16, Vec<u8>)>, String> {
+    let mut entries = Vec::new();
+    collect_files_recursive(pkg_dir, pkg_dir, &mut entries, 0)?;
+    Ok(entries)
+}
+
+fn collect_files_recursive(
+    base_dir: &Path,
+    dir: &Path,
+    entries: &mut Vec<(String, u16, Vec<u8>)>,
+    depth: usize,
+) -> Result<(), String> {
+    if depth > 20 {
+        return Ok(()); // safety limit
+    }
+    for entry in fs::read_dir(dir).map_err(|e| format!("read dir: {e}"))? {
+        let entry = entry.map_err(|e| format!("entry: {e}"))?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|e| format!("file type: {e}"))?;
+
+        if file_type.is_dir() {
+            collect_files_recursive(base_dir, &path, entries, depth + 1)?;
+        } else if file_type.is_file() {
+            let rel_path = path.strip_prefix(base_dir)
+                .map_err(|_| "strip prefix".to_string())?
+                .to_string_lossy()
+                .to_string();
+
+            let metadata = fs::metadata(&path)
+                .map_err(|e| format!("metadata: {e}"))?;
+
+            #[cfg(unix)]
+            let mode = {
+                use std::os::unix::fs::PermissionsExt;
+                metadata.permissions().mode() as u16
+            };
+            #[cfg(not(unix))]
+            let mode = 0o644u16;
+
+            let content = fs::read(&path)
+                .map_err(|e| format!("read: {e}"))?;
+
+            entries.push((rel_path, mode, content));
+        }
+    }
+    Ok(())
 }
 
 /// Install packages. Uses parallel validation, cache (content-addressable), native registry with backend fallback.
@@ -2015,8 +2284,14 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         match try_capsule_install(Path::new("."), options.quiet) {
             Ok(true) => {
                 profiler.mark("capsule_fast_path");
-                remember_installed_packages(Path::new("node_modules"));
-                write_install_markers();
+                // nm_fresh bypass: node_modules is already up to date — skip
+                // remember_installed_packages (readdir + all package.json reads)
+                // and write_install_markers (status writes) entirely. Only run
+                // them when a real install happened.
+                if nm_fresh().is_none() {
+                    remember_installed_packages(Path::new("node_modules"));
+                    write_install_markers();
+                }
                 return Ok(());
             }
             Ok(false) => {}
@@ -2056,7 +2331,19 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     }
 
     let requested_packages: Vec<String> = if options.from_lockfile {
-        packages.iter().map(|p| (*p).to_string()).collect()
+        // Deterministic CI mode: read resolved specs directly from lockfile
+        match lockfile::read_all_resolved_specs_from_dir(Path::new(".")) {
+            Some(mut specs) if !specs.is_empty() => {
+                if !options.quiet {
+                    crate::utils::log(&format!(
+                        "Lockfile layout ({} packages)",
+                        specs.len()
+                    ));
+                }
+                specs
+            }
+            _ => packages.iter().map(|p| (*p).to_string()).collect(),
+        }
     } else if let Some(specs) = can_reuse_lockfile_for_requested(packages) {
         if !options.quiet {
             crate::utils::log(&format!(
@@ -2070,7 +2357,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         // entirely if we've resolved these exact packages before. Computes a hash of
         // sorted package specs; if ~/.jhol-cache/expansion-cache/{hash}.txt exists,
         // loads it in <1ms vs the 100-800ms expand_with_transitive_dependencies costs.
-        if let Some(cached_specs) = crate::utils::load_expansion_cache(packages) {
+        let specs = if let Some(cached_specs) = crate::utils::load_expansion_cache(packages) {
             if !options.quiet {
                 crate::utils::log(&format!(
                     "Reusing expansion cache ({} packages)",
@@ -2079,7 +2366,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
             }
             cached_specs
         } else {
-            let specs = match expand_with_transitive_dependencies(packages) {
+            let fresh = match expand_with_transitive_dependencies(packages) {
                 Ok(specs) if !specs.is_empty() => specs,
                 Ok(_) => packages.iter().map(|p| (*p).to_string()).collect(),
                 Err(err) => {
@@ -2090,10 +2377,10 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                     packages.iter().map(|p| (*p).to_string()).collect()
                 }
             };
-            // Save successful expansions to disk for O(1) repeat installs
-            let _ = crate::utils::save_expansion_cache(packages, &specs);
-            specs
-        }
+            let _ = crate::utils::save_expansion_cache(packages, &fresh);
+            fresh
+        };
+        specs
     };
 
     if options.from_lockfile {
@@ -2102,6 +2389,26 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
             let _ = crate::capsule::write_capsule_from_project(Path::new("."));
             remember_installed_packages(Path::new("node_modules"));
             return Ok(());
+        }
+    }
+
+    // JGrid Pipeline: content-addressed, clone-ready materialization.
+    // Tries L0 → L1 → L2 fallback with mmap'd zero-copy reads.
+    #[cfg(feature = "pipeline")]
+    if !options.lockfile_only && !options.no_cache {
+        match try_jgrid_install(&requested_packages, options) {
+            Ok(true) => {
+                profiler.mark("jgrid_fast_path");
+                remember_installed_packages(Path::new("node_modules"));
+                write_install_markers();
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(e) => {
+                if !options.quiet {
+                    crate::utils::log(&format!("JGrid pipeline failed: {}", e));
+                }
+            }
         }
     }
 
@@ -2310,52 +2617,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
             .iter()
             .map(|(pkg, tarball_path)| (pkg.clone(), tarball_path.clone()))
             .collect();
-        let mut install_results: Vec<(String, std::path::PathBuf, bool)> = if legacy_chunk_scheduler
-        {
-            let mut outputs = Vec::with_capacity(cache_install_inputs.len());
-            for chunk in cache_install_inputs.chunks(cache_install_conc) {
-                use std::sync::mpsc;
-                use std::thread;
-                let (tx, rx) = mpsc::channel();
-                for (pkg, tarball_path) in chunk {
-                    let pkg = pkg.clone();
-                    let tarball_path = tarball_path.clone();
-                    let cache_dir = cache_dir.clone();
-                    let node_modules = node_modules.to_path_buf();
-                    let tx = tx.clone();
-                    thread::spawn(move || {
-                        let base = base_name(&pkg).to_string();
-                        // Single-pass decode cache: extract from cached bytes
-                        let ok = try_install_bundled_from_cache(&pkg, &base, &node_modules)
-                            || {
-                            match registry::ensure_unpacked_in_store(&tarball_path, &cache_dir) {
-                                Ok(unpacked) => {
-                                    utils::link_package_from_store(
-                                        &unpacked,
-                                        &node_modules,
-                                        &base,
-                                    )
-                                    .is_ok()
-                                    || selective_extract::extract_selective(
-                                        &tarball_path,
-                                        &node_modules,
-                                        &base,
-                                    )
-                                    .is_ok()
-                                }
-                                Err(_) => false,
-                            }
-                        };
-                        let _ = tx.send((pkg, tarball_path, ok));
-                    });
-                }
-                drop(tx);
-                for result in rx {
-                    outputs.push(result);
-                }
-            }
-            outputs
-        } else {
+        let mut install_results: Vec<(String, std::path::PathBuf, bool)> = {
             let cache_dir = cache_dir.clone();
             let node_modules = node_modules.to_path_buf();
             run_worker_pool(
@@ -2364,7 +2626,6 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                 worker_pool_seq_threshold,
                 move |(pkg, tarball_path)| {
                     let base = base_name(&pkg).to_string();
-                    // Single-pass decode cache: extract from cached bytes
                     let ok = try_install_bundled_from_cache(&pkg, &base, &node_modules)
                         || {
                         match registry::ensure_unpacked_in_store(&tarball_path, &cache_dir) {
@@ -2385,16 +2646,16 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                             Err(_) => false,
                         }
                     };
+                    if ok {
+                        let _ = bin_links::link_bins_for_package(&node_modules, &base);
+                    }
                     (pkg, tarball_path, ok)
                 },
             )
         };
 
-        install_results.sort_by(|a, b| a.0.cmp(&b.0));
         for (pkg, tarball_path, ok) in install_results {
             if ok {
-                let base = base_name(&pkg).to_string();
-                let _ = bin_links::link_bins_for_package(node_modules, &base);
                 if !options.quiet {
                     utils::log(&format!("Installed {} from cache (link/copy).", pkg));
                 }
@@ -2451,6 +2712,8 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         }
         sync_hidden_lockfile();
         write_install_markers();
+        #[cfg(feature = "pipeline")]
+        post_install_jgrid_ingest();
         return Ok(());
     }
 
@@ -2494,69 +2757,30 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         }
         let dl_inputs: Vec<(String, String, Option<String>)> = work;
         let dl_concurrency = download_conc;
+        let cache_dir_dl = cache_dir.clone();
         let mut download_results: Vec<(String, Result<(String, std::path::PathBuf), String>)> =
-            if legacy_chunk_scheduler {
-                let mut outputs = Vec::with_capacity(dl_inputs.len());
-                for chunk in dl_inputs.chunks(dl_concurrency) {
-                    use std::sync::mpsc;
-                    use std::thread;
-                    let (tx, rx) = mpsc::channel();
-                    for (pkg, url, integrity) in chunk {
-                        let pkg = pkg.clone();
-                        let url = url.clone();
-                        let integrity = integrity.clone();
-                        let cache_dir = cache_dir.clone();
-                        let tx = tx.clone();
-                        thread::spawn(move || {
-                            let pkg_key = exact_version_from_spec(&pkg)
-                                .map(|v| format!("{}@{}", base_name(&pkg), v))
-                                .unwrap_or_else(|| pkg.clone());
-                            let res = registry::download_tarball_to_store_hash_only(
-                                &url,
-                                &cache_dir,
-                                &pkg_key,
-                                integrity.as_deref(),
-                            )
-                            .and_then(|hash| {
-                                let store_path =
-                                    cache_dir.join("store").join(format!("{}.tgz", hash));
-                                registry::ensure_unpacked_in_store(&store_path, &cache_dir)
-                                    .map(|unpacked| (hash, unpacked))
-                            });
-                            let _ = tx.send((pkg, res));
-                        });
-                    }
-                    drop(tx);
-                    for result in rx {
-                        outputs.push(result);
-                    }
-                }
-                outputs
-            } else {
-                let cache_dir = cache_dir.clone();
-                run_worker_pool(
-                    dl_inputs,
-                    dl_concurrency,
-                    worker_pool_seq_threshold,
-                    move |(pkg, url, integrity)| {
-                        let pkg_key = exact_version_from_spec(&pkg)
-                            .map(|v| format!("{}@{}", base_name(&pkg), v))
-                            .unwrap_or_else(|| pkg.clone());
-                        let res = registry::download_tarball_to_store_hash_only(
-                            &url,
-                            &cache_dir,
-                            &pkg_key,
-                            integrity.as_deref(),
-                        )
-                        .and_then(|hash| {
-                            let store_path = cache_dir.join("store").join(format!("{}.tgz", hash));
-                            registry::ensure_unpacked_in_store(&store_path, &cache_dir)
-                                .map(|unpacked| (hash, unpacked))
-                        });
-                        (pkg, res)
-                    },
-                )
-            };
+            run_worker_pool(
+                dl_inputs,
+                dl_concurrency,
+                worker_pool_seq_threshold,
+                move |(pkg, url, integrity)| {
+                    let pkg_key = exact_version_from_spec(&pkg)
+                        .map(|v| format!("{}@{}", base_name(&pkg), v))
+                        .unwrap_or_else(|| pkg.clone());
+                    let res = registry::download_tarball_to_store_hash_only(
+                        &url,
+                        &cache_dir_dl,
+                        &pkg_key,
+                        integrity.as_deref(),
+                    )
+                    .and_then(|hash| {
+                        let store_path = cache_dir_dl.join("store").join(format!("{}.tgz", hash));
+                        registry::ensure_unpacked_in_store(&store_path, &cache_dir_dl)
+                            .map(|unpacked| (hash, unpacked))
+                    });
+                    (pkg, res)
+                },
+            );
         download_results.sort_by(|a, b| a.0.cmp(&b.0));
         for (pkg, res) in download_results {
             match res {
@@ -2628,43 +2852,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
             let mut download_results: Vec<(
                 String,
                 Result<(String, String, std::path::PathBuf), String>,
-            )> = if legacy_chunk_scheduler {
-                let mut outputs = Vec::with_capacity(dl_inputs.len());
-                for chunk in dl_inputs.chunks(dl_concurrency) {
-                    use std::sync::mpsc;
-                    use std::thread;
-                    let (tx, rx) = mpsc::channel();
-                    for item in chunk {
-                        let pkg = item.pkg.clone();
-                        let url = item.url.clone();
-                        let integrity = item.integrity.clone();
-                        let version = item.version.clone();
-                        let cache_dir = cache_dir.clone();
-                        let tx = tx.clone();
-                        thread::spawn(move || {
-                            let pkg_key = format!("{}@{}", base_name(&pkg), version);
-                            let res = registry::download_tarball_to_store_hash_only(
-                                &url,
-                                &cache_dir,
-                                &pkg_key,
-                                integrity.as_deref(),
-                            )
-                            .and_then(|hash| {
-                                let store_path =
-                                    cache_dir.join("store").join(format!("{}.tgz", hash));
-                                registry::ensure_unpacked_in_store(&store_path, &cache_dir)
-                                    .map(|unpacked| (hash, version, unpacked))
-                            });
-                            let _ = tx.send((pkg, res));
-                        });
-                    }
-                    drop(tx);
-                    for result in rx {
-                        outputs.push(result);
-                    }
-                }
-                outputs
-            } else {
+            )> = {
                 let cache_dir = cache_dir.clone();
                 run_worker_pool(
                     dl_inputs,
@@ -2715,7 +2903,12 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                             npm_fallback.push(pkg);
                         }
                     }
-                    Err(_) => npm_fallback.push(pkg),
+                Err(e) => {
+                    if std::env::var("JHOL_DEBUG_DOMAINS").is_ok() {
+                        eprintln!("[DL-ERR] {} : {}", pkg, e);
+                    }
+                    npm_fallback.push(pkg)
+                }
                 }
             }
 
@@ -2760,6 +2953,8 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         }
         sync_hidden_lockfile();
         write_install_markers();
+        #[cfg(feature = "pipeline")]
+        post_install_jgrid_ingest();
         return Ok(());
     }
 
@@ -2820,6 +3015,9 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                 sync_hidden_lockfile();
                 let _ = crate::capsule::write_capsule_from_project(Path::new("."));
                 remember_installed_packages(node_modules);
+                write_install_markers();
+                #[cfg(feature = "pipeline")]
+                post_install_jgrid_ingest();
                 return Ok(());
             }
             Err(e) => {

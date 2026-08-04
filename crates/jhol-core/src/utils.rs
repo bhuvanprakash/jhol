@@ -256,7 +256,7 @@ pub fn record_fallback_reason(reason: &str, packages: &[String]) {
         }
     }
 
-    if let Ok(s) = serde_json::to_string_pretty(&root) {
+    if let Ok(s) = serde_json::to_string(&root) {
         let _ = fs::write(path, s);
     }
 }
@@ -309,16 +309,29 @@ pub fn read_store_index() -> HashMap<String, String> {
     read_store_index_from_disk()
 }
 
+/// Access the store index with a read-only closure, avoiding a full clone of the HashMap.
+/// Prefer this over `read_store_index()` when you only need to query the index (get, contains_key, etc.).
+pub fn with_store_index<F, R>(f: F) -> R
+where
+    F: FnOnce(&HashMap<String, String>) -> R,
+{
+    let cache = store_index_cache();
+    if let Ok(guard) = cache.read() {
+        f(&guard)
+    } else {
+        f(&read_store_index_from_disk())
+    }
+}
+
 pub fn write_store_index(map: &HashMap<String, String>) -> Result<()> {
-    // Write through: update both cache and disk
     if let Ok(mut cache) = store_index_cache().write() {
         *cache = map.clone();
     }
     let path = store_index_path();
-    let s = serde_json::to_string_pretty(map).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    fs::write(path, s)?;
+    let s = serde_json::to_string(map)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    fs::write(&path, &s)?;
 
-    // Also write to JAGR-S store for zero-lookup on next startup
     if let Ok(map_read) = store_index_cache().read() {
         for (key, hash) in map_read.iter() {
             if let Some(at) = key.find('@') {
@@ -327,23 +340,8 @@ pub fn write_store_index(map: &HashMap<String, String>) -> Result<()> {
                 let _ = crate::jagrs::store_alias(name, version, hash);
             }
         }
-        // Flush is deferred — a background thread or next startup will sync.
-        // Removing hot-path fsync which can hang under mmap contention.
     }
 
-    use crate::file_lock::{AtomicWrite, FileLock};
-
-    let path = store_index_path();
-    let _lock = FileLock::lock(&path).map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to lock store index: {}", e),
-        )
-    })?;
-    let s = serde_json::to_string_pretty(map)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    AtomicWrite::write_to_file(&path, s.as_bytes())
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     Ok(())
 }
 
@@ -486,29 +484,30 @@ pub fn get_cached_tarball(package: &str) -> Option<PathBuf> {
     let base_name = package.split('@').next().unwrap_or(package);
     let versioned_key = format_cache_name(package);
 
-    // 1) Content-addressable store
-    let index = read_store_index();
-    let key = if package.contains('@') {
-        package.to_string()
-    } else {
-        // Try to find any version for this package in index
-        for (k, hash) in &index {
-            if k.starts_with(&format!("{}@", base_name)) {
+    // 1) Content-addressable store (no clone: uses with_store_index for read-only access)
+    let found = with_store_index(|index| -> Option<PathBuf> {
+        if package.contains('@') {
+            let key = package.to_string();
+            if let Some(hash) = index.get(&key) {
                 let store_file = store_dir().join(format!("{}.tgz", hash));
                 if store_file.exists() {
                     return Some(store_file);
                 }
             }
-        }
-        String::new()
-    };
-    if !key.is_empty() {
-        if let Some(hash) = index.get(&key) {
-            let store_file = store_dir().join(format!("{}.tgz", hash));
-            if store_file.exists() {
-                return Some(store_file);
+        } else {
+            for (k, hash) in index {
+                if k.starts_with(&format!("{}@", base_name)) {
+                    let store_file = store_dir().join(format!("{}.tgz", hash));
+                    if store_file.exists() {
+                        return Some(store_file);
+                    }
+                }
             }
         }
+        None
+    });
+    if let Some(f) = found {
+        return Some(f);
     }
 
     // 2) Legacy: exact version in cache root
@@ -600,7 +599,7 @@ pub fn cache_package_tarball(base_name: &str, version: &str) -> Result<PathBuf> 
 
 /// List all cached package tarballs (pkg@version or legacy base names)
 pub fn list_cached_packages() -> Result<Vec<String>> {
-    let mut names: Vec<String> = read_store_index().into_keys().collect();
+    let mut names: Vec<String> = with_store_index(|idx| idx.keys().cloned().collect());
     let cache_dir = cache_dir_path();
     if cache_dir.exists() {
         for e in fs::read_dir(&cache_dir)? {
@@ -767,7 +766,7 @@ pub fn cache_export(dir: &Path) -> Result<usize> {
         .map(|(spec, file)| serde_json::json!({ "spec": spec, "file": file }))
         .collect();
     let manifest_path = dir.join(CACHE_MANIFEST_NAME);
-    let s = serde_json::to_string_pretty(&manifest_json)
+    let s = serde_json::to_string(&manifest_json)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     fs::write(manifest_path, s)?;
     if let Ok(sig) = manifest_signature(&serde_json::to_string(&manifest_json).unwrap_or_default())
