@@ -181,10 +181,16 @@ pub fn try_capsule_execute(project_dir: &Path, quiet: bool) -> Result<bool, Stri
                             }
                             return Ok(false);
                         }
-                        if let Ok(pkg_json) = std::fs::read_to_string(pkg_dir.join("package.json")) {
-                            if let Ok(pkg_val) = serde_json::from_str::<serde_json::Value>(&pkg_json) {
-                                if let Some(installed_ver) = pkg_val.get("version").and_then(|v| v.as_str()) {
-                                    if !crate::registry::version_satisfies(spec_str, installed_ver) {
+                        if let Ok(pkg_json) = std::fs::read_to_string(pkg_dir.join("package.json"))
+                        {
+                            if let Ok(pkg_val) =
+                                serde_json::from_str::<serde_json::Value>(&pkg_json)
+                            {
+                                if let Some(installed_ver) =
+                                    pkg_val.get("version").and_then(|v| v.as_str())
+                                {
+                                    if !crate::registry::version_satisfies(spec_str, installed_ver)
+                                    {
                                         if !quiet {
                                             utils::log(&format!(
                                                 "Spectral verify FAIL: {}@{} does not satisfy {}",
@@ -210,12 +216,7 @@ pub fn add_conflict_risk(existing_deps: &HashMap<String, String>, adding: &[Stri
     let mut risk = 0.0f64;
     for pkg in adding {
         let base = pkg.split('@').next().unwrap_or(pkg);
-        risk = risk.max(
-            gate.conflict_risk
-                .get(base)
-                .copied()
-                .unwrap_or(0.2),
-        );
+        risk = risk.max(gate.conflict_risk.get(base).copied().unwrap_or(0.2));
         // New package always some risk
         risk = risk.max(0.1);
     }
@@ -227,10 +228,7 @@ pub fn add_conflict_risk(existing_deps: &HashMap<String, String>, adding: &[Stri
 }
 
 /// Store a single resolved package in GRM + lattice memory.
-pub fn remember_package(
-    pkg: &crate::lockfile_write::ResolvedPackage,
-    name: &str,
-) {
+pub fn remember_package(pkg: &crate::lockfile_write::ResolvedPackage, name: &str) {
     let spec = format!("{}@{}", name, pkg.version);
     let _ = lock_free_grm::store_global(ResolutionRecord {
         package_spec: spec,
@@ -283,11 +281,18 @@ pub fn full_spectral_classify(
         let n = deps.len() as f64;
         let pi = std::f64::consts::PI;
         // Lower bound estimate: δ_min * π² / n³
-        let max_deg = deps.values().map(|s| {
-            if s.starts_with('^') || s.starts_with('~') { 1u32 }
-            else if s == "*" || s == "latest" { 0 }
-            else { 2 }
-        }).sum::<u32>() as f64;
+        let max_deg = deps
+            .values()
+            .map(|s| {
+                if s.starts_with('^') || s.starts_with('~') {
+                    1u32
+                } else if s == "*" || s == "latest" {
+                    0
+                } else {
+                    2
+                }
+            })
+            .sum::<u32>() as f64;
         max_deg * pi * pi / n.powi(3)
     } else {
         0.0
@@ -353,33 +358,48 @@ pub fn frontier_add(packages: &[String], quiet: bool) -> Result<(), String> {
             pkg.splitn(2, '@').nth(1).unwrap_or("latest")
         } else if pkg.starts_with('@') {
             let idx = pkg.rfind('@').unwrap_or(0);
-            if idx > 0 { &pkg[idx + 1..] } else { "latest" }
+            if idx > 0 {
+                &pkg[idx + 1..]
+            } else {
+                "latest"
+            }
         } else {
             "latest"
         };
 
         // Check zero-copy metadata first
-        let (version, tarball_url, integrity) =
-            if let Some(meta) = crate::zero_copy_metadata::MmapMetadataStore::lookup_packument(name) {
-                if let Some(v) = resolve_version_from_meta(spec, &meta) {
-                    let url = if meta.dist.tarball_url.is_empty() {
-                        lockfile_tarball_url(name, &v)
-                    } else {
-                        meta.dist.tarball_url.clone()
-                    };
-                    (v, url, meta.dist.integrity)
+        let (version, tarball_url, integrity) = if let Some(meta) =
+            crate::zero_copy_metadata::MmapMetadataStore::lookup_packument(name)
+        {
+            if let Some(v) = resolve_version_from_meta(spec, &meta) {
+                let url = if meta.dist.tarball_url.is_empty() {
+                    lockfile_tarball_url(name, &v)
                 } else {
-                    return Err(format!("package {}@{} not found in zero-copy store", name, spec));
-                }
+                    meta.dist.tarball_url.clone()
+                };
+                (v, url, meta.dist.integrity)
             } else {
-                return Err(format!("package {} not cached; run full install first", name));
-            };
+                return Err(format!(
+                    "package {}@{} not found in zero-copy store",
+                    name, spec
+                ));
+            }
+        } else {
+            return Err(format!(
+                "package {} not cached; run full install first",
+                name
+            ));
+        };
 
         // Download tarball to JAGR-S store
         let pkg_key = format!("{}@{}", name, version);
         let hash = crate::registry::download_tarball_to_store_hash_only(
-            &tarball_url, &cache_dir, &pkg_key, integrity.as_deref(),
-        ).map_err(|e| format!("download failed for {}: {}", pkg, e))?;
+            &tarball_url,
+            &cache_dir,
+            &pkg_key,
+            integrity.as_deref(),
+        )
+        .map_err(|e| format!("download failed for {}: {}", pkg, e))?;
 
         // Full extract from memory via JAGR-S (no selective-untar)
         let store_path = cache_dir.join("store").join(format!("{}.tgz", hash));
@@ -440,7 +460,10 @@ pub fn frontier_add(packages: &[String], quiet: bool) -> Result<(), String> {
 }
 
 fn lockfile_tarball_url(name: &str, version: &str) -> String {
-    format!("https://registry.npmjs.org/{}/-/{}-{}.tgz", name, name, version)
+    format!(
+        "https://registry.npmjs.org/{}/-/{}-{}.tgz",
+        name, name, version
+    )
 }
 
 /// Query GRM for a root package.
@@ -469,22 +492,24 @@ pub fn project_package(
     } else {
         "xx"
     };
-    let unpacked = cache_dir
-        .join("store_unpacked")
-        .join(shard)
-        .join(hash_hex);
+    let unpacked = cache_dir.join("store_unpacked").join(shard).join(hash_hex);
 
-    if !unpacked.exists() {
+    if !crate::registry::store_extract_complete(&unpacked) {
+        crate::registry::remove_store_dir_pub(&unpacked);
         // Try JAGR-S bytes → full extract
         if let Some(bytes) = crate::jagrs::get_tarball(hash_hex) {
             std::fs::create_dir_all(&unpacked).map_err(|e| e.to_string())?;
             registry::extract_tarball_bytes_public(&bytes, &unpacked)?;
+            crate::registry::mark_store_extract_complete_pub(&unpacked);
         } else {
             let tgz = cache_dir.join("store").join(format!("{}.tgz", hash_hex));
             if tgz.exists() {
                 let _ = registry::ensure_unpacked_in_store(&tgz, cache_dir)?;
             } else {
-                return Err(format!("missing content for {}@{} ({})", name, version, hash_hex));
+                return Err(format!(
+                    "missing content for {}@{} ({})",
+                    name, version, hash_hex
+                ));
             }
         }
     }
@@ -544,22 +569,27 @@ fn package_dir(node_modules: &Path, name: &str) -> PathBuf {
 pub fn predictive_prefetch(context_pkgs: &[String], limit: usize) {
     let preds = crate::resolution_mirror::global_mirror().predict(context_pkgs, limit);
     // Spectral priority: order predictions by conflict risk, prefetch fragile first
-    let mut scored: Vec<_> = preds.iter().map(|p| {
-        let gate = spectral_gate_from_deps(&std::collections::HashMap::from_iter(
-            std::iter::once((p.package.clone(), "*".to_string()))
-        ));
-        let priority = match gate.stability {
-            StabilityClass::Fragile => 3u8,
-            StabilityClass::Marginal => 2,
-            _ => 1,
-        };
-        (priority, p)
-    }).collect();
+    let mut scored: Vec<_> = preds
+        .iter()
+        .map(|p| {
+            let gate = spectral_gate_from_deps(&std::collections::HashMap::from_iter(
+                std::iter::once((p.package.clone(), "*".to_string())),
+            ));
+            let priority = match gate.stability {
+                StabilityClass::Fragile => 3u8,
+                StabilityClass::Marginal => 2,
+                _ => 1,
+            };
+            (priority, p)
+        })
+        .collect();
     scored.sort_by(|a, b| b.0.cmp(&a.0)); // descending priority
     for (_priority, p) in scored {
         crate::daemon_cache::DaemonCache::prefetch(&p.package, true);
         // Store in zero-copy metadata mmap for instant packument lookup
-        if let Some(meta) = crate::zero_copy_metadata::MmapMetadataStore::lookup_packument(&p.package) {
+        if let Some(meta) =
+            crate::zero_copy_metadata::MmapMetadataStore::lookup_packument(&p.package)
+        {
             // Already cached — no-op
             let _ = meta;
         }
@@ -607,9 +637,7 @@ fn madvise_willneed(path: &Path) {
                 let len = meta.len() as usize;
                 if len > 0 {
                     // mmap the file and advise WILLNEED
-                    if let Ok(mmap) = unsafe {
-                        memmap2::Mmap::map(&file)
-                    } {
+                    if let Ok(mmap) = unsafe { memmap2::Mmap::map(&file) } {
                         let _ = mmap.advise(memmap2::Advice::WillNeed);
                     }
                 }
@@ -617,7 +645,9 @@ fn madvise_willneed(path: &Path) {
         }
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    { let _ = path; }
+    {
+        let _ = path;
+    }
 }
 
 /// GRM + lattice gate: check if all root deps are already resolved by cross-project memory.

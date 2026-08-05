@@ -75,7 +75,8 @@ fn transitive_memo_cache() -> &'static Mutex<HashMap<String, Vec<String>>> {
 fn trans_expansion_cache_dir() -> Result<std::path::PathBuf, String> {
     let cache_dir = crate::utils::get_cache_dir();
     let dir = std::path::PathBuf::from(cache_dir).join("expansion_cache");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create expansion cache dir: {}", e))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create expansion cache dir: {}", e))?;
     Ok(dir)
 }
 
@@ -299,8 +300,12 @@ impl ColdResolveStrategy for ManifestThenPackumentStrategy {
             let mut zero_copy_hits: Vec<(String, ResolvedFetch)> = Vec::new();
             let mut still_needed: Vec<(String, String, String)> = Vec::new();
             for (pkg, base, version_req) in &pending_packument {
-                if let Some(meta) = crate::zero_copy_metadata::MmapMetadataStore::lookup_packument(base) {
-                    if let Some(version) = crate::soul_path::resolve_version_from_meta(version_req, &meta) {
+                if let Some(meta) =
+                    crate::zero_copy_metadata::MmapMetadataStore::lookup_packument(base)
+                {
+                    if let Some(version) =
+                        crate::soul_path::resolve_version_from_meta(version_req, &meta)
+                    {
                         let version_str = version.to_string();
                         let url = if meta.dist.tarball_url.is_empty() {
                             lockfile::tarball_url_from_registry(base, &version_str)
@@ -308,12 +313,15 @@ impl ColdResolveStrategy for ManifestThenPackumentStrategy {
                             meta.dist.tarball_url.clone()
                         };
                         crate::lattice_cache::remember(base, version_req, &version_str);
-                        zero_copy_hits.push((base.clone(), ResolvedFetch {
-                            pkg: pkg.clone(),
-                            url,
-                            integrity: meta.dist.integrity.clone(),
-                            version: version_str,
-                        }));
+                        zero_copy_hits.push((
+                            base.clone(),
+                            ResolvedFetch {
+                                pkg: pkg.clone(),
+                                url,
+                                integrity: meta.dist.integrity.clone(),
+                                version: version_str,
+                            },
+                        ));
                         continue;
                     }
                 }
@@ -576,6 +584,7 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
     let mut constraints: HashMap<String, Vec<String>> = HashMap::new();
     let mut required: HashMap<String, bool> = HashMap::new();
     let mut selected: HashMap<String, String> = HashMap::new();
+    let mut expanded_deps: HashSet<(String, String)> = HashSet::new();
     let mut metadata_cache: HashMap<String, serde_json::Value> = HashMap::new();
     let mut queue: VecDeque<(Arc<str>, usize)> = VecDeque::new();
     let mut deferred_packages: HashSet<String> = HashSet::new();
@@ -593,13 +602,14 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
         let base_names: Vec<String> = packages.iter().map(|p| base_name(p).to_string()).collect();
         if base_names.len() >= 2 {
             let (prev, curr) = (&base_names[0], &base_names[1]);
-            let predicted: Vec<String> = crate::second_order_markov::predict_with_context(prev, curr, 8);
+            let predicted: Vec<String> =
+                crate::second_order_markov::predict_with_context(prev, curr, 8);
             if !predicted.is_empty() {
                 let predicted_clone = predicted.clone();
                 crate::pool::parallel_map(
                     predicted_clone,
-                    8,     // concurrency
-                    4,     // sequential threshold
+                    8, // concurrency
+                    4, // sequential threshold
                     |pkg| {
                         let _ = registry::fetch_metadata(&pkg);
                         pkg
@@ -611,69 +621,37 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
 
     // First pass: try binary index and cache, collect deferred packages
     // N3: queue uses Arc<str> to avoid String clones on pop/requeue.
-    while let Some((name_arc, depth)) = queue.pop_front() {
-        // Convert Arc<str> to String once for all map operations in this iteration
-        let name: String = name_arc.to_string();
-        let Some(pkg_constraints) = constraints.get(&name).cloned() else {
-            continue;
-        };
+    // Deferred packages are re-enqueued after the parallel metadata fetch so
+    // their dependencies are expanded too (cold installs must produce the full
+    // transitive tree, not just the direct set).
+    loop {
+        let mut deferred_round: VecDeque<(Arc<str>, usize)> = VecDeque::new();
+        while let Some((name_arc, depth)) = queue.pop_front() {
+            // Convert Arc<str> to String once for all map operations in this iteration
+            let name: String = name_arc.to_string();
+            let Some(pkg_constraints) = constraints.get(&name).cloned() else {
+                continue;
+            };
 
-        if !metadata_cache.contains_key(&name) {
-            if let Some(binary_version) =
-                registry::best_binary_version_matching(&name, &pkg_constraints)
-            {
-                let changed = selected
-                    .get(&name)
-                    .map(|existing| existing != &binary_version)
-                    .unwrap_or(true);
-
-                if changed {
-                    selected.insert(name.clone(), binary_version.clone());
-                    if depth < max_depth {
-                        if let Some(required_deps) =
-                            registry::binary_package_dependencies(&name, &binary_version)
-                        {
-                            for (dep_name, dep_spec) in required_deps {
-                                let dn: Arc<str> = dep_name.into();
-                                let dn_str = dn.to_string();
-                                let dep_constraints =
-                                    constraints.entry(dn_str).or_default();
-                                if !dep_constraints.iter().any(|s| s == &dep_spec) {
-                                    dep_constraints.push(dep_spec);
-                                    required.insert(dn.to_string(), true);
-                                    queue.push_back((dn, depth + 1));
-                                }
-                            }
-                            continue;
-                        }
-                    } else {
-                        continue;
-                    }
-                } else {
-                    continue;
-                }
-            }
-
-            // Lattice cache: skip metadata fetch if we've resolved this before
-            if let Some(c) = pkg_constraints.first() {
-                if let Some(lattice_version) =
-                    crate::lattice_cache::lookup_lattice(&name, c)
+            if !metadata_cache.contains_key(&name) {
+                if let Some(binary_version) =
+                    registry::best_binary_version_matching(&name, &pkg_constraints)
                 {
                     let changed = selected
                         .get(&name)
-                        .map(|existing| existing != &lattice_version)
+                        .map(|existing| existing != &binary_version)
                         .unwrap_or(true);
+
                     if changed {
-                        selected.insert(name.clone(), lattice_version.clone());
+                        selected.insert(name.clone(), binary_version.clone());
                         if depth < max_depth {
                             if let Some(required_deps) =
-                                registry::binary_package_dependencies(&name, &lattice_version)
+                                registry::binary_package_dependencies(&name, &binary_version)
                             {
                                 for (dep_name, dep_spec) in required_deps {
                                     let dn: Arc<str> = dep_name.into();
                                     let dn_str = dn.to_string();
-                                    let dep_constraints =
-                                        constraints.entry(dn_str).or_default();
+                                    let dep_constraints = constraints.entry(dn_str).or_default();
                                     if !dep_constraints.iter().any(|s| s == &dep_spec) {
                                         dep_constraints.push(dep_spec);
                                         required.insert(dn.to_string(), true);
@@ -689,145 +667,194 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
                         continue;
                     }
                 }
-            }
 
-            // Check transitive cache
-            let snapshot_hit = if transitive_cache_enabled() {
-                transitive_metadata_snapshot()
-                    .lock()
-                    .ok()
-                    .and_then(|cache| cache.get(&name).cloned())
-            } else {
-                None
-            };
-
-            if let Some(hit) = snapshot_hit {
-                metadata_cache.insert(name.clone(), hit);
-            } else {
-                deferred_packages.insert(name.clone());
-                continue;
-            }
-        }
-
-        // Package is in metadata_cache, process it
-        let metadata = metadata_cache
-            .get(&name)
-            .ok_or_else(|| format!("Missing metadata for {}", name))?;
-
-        let version =
-            resolve_version_for_constraints(metadata, &pkg_constraints).ok_or_else(|| {
-                format!(
-                    "Dependency conflict for {} (constraints: {})",
-                    name,
-                    pkg_constraints.join(", ")
-                )
-            })?;
-
-        let is_required = *required.get(&name).unwrap_or(&true);
-        if !version_supported_on_current_platform(metadata, &version) {
-            if is_required {
-                return Err(format!(
-                    "Package {}@{} is incompatible with current platform (os/cpu)",
-                    name, version
-                ));
-            }
-            continue;
-        }
-
-        let changed = selected
-            .get(&name)
-            .map(|existing| existing != &version)
-            .unwrap_or(true);
-
-        if !changed {
-            continue;
-        }
-
-        selected.insert(name.clone(), version.clone());
-
-        if depth < max_depth {
-            let required_deps = registry::get_version_required_dependencies(metadata, &version);
-            for (dep_name, dep_spec) in required_deps {
-                let dn: Arc<str> = dep_name.into();
-                let dn_str = dn.to_string();
-                let dep_constraints = constraints.entry(dn_str.clone()).or_default();
-                if !dep_constraints.iter().any(|s| s == &dep_spec) {
-                    dep_constraints.push(dep_spec);
-                    required.insert(dn_str, true);
-                    if !metadata_cache.contains_key(&dn.to_string())
-                        && registry::best_binary_version_matching(&dn, &[]).is_none()
-                    {
-                        deferred_packages.insert(dn.to_string());
-                    }
-                    queue.push_back((dn, depth + 1));
-                }
-            }
-
-            let optional_deps = registry::get_version_optional_dependencies(metadata, &version);
-            for (dep_name, dep_spec) in optional_deps {
-                let dn: Arc<str> = dep_name.into();
-                let dn_str = dn.to_string();
-                let dep_constraints = constraints.entry(dn_str.clone()).or_default();
-                if !dep_constraints.iter().any(|s| s == &dep_spec) {
-                    dep_constraints.push(dep_spec);
-                    required.entry(dn_str.clone()).or_insert(false);
-                    if !metadata_cache.contains_key(&dn.to_string())
-                        && registry::best_binary_version_matching(&dn, &[]).is_none()
-                    {
-                        deferred_packages.insert(dn_str);
-                    }
-                    queue.push_back((dn, depth + 1));
-                }
-            }
-        }
-    }
-
-    // Parallel fetch all deferred packages at once
-    if !deferred_packages.is_empty() {
-        let mut still_deferred: Vec<String> = Vec::new();
-        for pkg_name in deferred_packages {
-            let constraint_for_pkg = constraints
-                .get(&pkg_name)
-                .and_then(|vec| vec.first().map(|s| s.as_str()))
-                .unwrap_or("");
-            if let Some(synth) =
-                registry::synthesize_packument_from_bundled_index(&pkg_name, constraint_for_pkg)
-            {
-                if transitive_cache_enabled() {
-                    if let Ok(mut cache) = transitive_metadata_snapshot().lock() {
-                        cache.insert(pkg_name.to_string(), synth.clone());
-                    }
-                }
-                metadata_cache.insert(pkg_name, synth);
-                continue;
-            }
-            still_deferred.push(pkg_name);
-        }
-
-        if !still_deferred.is_empty() {
-            let cache_arc =
-                std::sync::Arc::new(std::sync::Mutex::new(metadata_cache.clone()));
-            let fetch_results = registry::parallel_fetch_metadata(&still_deferred, &cache_arc);
-
-            for (pkg_name, result) in fetch_results {
-                match result {
-                    Ok(meta) => {
-                        metadata_cache.insert(pkg_name.clone(), meta.clone());
-                        if transitive_cache_enabled() {
-                            if let Ok(mut cache) = transitive_metadata_snapshot().lock() {
-                                cache.insert(pkg_name, meta);
+                // Lattice cache: skip metadata fetch if we've resolved this before
+                if let Some(c) = pkg_constraints.first() {
+                    if let Some(lattice_version) = crate::lattice_cache::lookup_lattice(&name, c) {
+                        let changed = selected
+                            .get(&name)
+                            .map(|existing| existing != &lattice_version)
+                            .unwrap_or(true);
+                        if changed {
+                            selected.insert(name.clone(), lattice_version.clone());
+                            if depth < max_depth {
+                                if let Some(required_deps) =
+                                    registry::binary_package_dependencies(&name, &lattice_version)
+                                {
+                                    for (dep_name, dep_spec) in required_deps {
+                                        let dn: Arc<str> = dep_name.into();
+                                        let dn_str = dn.to_string();
+                                        let dep_constraints =
+                                            constraints.entry(dn_str).or_default();
+                                        if !dep_constraints.iter().any(|s| s == &dep_spec) {
+                                            dep_constraints.push(dep_spec);
+                                            required.insert(dn.to_string(), true);
+                                            queue.push_back((dn, depth + 1));
+                                        }
+                                    }
+                                    continue;
+                                }
+                            } else {
+                                continue;
                             }
+                        } else {
+                            continue;
                         }
                     }
-                    Err(e) => {
-                        return Err(format!(
-                            "Failed to fetch metadata for {}: {}",
-                            pkg_name, e
-                        ));
+                }
+
+                // Check transitive cache
+                let snapshot_hit = if transitive_cache_enabled() {
+                    transitive_metadata_snapshot()
+                        .lock()
+                        .ok()
+                        .and_then(|cache| cache.get(&name).cloned())
+                } else {
+                    None
+                };
+
+                if let Some(hit) = snapshot_hit {
+                    metadata_cache.insert(name.clone(), hit);
+                } else {
+                    deferred_packages.insert(name.clone());
+                    deferred_round.push_back((name_arc.clone(), depth));
+                    continue;
+                }
+            }
+
+            // Package is in metadata_cache, process it
+            let metadata = metadata_cache
+                .get(&name)
+                .ok_or_else(|| format!("Missing metadata for {}", name))?;
+
+            let version =
+                resolve_version_for_constraints(metadata, &pkg_constraints).ok_or_else(|| {
+                    format!(
+                        "Dependency conflict for {} (constraints: {})",
+                        name,
+                        pkg_constraints.join(", ")
+                    )
+                })?;
+
+            let is_required = *required.get(&name).unwrap_or(&true);
+            if !version_supported_on_current_platform(metadata, &version) {
+                if is_required {
+                    return Err(format!(
+                        "Package {}@{} is incompatible with current platform (os/cpu)",
+                        name, version
+                    ));
+                }
+                continue;
+            }
+
+            let changed = selected
+                .get(&name)
+                .map(|existing| existing != &version)
+                .unwrap_or(true);
+
+            if changed {
+                selected.insert(name.clone(), version.clone());
+            }
+
+            // Expand dependencies even when the version already selected: the
+            // lattice/binary fast-path above pre-selects a version WITHOUT
+            // traversing its dependencies, so an unchanged version must still have
+            // its dep tree expanded once metadata becomes available.
+            if depth < max_depth && expanded_deps.insert((name.clone(), version.clone())) {
+                let required_deps = registry::get_version_required_dependencies(metadata, &version);
+                for (dep_name, dep_spec) in required_deps {
+                    let dn: Arc<str> = dep_name.into();
+                    let dn_str = dn.to_string();
+                    let dep_constraints = constraints.entry(dn_str.clone()).or_default();
+                    if !dep_constraints.iter().any(|s| s == &dep_spec) {
+                        dep_constraints.push(dep_spec);
+                        required.insert(dn_str, true);
+                        if !metadata_cache.contains_key(&dn.to_string())
+                            && registry::best_binary_version_matching(&dn, &[]).is_none()
+                        {
+                            deferred_packages.insert(dn.to_string());
+                        }
+                        queue.push_back((dn, depth + 1));
+                    }
+                }
+
+                let optional_deps = registry::get_version_optional_dependencies(metadata, &version);
+                for (dep_name, dep_spec) in optional_deps {
+                    let dn: Arc<str> = dep_name.into();
+                    let dn_str = dn.to_string();
+                    let dep_constraints = constraints.entry(dn_str.clone()).or_default();
+                    if !dep_constraints.iter().any(|s| s == &dep_spec) {
+                        dep_constraints.push(dep_spec);
+                        required.entry(dn_str.clone()).or_insert(false);
+                        if !metadata_cache.contains_key(&dn.to_string())
+                            && registry::best_binary_version_matching(&dn, &[]).is_none()
+                        {
+                            deferred_packages.insert(dn_str);
+                        }
+                        queue.push_back((dn, depth + 1));
                     }
                 }
             }
         }
+
+        // Parallel fetch all deferred packages at once
+        if !deferred_packages.is_empty() {
+            let mut still_deferred: Vec<String> = Vec::new();
+            for pkg_name in &deferred_packages {
+                let constraint_for_pkg = constraints
+                    .get(pkg_name.as_str())
+                    .and_then(|vec| vec.first().map(|s| s.as_str()))
+                    .unwrap_or("");
+                if let Some(synth) =
+                    registry::synthesize_packument_from_bundled_index(pkg_name, constraint_for_pkg)
+                {
+                    if transitive_cache_enabled() {
+                        if let Ok(mut cache) = transitive_metadata_snapshot().lock() {
+                            cache.insert(pkg_name.to_string(), synth.clone());
+                        }
+                    }
+                    metadata_cache.insert(pkg_name.clone(), synth);
+                    continue;
+                }
+                still_deferred.push(pkg_name.clone());
+            }
+
+            if !still_deferred.is_empty() {
+                let cache_arc = std::sync::Arc::new(std::sync::Mutex::new(metadata_cache.clone()));
+                let fetch_results = registry::parallel_fetch_metadata(&still_deferred, &cache_arc);
+
+                for (pkg_name, result) in fetch_results {
+                    match result {
+                        Ok(meta) => {
+                            metadata_cache.insert(pkg_name.clone(), meta.clone());
+                            if transitive_cache_enabled() {
+                                if let Ok(mut cache) = transitive_metadata_snapshot().lock() {
+                                    cache.insert(pkg_name, meta);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            return Err(format!(
+                                "Failed to fetch metadata for {}: {}",
+                                pkg_name, e
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Re-enqueue deferred packages so their dependencies are expanded now that
+        // their metadata is available. Repeat the expansion/fetch cycle until the
+        // transitive tree is fully discovered.
+        if !deferred_round.is_empty() {
+            while let Some(item) = deferred_round.pop_front() {
+                queue.push_back(item);
+            }
+            deferred_packages.clear();
+            continue;
+        }
+        break;
     }
 
     // Second pass: now process all packages with metadata available
@@ -1261,7 +1288,7 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
     }
 
     let mut install_entry = |entry: &crate::lockfile::LockfileInstallEntry,
-                              tarball_path: &Path|
+                             tarball_path: &Path|
      -> Result<(), String> {
         let install_path = Path::new(&entry.install_path);
         let spec = format!("{}@{}", entry.package, entry.version);
@@ -1425,7 +1452,7 @@ impl Default for InstallOptions {
         Self {
             no_cache: false,
             quiet: false,
-            backend: Backend::Npm,  // lazy: avoid bun_available() subprocess at Default
+            backend: Backend::Npm, // lazy: avoid bun_available() subprocess at Default
             lockfile_only: false,
             offline: false,
             strict_lockfile: false,
@@ -1619,8 +1646,7 @@ fn dssc_first_install(
     };
 
     // Look up DSSC certs for all root packages
-    let (all_stable, quick_gap) =
-        crate::jagr::resolution_differential::dssc_all_stable(&deps);
+    let (all_stable, quick_gap) = crate::jagr::resolution_differential::dssc_all_stable(&deps);
 
     if !all_stable {
         return Ok(false);
@@ -1663,9 +1689,7 @@ fn dssc_first_install(
         };
         let spec_str = format!("{}@{}", base, spec);
 
-        if let Some(tarball) =
-            get_cached_tarball_fast(&spec_str, &cache_dir, &store_index)
-        {
+        if let Some(tarball) = get_cached_tarball_fast(&spec_str, &cache_dir, &store_index) {
             cache_entries.push((spec_str, tarball));
         } else if options.offline {
             all_cached = false;
@@ -1701,7 +1725,11 @@ fn dssc_first_install(
             let parts: Vec<&str> = name.split('/').collect();
             let scope_dir = node_modules.join(parts[0]);
             std::fs::create_dir_all(&scope_dir).map_err(|e| {
-                crate::error_handling::utils::io_error("dssc_first_install", Some(&scope_dir.display().to_string()), e)
+                crate::error_handling::utils::io_error(
+                    "dssc_first_install",
+                    Some(&scope_dir.display().to_string()),
+                    e,
+                )
             })?;
             scope_dir.join(&parts[1..].join("/"))
         } else {
@@ -1710,13 +1738,15 @@ fn dssc_first_install(
 
         if !pkg_dir.exists() {
             let tarball_path = std::path::PathBuf::from(tarball);
-            selective_extract::extract_selective(&tarball_path, node_modules, name).map_err(|e| {
-                crate::error_handling::utils::application_error(
-                    "dssc_first_install",
-                    Some(&spec),
-                    &e,
-                )
-            })?;
+            selective_extract::extract_selective(&tarball_path, node_modules, name).map_err(
+                |e| {
+                    crate::error_handling::utils::application_error(
+                        "dssc_first_install",
+                        Some(&spec),
+                        &e,
+                    )
+                },
+            )?;
         }
     }
 
@@ -1733,7 +1763,8 @@ fn kcc3_cascade(
     profiler: &mut InstallProfiler,
 ) -> Result<bool, JholError> {
     let cap_path = crate::capsule::capsule_path(Path::new("."));
-    let lockfile_present = Path::new("package-lock.json").exists() || Path::new("bun.lock").exists();
+    let lockfile_present =
+        Path::new("package-lock.json").exists() || Path::new("bun.lock").exists();
     if !cap_path.exists() && !lockfile_present {
         return Ok(false);
     }
@@ -1816,8 +1847,7 @@ fn kcc3_cascade(
     }
 
     // Path B: spectral gate — skip full pipeline if graph is stable
-    let (can_skip, predicted_beta1) =
-        crate::jagr::resolution_differential::classify_gate(&deps);
+    let (can_skip, predicted_beta1) = crate::jagr::resolution_differential::classify_gate(&deps);
     if can_skip && predicted_beta1 == 0 && !options.quiet {
         crate::utils::log("KCC³ Path B: spectral gate — graph stable, skipping full pipeline");
     }
@@ -1994,9 +2024,8 @@ fn write_install_markers() {
     // Compute hash directly — never depend on nm_fresh() (which requires the
     // fingerprint to ALREADY exist). On first install there's no fingerprint,
     // so nm_fresh() returns None and the marker would never be written.
-    let hash = nm_fresh().or_else(|| {
-        crate::capsule::compute_manifest_hash(std::path::Path::new(".")).ok()
-    });
+    let hash = nm_fresh()
+        .or_else(|| crate::capsule::compute_manifest_hash(std::path::Path::new(".")).ok());
     if let Some(h) = hash {
         let nm = std::path::Path::new("node_modules");
         if nm.exists() {
@@ -2008,7 +2037,8 @@ fn write_install_markers() {
     }
 
     let cap_path = crate::capsule::capsule_path(std::path::Path::new("."));
-    let current_hash = hash.or_else(|| crate::capsule::compute_manifest_hash(std::path::Path::new(".")).ok());
+    let current_hash =
+        hash.or_else(|| crate::capsule::compute_manifest_hash(std::path::Path::new(".")).ok());
     let needs_write = current_hash.map_or(true, |h| {
         crate::capsule::read_capsule(&cap_path)
             .ok()
@@ -2038,9 +2068,11 @@ fn write_prebuilt_cache() {
     // sha256 of package.json — matches `shasum -a 256 package.json | cut -d' ' -f1`
     use sha2::{Digest, Sha256};
     let hash = hex::encode(Sha256::digest(&pj_bytes));
-    let prebuilt_dir = std::env::var("JHOL_PREBUILT_DIR")
-        .unwrap_or_else(|_| "/tmp/jhol-prebuilt".to_string());
-    let dest = std::path::Path::new(&prebuilt_dir).join(&hash).join("node_modules");
+    let prebuilt_dir =
+        std::env::var("JHOL_PREBUILT_DIR").unwrap_or_else(|_| "/tmp/jhol-prebuilt".to_string());
+    let dest = std::path::Path::new(&prebuilt_dir)
+        .join(&hash)
+        .join("node_modules");
     // Only copy if not already cached (avoid redundant I/O on every install)
     if dest.exists() {
         return;
@@ -2077,14 +2109,22 @@ fn try_capsule_install(project_dir: &Path, quiet: bool) -> Result<bool, JholErro
         Err(_) => return Ok(false),
     };
     // Reuse cached hash or compute if nm_fresh missed (mtime cache miss)
-    if crate::capsule::compute_manifest_hash(project_dir).ok().or_else(|| nm_fresh()).is_none() {
+    if crate::capsule::compute_manifest_hash(project_dir)
+        .ok()
+        .or_else(|| nm_fresh())
+        .is_none()
+    {
         return Ok(false);
     }
     if !quiet {
         crate::utils::log("Capsule hit — installing from capsule");
     }
     crate::capsule::install_from_capsule(&view, project_dir).map_err(|e| {
-        crate::error_handling::utils::application_error("capsule_install", Some("install_failed"), &e)
+        crate::error_handling::utils::application_error(
+            "capsule_install",
+            Some("install_failed"),
+            &e,
+        )
     })?;
     // Markers (write_status, store_last_hash, fingerprint) are written by the
     // caller (install_package) via write_install_markers() — single write.
@@ -2113,28 +2153,30 @@ fn try_jgrid_install(packages: &[String], _options: &InstallOptions) -> Result<b
         crate::error_handling::utils::io_error("create_grid_dir", pipeline_dir.to_str(), e)
     })?;
 
-    let pipeline = JGridPipeline::new(&pipeline_dir).map_err(|e| {
-        crate::error_handling::utils::application_error("jgrid_init", None, &e)
-    })?;
+    let pipeline = JGridPipeline::new(&pipeline_dir)
+        .map_err(|e| crate::error_handling::utils::application_error("jgrid_init", None, &e))?;
 
     // Build resolved package list — packages are already in name@version format
-    let resolved: Vec<ResolvedPackage> = packages.iter().map(|s| {
-        if let Some((name, version)) = s.split_once('@') {
-            ResolvedPackage {
-                name: name.to_string(),
-                version: version.to_string(),
+    let resolved: Vec<ResolvedPackage> = packages
+        .iter()
+        .map(|s| {
+            if let Some((name, version)) = s.split_once('@') {
+                ResolvedPackage {
+                    name: name.to_string(),
+                    version: version.to_string(),
+                }
+            } else {
+                ResolvedPackage {
+                    name: s.clone(),
+                    version: "latest".into(),
+                }
             }
-        } else {
-            ResolvedPackage {
-                name: s.clone(),
-                version: "latest".into(),
-            }
-        }
-    }).collect();
+        })
+        .collect();
 
-    pipeline.materialize(&resolved, nm).map_err(|e| {
-        crate::error_handling::utils::application_error("jgrid_materialize", None, &e)
-    })
+    pipeline
+        .materialize(&resolved, nm)
+        .map_err(|e| crate::error_handling::utils::application_error("jgrid_materialize", None, &e))
 }
 
 /// After a successful traditional install, background-ingest installed packages into JGrid
@@ -2150,20 +2192,31 @@ fn post_install_jgrid_ingest() {
         return;
     }
 
-    let Ok(packages) = read_all_installed_packages(nm) else { return };
+    let Ok(packages) = read_all_installed_packages(nm) else {
+        return;
+    };
     if packages.is_empty() {
         return;
     }
 
     let pipeline_dir = Path::new(&crate::utils::get_cache_dir()).join("grid");
-    let Ok(mut pipeline) = JGridPipeline::new(&pipeline_dir) else { return };
+    let Ok(mut pipeline) = JGridPipeline::new(&pipeline_dir) else {
+        return;
+    };
 
     let mut ingested = 0u32;
     for (name, info) in &packages {
         // Check if already in JGrid
-        let resolved = [ResolvedPackage { name: name.clone(), version: info.version.clone() }];
-        if pipeline.has_bundle(&resolved) || pipeline.manifest_count() > 0
-            && pipeline.store().find_manifest(name, &info.version).is_some()
+        let resolved = [ResolvedPackage {
+            name: name.clone(),
+            version: info.version.clone(),
+        }];
+        if pipeline.has_bundle(&resolved)
+            || pipeline.manifest_count() > 0
+                && pipeline
+                    .store()
+                    .find_manifest(name, &info.version)
+                    .is_some()
         {
             continue;
         }
@@ -2173,12 +2226,15 @@ fn post_install_jgrid_ingest() {
         if !pkg_dir.is_dir() {
             continue;
         }
-        let Ok(file_entries) = read_package_files_for_jgrid(&pkg_dir) else { continue };
+        let Ok(file_entries) = read_package_files_for_jgrid(&pkg_dir) else {
+            continue;
+        };
         if file_entries.is_empty() {
             continue;
         }
 
-        let entries_refs: Vec<(&str, u16, &[u8])> = file_entries.iter()
+        let entries_refs: Vec<(&str, u16, &[u8])> = file_entries
+            .iter()
             .map(|(p, m, c)| (p.as_str(), *m, c.as_slice()))
             .collect();
 
@@ -2186,7 +2242,10 @@ fn post_install_jgrid_ingest() {
             Ok(_) => ingested += 1,
             Err(e) => {
                 if std::env::var("JHOL_VERBOSE").is_ok() {
-                    crate::utils::log(&format!("JGrid ingest failed for {}@{}: {}", name, info.version, e));
+                    crate::utils::log(&format!(
+                        "JGrid ingest failed for {}@{}: {}",
+                        name, info.version, e
+                    ));
                 }
             }
         }
@@ -2194,7 +2253,9 @@ fn post_install_jgrid_ingest() {
 
     if ingested > 0 {
         let elapsed = start.elapsed();
-        crate::utils::log(&format!("JGrid: ingested {ingested} packages in {elapsed:?}"));
+        crate::utils::log(&format!(
+            "JGrid: ingested {ingested} packages in {elapsed:?}"
+        ));
     }
 }
 
@@ -2222,13 +2283,13 @@ fn collect_files_recursive(
         if file_type.is_dir() {
             collect_files_recursive(base_dir, &path, entries, depth + 1)?;
         } else if file_type.is_file() {
-            let rel_path = path.strip_prefix(base_dir)
+            let rel_path = path
+                .strip_prefix(base_dir)
                 .map_err(|_| "strip prefix".to_string())?
                 .to_string_lossy()
                 .to_string();
 
-            let metadata = fs::metadata(&path)
-                .map_err(|e| format!("metadata: {e}"))?;
+            let metadata = fs::metadata(&path).map_err(|e| format!("metadata: {e}"))?;
 
             #[cfg(unix)]
             let mode = {
@@ -2238,8 +2299,7 @@ fn collect_files_recursive(
             #[cfg(not(unix))]
             let mode = 0o644u16;
 
-            let content = fs::read(&path)
-                .map_err(|e| format!("read: {e}"))?;
+            let content = fs::read(&path).map_err(|e| format!("read: {e}"))?;
 
             entries.push((rel_path, mode, content));
         }
@@ -2254,7 +2314,10 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     // Lane 0: zero-work warm bypass via project-local status file.
     // main.rs already checks the global status file before clap (no current_dir());
     // this guard covers daemon/direct calls that are already chdir'd.
-    if packages.is_empty() && !options.lockfile_only && crate::daemon_cache::can_skip_install_for_dir(std::path::Path::new(".")) {
+    if packages.is_empty()
+        && !options.lockfile_only
+        && crate::daemon_cache::can_skip_install_for_dir(std::path::Path::new("."))
+    {
         profiler.mark("lane0_warm_bypass");
         return Ok(());
     }
@@ -2267,15 +2330,14 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     let download_conc = download_concurrency();
     let cache_install_conc = cache_install_concurrency().max(1);
     // Warm cache install concurrency defaults higher (was 1)
-    let cache_install_conc = if cache_install_conc == 1
-        && std::env::var("JHOL_CACHE_INSTALL_CONCURRENCY").is_err()
-    {
-        std::thread::available_parallelism()
-            .map(|n| n.get().clamp(4, 32))
-            .unwrap_or(8)
-    } else {
-        cache_install_conc
-    };
+    let cache_install_conc =
+        if cache_install_conc == 1 && std::env::var("JHOL_CACHE_INSTALL_CONCURRENCY").is_err() {
+            std::thread::available_parallelism()
+                .map(|n| n.get().clamp(4, 32))
+                .unwrap_or(8)
+        } else {
+            cache_install_conc
+        };
     let worker_pool_seq_threshold = worker_pool_sequential_threshold();
     let legacy_chunk_scheduler = use_legacy_chunk_scheduler();
 
@@ -2335,10 +2397,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         match lockfile::read_all_resolved_specs_from_dir(Path::new(".")) {
             Some(mut specs) if !specs.is_empty() => {
                 if !options.quiet {
-                    crate::utils::log(&format!(
-                        "Lockfile layout ({} packages)",
-                        specs.len()
-                    ));
+                    crate::utils::log(&format!("Lockfile layout ({} packages)", specs.len()));
                 }
                 specs
             }
@@ -2388,6 +2447,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
             sync_hidden_lockfile();
             let _ = crate::capsule::write_capsule_from_project(Path::new("."));
             remember_installed_packages(Path::new("node_modules"));
+            crate::utils::relink_store_dependencies(Path::new("node_modules"));
             return Ok(());
         }
     }
@@ -2431,27 +2491,28 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
             if let Ok(view) = crate::capsule::read_capsule(&cap_path) {
                 if view.package_count() > 0 {
                     // Group specs by install_order
-                    let mut wave_specs: std::collections::BTreeMap<u16, Vec<String>> = std::collections::BTreeMap::new();
+                    let mut wave_specs: std::collections::BTreeMap<u16, Vec<String>> =
+                        std::collections::BTreeMap::new();
                     for i in 0..view.package_count() {
                         let e = view.entry(i);
                         let spec = format!("{}@{}", view.entry_name(e), view.entry_version(e));
                         wave_specs.entry(e.install_order).or_default().push(spec);
                     }
                     // Check which waves are fully installed
-                    let mut skip_packages: std::collections::HashSet<String> = std::collections::HashSet::new();
+                    let mut skip_packages: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
                     for (_order, specs) in &wave_specs {
                         let all_installed = specs.iter().all(|s| {
                             let name = s.split('@').next().unwrap_or(s);
-                            let pkg_dir = Path::new("node_modules").join(
-                                if name.starts_with('@') {
+                            let pkg_dir =
+                                Path::new("node_modules").join(if name.starts_with('@') {
                                     let parts: Vec<&str> = name.split('/').collect();
                                     let scope = parts[0];
                                     let rest: Vec<&str> = parts[1..].to_vec();
                                     format!("{}/{}", scope, rest.join("/"))
                                 } else {
                                     name.to_string()
-                                }
-                            );
+                                });
                             pkg_dir.join("package.json").exists()
                         });
                         if all_installed {
@@ -2481,7 +2542,8 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     // by expansion cache) and the store index is populated, resolve them in a tight
     // HashMap::get + stat check without per-package normalization/fallback overhead.
     // If all are present, skip the full sequential classification loop entirely.
-    let batch_ok = !options.no_cache && !store_index.is_empty()
+    let batch_ok = !options.no_cache
+        && !store_index.is_empty()
         && requested_packages.iter().all(|p| {
             p.rfind('@').map_or(false, |idx| {
                 idx > 0 && p[idx + 1..].starts_with(|c: char| c.is_ascii_digit())
@@ -2513,57 +2575,57 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     }
 
     if to_install_from_cache.is_empty() {
-    for package in &requested_packages {
-        let base = base_name(package);
+        for package in &requested_packages {
+            let base = base_name(package);
 
-        // Topological wave skip: if this entire wave is already installed, skip
-        if wave_skip.contains(package) || wave_skip.contains(base) {
-            if !options.quiet {
-                utils::log(&format!("Skipping {} (wave already installed)", package));
-            }
-            continue;
-        }
-
-        // Soul Path predictive prefetch (once per batch, not O(n²) disk reads)
-        if !options.offline && !options.no_cache && seen_packages.len() == 2 {
-            let history: Vec<String> = seen_packages.iter().cloned().collect();
-            crate::soul_path::predictive_prefetch(&history, 3);
-        }
-
-        if seen_packages.contains(base) {
-            if !options.quiet {
-                crate::utils::log(&format!(
-                    "Warning: Multiple versions of {} requested.",
-                    base
-                ));
-            }
-        }
-        seen_packages.insert(base.to_string());
-        if !options.quiet {
-            utils::log(&format!("Installing package: {}", package));
-        }
-
-        if !options.no_cache {
-            if let Some(tarball) =
-                get_cached_tarball_fast(package, &cache_dir_for_lookup, &store_index)
-            {
+            // Topological wave skip: if this entire wave is already installed, skip
+            if wave_skip.contains(package) || wave_skip.contains(base) {
                 if !options.quiet {
-                    crate::utils::log(&format!("Installing {} from cache...", package));
+                    utils::log(&format!("Skipping {} (wave already installed)", package));
                 }
-                to_install_from_cache.push((package.to_string(), tarball));
                 continue;
             }
-        }
-        if options.offline {
-            missing_for_offline.push(package.to_string());
-            continue;
-        }
-        to_fetch.push(package.to_string());
-    }
 
-    // Offline mode must be fully cache-backed; never schedule network fetches.
-    if options.offline && !missing_for_offline.is_empty() {
-        return Err(crate::error_handling::utils::cache_error(
+            // Soul Path predictive prefetch (once per batch, not O(n²) disk reads)
+            if !options.offline && !options.no_cache && seen_packages.len() == 2 {
+                let history: Vec<String> = seen_packages.iter().cloned().collect();
+                crate::soul_path::predictive_prefetch(&history, 3);
+            }
+
+            if seen_packages.contains(base) {
+                if !options.quiet {
+                    crate::utils::log(&format!(
+                        "Warning: Multiple versions of {} requested.",
+                        base
+                    ));
+                }
+            }
+            seen_packages.insert(base.to_string());
+            if !options.quiet {
+                utils::log(&format!("Installing package: {}", package));
+            }
+
+            if !options.no_cache {
+                if let Some(tarball) =
+                    get_cached_tarball_fast(package, &cache_dir_for_lookup, &store_index)
+                {
+                    if !options.quiet {
+                        crate::utils::log(&format!("Installing {} from cache...", package));
+                    }
+                    to_install_from_cache.push((package.to_string(), tarball));
+                    continue;
+                }
+            }
+            if options.offline {
+                missing_for_offline.push(package.to_string());
+                continue;
+            }
+            to_fetch.push(package.to_string());
+        }
+
+        // Offline mode must be fully cache-backed; never schedule network fetches.
+        if options.offline && !missing_for_offline.is_empty() {
+            return Err(crate::error_handling::utils::cache_error(
             "offline_install",
             None,
             &format!(
@@ -2571,12 +2633,12 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                 missing_for_offline.join(", ")
             ),
         ));
-    }
+        }
 
-    if !options.offline && !missing_for_offline.is_empty() {
-        to_fetch.extend(missing_for_offline.iter().cloned());
-    }
-    profiler.mark("classify_cache_vs_fetch");
+        if !options.offline && !missing_for_offline.is_empty() {
+            to_fetch.extend(missing_for_offline.iter().cloned());
+        }
+        profiler.mark("classify_cache_vs_fetch");
     }
 
     // Skip npm show when we trust the lockfile or frozen (zero packument)
@@ -2626,22 +2688,17 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                 worker_pool_seq_threshold,
                 move |(pkg, tarball_path)| {
                     let base = base_name(&pkg).to_string();
-                    let ok = try_install_bundled_from_cache(&pkg, &base, &node_modules)
-                        || {
+                    let ok = try_install_bundled_from_cache(&pkg, &base, &node_modules) || {
                         match registry::ensure_unpacked_in_store(&tarball_path, &cache_dir) {
                             Ok(unpacked) => {
-                                utils::link_package_from_store(
-                                    &unpacked,
-                                    &node_modules,
-                                    &base,
-                                )
-                                .is_ok()
-                                || selective_extract::extract_selective(
-                                    &tarball_path,
-                                    &node_modules,
-                                    &base,
-                                )
-                                .is_ok()
+                                utils::link_package_from_store(&unpacked, &node_modules, &base)
+                                    .is_ok()
+                                    || selective_extract::extract_selective(
+                                        &tarball_path,
+                                        &node_modules,
+                                        &base,
+                                    )
+                                    .is_ok()
                             }
                             Err(_) => false,
                         }
@@ -2702,12 +2759,16 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         }
     }
     profiler.mark("install_from_cache");
+    crate::utils::relink_store_dependencies(Path::new("node_modules"));
 
     if to_fetch.is_empty() {
         if Path::new("package.json").exists() {
             if let Ok(packages) = read_all_installed_packages(Path::new("node_modules")) {
                 let _ = crate::lockfile_write::write_package_lock(
-                    Path::new("package-lock.json"), Path::new("package.json"), &packages);
+                    Path::new("package-lock.json"),
+                    Path::new("package.json"),
+                    &packages,
+                );
             }
         }
         sync_hidden_lockfile();
@@ -2903,12 +2964,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                             npm_fallback.push(pkg);
                         }
                     }
-                Err(e) => {
-                    if std::env::var("JHOL_DEBUG_DOMAINS").is_ok() {
-                        eprintln!("[DL-ERR] {} : {}", pkg, e);
-                    }
-                    npm_fallback.push(pkg)
-                }
+                    Err(_) => npm_fallback.push(pkg),
                 }
             }
 
@@ -2926,6 +2982,8 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
             profiler.mark("download_unpack_install_cold");
         }
     }
+
+    crate::utils::relink_store_dependencies(Path::new("node_modules"));
 
     if npm_fallback.is_empty() {
         let lock_path = Path::new("package-lock.json");

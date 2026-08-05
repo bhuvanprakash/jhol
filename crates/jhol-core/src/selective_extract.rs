@@ -97,7 +97,10 @@ pub fn project_from_store(
     sheaf: FeatureSheaf,
 ) -> Result<usize, String> {
     if !store_unpacked.exists() {
-        return Err(format!("store unpacked missing: {}", store_unpacked.display()));
+        return Err(format!(
+            "store unpacked missing: {}",
+            store_unpacked.display()
+        ));
     }
     // KPSL default: whole-dir link for Full and Default (warm path speed).
     // Minimal still filters files for size-sensitive installs.
@@ -119,7 +122,14 @@ pub fn project_from_store(
         }
     }
 
-    walk_project(store_unpacked, store_unpacked, package_root, sheaf, &entry_extra, &mut count)?;
+    walk_project(
+        store_unpacked,
+        store_unpacked,
+        package_root,
+        sheaf,
+        &entry_extra,
+        &mut count,
+    )?;
     Ok(count)
 }
 
@@ -216,7 +226,7 @@ pub fn extract_with_sheaf(
                 .join("store_unpacked")
                 .join(shard)
                 .join(hash);
-            if unpacked.exists() {
+            if unpacked.exists() && crate::registry::store_extract_complete(&unpacked) {
                 return project_from_store(&unpacked, package_root, sheaf);
             }
         }
@@ -227,9 +237,11 @@ pub fn extract_with_sheaf(
     let mut archive = Archive::new(decoder);
     fs::create_dir_all(package_root).map_err(|e| format!("Failed to create dest dir: {}", e))?;
 
-    // Buffer entries so we can discover package.json entry points first.
-    let mut buffered: Vec<(String, Vec<u8>, bool)> = Vec::new();
+    // Stream entries: buffer only before package.json is discovered.
+    let mut pre_buffer: Vec<(String, Vec<u8>, bool)> = Vec::new();
     let mut entry_extra: HashSet<String> = HashSet::new();
+    let mut seen_package_json = false;
+    let mut extracted_count = 0usize;
 
     for entry in archive
         .entries()
@@ -254,12 +266,45 @@ pub fn extract_with_sheaf(
             if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&data) {
                 collect_entry_paths(&v, &mut entry_extra);
             }
+            seen_package_json = true;
+            // Flush pre-buffer now that we know entry_extra
+            for (rp, d, id) in pre_buffer.drain(..) {
+                if sheaf != FeatureSheaf::Full {
+                    if should_skip_noise(&rp) && !should_keep_file(&rp, sheaf, &entry_extra) {
+                        continue;
+                    }
+                    if !should_keep_file(&rp, sheaf, &entry_extra) {
+                        continue;
+                    }
+                }
+                let dest_path = package_root.join(&rp);
+                if id {
+                    fs::create_dir_all(&dest_path)
+                        .map_err(|e| format!("Failed to create dir: {}", e))?;
+                } else {
+                    if let Some(parent) = dest_path.parent() {
+                        fs::create_dir_all(parent)
+                            .map_err(|e| format!("Failed to create parent: {}", e))?;
+                    }
+                    fs::write(&dest_path, &d)
+                        .map_err(|e| format!("Failed to unpack file: {}", e))?;
+                    extracted_count += 1;
+                }
+            }
+            // Write package.json itself
+            let dest_path = package_root.join(&rel_path);
+            if let Some(parent) = dest_path.parent() {
+                fs::create_dir_all(parent).ok();
+            }
+            fs::write(&dest_path, &data).ok();
+            extracted_count += 1;
+            continue;
         }
-        buffered.push((rel_path, data, is_dir));
-    }
-
-    let mut extracted_count = 0usize;
-    for (rel_path, data, is_dir) in buffered {
+        if !seen_package_json {
+            pre_buffer.push((rel_path, data, is_dir));
+            continue;
+        }
+        // Stream process: we already know entry_extra
         if sheaf != FeatureSheaf::Full {
             if should_skip_noise(&rel_path) && !should_keep_file(&rel_path, sheaf, &entry_extra) {
                 continue;
@@ -273,9 +318,31 @@ pub fn extract_with_sheaf(
             fs::create_dir_all(&dest_path).map_err(|e| format!("Failed to create dir: {}", e))?;
         } else {
             if let Some(parent) = dest_path.parent() {
-                fs::create_dir_all(parent).map_err(|e| format!("Failed to create parent: {}", e))?;
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create parent: {}", e))?;
             }
             fs::write(&dest_path, &data).map_err(|e| format!("Failed to unpack file: {}", e))?;
+            extracted_count += 1;
+        }
+    }
+    // Flush any remaining pre-buffer entries if package.json was never found
+    for (rel_path, data, is_dir) in pre_buffer {
+        if sheaf != FeatureSheaf::Full {
+            if should_skip_noise(&rel_path) && !should_keep_file(&rel_path, sheaf, &entry_extra) {
+                continue;
+            }
+            if !should_keep_file(&rel_path, sheaf, &entry_extra) {
+                continue;
+            }
+        }
+        let dest_path = package_root.join(&rel_path);
+        if is_dir {
+            fs::create_dir_all(&dest_path).ok();
+        } else {
+            if let Some(parent) = dest_path.parent() {
+                fs::create_dir_all(parent).ok();
+            }
+            fs::write(&dest_path, &data).ok();
             extracted_count += 1;
         }
     }
@@ -336,21 +403,21 @@ fn should_skip_noise(path: &str) -> bool {
     let path_lower = path.to_lowercase().replace('\\', "/");
     for pattern in SKIP_NOISE {
         if pattern.ends_with('/') {
-            if path_lower.starts_with(pattern)
-                || path_lower.contains(&format!("/{}", pattern))
-            {
+            if path_lower.starts_with(pattern) || path_lower.contains(&format!("/{}", pattern)) {
                 return true;
             }
-        } else if path_lower == *pattern
-            || path_lower.ends_with(&format!("/{}", pattern))
-        {
+        } else if path_lower == *pattern || path_lower.ends_with(&format!("/{}", pattern)) {
             return true;
         }
     }
     // Drop pure markdown except LICENSE* already handled in keep.
     if path_lower.ends_with(".md") || path_lower.ends_with(".markdown") {
         let base = path_lower.rsplit('/').next().unwrap_or(&path_lower);
-        if !(base.starts_with("license") || base.starts_with("licence") || base.starts_with("notice") || base.starts_with("copying")) {
+        if !(base.starts_with("license")
+            || base.starts_with("licence")
+            || base.starts_with("notice")
+            || base.starts_with("copying"))
+        {
             return true;
         }
     }
@@ -367,7 +434,9 @@ fn should_keep_file(path: &str, sheaf: FeatureSheaf, entry_extra: &HashSet<Strin
     // Declared entry points always.
     if entry_extra.iter().any(|e| {
         let e = e.to_lowercase();
-        path_lower == e || path_lower.ends_with(&format!("/{}", e)) || path_lower.starts_with(&format!("{}/", e.trim_end_matches('/')))
+        path_lower == e
+            || path_lower.ends_with(&format!("/{}", e))
+            || path_lower.starts_with(&format!("{}/", e.trim_end_matches('/')))
     }) {
         return true;
     }
@@ -375,7 +444,12 @@ fn should_keep_file(path: &str, sheaf: FeatureSheaf, entry_extra: &HashSet<Strin
     // legal
     let base = path_lower.rsplit('/').next().unwrap_or(&path_lower);
     for p in LEGAL_TYPES_CORE {
-        if base == *p || base.starts_with("license") || base.starts_with("licence") || base.starts_with("copying") || base.starts_with("notice") {
+        if base == *p
+            || base.starts_with("license")
+            || base.starts_with("licence")
+            || base.starts_with("copying")
+            || base.starts_with("notice")
+        {
             return true;
         }
     }
@@ -556,9 +630,20 @@ mod tests {
     fn test_keep_license_and_dts() {
         let empty = HashSet::new();
         assert!(should_keep_file("LICENSE", FeatureSheaf::Default, &empty));
-        assert!(should_keep_file("index.d.ts", FeatureSheaf::Default, &empty));
-        assert!(should_keep_file("dist/index.js", FeatureSheaf::Default, &empty));
-        assert!(!should_keep_file("test/foo.js", FeatureSheaf::Default, &empty) || should_skip_noise("test/foo.js"));
+        assert!(should_keep_file(
+            "index.d.ts",
+            FeatureSheaf::Default,
+            &empty
+        ));
+        assert!(should_keep_file(
+            "dist/index.js",
+            FeatureSheaf::Default,
+            &empty
+        ));
+        assert!(
+            !should_keep_file("test/foo.js", FeatureSheaf::Default, &empty)
+                || should_skip_noise("test/foo.js")
+        );
         assert!(should_skip_noise("test/foo.js"));
         assert!(should_keep_file("README.md", FeatureSheaf::Full, &empty));
     }
@@ -567,7 +652,11 @@ mod tests {
     fn test_entry_extra() {
         let mut extra = HashSet::new();
         extra.insert("build/main.js".into());
-        assert!(should_keep_file("build/main.js", FeatureSheaf::Minimal, &extra));
+        assert!(should_keep_file(
+            "build/main.js",
+            FeatureSheaf::Minimal,
+            &extra
+        ));
     }
 
     #[test]

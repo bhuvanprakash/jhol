@@ -15,8 +15,11 @@ pub fn ensure_dir(path: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
-pub fn atomic_write_json<T: serde::Serialize>(path: &std::path::Path, data: &T) -> Result<(), String> {
-    let content = serde_json::to_string_pretty(data).map_err(|e| e.to_string())?;
+pub fn atomic_write_json<T: serde::Serialize>(
+    path: &std::path::Path,
+    data: &T,
+) -> Result<(), String> {
+    let content = serde_json::to_string(data).map_err(|e| e.to_string())?;
     std::fs::write(path, content).map_err(|e| e.to_string())?;
     Ok(())
 }

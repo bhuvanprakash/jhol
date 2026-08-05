@@ -11,7 +11,49 @@ use std::io::BufReader;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
+
+/// Cache for parsed semver requirements — avoids re-parsing common specs
+/// like "^1.0.0", ">=2.0.0", "*", etc. during resolution.
+pub(crate) fn cached_version_req(spec: &str) -> Option<VersionReq> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<VersionReq>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().ok()?;
+    if let Some(cached) = guard.get(spec) {
+        return cached.clone();
+    }
+    let parsed = VersionReq::parse(spec).ok();
+    guard.insert(spec.to_string(), parsed.clone());
+    parsed
+}
+
+/// Global packument read-cache for O(1) lookup without holding a lock.
+/// Updated by fetch_metadata and fetch_metadata_parallel after each network fetch.
+/// This is the fast path: predictor prefetches -> cache populated -> warm installs hit this.
+fn packument_read_cache() -> &'static RwLock<HashMap<String, serde_json::Value>> {
+    static CACHE: OnceLock<RwLock<HashMap<String, serde_json::Value>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::with_capacity(500)))
+}
+
+/// Check if a packument is already in the read cache (O(1), non-blocking read).
+pub fn in_packument_cache(package: &str) -> bool {
+    packument_read_cache()
+        .read()
+        .ok()
+        .map_or(false, |g| g.contains_key(package))
+}
+
+/// Look up a packument from the read cache without blocking.
+pub fn get_cached_packument(package: &str) -> Option<serde_json::Value> {
+    packument_read_cache().read().ok()?.get(package).cloned()
+}
+
+/// Insert a packument into the read cache (called after fetch_metadata returns).
+pub fn cache_packument(package: &str, meta: &serde_json::Value) {
+    if let Ok(mut guard) = packument_read_cache().write() {
+        guard.insert(package.to_string(), meta.clone());
+    }
+}
 
 /// Extract package name without version specifier.
 /// Scoped `@scope/pkg@1.0.0` remains `@scope/pkg`.
@@ -50,34 +92,34 @@ fn packument_cache_dir() -> PathBuf {
 }
 
 fn packument_cache_key(package: &str, abbreviated: bool) -> String {
-    // Use a more efficient cache key that's shorter but still unique
-    let mut hasher = Sha256::new();
-    hasher.update(package.as_bytes());
-    hasher.update(if abbreviated { b"abbr" } else { b"full" });
-    // Take only first 16 bytes (32 hex chars) for faster string operations
-    let hash_bytes = hasher.finalize();
-    hash_bytes[..16]
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<String>()
+    let h = xxhash_rust::xxh3::xxh3_64(package.as_bytes()).wrapping_add(if abbreviated {
+        1u64
+    } else {
+        0u64
+    });
+    format!("{:016x}", h)
 }
 
-fn packument_cache_paths(package: &str, abbreviated: bool) -> (PathBuf, PathBuf) {
+fn packument_cache_path(package: &str, abbreviated: bool) -> PathBuf {
     let key = packument_cache_key(package, abbreviated);
-    let dir = packument_cache_dir();
-    (
-        dir.join(format!("{}.json", key)),
-        dir.join(format!("{}.etag", key)),
-    )
+    packument_cache_dir().join(format!("{}.json", key))
 }
 
 fn read_packument_cache(package: &str, abbreviated: bool) -> (Option<Vec<u8>>, Option<String>) {
-    let (body_path, etag_path) = packument_cache_paths(package, abbreviated);
-    let body = std::fs::read(&body_path).ok();
-    let etag = std::fs::read_to_string(&etag_path)
-        .ok()
-        .map(|s| s.trim().to_string());
-    (body, etag)
+    let body_path = packument_cache_path(package, abbreviated);
+    let raw = match std::fs::read(&body_path) {
+        Ok(d) => d,
+        Err(_) => return (None, None),
+    };
+    // Single-file format: optional etag on first line, rest is body.
+    // If no newline, entire file is the body with no etag.
+    if let Some(pos) = raw.iter().position(|&b| b == b'\n') {
+        let etag = String::from_utf8_lossy(&raw[..pos]).trim().to_string();
+        let body = raw[pos + 1..].to_vec();
+        (Some(body), Some(etag))
+    } else {
+        (Some(raw), None)
+    }
 }
 
 fn write_packument_cache(
@@ -86,14 +128,17 @@ fn write_packument_cache(
     body: &[u8],
     etag: Option<&str>,
 ) -> Result<(), String> {
-    let (body_path, etag_path) = packument_cache_paths(package, abbreviated);
+    let body_path = packument_cache_path(package, abbreviated);
     if let Some(parent) = body_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    std::fs::write(&body_path, body).map_err(|e| e.to_string())?;
+    let mut out = Vec::with_capacity(body.len() + 128);
     if let Some(etag) = etag {
-        std::fs::write(&etag_path, etag).map_err(|e| e.to_string())?;
+        out.extend_from_slice(etag.as_bytes());
+        out.push(b'\n');
     }
+    out.extend_from_slice(body);
+    std::fs::write(&body_path, out).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -255,32 +300,54 @@ pub(crate) fn synthesize_packument_from_bundled_index(
     let entry = resolve_from_index(package, constraint)?;
 
     let mut versions = serde_json::Map::new();
-    let mut version_obj = serde_json::Map::new();
-    version_obj.insert("name".to_string(), serde_json::Value::String(entry.name.clone()));
-    version_obj.insert(
-        "version".to_string(),
-        serde_json::Value::String(entry.version.clone()),
-    );
-    version_obj.insert(
-        "dependencies".to_string(),
-        serde_json::to_value(&entry.dependencies).unwrap_or(serde_json::json!({})),
-    );
-    version_obj.insert(
-        "engines".to_string(),
-        serde_json::json!({"node": ">=10"}),
-    );
-    let mut dist = serde_json::Map::new();
-    dist.insert(
-        "tarball".to_string(),
-        serde_json::Value::String(entry.tarball_url.clone()),
-    );
-    dist.insert(
-        "integrity".to_string(),
-        serde_json::Value::String(entry.integrity.clone()),
-    );
-    version_obj.insert("dist".to_string(), serde_json::Value::Object(dist));
+    let mut saw_satisfying = false;
+    for ver in &entry.versions {
+        let mut version_obj = serde_json::Map::new();
+        version_obj.insert(
+            "name".to_string(),
+            serde_json::Value::String(entry.name.clone()),
+        );
+        version_obj.insert(
+            "version".to_string(),
+            serde_json::Value::String(ver.clone()),
+        );
+        // Dependencies are only known for the latest bundled version. For other
+        // bundled versions we cannot know their real deps from the index, so we
+        // leave them empty — those versions are only selectable when explicitly
+        // requested and their transitive deps come from a full network packument.
+        if *ver == entry.version {
+            version_obj.insert(
+                "dependencies".to_string(),
+                serde_json::to_value(&entry.dependencies).unwrap_or(serde_json::json!({})),
+            );
+        }
+        version_obj.insert("engines".to_string(), serde_json::json!({"node": ">=10"}));
+        let mut dist = serde_json::Map::new();
+        dist.insert(
+            "tarball".to_string(),
+            serde_json::Value::String(entry.tarball_url.clone()),
+        );
+        dist.insert(
+            "integrity".to_string(),
+            serde_json::Value::String(entry.integrity.clone()),
+        );
+        version_obj.insert("dist".to_string(), serde_json::Value::Object(dist));
 
-    versions.insert(entry.version.clone(), serde_json::Value::Object(version_obj));
+        if crate::registry::version_satisfies(constraint, ver) {
+            saw_satisfying = true;
+        }
+
+        versions.insert(ver.clone(), serde_json::Value::Object(version_obj));
+    }
+
+    // The synthesized packument is only a drop-in replacement when at least one
+    // bundled version actually satisfies the requested constraint. If the bundle
+    // cannot serve the request (e.g. the constraint requires a version that is
+    // not in the bundled list), return None so the caller falls through to a
+    // full network packument — a partial synth would cause a false "unresolved".
+    if !saw_satisfying {
+        return None;
+    }
 
     let mut dist_tags = serde_json::Map::new();
     dist_tags.insert(
@@ -367,8 +434,7 @@ const MIN_PARALLEL_CONCURRENCY: usize = 16; // Increased from 8 to 16
 const MAX_PARALLEL_CONCURRENCY: usize = 64; // Increased from 32 to 64
 
 fn packument_concurrency() -> usize {
-    std::env::var("JHOL_PACKUMENT_CONCURRENCY")
-        .ok()
+    crate::utils::cached_env_var("JHOL_PACKUMENT_CONCURRENCY")
         .and_then(|v| v.parse::<usize>().ok())
         .map(|n| n.clamp(MIN_PACKUMENT_CONCURRENCY, MAX_PACKUMENT_CONCURRENCY))
         .unwrap_or_else(|| {
@@ -394,7 +460,10 @@ pub fn parallel_resolve_tarballs_via_manifest(
 
     // rayon preserves order with indexed() — no mpsc channel, no thread::spawn overhead.
     // Zero thread creation per install; pool is reused across all installs.
-    let results: Vec<(String, Result<Option<(String, String, Option<String>)>, String>)> = requests
+    let results: Vec<(
+        String,
+        Result<Option<(String, String, Option<String>)>, String>,
+    )> = requests
         .par_iter()
         .map(|(request_id, package, version_req)| {
             let res = resolve_tarball_via_manifest(package, version_req);
@@ -579,10 +648,11 @@ pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
     // Layer 2: lattice_cache + manifest endpoint (~5KB vs ~50KB packument)
     // ============================================================
 
-    // Layer 1: bundled-index synthesis
-    if let Some(synth) = synthesize_packument_from_bundled_index(package, "") {
-        return Ok(synth);
-    }
+    // Layer 1: bundled-index synthesis. Only used when a concrete constraint is
+    // known AND satisfiable by the bundled version list (see
+    // `fetch_metadata_for_constraint`). With an empty constraint we cannot know
+    // what the caller needs, and returning a partial packument would break
+    // ranged resolution downstream — so we fall through to the full packument.
 
     // Layer 2: lattice_cache + manifest endpoint
     if let Some(version) = crate::lattice_cache::lookup_lattice(package, "latest") {
@@ -608,7 +678,12 @@ pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
                 .and_then(|d| d.as_object())
                 .map(|o| {
                     o.iter()
-                        .map(|(k, v)| (k.clone(), Value::String(v.to_string())))
+                        .map(|(k, v)| {
+                            (
+                                k.clone(),
+                                Value::String(v.as_str().unwrap_or("").to_string()),
+                            )
+                        })
                         .collect()
                 })
                 .unwrap_or_default();
@@ -617,7 +692,12 @@ pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
                 .and_then(|d| d.as_object())
                 .map(|o| {
                     o.iter()
-                        .map(|(k, v)| (k.clone(), Value::String(v.to_string())))
+                        .map(|(k, v)| {
+                            (
+                                k.clone(),
+                                Value::String(v.as_str().unwrap_or("").to_string()),
+                            )
+                        })
                         .collect()
                 })
                 .unwrap_or_default();
@@ -638,7 +718,10 @@ pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
 
             let mut version_obj = serde_json::Map::new();
             version_obj.insert("name".to_string(), Value::String(name.clone()));
-            version_obj.insert("version".to_string(), Value::String(resolved_version.clone()));
+            version_obj.insert(
+                "version".to_string(),
+                Value::String(resolved_version.clone()),
+            );
             version_obj.insert("dependencies".to_string(), Value::Object(deps.clone()));
             version_obj.insert("optionalDependencies".to_string(), Value::Object(opt_deps));
             version_obj.insert("engines".to_string(), serde_json::json!({"node": ">=10"}));
@@ -652,7 +735,17 @@ pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
             let mut versions = serde_json::Map::new();
             versions.insert(resolved_version.clone(), Value::Object(version_obj));
             let mut dist_tags = serde_json::Map::new();
-            dist_tags.insert("latest".to_string(), Value::String(resolved_version.clone()));
+            dist_tags.insert(
+                "latest".to_string(),
+                Value::String(resolved_version.clone()),
+            );
+
+            if std::env::var("JHOL_DEBUG_DOMAINS").is_ok() && package == "axios" {
+                eprintln!(
+                    "[MANIFEST-SYNTH] {}@{} deps: {:?}",
+                    package, resolved_version, deps
+                );
+            }
 
             let synth = serde_json::json!({
                 "name": name,
@@ -687,6 +780,7 @@ pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
                         format!("metadata:{}", package),
                         CachedMetadata::new(body.clone()),
                     );
+                    cache_packument(package, &parsed);
                     return Ok(parsed);
                 }
             }
@@ -713,11 +807,13 @@ pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
         .unwrap_or(true);
 
     if has_versions {
-        // Cache the metadata
+        // Cache in pre-resolved index + packument read cache + pre-warm index
         let mut cache = get_metadata_cache()
             .lock()
             .expect("metadata_cache: mutex lock failed (poisoned)");
         cache.insert(cache_key, CachedMetadata::new(body.clone()));
+        // Populate packument read cache for fast Markov predictor path
+        cache_packument(package, &parsed);
         // Soul Path: propagate to daemon arena for cross-process reuse
         crate::daemon_cache::DaemonCache::record(package, true, body);
         return Ok(parsed);
@@ -731,9 +827,100 @@ pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
         .lock()
         .expect("metadata_cache: mutex lock failed (poisoned)");
     cache.insert(cache_key, CachedMetadata::new(body.clone()));
+    cache_packument(package, &v);
     crate::daemon_cache::DaemonCache::record(package, false, body);
 
     Ok(v)
+}
+
+/// Fetch metadata for a package that must satisfy a concrete version constraint.
+///
+/// Unlike `fetch_metadata` (constraint-agnostic), this first checks the bundled
+/// index with the REAL constraint: if a bundled version list contains a version
+/// satisfying `constraint`, a synthesized packument is returned (zero network).
+/// If the bundle cannot serve the constraint (version not bundled), it falls
+/// through to `fetch_metadata`, which returns the full network packument — so a
+/// partial synth can never cause a false "unresolved".
+pub fn fetch_metadata_for_constraint(
+    package: &str,
+    constraint: &str,
+) -> Result<serde_json::Value, String> {
+    if let Some(synth) = synthesize_packument_from_bundled_index(package, constraint) {
+        return Ok(synth);
+    }
+    fetch_metadata_full_packument(package)
+}
+
+/// Fetch the complete network packument, bypassing every zero-network synth
+/// layer (bundled-index and manifest synth). Used as an escalation when a
+/// constraint cannot be satisfied by a single-version synth — a partial
+/// packument would otherwise cause a false "unresolved" for ranged requests
+/// like `^18.3.1` when the bundled/manifest "latest" does not match.
+pub fn fetch_metadata_full_packument(package: &str) -> Result<serde_json::Value, String> {
+    let cache_key = format!("metadata:{}", package);
+
+    // Persistent disk cache first (real, complete packuments only)
+    for abbreviated in &[true, false] {
+        let (cached_body, _cached_etag) = read_packument_cache(package, *abbreviated);
+        if let Some(body) = cached_body.filter(|b| !b.is_empty()) {
+            if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&body) {
+                let is_synth = parsed.get("_vortex_manifest_synth").is_some()
+                    || parsed.get("_bundled_index_synth").is_some();
+                if !is_synth
+                    && parsed
+                        .get("versions")
+                        .and_then(|v| v.as_object())
+                        .map(|o| !o.is_empty())
+                        .unwrap_or(false)
+                {
+                    let mut cache = get_metadata_cache()
+                        .lock()
+                        .expect("metadata_cache: mutex lock failed (poisoned)");
+                    cache.insert(
+                        format!("metadata:{}", package),
+                        CachedMetadata::new(body.clone()),
+                    );
+                    cache_packument(package, &parsed);
+                    return Ok(parsed);
+                }
+            }
+        }
+    }
+
+    // Soul Path: try daemon shared memory arena for a complete packument
+    if let Some(cached_bytes) = crate::daemon_cache::DaemonCache::lookup(package, true) {
+        if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&cached_bytes) {
+            if parsed
+                .get("versions")
+                .and_then(|v| v.as_object())
+                .map(|o| !o.is_empty())
+                .unwrap_or(false)
+            {
+                let mut cache = get_metadata_cache()
+                    .lock()
+                    .expect("metadata_cache: mutex lock failed (poisoned)");
+                cache.insert(cache_key, CachedMetadata::new(cached_bytes));
+                return Ok(parsed);
+            }
+        }
+    }
+
+    // Network (no synth fallbacks)
+    let body = match fetch_packument_with_etag(package, true) {
+        Ok(b) => b,
+        Err(_) => fetch_packument_with_etag(package, false)?,
+    };
+    let parsed: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+
+    cache_in_index(package, &parsed);
+    let mut cache = get_metadata_cache()
+        .lock()
+        .expect("metadata_cache: mutex lock failed (poisoned)");
+    cache.insert(cache_key, CachedMetadata::new(body.clone()));
+    cache_packument(package, &parsed);
+    crate::daemon_cache::DaemonCache::record(package, true, body);
+
+    Ok(parsed)
 }
 
 /// Fetch metadata for multiple packages in parallel using rayon
@@ -742,13 +929,45 @@ pub fn fetch_metadata_parallel(
 ) -> Vec<(String, Result<serde_json::Value, String>)> {
     use rayon::prelude::*;
 
-    packages
+    // Check packument read cache first (O(1), non-blocking)
+    let mut cached: Vec<(String, Result<serde_json::Value, String>)> = Vec::new();
+    let mut to_fetch: Vec<String> = Vec::new();
+    for pkg in packages {
+        if let Some(meta) = get_cached_packument(pkg) {
+            cached.push((pkg.clone(), Ok(meta)));
+        } else {
+            to_fetch.push(pkg.clone());
+        }
+    }
+
+    if to_fetch.is_empty() {
+        return cached;
+    }
+
+    // Network fetch for uncached packages via rayon
+    let fetched: Vec<(String, Result<serde_json::Value, String>)> = to_fetch
         .par_iter()
-        .map(|package| {
+        .map(|(package)| {
             let result = fetch_metadata(package);
             (package.clone(), result)
         })
-        .collect()
+        .collect();
+
+    // Merge in input order via position index
+    let pos: HashMap<&str, usize> = packages
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.as_str(), i))
+        .collect();
+    let mut all = cached;
+    all.extend(fetched);
+    all.sort_by(|a, b| {
+        pos.get(a.0.as_str())
+            .copied()
+            .unwrap_or(usize::MAX)
+            .cmp(&pos.get(b.0.as_str()).copied().unwrap_or(usize::MAX))
+    });
+    all
 }
 
 /// Fetch package metadata, using an in-memory cache to avoid duplicate requests during a resolve.
@@ -774,78 +993,146 @@ pub fn fetch_metadata_cached(
 }
 
 /// Fetch packuments for multiple packages in parallel. Uses shared cache to avoid duplicate fetches.
+/// Fetch packuments for multiple packages in parallel using rayon.
+///
+/// Uses the global rayon threadpool (64 persistent threads, zero spawn overhead per call).
+/// Packuments are checked against disk cache before network, then published to the
+/// shared in-process cache and zero-copy mmap store. Results are returned in input order.
 pub fn parallel_fetch_metadata(
     names: &[String],
     cache: &std::sync::Arc<std::sync::Mutex<HashMap<String, serde_json::Value>>>,
 ) -> Vec<(String, Result<serde_json::Value, String>)> {
-    use std::sync::mpsc;
-    use std::thread;
+    use rayon::prelude::*;
 
-    let mut results = Vec::with_capacity(names.len());
-    let concurrency = packument_concurrency();
+    let mut cached_results = Vec::new();
+    let mut to_fetch: Vec<String> = Vec::new();
 
-    // Pre-filter already cached packages to reduce thread overhead
-    let mut uncached_names = Vec::new();
+    // Separate cached vs uncached in one lock acquisition
     {
         let guard = cache
             .lock()
             .expect("metadata_cache: mutex lock failed (poisoned)");
         for name in names {
-            if !guard.contains_key(name) {
-                uncached_names.push(name.clone());
+            if let Some(cached) = guard.get(name) {
+                cached_results.push((name.clone(), Ok(cached.clone())));
             } else {
-                let cached = guard
-                    .get(name)
-                    .expect("metadata_cache: key disappeared between contains_key and get")
-                    .clone();
-                results.push((name.clone(), Ok(cached)));
+                to_fetch.push(name.clone());
             }
         }
     }
 
-    // Process remaining uncached packages in parallel
-    for chunk in uncached_names.chunks(concurrency) {
-        let (tx, rx) = mpsc::channel();
-        for name in chunk {
-            let name = name.clone();
-            let tx = tx.clone();
-            let cache = std::sync::Arc::clone(cache);
-            thread::spawn(move || {
-                // Double-check cache after thread spawn
-                {
-                    let guard = cache
-                        .lock()
-                        .expect("metadata_cache: mutex lock failed (poisoned)");
-                    if let Some(cached) = guard.get(&name) {
-                        let _ = tx.send((name, Ok(cached.clone())));
-                        return;
+    if to_fetch.is_empty() {
+        return cached_results;
+    }
+
+    // VORTEX Layer 3: check disk packument cache BEFORE rayon spawn.
+    // If packument is on disk, we get it without any network RTT.
+    let mut disk_hits: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
+    for name in &to_fetch {
+        for abbreviated in &[true, false] {
+            if let (Some(body), _) = read_packument_cache(name, *abbreviated) {
+                if body.is_empty() {
+                    continue;
+                }
+                if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&body) {
+                    if parsed
+                        .get("versions")
+                        .and_then(|v| v.as_object())
+                        .map(|o| !o.is_empty())
+                        .unwrap_or(false)
+                    {
+                        disk_hits.insert(name.clone(), parsed);
+                        break;
                     }
                 }
+            }
+        }
+    }
 
-                let res = fetch_metadata(&name);
-                if let Ok(ref meta) = res {
-                    let mut guard = cache
-                        .lock()
-                        .expect("metadata_cache: mutex lock failed (poisoned)");
-                    guard.insert(name.clone(), meta.clone());
-                    // Soul Path: store in zero-copy metadata mmap
-                    if let Some(versions) = meta.get("versions").and_then(|v| v.as_object()) {
-                        for (ver, pkg_data) in versions {
-                            if let Some(obj) = pkg_data.as_object() {
-                                let val: serde_json::Value = serde_json::Value::Object(obj.clone());
-                                crate::zero_copy_metadata::cache_packument_metadata(&name, ver, &val);
-                            }
+    // Add disk hits to results and remove from to-fetch
+    let mut still_need_network: Vec<String> = Vec::new();
+    for name in &to_fetch {
+        if let Some(meta) = disk_hits.get(name) {
+            cached_results.push((name.clone(), Ok(meta.clone())));
+        } else {
+            still_need_network.push(name.clone());
+        }
+    }
+
+    // Publish disk hits to in-process cache
+    {
+        let mut guard = cache.lock().expect("metadata_cache: poisoned");
+        for (name, meta) in &disk_hits {
+            guard.insert(name.clone(), meta.clone());
+        }
+    }
+
+    if still_need_network.is_empty() {
+        let mut results = cached_results;
+        let name_pos: std::collections::HashMap<&str, usize> = names
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.as_str(), i))
+            .collect();
+        results.sort_by(|a, b| {
+            let pa = name_pos.get(a.0.as_str()).copied().unwrap_or(usize::MAX);
+            let pb = name_pos.get(b.0.as_str()).copied().unwrap_or(usize::MAX);
+            pa.cmp(&pb)
+        });
+        return results;
+    }
+
+    // Network fetch for remaining packages via global rayon pool (zero spawn overhead)
+    let fetched: Vec<(String, Result<serde_json::Value, String>)> = still_need_network
+        .into_par_iter()
+        .map(|name| {
+            let res = fetch_metadata(&name);
+            if let Ok(ref meta) = res {
+                let is_synth = meta.get("_vortex_manifest_synth").is_some()
+                    || meta.get("_bundled_index_synth").is_some();
+                // Never persist synth packuments to the disk cache: a
+                // single-version synth would later be read back by
+                // fetch_metadata_full_packument and shadow the real (complete)
+                // packument, causing false "unresolved" for ranged constraints.
+                if !is_synth {
+                    let body = serde_json::to_vec(meta).unwrap_or_default();
+                    write_packument_cache(&name, false, &body, None);
+                }
+                if let Some(versions) = meta.get("versions").and_then(|v| v.as_object()) {
+                    for (ver, pkg_data) in versions {
+                        if let Some(obj) = pkg_data.as_object() {
+                            let val = serde_json::Value::Object(obj.clone());
+                            crate::zero_copy_metadata::cache_packument_metadata(&name, ver, &val);
                         }
                     }
                 }
-                let _ = tx.send((name, res));
-            });
-        }
-        drop(tx);
-        for (name, res) in rx {
-            results.push((name, res));
+            }
+            (name, res)
+        })
+        .collect();
+
+    // Publish network results to in-process cache
+    for (name, ref res) in &fetched {
+        if let Ok(meta) = res {
+            if let Ok(mut guard) = cache.lock() {
+                guard.insert(name.clone(), meta.clone());
+            }
         }
     }
+
+    let mut results = cached_results;
+    results.extend(fetched);
+    let name_pos: std::collections::HashMap<&str, usize> = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.as_str(), i))
+        .collect();
+    results.sort_by(|a, b| {
+        let pa = name_pos.get(a.0.as_str()).copied().unwrap_or(usize::MAX);
+        let pb = name_pos.get(b.0.as_str()).copied().unwrap_or(usize::MAX);
+        pa.cmp(&pb)
+    });
     results
 }
 
@@ -871,24 +1158,13 @@ pub fn validate_package_exists(package: &str) -> Result<bool, String> {
     }
 }
 
-/// Run validate_package_exists for multiple packages in parallel.
+/// Validate multiple packages in parallel using rayon.
 pub fn parallel_validate_packages(packages: &[String], _timeout_secs: u64) -> Vec<(String, bool)> {
-    use std::sync::mpsc;
-    use std::thread;
-    const CONCURRENCY: usize = 8;
-    let (tx, rx) = mpsc::channel();
-    for chunk in packages.chunks(CONCURRENCY) {
-        let chunk: Vec<String> = chunk.to_vec();
-        let tx = tx.clone();
-        thread::spawn(move || {
-            for pkg in chunk {
-                let ok = validate_package_exists(&pkg).unwrap_or(false);
-                let _ = tx.send((pkg, ok));
-            }
-        });
-    }
-    drop(tx);
-    rx.into_iter().collect()
+    use rayon::prelude::*;
+    packages
+        .par_iter()
+        .map(|pkg| (pkg.clone(), validate_package_exists(pkg).unwrap_or(false)))
+        .collect()
 }
 
 /// Check if a concrete version satisfies a semver range/spec.
@@ -897,15 +1173,52 @@ pub fn version_satisfies(spec: &str, version: &str) -> bool {
     if spec.is_empty() || spec == "*" {
         return Version::parse(version).is_ok();
     }
-    let req = match VersionReq::parse(spec) {
-        Ok(r) => r,
-        Err(_) => return false,
+    // npm supports `||` for OR-combined ranges (e.g. `^3.0.0 || ^4.0.0`); the
+    // `semver` crate's VersionReq::parse rejects it, so split on `||` and accept
+    // if any alternative matches.
+    if spec.contains("||") {
+        return spec.split("||").any(|part| {
+            let part = part.trim();
+            if part.is_empty() {
+                return false;
+            }
+            match cached_version_req(part) {
+                Some(req) => Version::parse(version).map_or(false, |v| req.matches(&v)),
+                None => false,
+            }
+        });
+    }
+    let Some(req) = cached_version_req(spec) else {
+        return false;
     };
     let v = match Version::parse(version) {
         Ok(v) => v,
         Err(_) => return false,
     };
     req.matches(&v)
+}
+
+/// True if any version in the packument satisfies at least one of the given
+/// constraints. Used to detect when a single-version synth packument cannot
+/// satisfy a ranged request (e.g. latest is 2.x but the constraint pins <2.0.0).
+pub fn meta_has_satisfying_version(meta: &serde_json::Value, constraints: &[String]) -> bool {
+    if constraints.is_empty() {
+        return true;
+    }
+    let Some(versions) = meta.get("versions").and_then(|v| v.as_object()) else {
+        return false;
+    };
+    versions
+        .keys()
+        .any(|v| constraints.iter().any(|c| version_satisfies(c, v)))
+}
+
+/// True if the packument contains the exact given version.
+pub fn meta_contains_version(meta: &serde_json::Value, version: &str) -> bool {
+    meta.get("versions")
+        .and_then(|v| v.as_object())
+        .map(|o| o.contains_key(version))
+        .unwrap_or(false)
 }
 
 /// Resolve a semver range to the maximum satisfying version from a list.
@@ -927,6 +1240,25 @@ pub fn resolve_range(version_strings: &[String], range: &str) -> Option<String> 
         .collect();
     satisfying.sort();
     satisfying.last().map(|v| v.to_string())
+}
+
+/// Same as resolve_range but takes pre-parsed, sorted (ascending) version list.
+/// Avoids re-parsing and re-sorting when caller already has parsed versions.
+pub fn resolve_range_from_parsed(
+    parsed: &[(semver::Version, &str)],
+    range: &str,
+) -> Option<String> {
+    let range = range.trim();
+    if range.is_empty() || range == "*" {
+        return parsed.last().map(|(_, s)| s.to_string());
+    }
+    let req = semver::VersionReq::parse(range).ok()?;
+    for (ver, ver_str) in parsed.iter().rev() {
+        if req.matches(ver) {
+            return Some(ver_str.to_string());
+        }
+    }
+    None
 }
 
 /// Resolve version to a concrete semver (e.g. "latest" -> "1.2.3", "^1.0" -> "1.2.3")
@@ -1432,9 +1764,10 @@ fn ensure_shared_binary_unpacked(hash: &str, tarball: &[u8]) -> Result<Option<Pa
         return Ok(None);
     };
 
-    if shared_unpacked.exists() {
+    if shared_unpacked.exists() && store_extract_complete(&shared_unpacked) {
         return Ok(Some(shared_unpacked));
     }
+    remove_store_dir(&shared_unpacked);
 
     if let Some(parent) = shared_unpacked.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -1449,6 +1782,7 @@ fn ensure_shared_binary_unpacked(hash: &str, tarball: &[u8]) -> Result<Option<Pa
         let _ = std::fs::remove_dir_all(&tmp);
         return Err(err);
     }
+    mark_store_extract_complete(&tmp);
 
     if std::fs::rename(&tmp, &shared_unpacked).is_err() {
         if !shared_unpacked.exists() {
@@ -1462,9 +1796,7 @@ fn ensure_shared_binary_unpacked(hash: &str, tarball: &[u8]) -> Result<Option<Pa
 }
 
 fn link_or_copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
-    if dst.exists() {
-        std::fs::remove_dir_all(dst).map_err(|e| e.to_string())?;
-    }
+    remove_store_dir(dst);
 
     #[cfg(unix)]
     {
@@ -1553,19 +1885,21 @@ pub fn download_tarball_to_store_hash_only(
             // Pre-populate sharded unpacked store to avoid a second decompression pass in cold installs.
             let shard = if hash.len() >= 2 { &hash[..2] } else { "xx" };
             let unpacked = cache_dir.join("store_unpacked").join(shard).join(&hash);
-            if !unpacked.exists() {
+            if !store_extract_complete(&unpacked) {
+                remove_store_dir(&unpacked);
                 let mut unpacked_ready = false;
                 if let Some(shared_unpacked) = ensure_shared_binary_unpacked(&hash, &tarball)? {
-                    if shared_unpacked.exists() {
+                    if store_extract_complete(&shared_unpacked) {
                         unpacked_ready = link_or_copy_dir(&shared_unpacked, &unpacked).is_ok();
                     }
                 }
                 if !unpacked_ready {
                     std::fs::create_dir_all(&unpacked).map_err(|e| e.to_string())?;
                     if let Err(e) = extract_tarball_bytes_to_dir(&tarball, &unpacked) {
-                        let _ = std::fs::remove_dir_all(&unpacked);
+                        remove_store_dir(&unpacked);
                         return Err(e);
                     }
+                    mark_store_extract_complete(&unpacked);
                 }
             }
 
@@ -1596,15 +1930,17 @@ pub fn download_tarball_to_store_hash_only(
         }
         let shard = if hash.len() >= 2 { &hash[..2] } else { "xx" };
         let unpacked = cache_dir.join("store_unpacked").join(shard).join(&hash);
-        if !unpacked.exists() {
+        if !store_extract_complete(&unpacked) {
+            remove_store_dir(&unpacked);
             if let Err(e) = std::fs::create_dir_all(&unpacked)
                 .map_err(|e| e.to_string())
                 .and_then(|_| extract_tarball_bytes_to_dir(&data, &unpacked))
             {
-                let _ = std::fs::remove_dir_all(&unpacked);
+                remove_store_dir(&unpacked);
                 let _ = std::fs::remove_file(&tmp);
                 return Err(e);
             }
+            mark_store_extract_complete(&unpacked);
         }
     }
 
@@ -1673,6 +2009,48 @@ fn extract_tar_from_bytes(decompressed: &[u8], dest_dir: &Path) -> Result<(), St
     Ok(())
 }
 
+/// marker file name proving a store extraction completed (every file on disk).
+/// Guards against partial extracts (kill mid-tar, stale manifest-only caches)
+/// that would otherwise shadow the real content forever because the store
+/// populate paths short-circuit on `dir.exists()`.
+const STORE_COMPLETE_MARKER: &str = ".jhol-extract-complete";
+
+/// Write the completion marker after a successful full extraction.
+fn mark_store_extract_complete(dest_dir: &Path) {
+    let _ = std::fs::write(dest_dir.join(STORE_COMPLETE_MARKER), "ok");
+}
+
+/// True when a store dir was fully extracted (marker present) OR contains real
+/// content beyond an empty shell. A dir holding only `package.json` (the first
+/// tar entry — the classic partial-extract signature) is treated as incomplete,
+/// even if runtime relink `node_modules/` symlink dirs were added afterwards.
+pub fn store_extract_complete(dest_dir: &Path) -> bool {
+    if dest_dir.join(STORE_COMPLETE_MARKER).exists() {
+        return true;
+    }
+    // Legacy mark-free dirs: a real body file (regular file beyond package.json)
+    // proves the tarball was fully materialized. The relink `node_modules/`
+    // sibling is a symlink dir and must not satisfy this.
+    let pkg_json = dest_dir.join("package.json");
+    if !pkg_json.exists() {
+        return false;
+    }
+    if let Ok(rd) = std::fs::read_dir(dest_dir) {
+        for ent in rd.flatten() {
+            let name = ent.file_name();
+            let name = name.to_string_lossy();
+            if name == "package.json" || name == STORE_COMPLETE_MARKER {
+                continue;
+            }
+            if ent.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                return true;
+            }
+        }
+        return false;
+    }
+    false
+}
+
 /// Single-pass cold download → unpack.
 ///
 /// Downloads the tarball, verifies SRI integrity inline, computes the SHA-256
@@ -1696,9 +2074,11 @@ pub fn download_unpack_to_store_unpacked(
             let hash = format!("{:x}", Sha256::digest(&tarball));
             let shard = if hash.len() >= 2 { &hash[..2] } else { "xx" };
             let unpacked = cache_dir.join("store_unpacked").join(shard).join(&hash);
-            if !unpacked.exists() {
+            if !store_extract_complete(&unpacked) {
+                remove_store_dir(&unpacked);
                 std::fs::create_dir_all(&unpacked).map_err(|e| e.to_string())?;
                 extract_tar_from_bytes(&tarball, &unpacked)?;
+                mark_store_extract_complete(&unpacked);
             }
             let store_file = cache_dir.join("store").join(format!("{}.tgz", hash));
             if !store_file.exists() {
@@ -1721,10 +2101,12 @@ pub fn download_unpack_to_store_unpacked(
     let hash = format!("{:x}", Sha256::digest(&bytes));
     let shard = if hash.len() >= 2 { &hash[..2] } else { "xx" };
     let unpacked = cache_dir.join("store_unpacked").join(shard).join(&hash);
-    if !unpacked.exists() {
+    if !store_extract_complete(&unpacked) {
+        remove_store_dir(&unpacked);
         std::fs::create_dir_all(&unpacked).map_err(|e| e.to_string())?;
         let decompressed = decompress_gzip_libdeflate(&bytes)?;
         extract_tar_from_bytes(&decompressed, &unpacked)?;
+        mark_store_extract_complete(&unpacked);
     }
 
     let store_file = cache_dir.join("store").join(format!("{}.tgz", hash));
@@ -1738,6 +2120,30 @@ pub fn download_unpack_to_store_unpacked(
     Ok((hash, unpacked))
 }
 
+/// Public wrapper for marking a completed store extraction.
+pub fn mark_store_extract_complete_pub(dest_dir: &Path) {
+    mark_store_extract_complete(dest_dir);
+}
+
+/// Public wrapper for removing a store dir or broken symlink.
+pub fn remove_store_dir_pub(path: &Path) {
+    remove_store_dir(path);
+}
+
+/// Remove a store dir (or broken symlink) so a fresh extract can replace it.
+fn remove_store_dir(path: &Path) {
+    use std::fs;
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => {
+            let _ = fs::remove_dir_all(path);
+        }
+        Ok(_) => {
+            let _ = fs::remove_file(path);
+        }
+        Err(_) => {}
+    }
+}
+
 /// Ensure the tarball is unpacked in sharded store_unpacked/ab/<hash>; return that path.
 pub fn ensure_unpacked_in_store(tarball_path: &Path, cache_dir: &Path) -> Result<PathBuf, String> {
     let hash = tarball_path
@@ -1747,9 +2153,11 @@ pub fn ensure_unpacked_in_store(tarball_path: &Path, cache_dir: &Path) -> Result
     let shard = if hash.len() >= 2 { &hash[..2] } else { "xx" };
     let store_unpacked_base = cache_dir.join("store_unpacked").join(shard);
     let unpacked = store_unpacked_base.join(hash);
-    if !unpacked.exists() {
+    if !store_extract_complete(&unpacked) {
+        remove_store_dir(&unpacked);
         std::fs::create_dir_all(&unpacked).map_err(|e| e.to_string())?;
         extract_tarball_to_dir(tarball_path, &unpacked)?;
+        mark_store_extract_complete(&unpacked);
     }
     Ok(unpacked)
 }
@@ -1872,7 +2280,10 @@ pub fn get_bundled_tarball(spec: &str) -> Option<Vec<u8>> {
     let (_, archive) = entries[idx];
     let bytes = decode_binary_package_archive(archive).ok()?;
     // Cache so the next caller (install phase) doesn't re-decode.
-    cache.lock().unwrap().insert(spec.to_string(), bytes.clone());
+    cache
+        .lock()
+        .unwrap()
+        .insert(spec.to_string(), bytes.clone());
     Some(bytes)
 }
 

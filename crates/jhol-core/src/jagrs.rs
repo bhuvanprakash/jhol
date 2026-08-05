@@ -31,20 +31,20 @@ pub const V3_DIR: &str = "v3";
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct JagrsEntry {
-    pub key_hash: u64,   // xxh3(name@version) for alias, xxh3(tarball) for object
-    pub offset: u32,     // byte offset into objects.jagrs or aliases.jagrs
-    pub size: u32,       // tarball size in bytes
-    pub kind: u8,        // 0=empty, 1=tarball, 2=alias
-    pub refcount: u8,    // number of aliases pointing to this tarball
-    _pad: [u8; 14],     // future: signature, provenance
+    pub key_hash: u64, // xxh3(name@version) for alias, xxh3(tarball) for object
+    pub offset: u32,   // byte offset into objects.jagrs or aliases.jagrs
+    pub size: u32,     // tarball size in bytes
+    pub kind: u8,      // 0=empty, 1=tarball, 2=alias
+    pub refcount: u8,  // number of aliases pointing to this tarball
+    _pad: [u8; 14],    // future: signature, provenance
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct AliasRecord {
-    pub name_hash: u64,  // xxh3(package@version)
-    pub hash: [u8; 32],  // SHA256 hex bytes of tarball
-    pub name_off: u32,   // offset into string table at end of aliases.jagrs
+    pub name_hash: u64, // xxh3(package@version)
+    pub hash: [u8; 32], // SHA256 hex bytes of tarball
+    pub name_off: u32,  // offset into string table at end of aliases.jagrs
     pub version_off: u32,
 }
 
@@ -54,7 +54,7 @@ pub struct ManifestHeader {
     pub version: u32,
     pub capacity: u32,
     pub entry_count: u32,
-    pub object_size: u64,   // total bytes in objects.jagrs
+    pub object_size: u64, // total bytes in objects.jagrs
     pub alias_count: u32,
     _reserved: [u8; 32],
 }
@@ -66,6 +66,7 @@ pub struct JagrsStore {
     manifest: memmap2::MmapMut,
     objects: fs::File,
     aliases: fs::File,
+    aliases_mmap: memmap2::Mmap, // N10: mmap'd aliases for zero-copy reads
     objects_len: Mutex<u64>,
     aliases_count: Mutex<u32>,
     capacity: u32,
@@ -88,10 +89,17 @@ impl JagrsStore {
             Self::create_manifest(&mf_path, DEFAULT_CAPACITY)?;
         }
         let mf_file = fs::OpenOptions::new()
-            .read(true).write(true).create(true)
-            .open(&mf_path).map_err(|e| format!("jagrs open manifest: {}", e))?;
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&mf_path)
+            .map_err(|e| format!("jagrs open manifest: {}", e))?;
         let man_len = mf_file.metadata().map_err(|e| e.to_string())?.len();
-        let manifest = unsafe { memmap2::MmapOptions::new().map_mut(&mf_file).map_err(|e| format!("jagrs mmap manifest: {}", e))? };
+        let manifest = unsafe {
+            memmap2::MmapOptions::new()
+                .map_mut(&mf_file)
+                .map_err(|e| format!("jagrs mmap manifest: {}", e))?
+        };
         let manifest: memmap2::MmapMut = manifest;
 
         // Parse header
@@ -105,29 +113,55 @@ impl JagrsStore {
         let capacity = hdr.capacity;
         let expected_len = size_of::<ManifestHeader>() + capacity as usize * ENTRY_SIZE;
         if man_len < expected_len as u64 {
-            return Err(format!("jagrs: manifest truncated {} < {}", man_len, expected_len));
+            return Err(format!(
+                "jagrs: manifest truncated {} < {}",
+                man_len, expected_len
+            ));
         }
 
         // Open objects (append-only)
         let objects = fs::OpenOptions::new()
-            .read(true).write(true).create(true)
-            .open(&ob_path).map_err(|e| format!("jagrs open objects: {}", e))?;
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&ob_path)
+            .map_err(|e| format!("jagrs open objects: {}", e))?;
         let objects_len = objects.metadata().map_err(|e| e.to_string())?.len();
 
-        // Open aliases (append-only)
+        // Open aliases (append-only) + mmap for zero-copy reads (N10)
         let aliases = fs::OpenOptions::new()
-            .read(true).write(true).create(true)
-            .open(&al_path).map_err(|e| format!("jagrs open aliases: {}", e))?;
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&al_path)
+            .map_err(|e| format!("jagrs open aliases: {}", e))?;
         let al_len = aliases.metadata().map_err(|e| e.to_string())?.len();
+        let aliases_mmap = if al_len > 0 {
+            unsafe {
+                memmap2::MmapOptions::new()
+                    .map(&aliases)
+                    .map_err(|e| format!("jagrs mmap aliases: {}", e))?
+            }
+        } else {
+            unsafe {
+                memmap2::MmapOptions::new()
+                    .len(4096)
+                    .map(&aliases)
+                    .map_err(|e| format!("jagrs mmap aliases: {}", e))?
+            }
+        };
         let aliases_count = if size_of::<AliasRecord>() > 0 {
             (al_len as usize / size_of::<AliasRecord>()) as u32
-        } else { 0 };
+        } else {
+            0
+        };
 
         Ok(Self {
             root,
             manifest,
             objects,
             aliases,
+            aliases_mmap,
             objects_len: Mutex::new(objects_len),
             aliases_count: Mutex::new(aliases_count),
             capacity,
@@ -147,7 +181,10 @@ impl JagrsStore {
             _reserved: [0u8; 32],
         };
         let hdr_bytes = unsafe {
-            std::slice::from_raw_parts(&hdr as *const ManifestHeader as *const u8, size_of::<ManifestHeader>())
+            std::slice::from_raw_parts(
+                &hdr as *const ManifestHeader as *const u8,
+                size_of::<ManifestHeader>(),
+            )
         };
         let table_size = capacity as usize * ENTRY_SIZE;
         let mut buf = Vec::with_capacity(hdr_bytes.len() + table_size);
@@ -171,7 +208,10 @@ impl JagrsStore {
             return Ok(hash);
         }
 
-        let _lock = self.write_lock.lock().map_err(|_| "jagrs lock".to_string())?;
+        let _lock = self
+            .write_lock
+            .lock()
+            .map_err(|_| "jagrs lock".to_string())?;
 
         // Re-check after lock
         if self.has_hash_unlocked(&hash) {
@@ -179,11 +219,16 @@ impl JagrsStore {
         }
 
         // Append to objects
-        let mut ob_len = self.objects_len.lock().map_err(|_| "jagrs lock objects".to_string())?;
+        let mut ob_len = self
+            .objects_len
+            .lock()
+            .map_err(|_| "jagrs lock objects".to_string())?;
         let offset = *ob_len;
         let mut file = &self.objects;
-        file.write_all(data).map_err(|e| format!("jagrs write objects: {}", e))?;
-        file.sync_all().map_err(|e| format!("jagrs sync objects: {}", e))?;
+        file.write_all(data)
+            .map_err(|e| format!("jagrs write objects: {}", e))?;
+        file.sync_all()
+            .map_err(|e| format!("jagrs sync objects: {}", e))?;
         let size = data.len() as u32;
 
         // Insert into hash table
@@ -205,7 +250,10 @@ impl JagrsStore {
             return Ok(());
         }
 
-        let _lock = self.write_lock.lock().map_err(|_| "jagrs lock".to_string())?;
+        let _lock = self
+            .write_lock
+            .lock()
+            .map_err(|_| "jagrs lock".to_string())?;
         if self.lookup_alias_unlocked(&key).is_some() {
             return Ok(());
         }
@@ -224,11 +272,18 @@ impl JagrsStore {
         };
         // Write record + inline string data at end of aliases file
         let rec_bytes = unsafe {
-            std::slice::from_raw_parts(&rec as *const AliasRecord as *const u8, size_of::<AliasRecord>())
+            std::slice::from_raw_parts(
+                &rec as *const AliasRecord as *const u8,
+                size_of::<AliasRecord>(),
+            )
         };
         let mut file = &self.aliases;
-        file.write_all(rec_bytes).map_err(|e| format!("jagrs write alias: {}", e))?;
-        let mut al_count = self.aliases_count.lock().map_err(|_| "jagrs lock aliases".to_string())?;
+        file.write_all(rec_bytes)
+            .map_err(|e| format!("jagrs write alias: {}", e))?;
+        let mut al_count = self
+            .aliases_count
+            .lock()
+            .map_err(|_| "jagrs lock aliases".to_string())?;
         let offset = (*al_count as u64) * size_of::<AliasRecord>() as u64;
         let entry_off = offset as u32;
 
@@ -329,12 +384,13 @@ impl JagrsStore {
         unsafe { std::slice::from_raw_parts_mut(ptr, self.capacity as usize) }
     }
 
-    /// Linear probe for key_hash with given kind. Returns (entry_ref, index).
+    /// Bounded linear probe (max log2(capacity) steps) — prevents O(n) worst-case.
     fn probe(&self, key_hash: u64, kind: u8) -> Option<(&JagrsEntry, usize)> {
         let entries = self.entries_slice();
         let mask = self.capacity - 1;
+        let max_probe = (self.capacity as f64).log2().ceil() as usize;
         let mut i = (key_hash as usize) & (mask as usize);
-        for _ in 0..self.capacity as usize {
+        for _ in 0..max_probe {
             let e = &entries[i];
             if e.kind == 0 {
                 return None;
@@ -383,14 +439,14 @@ impl JagrsStore {
     }
 
     fn read_alias_hash(&self, entry: &JagrsEntry) -> String {
-        // Read AliasRecord at entry.offset from aliases file
-        use std::io::{Read, Seek};
-        let offset = entry.offset as u64 * size_of::<AliasRecord>() as u64;
-        let mut file = &self.aliases;
-        file.seek(std::io::SeekFrom::Start(offset)).ok();
-        let mut rec_bytes = [0u8; size_of::<AliasRecord>()];
-        file.read_exact(&mut rec_bytes).ok();
-        let rec: AliasRecord = unsafe { std::mem::transmute(rec_bytes) };
+        // Read from mmap'd aliases — zero syscalls (N10)
+        let offset = entry.offset as usize * size_of::<AliasRecord>();
+        let end = offset + size_of::<AliasRecord>();
+        if end > self.aliases_mmap.len() {
+            return String::new();
+        }
+        let rec_bytes: &[u8] = &self.aliases_mmap[offset..end];
+        let rec: &AliasRecord = unsafe { &*(rec_bytes.as_ptr() as *const AliasRecord) };
         hex::encode(rec.hash)
     }
 }
@@ -458,13 +514,15 @@ pub fn download_and_stream_to_store(
         .join("store_unpacked")
         .join(shard)
         .join(&hash);
-    if !unpacked.exists() {
+    if !crate::registry::store_extract_complete(&unpacked) {
+        crate::registry::remove_store_dir_pub(&unpacked);
         std::fs::create_dir_all(&unpacked).map_err(|e| format!("mkdir unpacked: {}", e))?;
         // FULL extract into content plane (Soul Path quality)
         if let Err(e) = crate::registry::extract_tarball_bytes_public(&bytes, &unpacked) {
-            let _ = std::fs::remove_dir_all(&unpacked);
+            crate::registry::remove_store_dir_pub(&unpacked);
             return Err(e);
         }
+        crate::registry::mark_store_extract_complete_pub(&unpacked);
     }
 
     // Also keep classic .tgz for tools that still open it
@@ -695,8 +753,8 @@ pub fn daemon_stats() -> JagrsStats {
 // Zero startup cost, zero crash risk, zero memory for index.
 // Kernel dentry cache IS the hash table.
 pub mod git {
-    use std::path::{Path, PathBuf};
     use std::fs;
+    use std::path::{Path, PathBuf};
 
     pub fn git_base(cache_dir: &str) -> PathBuf {
         PathBuf::from(cache_dir).join("v3").join("git")
@@ -704,7 +762,10 @@ pub mod git {
 
     pub fn object_path(base: &Path, hash: &str) -> PathBuf {
         if hash.len() >= 4 {
-            base.join("objects").join(&hash[0..2]).join(&hash[2..4]).join(hash)
+            base.join("objects")
+                .join(&hash[0..2])
+                .join(&hash[2..4])
+                .join(hash)
         } else {
             base.join("objects").join("xx").join("xx").join(hash)
         }
@@ -737,9 +798,11 @@ pub mod git {
         let target = object_path(base, hash);
         if !link.exists() {
             #[cfg(unix)]
-            std::os::unix::fs::symlink(&target, &link).map_err(|e| format!("git symlink: {}", e))?;
+            std::os::unix::fs::symlink(&target, &link)
+                .map_err(|e| format!("git symlink: {}", e))?;
             #[cfg(not(unix))]
-            fs::write(&link, target.to_string_lossy().as_bytes()).map_err(|e| format!("git write: {}", e))?;
+            fs::write(&link, target.to_string_lossy().as_bytes())
+                .map_err(|e| format!("git write: {}", e))?;
         }
         Ok(())
     }
@@ -753,9 +816,9 @@ pub mod git {
     pub fn list_versions(base: &Path, name: &str) -> Vec<String> {
         let dir = base.join("aliases").join(name);
         match fs::read_dir(&dir) {
-            Ok(entries) => entries.filter_map(|e| {
-                e.ok()?.file_name().to_str().map(|s| s.to_string())
-            }).collect(),
+            Ok(entries) => entries
+                .filter_map(|e| e.ok()?.file_name().to_str().map(|s| s.to_string()))
+                .collect(),
             Err(_) => vec![],
         }
     }
@@ -775,14 +838,14 @@ pub struct ManifestHeaderV2 {
     pub entry_count: u32,
     pub object_size: u64,
     pub alias_count: u32,
-    pub pgm_model_offset: u64,    // offset into manifest for PGM segments
-    pub xor_filter_offset: u64,   // offset for XOR filter bit array
-    pub front_code_offset: u64,   // offset for front-coded alias strings
-    pub ef_offsets_offset: u64,   // offset for Elias-Fano offset list
-    pub ef_lengths_offset: u64,   // offset for Elias-Fano length list
-    pub hnsw_offset: u64,         // offset for HNSW graph data
-    pub cdc_fingerprints: u64,    // number of CDC fingerprints in objects footer
-    pub compaction_level: u8,     // 0=append-only(v1), 1=tiered L0, 2=tiered L1, 3=tiered L2
+    pub pgm_model_offset: u64,  // offset into manifest for PGM segments
+    pub xor_filter_offset: u64, // offset for XOR filter bit array
+    pub front_code_offset: u64, // offset for front-coded alias strings
+    pub ef_offsets_offset: u64, // offset for Elias-Fano offset list
+    pub ef_lengths_offset: u64, // offset for Elias-Fano length list
+    pub hnsw_offset: u64,       // offset for HNSW graph data
+    pub cdc_fingerprints: u64,  // number of CDC fingerprints in objects footer
+    pub compaction_level: u8,   // 0=append-only(v1), 1=tiered L0, 2=tiered L1, 3=tiered L2
     _reserved: [u8; 27],
 }
 
@@ -809,7 +872,10 @@ pub struct PGMIndex {
 impl PGMIndex {
     pub fn new(keys: &[u64], epsilon: u32) -> Self {
         if keys.is_empty() {
-            return Self { segments: Vec::new(), epsilon };
+            return Self {
+                segments: Vec::new(),
+                epsilon,
+            };
         }
         let mut segs = Vec::new();
         let mut i = 0;
@@ -858,7 +924,10 @@ impl PGMIndex {
             });
             i = j;
         }
-        Self { segments: segs, epsilon }
+        Self {
+            segments: segs,
+            epsilon,
+        }
     }
 
     /// Predict position for key. Returns (lower_bound, upper_bound).
@@ -887,7 +956,9 @@ impl PGMIndex {
         (lb, ub)
     }
 
-    pub fn len(&self) -> usize { self.segments.len() }
+    pub fn len(&self) -> usize {
+        self.segments.len()
+    }
 }
 
 // ── 2.1 XorFilter ──────────────────────────────────────────────────────────────
@@ -919,7 +990,11 @@ impl XorFilter {
                 }
             }
         }
-        Self { bits, seed, block_bits }
+        Self {
+            bits,
+            seed,
+            block_bits,
+        }
     }
 
     /// Query: returns true if item MAY be present (0.3% false positive rate).
@@ -953,7 +1028,11 @@ impl GearHasher {
         for i in 0..256u64 {
             let mut h = i;
             for _ in 0..8 {
-                h = if h & 1 == 1 { (h >> 1) ^ 0x9e37_79b9_7f4a_7c15 } else { h >> 1 };
+                h = if h & 1 == 1 {
+                    (h >> 1) ^ 0x9e37_79b9_7f4a_7c15
+                } else {
+                    h >> 1
+                };
             }
             table[i as usize] = h;
         }
@@ -1023,7 +1102,11 @@ pub fn cdc_dedup(
     existing_fingerprints: &mut std::collections::HashSet<u64>,
 ) -> (Vec<(u64, u64)>, u64) {
     let hasher = GearHasher::new();
-    let avg_size = if data.len() > 65536 { 16384u32 } else { 4096u32 };
+    let avg_size = if data.len() > 65536 {
+        16384u32
+    } else {
+        4096u32
+    };
     let boundaries = hasher.find_boundaries(data, avg_size);
     let mut unique: Vec<(u64, u64)> = Vec::new();
     let mut savings = 0u64;
@@ -1060,7 +1143,11 @@ pub struct FrontCodedTable {
 impl FrontCodedTable {
     pub fn new(strings: &[String]) -> Self {
         if strings.is_empty() {
-            return Self { data: Vec::new(), lengths: Vec::new(), prefix_lens: Vec::new() };
+            return Self {
+                data: Vec::new(),
+                lengths: Vec::new(),
+                prefix_lens: Vec::new(),
+            };
         }
         let mut sorted = strings.to_vec();
         sorted.sort();
@@ -1087,7 +1174,11 @@ impl FrontCodedTable {
             lengths.push(bytes.len() as u32);
             data.extend_from_slice(suffix);
         }
-        Self { data, lengths, prefix_lens }
+        Self {
+            data,
+            lengths,
+            prefix_lens,
+        }
     }
 
     pub fn get(&self, index: usize, out: &mut String) {
@@ -1095,7 +1186,11 @@ impl FrontCodedTable {
             return;
         }
         let total_len = self.lengths[index] as usize;
-        let prefix_len = if index > 0 { self.prefix_lens[index] as usize } else { 0 };
+        let prefix_len = if index > 0 {
+            self.prefix_lens[index] as usize
+        } else {
+            0
+        };
         // Reconstruct from previous
         if index > 0 {
             let mut prev = String::new();
@@ -1106,7 +1201,11 @@ impl FrontCodedTable {
         let mut suffix_start = 0usize;
         for i in 0..index {
             let total = self.lengths[i] as usize;
-            let pre = if i > 0 { self.prefix_lens[i] as usize } else { 0 };
+            let pre = if i > 0 {
+                self.prefix_lens[i] as usize
+            } else {
+                0
+            };
             suffix_start += total - pre;
         }
         let suffix_end = suffix_start + (total_len - prefix_len);
@@ -1125,7 +1224,7 @@ pub struct EliasFano {
     /// Low bits packed
     low_bits: Vec<u64>,
     n: usize,
-    l: usize,           // bits per low value
+    l: usize, // bits per low value
     low_mask: u64,
     /// Universe size (max value + 1)
     u: u64,
@@ -1137,7 +1236,10 @@ impl EliasFano {
             return Self {
                 high_bits: vec![0],
                 low_bits: vec![0],
-                n: 0, l: 0, low_mask: 0, u: 1,
+                n: 0,
+                l: 0,
+                low_mask: 0,
+                u: 1,
             };
         }
         let n = values.len();
@@ -1180,14 +1282,25 @@ impl EliasFano {
             }
         }
 
-        Self { high_bits, low_bits, n, l, low_mask, u }
+        Self {
+            high_bits,
+            low_bits,
+            n,
+            l,
+            low_mask,
+            u,
+        }
     }
 
-    pub fn len(&self) -> usize { self.n }
+    pub fn len(&self) -> usize {
+        self.n
+    }
 
     /// Decode i-th value (0-indexed).
     pub fn get(&self, i: usize) -> Option<u64> {
-        if i >= self.n { return None; }
+        if i >= self.n {
+            return None;
+        }
         // Low bits
         let bit_pos = i * self.l;
         let word_idx = bit_pos / 64;
@@ -1282,11 +1395,19 @@ impl EmbeddingIndex {
 
     /// Cosine similarity between two embeddings.
     pub fn cosine_sim(a: &[i8], b: &[i8]) -> f64 {
-        let dot: i64 = a.iter().zip(b.iter()).map(|(x, y)| (*x as i64) * (*y as i64)).sum();
+        let dot: i64 = a
+            .iter()
+            .zip(b.iter())
+            .map(|(x, y)| (*x as i64) * (*y as i64))
+            .sum();
         let na: i64 = a.iter().map(|x| (*x as i64) * (*x as i64)).sum();
         let nb: i64 = b.iter().map(|y| (*y as i64) * (*y as i64)).sum();
         let denom = ((na as f64).sqrt()) * ((nb as f64).sqrt());
-        if denom > 0.0 { dot as f64 / denom } else { 0.0 }
+        if denom > 0.0 {
+            dot as f64 / denom
+        } else {
+            0.0
+        }
     }
 
     /// Search for k nearest neighbors. Returns (similarity, index) pairs.
@@ -1294,7 +1415,10 @@ impl EmbeddingIndex {
         if self.vectors.is_empty() {
             return Vec::new();
         }
-        let mut candidates: Vec<(f64, usize)> = self.vectors.iter().enumerate()
+        let mut candidates: Vec<(f64, usize)> = self
+            .vectors
+            .iter()
+            .enumerate()
             .map(|(i, v)| (Self::cosine_sim(query, v), i))
             .collect();
         candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -1312,7 +1436,8 @@ impl EmbeddingIndex {
         };
         let query = &self.vectors[idx];
         let neighbors = self.search(query, k + 1); // +1 to exclude self
-        neighbors.into_iter()
+        neighbors
+            .into_iter()
             .filter(|(_, i)| *i != idx)
             .take(k)
             .map(|(_, i)| self.labels[i].clone())
@@ -1381,9 +1506,21 @@ impl TieredStore {
     pub fn open(cache_dir: &str) -> Result<Self, String> {
         let root = PathBuf::from(cache_dir).join(V3_DIR).join("tiers");
         let levels = vec![
-            TierLevel { path: root.join("L0"), max_size: 64 * 1024 * 1024, current_size: 0 },
-            TierLevel { path: root.join("L1"), max_size: 640 * 1024 * 1024, current_size: 0 },
-            TierLevel { path: root.join("L2"), max_size: 6_400 * 1024 * 1024, current_size: 0 },
+            TierLevel {
+                path: root.join("L0"),
+                max_size: 64 * 1024 * 1024,
+                current_size: 0,
+            },
+            TierLevel {
+                path: root.join("L1"),
+                max_size: 640 * 1024 * 1024,
+                current_size: 0,
+            },
+            TierLevel {
+                path: root.join("L2"),
+                max_size: 6_400 * 1024 * 1024,
+                current_size: 0,
+            },
         ];
         for l in &levels {
             std::fs::create_dir_all(&l.path).map_err(|e| format!("tier mkdir: {}", e))?;
@@ -1445,7 +1582,9 @@ impl TieredStore {
 /// Check if a jagrs store is v2 format.
 pub fn is_v2(cache_dir: &str) -> bool {
     let mf_path = PathBuf::from(cache_dir).join(V3_DIR).join(MANIFEST_FILE);
-    if !mf_path.exists() { return false; }
+    if !mf_path.exists() {
+        return false;
+    }
     if let Ok(bytes) = std::fs::read(&mf_path) {
         if bytes.len() >= size_of::<ManifestHeader>() {
             let hdr = unsafe { &*(bytes.as_ptr() as *const ManifestHeader) };
@@ -1607,8 +1746,11 @@ mod tests {
         // Create v1 store_index.json
         let index_path = dir.join("store_index.json");
         let mut index = std::collections::HashMap::new();
-        index.insert("left-pad@1.3.0".to_string(), "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string());
-        let json = serde_json::to_string_pretty(&index).unwrap();
+        index.insert(
+            "left-pad@1.3.0".to_string(),
+            "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
+        );
+        let json = serde_json::to_string(&index).unwrap();
         fs::write(&index_path, &json).unwrap();
 
         // Create store dir with tarball file
