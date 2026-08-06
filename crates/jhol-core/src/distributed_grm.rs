@@ -1,8 +1,8 @@
 //! Distributed GRM - P2P Resolution Network Foundation
 //! Innovation: Share resolutions across all users
 
-use std::collections::HashMap;
 use crate::grm::ResolutionRecord;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct P2PResolutionRecord {
@@ -20,7 +20,9 @@ pub struct DistributedGRM {
 
 impl DistributedGRM {
     pub fn new() -> Self {
-        Self { local_cache: HashMap::new() }
+        Self {
+            local_cache: HashMap::new(),
+        }
     }
 
     pub fn query_dht(&self, package_spec: &str) -> Option<P2PResolutionRecord> {
@@ -32,8 +34,8 @@ impl DistributedGRM {
     }
 }
 
-use std::sync::OnceLock;
 use parking_lot::RwLock;
+use std::sync::OnceLock;
 
 fn global_dgrm() -> &'static RwLock<DistributedGRM> {
     static INSTANCE: OnceLock<RwLock<DistributedGRM>> = OnceLock::new();

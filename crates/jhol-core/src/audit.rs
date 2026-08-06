@@ -59,7 +59,10 @@ pub fn run_audit(_backend: crate::backend::Backend, quiet: bool) -> Result<(), S
     println!("Found {} vulnerability(ies):", vulns.len());
     for v in &vulns {
         let sev = v.severity.as_deref().unwrap_or("unknown");
-        println!("  {}@{} ({}): {} - {}", v.package_name, v.package_version, sev, v.id, v.summary);
+        println!(
+            "  {}@{} ({}): {} - {}",
+            v.package_name, v.package_version, sev, v.id, v.summary
+        );
     }
     Ok(())
 }
@@ -96,7 +99,10 @@ pub fn run_audit_gate(_backend: crate::backend::Backend) -> Result<(), String> {
     if vulns.is_empty() {
         return Ok(());
     }
-    Err(format!("audit gate failed: {} vulnerability(ies) found", vulns.len()))
+    Err(format!(
+        "audit gate failed: {} vulnerability(ies) found",
+        vulns.len()
+    ))
 }
 
 // ── Filtered audit variants (used by main.rs with --ignore/--min-severity) ─────

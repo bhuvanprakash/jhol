@@ -12,7 +12,10 @@ impl QuantumResistantSigner {
     pub fn generate() -> Result<Self, String> {
         let secret_key: Vec<u8> = (0..64).map(|_| rand::random::<u8>()).collect();
         let public_key: Vec<u8> = (0..32).map(|_| rand::random::<u8>()).collect();
-        Ok(Self { secret_key, public_key })
+        Ok(Self {
+            secret_key,
+            public_key,
+        })
     }
 
     pub fn sign(&self, content: &[u8]) -> Vec<u8> {
@@ -25,10 +28,12 @@ impl QuantumResistantSigner {
 
     pub fn verify(&self, content: &[u8], signature: &[u8]) -> bool {
         let hash = Sha256::digest(content);
-signature.len() >= 32 && signature[..32] == hash[..]
+        signature.len() >= 32 && signature[..32] == hash[..]
     }
 
-    pub fn public_key(&self) -> &[u8] { &self.public_key }
+    pub fn public_key(&self) -> &[u8] {
+        &self.public_key
+    }
 }
 
 pub fn sign_package(content: &[u8]) -> Result<Vec<u8>, String> {

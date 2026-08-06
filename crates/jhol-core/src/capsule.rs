@@ -12,8 +12,14 @@ use std::io::Write;
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
 
-const _: () = assert!(size_of::<CapsuleHeader>() == 64, "CapsuleHeader must be 64 bytes");
-const _: () = assert!(size_of::<PackageEntry>() == 64, "PackageEntry must be 64 bytes");
+const _: () = assert!(
+    size_of::<CapsuleHeader>() == 64,
+    "CapsuleHeader must be 64 bytes"
+);
+const _: () = assert!(
+    size_of::<PackageEntry>() == 64,
+    "PackageEntry must be 64 bytes"
+);
 const _: () = assert!(size_of::<DepEdge>() == 8, "DepEdge must be 8 bytes");
 
 // ── Constants ────────────────────────────────────────────────────────────────────
@@ -86,7 +92,8 @@ unsafe impl Sync for CapsuleView {}
 
 impl CapsuleView {
     pub fn open(path: &Path) -> Result<Self, String> {
-        let file = fs::File::open(path).map_err(|e| format!("capsule open {}: {}", path.display(), e))?;
+        let file =
+            fs::File::open(path).map_err(|e| format!("capsule open {}: {}", path.display(), e))?;
         let mmap = unsafe { Mmap::map(&file).map_err(|e| format!("capsule mmap: {}", e))? };
 
         if mmap.len() < HEADER_SIZE {
@@ -115,7 +122,11 @@ impl CapsuleView {
         let deps_end = deps_start + dep_count * DEP_EDGE_SIZE;
 
         if mmap.len() < deps_end {
-            return Err(format!("capsule: truncated ({} < {})", mmap.len(), deps_end));
+            return Err(format!(
+                "capsule: truncated ({} < {})",
+                mmap.len(),
+                deps_end
+            ));
         }
 
         let entries = unsafe { mmap.as_ptr().add(entries_start) as *const PackageEntry };
@@ -176,7 +187,12 @@ impl CapsuleView {
     }
 
     pub fn entry(&self, idx: usize) -> &PackageEntry {
-        assert!(idx < self.pkg_count, "capsule entry idx {} >= {}", idx, self.pkg_count);
+        assert!(
+            idx < self.pkg_count,
+            "capsule entry idx {} >= {}",
+            idx,
+            self.pkg_count
+        );
         unsafe { &*self.entries.add(idx) }
     }
 
@@ -186,24 +202,38 @@ impl CapsuleView {
 
     pub fn entry_name(&self, entry: &PackageEntry) -> &str {
         let start = entry.name_off as usize;
-        let remaining = &unsafe { std::slice::from_raw_parts(self.string_table, self.str_len) }[start..];
-        let end = remaining.iter().position(|&b| b == 0).unwrap_or(remaining.len());
+        let remaining =
+            &unsafe { std::slice::from_raw_parts(self.string_table, self.str_len) }[start..];
+        let end = remaining
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(remaining.len());
         unsafe { std::str::from_utf8_unchecked(&remaining[..end]) }
     }
 
     pub fn entry_version(&self, entry: &PackageEntry) -> &str {
         let start = entry.version_off as usize;
-        let remaining = &unsafe { std::slice::from_raw_parts(self.string_table, self.str_len) }[start..];
-        let end = remaining.iter().position(|&b| b == 0).unwrap_or(remaining.len());
+        let remaining =
+            &unsafe { std::slice::from_raw_parts(self.string_table, self.str_len) }[start..];
+        let end = remaining
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(remaining.len());
         unsafe { std::str::from_utf8_unchecked(&remaining[..end]) }
     }
 
     /// Read tarball URL from string table (zero-copy).
     pub fn entry_url(&self, entry: &PackageEntry) -> &str {
-        if entry.url_off == 0 { return ""; }
+        if entry.url_off == 0 {
+            return "";
+        }
         let start = entry.url_off as usize;
-        let remaining = &unsafe { std::slice::from_raw_parts(self.string_table, self.str_len) }[start..];
-        let end = remaining.iter().position(|&b| b == 0).unwrap_or(remaining.len());
+        let remaining =
+            &unsafe { std::slice::from_raw_parts(self.string_table, self.str_len) }[start..];
+        let end = remaining
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(remaining.len());
         unsafe { std::str::from_utf8_unchecked(&remaining[..end]) }
     }
 
@@ -219,7 +249,10 @@ impl CapsuleView {
         for i in 0..self.pkg_count {
             let e = self.entry(i);
             if e.name_off as usize >= self.str_len {
-                return Err(format!("pkg {}: name_off {} >= str_len {}", i, e.name_off, self.str_len));
+                return Err(format!(
+                    "pkg {}: name_off {} >= str_len {}",
+                    i, e.name_off, self.str_len
+                ));
             }
             let name_end = str_bytes[e.name_off as usize..]
                 .iter()
@@ -229,7 +262,10 @@ impl CapsuleView {
                 return Err(format!("pkg {}: empty name", i));
             }
             if e.version_off as usize >= self.str_len {
-                return Err(format!("pkg {}: version_off {} >= str_len {}", i, e.version_off, self.str_len));
+                return Err(format!(
+                    "pkg {}: version_off {} >= str_len {}",
+                    i, e.version_off, self.str_len
+                ));
             }
             let ver_end = str_bytes[e.version_off as usize..]
                 .iter()
@@ -243,7 +279,10 @@ impl CapsuleView {
             }
             for d in self.entry_deps(e) {
                 if d.pkg_idx as usize >= self.pkg_count {
-                    return Err(format!("pkg {}: dep idx {} >= {}", i, d.pkg_idx, self.pkg_count));
+                    return Err(format!(
+                        "pkg {}: dep idx {} >= {}",
+                        i, d.pkg_idx, self.pkg_count
+                    ));
                 }
             }
         }
@@ -313,7 +352,11 @@ impl CapsuleBuilder {
     ) -> u32 {
         let name_off = self.intern_string(name);
         let version_off = self.intern_string(version);
-        let url_off = if tarball_url.is_empty() { 0 } else { self.intern_string(tarball_url) };
+        let url_off = if tarball_url.is_empty() {
+            0
+        } else {
+            self.intern_string(tarball_url)
+        };
         let dep_start = self.dep_count;
 
         for &(pkg_idx, edge_type) in deps {
@@ -329,7 +372,8 @@ impl CapsuleBuilder {
         self.entries.extend_from_slice(tarball_hash);
         self.entries.extend_from_slice(&unpacked_size.to_le_bytes());
         self.entries.extend_from_slice(&dep_start.to_le_bytes());
-        self.entries.extend_from_slice(&(deps.len() as u16).to_le_bytes());
+        self.entries
+            .extend_from_slice(&(deps.len() as u16).to_le_bytes());
         self.entries.extend_from_slice(&flags.to_le_bytes());
         self.entries.extend_from_slice(&url_off.to_le_bytes());
         self.entries.extend_from_slice(&install_order.to_le_bytes());
@@ -347,7 +391,7 @@ impl CapsuleBuilder {
         }
 
         let mut buf = Vec::with_capacity(
-            HEADER_SIZE + self.entries.len() + self.string_table.len() + self.dep_edges.len()
+            HEADER_SIZE + self.entries.len() + self.string_table.len() + self.dep_edges.len(),
         );
 
         // Header
@@ -408,7 +452,8 @@ pub fn write_capsule(path: &Path, builder: CapsuleBuilder) -> Result<(), String>
     let tmp = path.with_extension("tmp");
     {
         let mut f = fs::File::create(&tmp).map_err(|e| format!("capsule create tmp: {}", e))?;
-        f.write_all(&data).map_err(|e| format!("capsule write: {}", e))?;
+        f.write_all(&data)
+            .map_err(|e| format!("capsule write: {}", e))?;
         f.sync_all().map_err(|e| format!("capsule sync: {}", e))?;
     }
     fs::rename(&tmp, path).map_err(|e| format!("capsule rename: {}", e))?;
@@ -541,16 +586,20 @@ fn install_from_capsule_serial(view: &CapsuleView, project_dir: &Path) -> Result
             )
         };
         let pkg_key = format!("{}@{}", name, version);
-        let hash: String = crate::jagrs::download_and_stream_to_store(&url, cache_dir.to_str().unwrap_or("."), &pkg_key)
-            .or_else(|_| -> Result<String, String> {
-                let bytes = crate::http_client::get_bytes_with_bearer(&url, None)?;
-                fs::create_dir_all(&store_dir).ok();
-                let store_path = store_dir.join(format!("{}.tgz", tarball_hex));
-                fs::write(&store_path, &bytes).map_err(|e| e.to_string())?;
-                let _ = crate::jagrs::store_tarball(&bytes);
-                let _ = crate::registry::ensure_unpacked_in_store(&store_path, &cache_dir);
-                Ok(tarball_hex.clone())
-            })?;
+        let hash: String = crate::jagrs::download_and_stream_to_store(
+            &url,
+            cache_dir.to_str().unwrap_or("."),
+            &pkg_key,
+        )
+        .or_else(|_| -> Result<String, String> {
+            let bytes = crate::http_client::get_bytes_with_bearer(&url, None)?;
+            fs::create_dir_all(&store_dir).ok();
+            let store_path = store_dir.join(format!("{}.tgz", tarball_hex));
+            fs::write(&store_path, &bytes).map_err(|e| e.to_string())?;
+            let _ = crate::jagrs::store_tarball(&bytes);
+            let _ = crate::registry::ensure_unpacked_in_store(&store_path, &cache_dir);
+            Ok(tarball_hex.clone())
+        })?;
         crate::soul_path::project_package(name, version, &hash, &node_modules, &cache_dir)
             .map_err(|e| format!("capsule: project {}: {}", name, e))?;
         index_batch.insert(format!("{}@{}", name, version), hash);
@@ -714,9 +763,7 @@ pub fn write_capsule_from_project(project_dir: &Path) -> Result<(), String> {
             if let Some(deps_obj) = pj.get("dependencies").and_then(|d| d.as_object()) {
                 let deps: std::collections::HashMap<String, String> = deps_obj
                     .iter()
-                    .map(|(k, v)| {
-                        (k.clone(), v.as_str().unwrap_or("*").to_string())
-                    })
+                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("*").to_string()))
                     .collect();
                 let gate = crate::soul_path::spectral_gate_from_deps(&deps);
                 builder.set_spectral(gate.spectral_gap, gate.predicted_beta1 as u64);
@@ -752,10 +799,7 @@ pub fn write_capsule_from_project(project_dir: &Path) -> Result<(), String> {
         let unpacked_size = 0u32;
         let flags = extract_flags(pkg);
         let install_order = *order_map.get(name).unwrap_or(&0);
-        let url = pkg
-            .get("resolved")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let url = pkg.get("resolved").and_then(|v| v.as_str()).unwrap_or("");
 
         let mut deps_idx: Vec<(u32, u16)> = Vec::new();
         if let Some(dlist) = edges_by_name.get(name) {
@@ -821,16 +865,24 @@ pub fn write_capsule_from_deps(
 
         let hash = {
             let spec = format!("{}@{}", name, version);
-            let store_idx = crate::utils::read_store_index();
-            store_idx.get(&spec).cloned().unwrap_or_default()
+            crate::utils::with_store_index(|idx| idx.get(&spec).cloned().unwrap_or_default())
         };
 
         let mut entry = serde_json::Map::new();
-        entry.insert("version".to_string(), serde_json::Value::String(version.to_string()));
+        entry.insert(
+            "version".to_string(),
+            serde_json::Value::String(version.to_string()),
+        );
         if !hash.is_empty() {
-            entry.insert("integrity".to_string(), serde_json::Value::String(format!("sha256-{}", hash)));
+            entry.insert(
+                "integrity".to_string(),
+                serde_json::Value::String(format!("sha256-{}", hash)),
+            );
         }
-        entry.insert("dependencies".to_string(), serde_json::Value::Object(serde_json::Map::new()));
+        entry.insert(
+            "dependencies".to_string(),
+            serde_json::Value::Object(serde_json::Map::new()),
+        );
         packages.insert(key, serde_json::Value::Object(entry));
     }
 
@@ -858,9 +910,19 @@ fn lockfile_key_to_name(key: &str) -> String {
 
 fn extract_flags(pkg: &serde_json::Value) -> u16 {
     let mut flags = 0u16;
-    if pkg.get("dev").and_then(|v| v.as_bool()).unwrap_or(false) { flags |= 1; }
-    if pkg.get("peer").and_then(|v| v.as_bool()).unwrap_or(false) { flags |= 2; }
-    if pkg.get("optional").and_then(|v| v.as_bool()).unwrap_or(false) { flags |= 4; }
+    if pkg.get("dev").and_then(|v| v.as_bool()).unwrap_or(false) {
+        flags |= 1;
+    }
+    if pkg.get("peer").and_then(|v| v.as_bool()).unwrap_or(false) {
+        flags |= 2;
+    }
+    if pkg
+        .get("optional")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        flags |= 4;
+    }
     flags
 }
 
@@ -908,10 +970,7 @@ fn resolve_tarball_hash(
 
 /// Classifier: look up capsule by knot fingerprint AND manifest hash.
 /// Returns Some(CapsuleView) if fingerprint matches, None otherwise.
-pub fn classifier_lookup(
-    project_dir: &Path,
-    knot_fp: u64,
-) -> Option<CapsuleView> {
+pub fn classifier_lookup(project_dir: &Path, knot_fp: u64) -> Option<CapsuleView> {
     let cap_path = capsule_path(project_dir);
     if !cap_path.exists() {
         return None;
@@ -926,10 +985,7 @@ pub fn classifier_lookup(
 
 /// Write CGA capsule (git-committable) — includes knot fingerprint for classifier.
 /// Writes to `.jhol/capsule.bin` path (git-friendly).
-pub fn write_cga_capsule(
-    project_dir: &Path,
-    builder: CapsuleBuilder,
-) -> Result<(), String> {
+pub fn write_cga_capsule(project_dir: &Path, builder: CapsuleBuilder) -> Result<(), String> {
     let cap_path = cga_capsule_path(project_dir);
     if let Some(parent) = cap_path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("cga mkdir: {}", e))?;
@@ -999,7 +1055,8 @@ mod tests {
         use std::sync::atomic::{AtomicU32, Ordering};
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let c = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let d = std::env::temp_dir().join(format!("jhol-capsule-test-{}-{}", std::process::id(), c));
+        let d =
+            std::env::temp_dir().join(format!("jhol-capsule-test-{}-{}", std::process::id(), c));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d

@@ -2,7 +2,7 @@
 //! Innovation: Replace JSON with bincode + zstd
 //! Performance: 2ms → 0.3ms (6x faster)
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::path::Path;
 
@@ -30,7 +30,7 @@ impl BinaryLockfile {
         let compressed_data = zstd::encode_all(&bincode_data[..], 3).map_err(|e| e.to_string())?;
         let compressed_size = compressed_data.len() as u64;
         let checksum = xxhash_rust::xxh3::xxh3_64(&bincode_data);
-        
+
         Ok(Self {
             header: BinaryLockfileHeader {
                 magic: BINARY_LOCKFILE_MAGIC,
@@ -58,7 +58,8 @@ impl BinaryLockfile {
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), String> {
         let mut file = std::fs::File::create(path).map_err(|e| e.to_string())?;
         let header_bytes = bincode::serialize(&self.header).map_err(|e| e.to_string())?;
-        file.write_all(&(header_bytes.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
+        file.write_all(&(header_bytes.len() as u32).to_le_bytes())
+            .map_err(|e| e.to_string())?;
         file.write_all(&header_bytes).map_err(|e| e.to_string())?;
         file.write_all(&self.data).map_err(|e| e.to_string())?;
         file.sync_all().map_err(|e| e.to_string())?;
@@ -71,23 +72,37 @@ impl BinaryLockfile {
         file.read_exact(&mut len_buf).map_err(|e| e.to_string())?;
         let header_len = u32::from_le_bytes(len_buf) as usize;
         let mut header_bytes = vec![0u8; header_len];
-        file.read_exact(&mut header_bytes).map_err(|e| e.to_string())?;
-        let header: BinaryLockfileHeader = bincode::deserialize(&header_bytes).map_err(|e| e.to_string())?;
+        file.read_exact(&mut header_bytes)
+            .map_err(|e| e.to_string())?;
+        let header: BinaryLockfileHeader =
+            bincode::deserialize(&header_bytes).map_err(|e| e.to_string())?;
         let mut data = Vec::with_capacity(header.compressed_size as usize);
         file.read_to_end(&mut data).map_err(|e| e.to_string())?;
         Ok(Self { header, data })
     }
 
     pub fn is_binary_format<P: AsRef<Path>>(path: P) -> bool {
-        let mut file = match std::fs::File::open(path) { Ok(f) => f, Err(_) => return false };
+        let mut file = match std::fs::File::open(path) {
+            Ok(f) => f,
+            Err(_) => return false,
+        };
         let mut len_buf = [0u8; 4];
-        if file.read_exact(&mut len_buf).is_err() { return false; }
+        if file.read_exact(&mut len_buf).is_err() {
+            return false;
+        }
         let header_len = u32::from_le_bytes(len_buf) as usize;
-        if header_len > 1024 || header_len < 16 { return false; }
+        if header_len > 1024 || header_len < 16 {
+            return false;
+        }
         let mut header_bytes = vec![0u8; header_len];
-        if file.read_exact(&mut header_bytes).is_err() { return false; }
+        if file.read_exact(&mut header_bytes).is_err() {
+            return false;
+        }
         let header: Result<BinaryLockfileHeader, _> = bincode::deserialize(&header_bytes);
-        match header { Ok(h) => h.magic == BINARY_LOCKFILE_MAGIC, Err(_) => false }
+        match header {
+            Ok(h) => h.magic == BINARY_LOCKFILE_MAGIC,
+            Err(_) => false,
+        }
     }
 }
 
@@ -116,8 +131,14 @@ pub fn prewrite_predicted_lockfile(
                 continue;
             }
             let mut entry = serde_json::Map::new();
-            entry.insert("version".to_string(), serde_json::Value::String(version.to_string()));
-            entry.insert("dependencies".to_string(), serde_json::Value::Object(serde_json::Map::new()));
+            entry.insert(
+                "version".to_string(),
+                serde_json::Value::String(version.to_string()),
+            );
+            entry.insert(
+                "dependencies".to_string(),
+                serde_json::Value::Object(serde_json::Map::new()),
+            );
             packages.insert(key, serde_json::Value::Object(entry));
         }
     }

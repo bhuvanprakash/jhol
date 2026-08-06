@@ -241,8 +241,8 @@ pub fn clear_config_cache() {
 
 #[repr(C, packed)]
 struct StatusFile {
-    magic: [u8; 8],          // "JHLSTAT\0"
-    nm_fresh: u8,            // 1 = node_modules verified correct
+    magic: [u8; 8], // "JHLSTAT\0"
+    nm_fresh: u8,   // 1 = node_modules verified correct
     pj_mtime_sec: u64,
     pj_mtime_nsec: u32,
     pj_size: u64,
@@ -283,14 +283,18 @@ fn global_status_path_for_hash(hash: u64) -> PathBuf {
     std::env::var("JHOL_STATUS_FILE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            Path::new("/tmp").join("jhol-status").join(format!("{:016x}.bin", hash))
+            Path::new("/tmp")
+                .join("jhol-status")
+                .join(format!("{:016x}.bin", hash))
         })
 }
 
 fn file_mtime_size(p: &std::path::Path) -> Option<(u64, u32, u64)> {
     let meta = std::fs::metadata(p).ok()?;
     let mtime = meta.modified().ok()?;
-    let dur = mtime.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let dur = mtime
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
     Some((dur.as_secs(), dur.subsec_nanos(), meta.len()))
 }
 
@@ -361,9 +365,15 @@ pub fn can_skip_install_for_dir(project_dir: &std::path::Path) -> bool {
         Err(_) => return false,
     };
     let mut buf = [0u8; 61];
-    if f.read_exact(&mut buf).is_err() { return false; }
-    if &buf[..8] != b"JHLSTAT\0" { return false; }
-    if buf[8] != 1 { return false; }
+    if f.read_exact(&mut buf).is_err() {
+        return false;
+    }
+    if &buf[..8] != b"JHLSTAT\0" {
+        return false;
+    }
+    if buf[8] != 1 {
+        return false;
+    }
 
     let u64_at = |off: usize| u64::from_le_bytes(buf[off..off + 8].try_into().unwrap_or([0; 8]));
     let u32_at = |off: usize| u32::from_le_bytes(buf[off..off + 4].try_into().unwrap_or([0; 4]));
@@ -376,7 +386,9 @@ pub fn can_skip_install_for_dir(project_dir: &std::path::Path) -> bool {
     let pl = project_dir.join("package-lock.json");
     let nm = project_dir.join("node_modules");
 
-    if !nm.exists() { return false; }
+    if !nm.exists() {
+        return false;
+    }
 
     let cur_pj = file_mtime_size(&pj).unwrap_or((0, 0, 0));
     let cur_pl = file_mtime_size(&pl).unwrap_or((0, 0, 0));
@@ -425,8 +437,8 @@ const FLAG_NO_SCRIPTS: u32 = 1 << 8;
 /// Read/written with a single read/write call — zero parse.
 #[repr(C, packed)]
 pub struct DaemonRequest {
-    pub magic: [u8; 8],          // "JHLREQ\0"
-    pub cwd: [u8; DAEMON_CWD_LEN],  // null-terminated
+    pub magic: [u8; 8],            // "JHLREQ\0"
+    pub cwd: [u8; DAEMON_CWD_LEN], // null-terminated
     pub manifest_hash: [u8; 8],
     pub flags: u32,
     pub pkg_count: u32,
@@ -437,14 +449,24 @@ pub struct DaemonRequest {
 /// Packed response from daemon to CLI. Tiny — 1 byte for success.
 #[repr(C, packed)]
 pub struct DaemonResponse {
-    pub ok: u8,                   // 0=success, 1=error
+    pub ok: u8,                          // 0=success, 1=error
     pub error_msg: [u8; DAEMON_ERR_LEN], // null-terminated, valid when ok=1
 }
 
 impl DaemonRequest {
-    pub fn new(cwd: &str, packages: &[String], quiet: bool, no_cache: bool, offline: bool,
-               strict_lockfile: bool, strict_peer_deps: bool, from_lockfile: bool,
-               lockfile_only: bool, native_only: bool, no_scripts: bool) -> Self {
+    pub fn new(
+        cwd: &str,
+        packages: &[String],
+        quiet: bool,
+        no_cache: bool,
+        offline: bool,
+        strict_lockfile: bool,
+        strict_peer_deps: bool,
+        from_lockfile: bool,
+        lockfile_only: bool,
+        native_only: bool,
+        no_scripts: bool,
+    ) -> Self {
         let mut req = Self {
             magic: *b"JHLREQ\0\0",
             cwd: [0u8; DAEMON_CWD_LEN],
@@ -459,15 +481,33 @@ impl DaemonRequest {
         req.cwd[..len].copy_from_slice(&cwd_bytes[..len]);
         req.cwd[len] = 0;
         // Set flags
-        if quiet { req.flags |= FLAG_QUIET; }
-        if no_cache { req.flags |= FLAG_NO_CACHE; }
-        if offline { req.flags |= FLAG_OFFLINE; }
-        if strict_lockfile { req.flags |= FLAG_STRICT_LOCKFILE; }
-        if strict_peer_deps { req.flags |= FLAG_STRICT_PEER_DEPS; }
-        if from_lockfile { req.flags |= FLAG_FROM_LOCKFILE; }
-        if lockfile_only { req.flags |= FLAG_LOCKFILE_ONLY; }
-        if native_only { req.flags |= FLAG_NATIVE_ONLY; }
-        if no_scripts { req.flags |= FLAG_NO_SCRIPTS; }
+        if quiet {
+            req.flags |= FLAG_QUIET;
+        }
+        if no_cache {
+            req.flags |= FLAG_NO_CACHE;
+        }
+        if offline {
+            req.flags |= FLAG_OFFLINE;
+        }
+        if strict_lockfile {
+            req.flags |= FLAG_STRICT_LOCKFILE;
+        }
+        if strict_peer_deps {
+            req.flags |= FLAG_STRICT_PEER_DEPS;
+        }
+        if from_lockfile {
+            req.flags |= FLAG_FROM_LOCKFILE;
+        }
+        if lockfile_only {
+            req.flags |= FLAG_LOCKFILE_ONLY;
+        }
+        if native_only {
+            req.flags |= FLAG_NATIVE_ONLY;
+        }
+        if no_scripts {
+            req.flags |= FLAG_NO_SCRIPTS;
+        }
         // Copy package names
         for (i, pkg) in packages.iter().enumerate().take(DAEMON_MAX_PKGS) {
             let pkg_bytes = pkg.as_bytes();
@@ -479,14 +519,21 @@ impl DaemonRequest {
     }
 
     pub fn cwd_str(&self) -> &str {
-        let end = self.cwd.iter().position(|&b| b == 0).unwrap_or(DAEMON_CWD_LEN - 1);
+        let end = self
+            .cwd
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(DAEMON_CWD_LEN - 1);
         std::str::from_utf8(&self.cwd[..end]).unwrap_or(".")
     }
 
     pub fn packages(&self) -> Vec<String> {
         let mut pkgs = Vec::with_capacity(self.pkg_count as usize);
         for i in 0..(self.pkg_count as usize).min(DAEMON_MAX_PKGS) {
-            let end = self.pkgs[i].iter().position(|&b| b == 0).unwrap_or(DAEMON_PKG_NAME_LEN - 1);
+            let end = self.pkgs[i]
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(DAEMON_PKG_NAME_LEN - 1);
             if let Ok(s) = std::str::from_utf8(&self.pkgs[i][..end]) {
                 if !s.is_empty() {
                     pkgs.push(s.to_string());
@@ -496,24 +543,48 @@ impl DaemonRequest {
         pkgs
     }
 
-    pub fn quiet(&self) -> bool { self.flags & FLAG_QUIET != 0 }
-    pub fn no_cache(&self) -> bool { self.flags & FLAG_NO_CACHE != 0 }
-    pub fn offline(&self) -> bool { self.flags & FLAG_OFFLINE != 0 }
-    pub fn strict_lockfile(&self) -> bool { self.flags & FLAG_STRICT_LOCKFILE != 0 }
-    pub fn strict_peer_deps(&self) -> bool { self.flags & FLAG_STRICT_PEER_DEPS != 0 }
-    pub fn from_lockfile(&self) -> bool { self.flags & FLAG_FROM_LOCKFILE != 0 }
-    pub fn lockfile_only(&self) -> bool { self.flags & FLAG_LOCKFILE_ONLY != 0 }
-    pub fn native_only(&self) -> bool { self.flags & FLAG_NATIVE_ONLY != 0 }
-    pub fn no_scripts(&self) -> bool { self.flags & FLAG_NO_SCRIPTS != 0 }
+    pub fn quiet(&self) -> bool {
+        self.flags & FLAG_QUIET != 0
+    }
+    pub fn no_cache(&self) -> bool {
+        self.flags & FLAG_NO_CACHE != 0
+    }
+    pub fn offline(&self) -> bool {
+        self.flags & FLAG_OFFLINE != 0
+    }
+    pub fn strict_lockfile(&self) -> bool {
+        self.flags & FLAG_STRICT_LOCKFILE != 0
+    }
+    pub fn strict_peer_deps(&self) -> bool {
+        self.flags & FLAG_STRICT_PEER_DEPS != 0
+    }
+    pub fn from_lockfile(&self) -> bool {
+        self.flags & FLAG_FROM_LOCKFILE != 0
+    }
+    pub fn lockfile_only(&self) -> bool {
+        self.flags & FLAG_LOCKFILE_ONLY != 0
+    }
+    pub fn native_only(&self) -> bool {
+        self.flags & FLAG_NATIVE_ONLY != 0
+    }
+    pub fn no_scripts(&self) -> bool {
+        self.flags & FLAG_NO_SCRIPTS != 0
+    }
 }
 
 impl DaemonResponse {
     pub fn success() -> Self {
-        Self { ok: 0, error_msg: [0u8; DAEMON_ERR_LEN] }
+        Self {
+            ok: 0,
+            error_msg: [0u8; DAEMON_ERR_LEN],
+        }
     }
 
     pub fn error(msg: &str) -> Self {
-        let mut r = Self { ok: 1, error_msg: [0u8; DAEMON_ERR_LEN] };
+        let mut r = Self {
+            ok: 1,
+            error_msg: [0u8; DAEMON_ERR_LEN],
+        };
         let bytes = msg.as_bytes();
         let len = bytes.len().min(DAEMON_ERR_LEN - 1);
         r.error_msg[..len].copy_from_slice(&bytes[..len]);
@@ -522,8 +593,14 @@ impl DaemonResponse {
     }
 
     pub fn error_str(&self) -> &str {
-        if self.ok == 0 { return ""; }
-        let end = self.error_msg.iter().position(|&b| b == 0).unwrap_or(DAEMON_ERR_LEN - 1);
+        if self.ok == 0 {
+            return "";
+        }
+        let end = self
+            .error_msg
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(DAEMON_ERR_LEN - 1);
         std::str::from_utf8(&self.error_msg[..end]).unwrap_or("unknown error")
     }
 }
@@ -550,7 +627,10 @@ pub fn read_request(stream: &mut impl std::io::Read) -> std::io::Result<DaemonRe
 }
 
 /// Write a daemon response to a stream. Single write — zero serde.
-pub fn write_response(stream: &mut impl std::io::Write, resp: &DaemonResponse) -> std::io::Result<()> {
+pub fn write_response(
+    stream: &mut impl std::io::Write,
+    resp: &DaemonResponse,
+) -> std::io::Result<()> {
     let ptr = resp as *const DaemonResponse as *const u8;
     let slice = unsafe { std::slice::from_raw_parts(ptr, DAEMON_RESPONSE_SIZE) };
     stream.write_all(slice)
@@ -604,7 +684,8 @@ pub fn try_exit_before_clap() {
     // Raw argv check: only install-like commands trigger I/O.
     // On macOS _NSGetArgv is a function call, not lazy init.
     let arg1 = get_argv1();
-    let is_install = matches!(arg1.as_deref(),
+    let is_install = matches!(
+        arg1.as_deref(),
         Some("install" | "i" | "add" | "ci" | "remove" | "uninstall" | "update")
     );
     if !is_install {
@@ -626,8 +707,12 @@ fn get_argv1() -> Option<String> {
         let mut argc: i32 = 0;
         let mut argv: *mut *mut i8 = std::ptr::null_mut();
         let result = unsafe { _NSGetArgv(&mut argc as *mut i32, &mut argv as *mut *mut *mut i8) };
-        if result != 0 { return None; }
-        if argc < 2 { return None; }
+        if result != 0 {
+            return None;
+        }
+        if argc < 2 {
+            return None;
+        }
         let arg1 = unsafe { std::ffi::CStr::from_ptr(*argv.offset(1)) };
         arg1.to_str().ok().map(|s| s.to_string())
     }
@@ -706,8 +791,8 @@ pub fn fast_nm_check(project_dir: &std::path::Path) -> bool {
 //
 // Daemon keeps the parsed capsule view in memory so warm requests skip mmap + verify.
 
-use std::sync::Arc;
 use crate::capsule::CapsuleView;
+use std::sync::Arc;
 
 static CAPSULE_CACHE: std::sync::OnceLock<Mutex<Option<CapsuleSnapshot>>> =
     std::sync::OnceLock::new();
@@ -876,6 +961,7 @@ pub fn speculate_neighborhoods(
         available_versions: available,
         dependencies: deps_map,
         conflicts: vec![],
+        focus_packages: None,
     };
 
     let mut edits = Vec::new();
@@ -904,7 +990,7 @@ pub fn speculate_neighborhoods(
         };
         let changed = vec![name.clone()];
         // knot_solve_star returns HashMap<String,String> directly
-        let result = knot_solve_star(knot_fp, &changed, &base_request);
+        let result = knot_solve_star(knot_fp, &changed, &base_request, None);
         let entries: HashMap<String, MirrorEntry> = match result {
             Ok(map) if !map.is_empty() => {
                 let mut m = HashMap::new();
@@ -912,14 +998,12 @@ pub fn speculate_neighborhoods(
                     m.insert(
                         pkg.clone(),
                         MirrorEntry {
-                            package: pkg.clone(),
-                            version: ver.clone(),
-                            resolved_version: ver.clone(),
+                            package: Arc::from(pkg.as_str()),
+                            version: Arc::from(ver.as_str()),
                             integrity: None,
                             resolved_url: None,
                             tarball_url: None,
                             deps: HashMap::new(),
-                            dependencies: HashMap::new(),
                             dep_signature: String::new(),
                         },
                     );
@@ -931,5 +1015,3 @@ pub fn speculate_neighborhoods(
         snr_put(knot_fp, &edit_desc, entries);
     }
 }
-
-

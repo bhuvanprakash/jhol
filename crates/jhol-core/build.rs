@@ -50,12 +50,15 @@ fn generate_bundled_packages_from_binary(_binary_dir: &Path) {
     println!("cargo:warning=PRW mode: embedding NO tarballs (binary stays small)");
     let mut rust_code = String::new();
     rust_code.push_str("#[doc(hidden)]\n");
-    rust_code.push_str("pub fn get_bundled_package_data() -> &'static [(&'static str, &'static [u8])] {\n");
+    rust_code.push_str(
+        "pub fn get_bundled_package_data() -> &'static [(&'static str, &'static [u8])] {\n",
+    );
     rust_code.push_str("    static DATA: &[(&str, &[u8])] = &[];\n");
     rust_code.push_str("    DATA\n");
     rust_code.push_str("}\n\n");
     rust_code.push_str("#[doc(hidden)]\n");
-    rust_code.push_str("pub fn get_bundled_hashes() -> &'static [(&'static str, &'static str)] {\n");
+    rust_code
+        .push_str("pub fn get_bundled_hashes() -> &'static [(&'static str, &'static str)] {\n");
     rust_code.push_str("    static HASHES: &[(&str, &str)] = &[];\n");
     rust_code.push_str("    HASHES\n");
     rust_code.push_str("}\n");
@@ -183,41 +186,120 @@ fn generate_dssc_certs(binary_dir: &Path) {
 fn classify_package_for_dssc(name: &str) -> (u8, u32, u32) {
     // Well-known zero-dep packages: leaf nodes, always Stable
     let zero_dep_packages = [
-        "lodash", "chalk", "ms", "debug", "semver", "uuid", "chalk-template",
-        "escape-string-regexp", "strip-ansi", "ansi-styles", "supports-color",
-        "has-flag", "color-convert", "color-name", "yocto-queue",
-        "fast-deep-equal", "fast-json-stable-stringify", "json-parse-even-better-errors",
-        "fast-levenshtein", "callsites", "path-is-absolute", "resolve-from",
-        "function-bind", "object-assign", "is-fullwidth-code-point",
-        "strip-json-comments", "minimist", "wordwrap", "wrappy",
-        "inflight", "once", "inherits", "process-nextick-args",
-        "safe-buffer", "safe-regex", "string_decoder", "core-util-is",
-        "isarray", "has-symbols", "es-to-primitive", "is-callable",
-        "is-negative-zero", "is-regex", "object-inspect", "string.prototype.trim",
-        "which-boxed-primitive", "side-channel", "get-intrinsic",
-        "has-proto", "has-tostringtag", "math-intrinsics",
+        "lodash",
+        "chalk",
+        "ms",
+        "debug",
+        "semver",
+        "uuid",
+        "chalk-template",
+        "escape-string-regexp",
+        "strip-ansi",
+        "ansi-styles",
+        "supports-color",
+        "has-flag",
+        "color-convert",
+        "color-name",
+        "yocto-queue",
+        "fast-deep-equal",
+        "fast-json-stable-stringify",
+        "json-parse-even-better-errors",
+        "fast-levenshtein",
+        "callsites",
+        "path-is-absolute",
+        "resolve-from",
+        "function-bind",
+        "object-assign",
+        "is-fullwidth-code-point",
+        "strip-json-comments",
+        "minimist",
+        "wordwrap",
+        "wrappy",
+        "inflight",
+        "once",
+        "inherits",
+        "process-nextick-args",
+        "safe-buffer",
+        "safe-regex",
+        "string_decoder",
+        "core-util-is",
+        "isarray",
+        "has-symbols",
+        "es-to-primitive",
+        "is-callable",
+        "is-negative-zero",
+        "is-regex",
+        "object-inspect",
+        "string.prototype.trim",
+        "which-boxed-primitive",
+        "side-channel",
+        "get-intrinsic",
+        "has-proto",
+        "has-tostringtag",
+        "math-intrinsics",
     ];
     let low_dep_packages = [
-        "react", "react-dom", "vue", "svelte", "preact", "lit",
-        "dayjs", "moment", "luxon", "date-fns",
-        "zod", "yup", "joi", "ajv", "superjson",
-        "immer", "rxjs", "nanoid", "cross-env", "rimraf",
-        "dotenv", "glob", "minimatch", "brace-expansion",
-        "concat-map", "balanced-match", "fs.realpath", "inflight",
-        "path-is-absolute", "object-is", "array-flatten",
-        "is-core-module", "supports-preserve-symlinks-flag",
+        "react",
+        "react-dom",
+        "vue",
+        "svelte",
+        "preact",
+        "lit",
+        "dayjs",
+        "moment",
+        "luxon",
+        "date-fns",
+        "zod",
+        "yup",
+        "joi",
+        "ajv",
+        "superjson",
+        "immer",
+        "rxjs",
+        "nanoid",
+        "cross-env",
+        "rimraf",
+        "dotenv",
+        "glob",
+        "minimatch",
+        "brace-expansion",
+        "concat-map",
+        "balanced-match",
+        "fs.realpath",
+        "inflight",
+        "path-is-absolute",
+        "object-is",
+        "array-flatten",
+        "is-core-module",
+        "supports-preserve-symlinks-flag",
     ];
     let scoped_stable = [
-        "@babel/core", "@babel/preset-env", "@babel/preset-react",
-        "@babel/preset-typescript", "@babel/runtime",
-        "@types/node", "@types/react", "@types/jest",
-        "@eslint/js", "@humanwhocodes/config-array",
+        "@babel/core",
+        "@babel/preset-env",
+        "@babel/preset-react",
+        "@babel/preset-typescript",
+        "@babel/runtime",
+        "@types/node",
+        "@types/react",
+        "@types/jest",
+        "@eslint/js",
+        "@humanwhocodes/config-array",
         "@nicolo-ribaudo/chokidar-2",
     ];
     let high_fanout = [
-        "typescript", "webpack", "vite", "esbuild", "rollup",
-        "next", "nuxt", "gatsby", "angular", "ember-cli",
-        "@angular/core", "@angular/cli", "@nestjs/core",
+        "typescript",
+        "webpack",
+        "vite",
+        "esbuild",
+        "rollup",
+        "next",
+        "nuxt",
+        "gatsby",
+        "angular",
+        "ember-cli",
+        "@angular/core",
+        "@angular/cli",
+        "@nestjs/core",
     ];
 
     let name_lower = name.to_lowercase();
@@ -305,8 +387,8 @@ fn generate_resolution_seed(binary_dir: &Path) {
         let escaped_name = name.replace('\\', "\\\\").replace('"', "\\\"");
         let escaped_version = version.replace('\\', "\\\\").replace('"', "\\\"");
         rust_code.push_str(&format!(
-            "    store.by_pkg.entry(\"{}\".to_string()).or_default().push(LatticeEntry {{ constraint: \"*\".to_string(), version: \"{}\".to_string(), hits: 1 }});\n",
-            escaped_name, escaped_version
+            "    let _v=\"{}\".to_string(); store.by_pkg.entry(\"{}\".to_string()).or_default().push(LatticeEntry {{ constraint: \"*\".to_string(), version: _v.clone(), parsed_version: semver::Version::parse(&_v).unwrap_or(semver::Version::new(0,0,0)), hits: 1 }});\n",
+            escaped_version, escaped_name
         ));
     }
     rust_code.push_str("}\n");

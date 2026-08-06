@@ -7,9 +7,10 @@ license-file = "../../LICENSE"
 repository = "https://github.com/bhuvanprakash/jhol"
 
 [features]
-default = ["http-reqwest", "simd"]  # Enable SIMD by default
+default = ["http-reqwest", "simd", "pipeline"]  # Enable SIMD by default
 http-reqwest = ["dep:reqwest", "dep:tokio"]
 simd = []  # SIMD optimizations enabled by default
+pipeline = ["dep:jhol-pipeline"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
@@ -65,6 +66,9 @@ hex = "0.4"
 # JAGR-3: Graph IR dependencies
 ahash = "0.8"
 smallvec = "1.13"
+
+# JGrid Pipeline (optional, enabled via 'pipeline' feature)
+jhol-pipeline = { path = "../jhol-pipeline", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = "0.6"

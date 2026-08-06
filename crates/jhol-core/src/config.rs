@@ -79,7 +79,9 @@ pub struct JholrcRegistryConfig {
 
 /// Load the `.jholrc` registry section from `dir`, then `~/.jholrc`.
 pub fn load_jholrc_registry(dir: &Path) -> Option<JholrcRegistryConfig> {
-    static CACHE: std::sync::OnceLock<std::sync::RwLock<Option<(std::time::SystemTime, JholrcRegistryConfig)>>> = std::sync::OnceLock::new();
+    static CACHE: std::sync::OnceLock<
+        std::sync::RwLock<Option<(std::time::SystemTime, JholrcRegistryConfig)>>,
+    > = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::RwLock::new(None));
 
     let home = dirs_home();
@@ -118,7 +120,8 @@ pub fn load_jholrc_registry(dir: &Path) -> Option<JholrcRegistryConfig> {
     if let Some(scopes) = reg.get("scopes").and_then(|x| x.as_object()) {
         for (k, v) in scopes {
             if let Some(url) = v.as_str() {
-                out.scopes.insert(k.clone(), url.trim_end_matches('/').to_string());
+                out.scopes
+                    .insert(k.clone(), url.trim_end_matches('/').to_string());
             }
         }
     }
@@ -454,7 +457,8 @@ fn load_config_cached(dir: &Path) -> Config {
         home.map(|h| h.join(".jholrc"))
             .unwrap_or_else(|| dir.join(".none")),
     ];
-    let latest_mtime = candidates.iter()
+    let latest_mtime = candidates
+        .iter()
         .filter_map(|p| p.is_file().then(|| p.metadata().ok()?.modified().ok()))
         .flatten()
         .max();

@@ -1,14 +1,14 @@
 //! Content-Addressable Store implementation
-//! 
+//!
 //! Stores packages by content hash (SHA256) for deduplication.
 //! Supports hard links, reflinks, and regular copies.
 
 use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::io::{Read, Write};
-use std::fs::{self, File};
 
 use dashmap::DashMap;
 use sha2::{Digest, Sha256};
@@ -34,7 +34,7 @@ pub struct CASConfig {
 impl Default for CASConfig {
     fn default() -> Self {
         Self {
-            max_size: 10 * 1024 * 1024 * 1024, // 10 GB default
+            max_size: 10 * 1024 * 1024 * 1024,               // 10 GB default
             max_age: Duration::from_secs(30 * 24 * 60 * 60), // 30 days
             verify_integrity: true,
             prefer_hardlinks: true,
@@ -63,7 +63,7 @@ pub struct StoreEntry {
 }
 
 /// Content-Addressable Store
-/// 
+///
 /// Stores packages by content hash for deduplication.
 /// Directory structure: `~/.jhol-store/v1/files/XX/XXXX/full_hash`
 pub struct ContentAddressableStore {
@@ -92,13 +92,13 @@ impl ContentAddressableStore {
         // Ensure store directories exist
         let files_dir = store_path.join("files");
         let _ = fs::create_dir_all(&files_dir);
-        
+
         // Create subdirectories for hash sharding (00-ff)
         for i in 0..256 {
             let subdir = format!("{:02x}", i);
             let _ = fs::create_dir_all(files_dir.join(&subdir));
         }
-        
+
         Self {
             store_path,
             index: Arc::new(DashMap::new()),
@@ -114,7 +114,7 @@ impl ContentAddressableStore {
         if hash.len() < 4 {
             return self.store_path.join("files").join("invalid");
         }
-        
+
         let subdir1 = &hash[0..2];
         let subdir2 = &hash[2..4];
         self.store_path
@@ -128,15 +128,16 @@ impl ContentAddressableStore {
     pub async fn store(&self, content: &[u8]) -> Result<String, String> {
         // Compute hash
         let hash = compute_hash(content);
-        
+
         // Get write lock for this hash
-        let lock = self.write_locks
+        let lock = self
+            .write_locks
             .entry(hash.clone())
             .or_insert_with(|| Arc::new(TokioMutex::new(())))
             .clone();
-        
+
         let _guard = lock.lock().await;
-        
+
         // Extract data, then release the DashMap read guard before inserting.
         // A read+write on the same shard can otherwise deadlock.
         if let Some(entry) = self.entries.get(&hash) {
@@ -147,7 +148,7 @@ impl ContentAddressableStore {
             self.entries.insert(hash.clone(), updated);
             return Ok(hash);
         }
-        
+
         // Store the content
         let store_path = self.hash_to_path(&hash);
 
@@ -157,7 +158,7 @@ impl ContentAddressableStore {
             fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create shard directory: {}", e))?;
         }
-        
+
         // Atomic write: write to temp file, then rename
         let temp_path = store_path.with_extension("tmp");
         {
@@ -165,17 +166,15 @@ impl ContentAddressableStore {
                 .map_err(|e| format!("Failed to create temp file: {}", e))?;
             file.write_all(content)
                 .map_err(|e| format!("Failed to write content: {}", e))?;
-            file.sync_all()
-                .map_err(|e| format!("Failed to sync file: {}", e))?;
         }
-        
+
         // Rename to final location
         fs::rename(&temp_path, &store_path)
             .map_err(|e| format!("Failed to finalize store: {}", e))?;
-        
+
         // Compute integrity hash
         let integrity = format!("sha256-{}", base64::encode(Sha256::digest(content)));
-        
+
         // Create entry
         let entry = StoreEntry {
             hash: hash.clone(),
@@ -186,19 +185,19 @@ impl ContentAddressableStore {
             access_count: 1,
             references: HashMap::new(),
         };
-        
+
         // Update tracking
         self.entries.insert(hash.clone(), entry);
-        
+
         // Update total size
         {
             let mut total = self.total_size.lock().await;
             *total += content.len() as u64;
         }
-        
+
         // Check size limits and evict if needed
         self.evict_if_needed().await;
-        
+
         Ok(hash)
     }
 
@@ -213,29 +212,34 @@ impl ContentAddressableStore {
         // Verify integrity if provided
         if let Some(expected) = expected_integrity {
             if !verify_integrity(content, expected) {
-                return Err(format!("Integrity verification failed for {}@{}", package, version));
+                return Err(format!(
+                    "Integrity verification failed for {}@{}",
+                    package, version
+                ));
             }
         }
-        
+
         // Store content
         let hash = self.store(content).await?;
-        
+
         // Update index
         let key = format!("{}@{}", package, version);
         self.index.insert(key.clone(), hash.clone());
-        
+
         // Update entry references
         if let Some(mut entry) = self.entries.get_mut(&hash) {
             *entry.references.entry(key).or_insert(0) += 1;
         }
-        
+
         Ok(hash)
     }
 
     /// Get content by hash
     pub async fn get(&self, hash: &str) -> Result<Vec<u8>, String> {
         let (entry_value, store_path) = {
-            let entry = self.entries.get(hash)
+            let entry = self
+                .entries
+                .get(hash)
                 .ok_or_else(|| format!("Hash {} not found in store", hash))?;
             let mut entry_value = entry.value().clone();
             let store_path = entry.store_path.clone();
@@ -245,22 +249,24 @@ impl ContentAddressableStore {
             (entry_value, store_path)
         };
         self.entries.insert(hash.to_string(), entry_value);
-        
+
         // Read content
         let content = tokio::fs::read(&store_path)
             .await
             .map_err(|e| format!("Failed to read store entry: {}", e))?;
-        
+
         Ok(content)
     }
 
     /// Get content by package@version
     pub async fn get_package(&self, package: &str, version: &str) -> Result<Vec<u8>, String> {
         let key = format!("{}@{}", package, version);
-        let hash = self.index.get(&key)
+        let hash = self
+            .index
+            .get(&key)
             .ok_or_else(|| format!("Package {}@{} not found in store", package, version))?
             .clone();
-        
+
         self.get(&hash).await
     }
 
@@ -282,15 +288,17 @@ impl ContentAddressableStore {
         dest: &Path,
         link_type: Option<LinkType>,
     ) -> Result<(), String> {
-        let entry = self.entries.get(hash)
+        let entry = self
+            .entries
+            .get(hash)
             .ok_or_else(|| format!("Hash {} not found in store", hash))?;
-        
+
         let store_path = entry.store_path.clone();
         drop(entry); // Release lock
-        
+
         // Determine link type
         let link_type = link_type.unwrap_or_else(|| self.default_link_type());
-        
+
         // Attempt to link
         match link_type {
             LinkType::HardLink => {
@@ -309,16 +317,16 @@ impl ContentAddressableStore {
                 return self.copy_file(&store_path, dest).await;
             }
         }
-        
+
         // Try alternative link types
         if self.config.enable_reflink && self.try_reflink(&store_path, dest).await {
             return Ok(());
         }
-        
+
         if self.config.prefer_hardlinks && self.try_hardlink(&store_path, dest).await {
             return Ok(());
         }
-        
+
         // Final fallback: copy
         self.copy_file(&store_path, dest).await
     }
@@ -329,10 +337,10 @@ impl ContentAddressableStore {
         if let Some(parent) = dest.parent() {
             let _ = tokio::fs::create_dir_all(parent).await;
         }
-        
+
         // Remove existing destination
         let _ = tokio::fs::remove_file(dest).await;
-        
+
         // Try hard link
         match tokio::fs::hard_link(src, dest).await {
             Ok(()) => true,
@@ -346,10 +354,10 @@ impl ContentAddressableStore {
         if let Some(parent) = dest.parent() {
             let _ = tokio::fs::create_dir_all(parent).await;
         }
-        
+
         // Remove existing destination
         let _ = tokio::fs::remove_file(dest).await;
-        
+
         // Try reflink (platform-specific)
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
@@ -358,7 +366,7 @@ impl ContentAddressableStore {
                 Err(_) => {}
             }
         }
-        
+
         // Try reflink_or_copy (copy if reflink not supported)
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
@@ -378,12 +386,12 @@ impl ContentAddressableStore {
                 .await
                 .map_err(|e| format!("Failed to create destination directory: {}", e))?;
         }
-        
+
         // Copy file
         tokio::fs::copy(src, dest)
             .await
             .map_err(|e| format!("Failed to copy file: {}", e))?;
-        
+
         Ok(())
     }
 
@@ -401,42 +409,43 @@ impl ContentAddressableStore {
     /// Evict entries if cache is too large
     async fn evict_if_needed(&self) {
         let total_size = *self.total_size.lock().await;
-        
+
         if total_size <= self.config.max_size || self.config.max_size == 0 {
             return;
         }
-        
+
         // Find oldest entries (LRU eviction)
-        let mut entries_to_evict: Vec<(String, Instant)> = self.entries
+        let mut entries_to_evict: Vec<(String, Instant)> = self
+            .entries
             .iter()
             .map(|e| (e.key().clone(), e.value().last_accessed))
             .collect();
-        
+
         // Sort by last access time (oldest first)
         entries_to_evict.sort_by(|a, b| a.1.cmp(&b.1));
-        
+
         // Evict until under limit
         let mut evicted_size = 0u64;
         let target_size = self.config.max_size / 2; // Evict to 50% of max
-        
+
         for (hash, _) in entries_to_evict {
             if total_size - evicted_size <= target_size {
                 break;
             }
-            
+
             if let Some(entry) = self.entries.remove(&hash) {
                 evicted_size += entry.1.size;
-                
+
                 // Delete file
                 let _ = tokio::fs::remove_file(&entry.1.store_path).await;
-                
+
                 // Remove from index
                 for key in entry.1.references.keys() {
                     self.index.remove(key);
                 }
             }
         }
-        
+
         // Update total size
         {
             let mut total = self.total_size.lock().await;
@@ -449,13 +458,13 @@ impl ContentAddressableStore {
         let mut total_size = 0u64;
         let mut entry_count = 0u64;
         let mut total_references = 0u64;
-        
+
         for entry in self.entries.iter() {
             total_size += entry.value().size;
             entry_count += 1;
             total_references += entry.value().references.len() as u64;
         }
-        
+
         CASStats {
             entry_count,
             total_size,
@@ -472,7 +481,7 @@ impl ContentAddressableStore {
             tokio::fs::remove_dir_all(&files_dir)
                 .await
                 .map_err(|e| format!("Failed to clear store: {}", e))?;
-            
+
             // Recreate directories
             let _ = fs::create_dir_all(&files_dir);
             for i in 0..256 {
@@ -480,17 +489,17 @@ impl ContentAddressableStore {
                 let _ = fs::create_dir_all(files_dir.join(&subdir));
             }
         }
-        
+
         // Clear maps
         self.index.clear();
         self.entries.clear();
-        
+
         // Reset size
         {
             let mut total = self.total_size.lock().await;
             *total = 0;
         }
-        
+
         Ok(())
     }
 
@@ -499,36 +508,36 @@ impl ContentAddressableStore {
         let now = Instant::now();
         let mut pruned_count = 0u64;
         let mut pruned_size = 0u64;
-        
+
         let mut to_remove: Vec<String> = Vec::new();
-        
+
         for entry in self.entries.iter() {
             if now.duration_since(entry.value().last_accessed) > self.config.max_age {
                 to_remove.push(entry.key().clone());
             }
         }
-        
+
         for hash in to_remove {
             if let Some(entry) = self.entries.remove(&hash) {
                 pruned_size += entry.1.size;
                 pruned_count += 1;
-                
+
                 // Delete file
                 let _ = tokio::fs::remove_file(&entry.1.store_path).await;
-                
+
                 // Remove from index
                 for key in entry.1.references.keys() {
                     self.index.remove(key);
                 }
             }
         }
-        
+
         // Update total size
         {
             let mut total = self.total_size.lock().await;
             *total = total.saturating_sub(pruned_size);
         }
-        
+
         Ok(PruneResult {
             pruned_count,
             pruned_size,
@@ -590,12 +599,12 @@ mod tests {
     async fn test_store_and_get() {
         let temp_dir = tempfile::tempdir().unwrap();
         let cas = ContentAddressableStore::new(temp_dir.path().to_path_buf());
-        
+
         let content = b"test content";
         let hash = cas.store(content).await.unwrap();
-        
+
         assert_eq!(hash.len(), 64); // SHA256 hex length
-        
+
         let retrieved = cas.get(&hash).await.unwrap();
         assert_eq!(retrieved, content);
     }
@@ -604,14 +613,14 @@ mod tests {
     async fn test_deduplication() {
         let temp_dir = tempfile::tempdir().unwrap();
         let cas = ContentAddressableStore::new(temp_dir.path().to_path_buf());
-        
+
         let content = b"test content";
         let hash1 = cas.store(content).await.unwrap();
         let hash2 = cas.store(content).await.unwrap();
-        
+
         // Same content should produce same hash
         assert_eq!(hash1, hash2);
-        
+
         // Should only have one entry
         let stats = cas.stats().await;
         assert_eq!(stats.entry_count, 1);
@@ -621,12 +630,15 @@ mod tests {
     async fn test_store_package() {
         let temp_dir = tempfile::tempdir().unwrap();
         let cas = ContentAddressableStore::new(temp_dir.path().to_path_buf());
-        
+
         let content = b"package content";
-        let hash = cas.store_package("test-pkg", "1.0.0", content, None).await.unwrap();
-        
+        let hash = cas
+            .store_package("test-pkg", "1.0.0", content, None)
+            .await
+            .unwrap();
+
         assert!(cas.has_package("test-pkg", "1.0.0"));
-        
+
         let retrieved = cas.get_package("test-pkg", "1.0.0").await.unwrap();
         assert_eq!(retrieved, content);
     }

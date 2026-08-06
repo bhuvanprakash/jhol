@@ -1,7 +1,7 @@
 //! Integrity hash verification (SRI - Subresource Integrity)
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use sha2::{Digest, Sha256, Sha384, Sha512};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 /// Integrity hash in SRI format (e.g., "sha256-abc123...")
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,7 +31,7 @@ impl HashAlgorithm {
             HashAlgorithm::Sha512 => "sha512",
         }
     }
-    
+
     /// Compute hash of content
     pub fn compute(&self, content: &[u8]) -> String {
         match self {
@@ -49,7 +49,7 @@ impl HashAlgorithm {
             }
         }
     }
-    
+
     /// Verify content against expected hash
     pub fn verify(&self, content: &[u8], expected_hash: &str) -> bool {
         let computed = self.compute(content);
@@ -61,56 +61,56 @@ impl IntegrityHash {
     /// Parse an SRI string (e.g., "sha256-abc123...")
     pub fn parse(sri: &str) -> Option<Self> {
         let sri = sri.trim();
-        
+
         // Handle multiple hashes (take the first one)
         let sri = sri.split_whitespace().next().unwrap_or(sri);
-        
+
         let parts: Vec<&str> = sri.split('-').collect();
         if parts.len() != 2 {
             return None;
         }
-        
+
         let algorithm = match parts[0] {
             "sha256" => HashAlgorithm::Sha256,
             "sha384" => HashAlgorithm::Sha384,
             "sha512" => HashAlgorithm::Sha512,
             _ => return None,
         };
-        
+
         Some(Self {
             algorithm,
             hash: parts[1].to_string(),
             sri: sri.to_string(),
         })
     }
-    
+
     /// Create a new integrity hash
     pub fn new(algorithm: HashAlgorithm, content: &[u8]) -> Self {
         let hash = algorithm.compute(content);
         let sri = format!("{}-{}", algorithm.name(), hash);
-        
+
         Self {
             algorithm,
             hash,
             sri,
         }
     }
-    
+
     /// Compute SHA256 integrity hash
     pub fn sha256(content: &[u8]) -> Self {
         Self::new(HashAlgorithm::Sha256, content)
     }
-    
+
     /// Compute SHA512 integrity hash
     pub fn sha512(content: &[u8]) -> Self {
         Self::new(HashAlgorithm::Sha512, content)
     }
-    
+
     /// Verify content against this integrity hash
     pub fn verify(&self, content: &[u8]) -> bool {
         self.algorithm.verify(content, &self.hash)
     }
-    
+
     /// Get the SRI string
     pub fn as_sri(&self) -> &str {
         &self.sri
@@ -137,7 +137,7 @@ pub fn verify_integrity(content: &[u8], expected_integrity: &str) -> bool {
             }
         }
     }
-    
+
     false
 }
 
@@ -145,7 +145,7 @@ pub fn verify_integrity(content: &[u8], expected_integrity: &str) -> bool {
 pub fn verify_integrity_strict(content: &[u8], expected_integrity: &str) -> Result<bool, String> {
     let integrity = IntegrityHash::parse(expected_integrity)
         .ok_or_else(|| format!("Invalid integrity hash: {}", expected_integrity))?;
-    
+
     Ok(integrity.verify(content))
 }
 
@@ -154,11 +154,11 @@ pub fn compare_integrity(integrity1: &str, integrity2: &str) -> bool {
     if integrity1 == integrity2 {
         return true;
     }
-    
+
     // Parse both and compare hashes (even if different algorithms)
     let parsed1 = IntegrityHash::parse(integrity1);
     let parsed2 = IntegrityHash::parse(integrity2);
-    
+
     match (parsed1, parsed2) {
         (Some(i1), Some(i2)) => i1.hash == i2.hash,
         _ => false,
@@ -173,7 +173,7 @@ mod tests {
     fn test_parse_integrity() {
         let sri = "sha256-abc123==";
         let integrity = IntegrityHash::parse(sri).unwrap();
-        
+
         assert_eq!(integrity.algorithm, HashAlgorithm::Sha256);
         assert_eq!(integrity.hash, "abc123==");
         assert_eq!(integrity.sri, sri);
@@ -183,12 +183,12 @@ mod tests {
     fn test_compute_integrity() {
         let content = b"test content";
         let integrity = compute_integrity(content);
-        
+
         assert!(integrity.starts_with("sha256-"));
-        
+
         // Verify
         assert!(verify_integrity(content, &integrity));
-        
+
         // Wrong content should fail
         assert!(!verify_integrity(b"wrong content", &integrity));
     }
@@ -200,10 +200,10 @@ mod tests {
         let sha256 = sha256_hash.as_sri();
         let sha512_hash = IntegrityHash::sha512(content);
         let sha512 = sha512_hash.as_sri();
-        
+
         // Multiple hashes (space-separated)
         let combined = format!("{} {}", sha256, sha512);
-        
+
         // Should verify with either hash
         assert!(verify_integrity(content, &combined));
     }
@@ -213,10 +213,10 @@ mod tests {
         let content = b"test content";
         let sha256_1 = compute_integrity(content);
         let sha256_2 = compute_integrity(content);
-        
+
         // Same content, same hash
         assert!(compare_integrity(&sha256_1, &sha256_2));
-        
+
         // Different algorithms encode different SRI digests.
         let sha512 = compute_integrity_sha512(content);
         assert!(!compare_integrity(&sha256_1, &sha512));

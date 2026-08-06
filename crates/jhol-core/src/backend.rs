@@ -145,14 +145,16 @@ pub fn backend_install_from_package_json(
 pub fn backend_outdated_json(backend: Backend) -> Option<serde_json::Value> {
     match backend {
         Backend::Npm => {
-            let out = run_command_timeout("npm", &["outdated", "--json"], OUTDATED_TIMEOUT_SECS).ok()?;
+            let out =
+                run_command_timeout("npm", &["outdated", "--json"], OUTDATED_TIMEOUT_SECS).ok()?;
             let s = String::from_utf8_lossy(&out.stdout);
             serde_json::from_str(&s).ok()
         }
         Backend::Bun => {
             // Bun doesn't have `bun outdated --json`. Use npm outdated for compatibility when bun is backend
             // (project may still have package-lock.json or we run in node_modules context).
-            let out = run_command_timeout("npm", &["outdated", "--json"], OUTDATED_TIMEOUT_SECS).ok()?;
+            let out =
+                run_command_timeout("npm", &["outdated", "--json"], OUTDATED_TIMEOUT_SECS).ok()?;
             let s = String::from_utf8_lossy(&out.stdout);
             serde_json::from_str(&s).ok()
         }
@@ -160,14 +162,22 @@ pub fn backend_outdated_json(backend: Backend) -> Option<serde_json::Value> {
 }
 
 /// Fix outdated packages by installing latest. packages = list of package names.
-pub fn backend_fix_packages(packages: &[String], backend: Backend, quiet: bool) -> Result<(), String> {
+pub fn backend_fix_packages(
+    packages: &[String],
+    backend: Backend,
+    quiet: bool,
+) -> Result<(), String> {
     if packages.is_empty() {
         return Ok(());
     }
     let specs: Vec<String> = packages.iter().map(|p| format!("{}@latest", p)).collect();
     let refs: Vec<&str> = specs.iter().map(String::as_str).collect();
     if !quiet {
-        println!("Updating {} package(s) via {}...", packages.len(), backend_name(backend));
+        println!(
+            "Updating {} package(s) via {}...",
+            packages.len(),
+            backend_name(backend)
+        );
     }
     backend_install(&refs, backend, false, true)
 }
