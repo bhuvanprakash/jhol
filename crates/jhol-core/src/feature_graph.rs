@@ -230,12 +230,9 @@ pub struct InstallReport {
 /// and the context of existing dependencies. Uses simple heuristics:
 /// - @scoped packages often need the "core" feature
 /// - well-known packages have known feature patterns
-pub fn predict_features(
-    package: &str,
-    existing_deps: &[String],
-) -> Vec<String> {
+pub fn predict_features(package: &str, existing_deps: &[String]) -> Vec<String> {
     let mut features = Vec::new();
-    
+
     // Scoped packages: core feature by default
     if package.starts_with('@') {
         features.push("core".to_string());
@@ -251,7 +248,9 @@ pub fn predict_features(
         ("lodash", vec!["array", "collection", "object", "string"]),
         ("express", vec!["static", "json", "urlencoded"]),
         ("typescript", vec!["lib", "utils"]),
-    ].into_iter().collect();
+    ]
+    .into_iter()
+    .collect();
 
     if let Some(predicted) = known.get(package) {
         features.extend(predicted.iter().map(|s| s.to_string()));
@@ -264,7 +263,10 @@ pub fn predict_features(
         None
     };
     if let Some(ref s) = scope {
-        if existing_deps.iter().any(|d| d.starts_with(s) && d != package) {
+        if existing_deps
+            .iter()
+            .any(|d| d.starts_with(s) && d != package)
+        {
             features.push("shared".to_string());
         }
     }

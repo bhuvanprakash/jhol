@@ -2,11 +2,11 @@
 //! Performance: 1.5ms → 0ms (instant)
 
 #[cfg(target_os = "linux")]
+use crate::mpt_store::ContentHash;
+#[cfg(target_os = "linux")]
 use std::collections::HashMap;
 #[cfg(target_os = "linux")]
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "linux")]
-use crate::mpt_store::ContentHash;
 
 #[cfg(target_os = "linux")]
 pub struct JholFS {
@@ -24,7 +24,11 @@ struct FileEntry {
 
 #[cfg(target_os = "linux")]
 impl JholFS {
-    pub fn new() -> Self { Self { manifest: HashMap::new() } }
+    pub fn new() -> Self {
+        Self {
+            manifest: HashMap::new(),
+        }
+    }
 
     pub fn mount<P: AsRef<Path>>(&self, mountpoint: P) -> Result<(), String> {
         println!("🚀 Jhol FUSE mounted at {}", mountpoint.as_ref().display());

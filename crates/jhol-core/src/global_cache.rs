@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::PoisonError;
 use std::sync::{Arc, RwLock};
 
@@ -43,6 +44,12 @@ pub struct GlobalCache {
     index: Arc<RwLock<HashMap<String, CacheEntry>>>,
     /// Memory-mapped file handles for zero-copy reads
     mmap_files: Arc<RwLock<HashMap<String, memmap2::Mmap>>>,
+    /// Pending index writes for batch flush (N12)
+    dirty_count: AtomicU64,
+    /// Running total size (C4)
+    total_size: AtomicU64,
+    /// Running total accesses (C4)
+    total_accesses: AtomicU64,
 }
 
 /// Cache entry metadata
@@ -97,6 +104,9 @@ impl GlobalCache {
             cache_dir,
             index: Arc::new(RwLock::new(index)),
             mmap_files: Arc::new(RwLock::new(HashMap::new())),
+            dirty_count: AtomicU64::new(0),
+            total_size: AtomicU64::new(0),
+            total_accesses: AtomicU64::new(0),
         })
     }
 
@@ -106,21 +116,16 @@ impl GlobalCache {
         rw_lock!(self.index, read).contains_key(&key)
     }
 
-    /// Get package from cache (zero-copy read via mmap)
+    /// Get package from cache (direct file read — no mmap copy overhead)
     pub fn get(&self, package: &str, version: &str) -> Option<Vec<u8>> {
         let key = format!("{}@{}", package, version);
 
         // Update access count
         if let Some(entry) = rw_lock!(self.index, write).get_mut(&key) {
             entry.accessed_count += 1;
+            self.total_accesses.fetch_add(1, Ordering::Relaxed);
         }
 
-        // Try memory-mapped read
-        if let Some(mmap) = rw_lock!(self.mmap_files, read).get(&key) {
-            return Some(mmap.to_vec());
-        }
-
-        // Fall back to file read
         let entry = rw_lock!(self.index, read).get(&key)?.clone();
         let file_path = self.cache_dir.join(format!("{}.pkg", entry.hash));
 
@@ -128,12 +133,6 @@ impl GlobalCache {
             let mut file = File::open(&file_path).ok()?;
             let mut data = Vec::new();
             file.read_to_end(&mut data).ok()?;
-
-            // Memory-map for future access
-            if let Ok(mmap) = unsafe { memmap2::Mmap::map(&file) } {
-                rw_lock!(self.mmap_files, write).insert(key, mmap);
-            }
-
             Some(data)
         } else {
             None
@@ -187,8 +186,13 @@ impl GlobalCache {
         // Update index
         rw_lock!(self.index, write).insert(key, entry.clone());
 
-        // Save index
-        self.save_index()?;
+        self.total_size.fetch_add(entry.size, Ordering::Relaxed);
+
+        // Batch index writes: save every 16 additions or on explicit flush
+        let count = self.dirty_count.fetch_add(1, Ordering::Relaxed) + 1;
+        if count % 16 == 0 {
+            self.save_index()?;
+        }
 
         Ok(entry)
     }
@@ -202,7 +206,7 @@ impl GlobalCache {
         let _lock = FileLock::lock(&index_path)
             .map_err(|e| format!("Failed to acquire index lock: {}", e))?;
 
-        let content = serde_json::to_string_pretty(&*rw_lock!(self.index, read))
+        let content = serde_json::to_string(&*rw_lock!(self.index, read))
             .map_err(|e| format!("Failed to serialize index: {}", e))?;
 
         AtomicWrite::write_to_file(&index_path, content.as_bytes())
@@ -214,9 +218,8 @@ impl GlobalCache {
     /// Get cache statistics
     pub fn stats(&self) -> CacheStats {
         let index = rw_lock!(self.index, read);
-
-        let total_size: u64 = index.values().map(|e| e.size).sum();
         let total_packages = index.len();
+        let total_size = self.total_size.load(Ordering::Relaxed);
         let total_accesses: u64 = index.values().map(|e| e.accessed_count).sum();
 
         CacheStats {
@@ -244,6 +247,8 @@ impl GlobalCache {
 
         // Clear index
         self.index.write().unwrap().clear();
+        self.total_size.store(0, Ordering::Relaxed);
+        self.total_accesses.store(0, Ordering::Relaxed);
 
         // Save empty index
         self.save_index()?;

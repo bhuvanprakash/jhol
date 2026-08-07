@@ -117,42 +117,55 @@ pub fn snf_join(sheaf1: &TropicalSheaf, sheaf2: &TropicalSheaf) -> Option<Tropic
 
 /// Intersect two sheaves
 fn intersect_sheaves(sheaf1: &TropicalSheaf, sheaf2: &TropicalSheaf) -> TropicalSheaf {
-    // Find common vertices
+    // Build vertex index for sheaf2: (var_idx, version_bits) -> index (J1: O(n+m))
+    let v2_index: HashMap<(usize, u64), usize> = sheaf2
+        .complex
+        .vertices
+        .iter()
+        .enumerate()
+        .map(|(i, v)| ((v.var_idx, v.version.to_bits()), i))
+        .collect();
+
     let mut common_vertices = Vec::new();
-    // Use Vec for mapping (index = old index, value = new index if mapped)
     let mut v1_to_new: Vec<Option<usize>> = vec![None; sheaf1.complex.vertices.len()];
     let mut v2_to_new: Vec<Option<usize>> = vec![None; sheaf2.complex.vertices.len()];
+    let mut new_to_pair: HashMap<usize, (usize, usize)> = HashMap::new();
 
     for (i1, v1) in sheaf1.complex.vertices.iter().enumerate() {
-        for (i2, v2) in sheaf2.complex.vertices.iter().enumerate() {
-            if v1.var_idx == v2.var_idx && (v1.version - v2.version).abs() < 1e-9 {
-                v1_to_new[i1] = Some(common_vertices.len());
-                v2_to_new[i2] = Some(common_vertices.len());
-                common_vertices.push(v1.clone());
-                break;
-            }
+        let key = (v1.var_idx, v1.version.to_bits());
+        if let Some(&i2) = v2_index.get(&key) {
+            let new_idx = common_vertices.len();
+            v1_to_new[i1] = Some(new_idx);
+            v2_to_new[i2] = Some(new_idx);
+            common_vertices.push(v1.clone());
+            new_to_pair.insert(new_idx, (i1, i2));
         }
     }
 
-    // Build intersection simplices
+    // Pre-index sheaf2 simplices by mapped vertex set (J2)
+    let mut s2_by_key: HashMap<Vec<usize>, Vec<Vec<usize>>> = HashMap::new();
+    for s2 in &sheaf2.complex.simplices {
+        let mut mapped2: Vec<usize> = s2
+            .iter()
+            .filter_map(|&v| v2_to_new.get(v).copied().flatten())
+            .collect();
+        if !mapped2.is_empty() {
+            mapped2.sort();
+            s2_by_key.entry(mapped2).or_default().push(s2.clone());
+        }
+    }
+
+    // Build intersection simplices (J2: O(n) single pass)
     let mut simplices = Vec::new();
     for s1 in &sheaf1.complex.simplices {
-        let mut mapped: Vec<_> = s1
+        let mut mapped: Vec<usize> = s1
             .iter()
             .filter_map(|&v| v1_to_new.get(v).copied().flatten())
             .collect();
         if !mapped.is_empty() {
             mapped.sort();
-            for s2 in &sheaf2.complex.simplices {
-                let mut mapped2: Vec<_> = s2
-                    .iter()
-                    .filter_map(|&v| v2_to_new.get(v).copied().flatten())
-                    .collect();
-                mapped2.sort();
-                if mapped == mapped2 {
-                    simplices.push(mapped);
-                    break;
-                }
+            if s2_by_key.contains_key(&mapped) {
+                simplices.push(mapped);
             }
         }
     }
@@ -161,22 +174,12 @@ fn intersect_sheaves(sheaf1: &TropicalSheaf, sheaf2: &TropicalSheaf) -> Tropical
     simplices.sort();
     simplices.dedup();
 
-    // Build stalks and restrictions
+    // Build stalks using pre-computed mapping (J3: O(n), no linear scan)
     let mut stalks = HashMap::new();
-    for (new_idx, vertex) in common_vertices.iter().enumerate() {
-        let old_idx_s1 =
-            sheaf1.complex.vertices.iter().position(|v| {
-                v.var_idx == vertex.var_idx && (v.version - vertex.version).abs() < 1e-9
-            });
-        let old_idx_s2 =
-            sheaf2.complex.vertices.iter().position(|v| {
-                v.var_idx == vertex.var_idx && (v.version - vertex.version).abs() < 1e-9
-            });
-        if let (Some(i1), Some(i2)) = (old_idx_s1, old_idx_s2) {
-            if let (Some(s1), Some(s2)) = (sheaf1.stalks.get(&i1), sheaf2.stalks.get(&i2)) {
-                let intersection: Vec<_> = s1.iter().filter(|v| s2.contains(v)).copied().collect();
-                stalks.insert(new_idx, intersection);
-            }
+    for (new_idx, (i1, i2)) in &new_to_pair {
+        if let (Some(s1), Some(s2)) = (sheaf1.stalks.get(i1), sheaf2.stalks.get(i2)) {
+            let intersection: Vec<_> = s1.iter().filter(|v| s2.contains(v)).copied().collect();
+            stalks.insert(*new_idx, intersection);
         }
     }
 
@@ -188,7 +191,6 @@ fn intersect_sheaves(sheaf1: &TropicalSheaf, sheaf2: &TropicalSheaf) -> Tropical
     }
     for ((v1, v2), rm2) in &sheaf2.restrictions {
         if let (Some(Some(n1)), Some(Some(n2))) = (v2_to_new.get(*v1), v2_to_new.get(*v2)) {
-            // Only insert if not already present from sheaf1 (sheaf1 takes priority)
             if !restrictions.contains_key(&(*n1, *n2)) {
                 restrictions.insert((*n1, *n2), rm2.clone());
             }

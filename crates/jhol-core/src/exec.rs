@@ -68,7 +68,6 @@ pub fn exec_binary(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::find_binary_in_node_modules;

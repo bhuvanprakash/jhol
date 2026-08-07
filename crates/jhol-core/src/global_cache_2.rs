@@ -164,7 +164,7 @@ impl GlobalCache2 {
             "current_size": self.current_size,
         });
 
-        let content = serde_json::to_string_pretty(&data)
+        let content = serde_json::to_string(&data)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
 
         AtomicWrite::write_to_file(&metadata_path, content.as_bytes())

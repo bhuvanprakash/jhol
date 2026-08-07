@@ -153,7 +153,7 @@ impl DependencyHypergraph {
             "dependencies": deps
         });
 
-        Ok(serde_json::to_string_pretty(&package_json)
+        Ok(serde_json::to_string(&package_json)
             .map_err(|e| format!("JSON serialization error: {}", e))?)
     }
 

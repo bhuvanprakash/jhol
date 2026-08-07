@@ -42,56 +42,50 @@ fn pool() -> &'static rayon::ThreadPool {
 pub fn batch_stat(paths: &[String]) -> Vec<StatResult> {
     pool().install(|| {
         use rayon::prelude::*;
-        paths.par_iter().map(|p| {
-            let path = Path::new(p);
-            match std::fs::metadata(path) {
-                Ok(m) => StatResult {
-                    path: p.clone(),
-                    exists: true,
-                    is_dir: m.is_dir(),
-                    size: m.len(),
-                },
-                Err(_) => StatResult {
-                    path: p.clone(),
-                    exists: false,
-                    is_dir: false,
-                    size: 0,
-                },
-            }
-        }).collect()
+        paths
+            .par_iter()
+            .map(|p| {
+                let path = Path::new(p);
+                match std::fs::metadata(path) {
+                    Ok(m) => StatResult {
+                        path: p.clone(),
+                        exists: true,
+                        is_dir: m.is_dir(),
+                        size: m.len(),
+                    },
+                    Err(_) => StatResult {
+                        path: p.clone(),
+                        exists: false,
+                        is_dir: false,
+                        size: 0,
+                    },
+                }
+            })
+            .collect()
     })
 }
 
 /// Batch symlink multiple targets in parallel.
 /// Returns results in the same order as inputs.
 pub fn batch_symlink(targets: &[String], links: &[String]) -> Vec<LinkResult> {
-    assert_eq!(targets.len(), links.len(), "batch_symlink: mismatched lengths");
+    assert_eq!(
+        targets.len(),
+        links.len(),
+        "batch_symlink: mismatched lengths"
+    );
     pool().install(|| {
         use rayon::prelude::*;
-        targets.par_iter().zip(links.par_iter()).map(|(target, link)| {
-            let link_path = Path::new(link);
-            if let Some(parent) = link_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = std::fs::remove_file(link_path);
-            #[cfg(unix)]
-            match std::os::unix::fs::symlink(target, link_path) {
-                Ok(()) => LinkResult {
-                    target: target.clone(),
-                    link: link.clone(),
-                    ok: true,
-                    error: None,
-                },
-                Err(e) => LinkResult {
-                    target: target.clone(),
-                    link: link.clone(),
-                    ok: false,
-                    error: Some(e.to_string()),
-                },
-            }
-            #[cfg(not(unix))]
-            {
-                match std::fs::hard_link(target, link_path) {
+        targets
+            .par_iter()
+            .zip(links.par_iter())
+            .map(|(target, link)| {
+                let link_path = Path::new(link);
+                if let Some(parent) = link_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::remove_file(link_path);
+                #[cfg(unix)]
+                match std::os::unix::fs::symlink(target, link_path) {
                     Ok(()) => LinkResult {
                         target: target.clone(),
                         link: link.clone(),
@@ -105,8 +99,25 @@ pub fn batch_symlink(targets: &[String], links: &[String]) -> Vec<LinkResult> {
                         error: Some(e.to_string()),
                     },
                 }
-            }
-        }).collect()
+                #[cfg(not(unix))]
+                {
+                    match std::fs::hard_link(target, link_path) {
+                        Ok(()) => LinkResult {
+                            target: target.clone(),
+                            link: link.clone(),
+                            ok: true,
+                            error: None,
+                        },
+                        Err(e) => LinkResult {
+                            target: target.clone(),
+                            link: link.clone(),
+                            ok: false,
+                            error: Some(e.to_string()),
+                        },
+                    }
+                }
+            })
+            .collect()
     })
 }
 
@@ -115,8 +126,8 @@ pub fn batch_symlink(targets: &[String], links: &[String]) -> Vec<LinkResult> {
 pub fn batch_mkdir(dirs: &[String]) -> Vec<bool> {
     pool().install(|| {
         use rayon::prelude::*;
-        dirs.par_iter().map(|d| {
-            std::fs::create_dir_all(d).is_ok()
-        }).collect()
+        dirs.par_iter()
+            .map(|d| std::fs::create_dir_all(d).is_ok())
+            .collect()
     })
 }

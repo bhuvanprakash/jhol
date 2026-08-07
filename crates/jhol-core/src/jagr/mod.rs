@@ -1,19 +1,24 @@
 //! JAGR resolver — Layer 0 spectral pre-filter (Soul Path gate).
 //! Full three-layer resolver available via feature flag.
 
+pub mod betti_numbers;
+pub mod conflict_explainer;
+pub mod core_guided_lp;
+pub mod core_guided_solver;
+pub mod jagr_resolver;
 pub mod knot;
+pub mod maxsat_solver;
+pub mod mayer_vietoris;
+pub mod ol3p_solver;
 pub mod resolution_differential;
+pub mod simplicial_normal_form;
+pub mod tropical_math;
+pub mod tropical_max_atom;
+pub mod tropical_nullstellensatz;
+pub mod tropical_polyhedron;
+pub mod tropical_sheaf;
+pub mod tropical_sheaf_analyzer;
 
-pub use knot::{knot_solve, build_knot_graph, KnotRequest};
+pub use jagr_resolver::JagrResolver;
+pub use knot::{build_knot_graph, knot_solve, KnotRequest};
 pub use resolution_differential::{ResolutionDifferential, ResolveRequest};
-
-/// Compatibility stub for the full three-layer JAGR resolver.
-pub struct JagrResolver;
-impl JagrResolver {
-    pub fn new() -> Self { Self }
-    pub fn with_lp(self, _lp: bool) -> Self { self }
-    pub fn with_timeout(self, _ms: u64) -> Self { self }
-    pub fn with_skip_layer3(self, _skip: bool) -> Self { self }
-    pub fn with_skip_layer2(self, _skip: bool) -> Self { self }
-    pub fn with_run_all_layers(self, _all: bool) -> Self { self }
-}

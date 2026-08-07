@@ -213,13 +213,14 @@ impl HttpClient {
         bearer_token: Option<&str>,
     ) -> Result<(), String> {
         let _guard = self.limit.acquire();
+        let auth_header = bearer_token
+            .filter(|t| !t.is_empty())
+            .map(|t| format!("Bearer {}", t));
         let resp = self.send_with_retry(|| {
             let req = self.agent.get(url);
-            match bearer_token {
-                Some(token) if !token.is_empty() => req
-                    .set("Authorization", &format!("Bearer {}", token))
-                    .call(),
-                _ => req.call(),
+            match &auth_header {
+                Some(h) => req.set("Authorization", h).call(),
+                None => req.call(),
             }
         })?;
         let mut out = File::create(dest).map_err(|e| e.to_string())?;
@@ -239,13 +240,14 @@ impl HttpClient {
         bearer_token: Option<&str>,
     ) -> Result<Vec<u8>, String> {
         let _guard = self.limit.acquire();
+        let auth_header = bearer_token
+            .filter(|t| !t.is_empty())
+            .map(|t| format!("Bearer {}", t));
         let resp = self.send_with_retry(|| {
             let req = self.agent.get(url);
-            match bearer_token {
-                Some(token) if !token.is_empty() => req
-                    .set("Authorization", &format!("Bearer {}", token))
-                    .call(),
-                _ => req.call(),
+            match &auth_header {
+                Some(h) => req.set("Authorization", h).call(),
+                None => req.call(),
             }
         })?;
         // Pre-allocate from Content-Length if present to reduce reallocs.

@@ -23,7 +23,9 @@ pub struct IncrementalResolver {
 
 impl IncrementalResolver {
     pub fn new() -> Self {
-        Self { packages: HashMap::new() }
+        Self {
+            packages: HashMap::new(),
+        }
     }
 
     pub fn add_package(&mut self, package: PackageNode) {
@@ -44,11 +46,13 @@ impl IncrementalResolver {
         self.packages.values().cloned().collect()
     }
 
-    pub fn step(&mut self) -> bool { false }
+    pub fn step(&mut self) -> bool {
+        false
+    }
 }
 
-use std::sync::OnceLock;
 use parking_lot::RwLock;
+use std::sync::OnceLock;
 
 fn global_resolver() -> &'static RwLock<IncrementalResolver> {
     static INSTANCE: OnceLock<RwLock<IncrementalResolver>> = OnceLock::new();

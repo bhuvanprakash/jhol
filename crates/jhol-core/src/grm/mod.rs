@@ -1,12 +1,12 @@
 //! Global Resolution Memory — stub for compatibility.
 
-pub mod store;
 pub mod query;
+pub mod store;
 pub mod sync;
 
-use std::time::SystemTime;
-use serde::{Serialize, Deserialize};
 use crate::mpt_store::ContentHash;
+use serde::{Deserialize, Serialize};
+use std::time::SystemTime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ResolutionSource {
@@ -50,13 +50,20 @@ pub struct GRMStats {
 }
 
 pub fn current_timestamp() -> u64 {
-    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs()
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 pub struct GrmHandle;
 impl GrmHandle {
-    pub fn new() -> Self { Self }
-    pub fn current_timestamp() -> u64 { current_timestamp() }
+    pub fn new() -> Self {
+        Self
+    }
+    pub fn current_timestamp() -> u64 {
+        current_timestamp()
+    }
 }
 
 pub fn lookup(spec: &str) -> Option<ResolutionRecord> {

@@ -72,14 +72,23 @@ pub enum JholError {
 impl fmt::Display for JholError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            JholError::Io { operation, path, source } => {
+            JholError::Io {
+                operation,
+                path,
+                source,
+            } => {
                 write!(f, "I/O error in {}: {}", operation, source)?;
                 if let Some(path) = path {
                     write!(f, " (path: {})", path)?;
                 }
                 Ok(())
             }
-            JholError::Network { operation, url, status, source } => {
+            JholError::Network {
+                operation,
+                url,
+                status,
+                source,
+            } => {
                 write!(f, "Network error in {}: {}", operation, source)?;
                 if let Some(url) = url {
                     write!(f, " (url: {})", url)?;
@@ -89,7 +98,12 @@ impl fmt::Display for JholError {
                 }
                 Ok(())
             }
-            JholError::Registry { operation, package, version, source } => {
+            JholError::Registry {
+                operation,
+                package,
+                version,
+                source,
+            } => {
                 write!(f, "Registry error in {}: {}", operation, source)?;
                 if let Some(package) = package {
                     write!(f, " (package: {})", package)?;
@@ -99,7 +113,12 @@ impl fmt::Display for JholError {
                 }
                 Ok(())
             }
-            JholError::Resolution { operation, package, conflict_details, source } => {
+            JholError::Resolution {
+                operation,
+                package,
+                conflict_details,
+                source,
+            } => {
                 write!(f, "Resolution error in {}: {}", operation, source)?;
                 if let Some(package) = package {
                     write!(f, " (package: {})", package)?;
@@ -109,24 +128,47 @@ impl fmt::Display for JholError {
                 }
                 Ok(())
             }
-            JholError::Cache { operation, key, source } => {
+            JholError::Cache {
+                operation,
+                key,
+                source,
+            } => {
                 write!(f, "Cache error in {}: {}", operation, source)?;
                 if let Some(key) = key {
                     write!(f, " (key: {})", key)?;
                 }
                 Ok(())
             }
-            JholError::Config { operation, field, source } => {
+            JholError::Config {
+                operation,
+                field,
+                source,
+            } => {
                 write!(f, "Configuration error in {}: {}", operation, source)?;
                 if let Some(field) = field {
                     write!(f, " (field: {})", field)?;
                 }
                 Ok(())
             }
-            JholError::Security { operation, path, reason } => {
-                write!(f, "Security error in {}: {} (reason: {})", operation, path.as_deref().unwrap_or("unknown"), reason)
+            JholError::Security {
+                operation,
+                path,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "Security error in {}: {} (reason: {})",
+                    operation,
+                    path.as_deref().unwrap_or("unknown"),
+                    reason
+                )
             }
-            JholError::Performance { operation, duration, limit, source } => {
+            JholError::Performance {
+                operation,
+                duration,
+                limit,
+                source,
+            } => {
                 write!(f, "Performance error in {}: {}", operation, source)?;
                 if let Some(duration) = duration {
                     write!(f, " (duration: {}ms)", duration)?;
@@ -136,7 +178,11 @@ impl fmt::Display for JholError {
                 }
                 Ok(())
             }
-            JholError::Application { operation, details, source } => {
+            JholError::Application {
+                operation,
+                details,
+                source,
+            } => {
                 write!(f, "Application error in {}: {}", operation, source)?;
                 if let Some(details) = details {
                     write!(f, " (details: {})", details)?;
@@ -218,12 +264,15 @@ impl PerformanceLogger {
     pub fn finish(mut self) -> u64 {
         let duration = self.start_time.elapsed().as_millis() as u64;
         self.context.duration = Some(duration);
-        
+
         // Log performance metrics
         if duration > 5000 {
-            crate::utils::log(&format!("WARNING: Slow operation detected: {} took {}ms", self.operation, duration));
+            crate::utils::log(&format!(
+                "WARNING: Slow operation detected: {} took {}ms",
+                self.operation, duration
+            ));
         }
-        
+
         duration
     }
 }
@@ -232,7 +281,10 @@ impl PerformanceLogger {
 #[derive(Debug, Clone)]
 pub enum RecoveryStrategy {
     /// Retry the operation with exponential backoff
-    Retry { max_attempts: u32, backoff_factor: u64 },
+    Retry {
+        max_attempts: u32,
+        backoff_factor: u64,
+    },
     /// Fall back to an alternative implementation
     Fallback { alternative: String },
     /// Skip the operation and continue
@@ -279,15 +331,20 @@ impl ErrorHandler {
     }
 
     /// Handle an error with appropriate recovery strategy
-    pub fn handle_error(&self, error: JholError, strategy: RecoveryStrategy) -> Result<(), JholError> {
+    pub fn handle_error(
+        &self,
+        error: JholError,
+        strategy: RecoveryStrategy,
+    ) -> Result<(), JholError> {
         if self.enable_logging {
             self.log_error(&error, ErrorSeverity::Error);
         }
 
         match strategy {
-            RecoveryStrategy::Retry { max_attempts, backoff_factor } => {
-                self.retry_with_backoff(error, max_attempts, backoff_factor)
-            }
+            RecoveryStrategy::Retry {
+                max_attempts,
+                backoff_factor,
+            } => self.retry_with_backoff(error, max_attempts, backoff_factor),
             RecoveryStrategy::Fallback { alternative } => {
                 if self.enable_logging {
                     crate::utils::log(&format!("Falling back to alternative: {}", alternative));
@@ -306,22 +363,26 @@ impl ErrorHandler {
                 }
                 Ok(())
             }
-            RecoveryStrategy::ManualIntervention { instructions } => {
-                Err(JholError::Application {
-                    operation: "manual_intervention".to_string(),
-                    details: Some(instructions),
-                    source: "Manual intervention required".to_string(),
-                })
-            }
+            RecoveryStrategy::ManualIntervention { instructions } => Err(JholError::Application {
+                operation: "manual_intervention".to_string(),
+                details: Some(instructions),
+                source: "Manual intervention required".to_string(),
+            }),
             RecoveryStrategy::PartialResult { missing_items } => {
                 if self.enable_logging {
-                    crate::utils::log(&format!("Continuing with partial results, missing: {:?}", missing_items));
+                    crate::utils::log(&format!(
+                        "Continuing with partial results, missing: {:?}",
+                        missing_items
+                    ));
                 }
                 Ok(())
             }
             RecoveryStrategy::DegradeFunctionality { degraded_features } => {
                 if self.enable_logging {
-                    crate::utils::log(&format!("Degrading functionality, disabled features: {:?}", degraded_features));
+                    crate::utils::log(&format!(
+                        "Degrading functionality, disabled features: {:?}",
+                        degraded_features
+                    ));
                 }
                 Ok(())
             }
@@ -370,12 +431,7 @@ impl ErrorHandler {
             .unwrap_or_default()
             .as_secs();
 
-        let log_entry = format!(
-            "[{}] {:?}: {}",
-            timestamp,
-            severity,
-            error
-        );
+        let log_entry = format!("[{}] {:?}: {}", timestamp, severity, error);
 
         match severity {
             ErrorSeverity::Info => crate::utils::log(&log_entry),
@@ -467,7 +523,12 @@ pub mod utils {
     }
 
     /// Create a registry error with package context
-    pub fn registry_error_with_package(operation: &str, package: &str, version: Option<&str>, source: &str) -> JholError {
+    pub fn registry_error_with_package(
+        operation: &str,
+        package: &str,
+        version: Option<&str>,
+        source: &str,
+    ) -> JholError {
         JholError::Registry {
             operation: operation.to_string(),
             package: Some(package.to_string()),
@@ -477,7 +538,12 @@ pub mod utils {
     }
 
     /// Create a network error with status code
-    pub fn network_error_with_status(operation: &str, url: Option<&str>, status: u16, source: &str) -> JholError {
+    pub fn network_error_with_status(
+        operation: &str,
+        url: Option<&str>,
+        status: u16,
+        source: &str,
+    ) -> JholError {
         JholError::Network {
             operation: operation.to_string(),
             url: url.map(String::from),
@@ -487,7 +553,12 @@ pub mod utils {
     }
 
     /// Create a resolution error with detailed conflict information
-    pub fn detailed_resolution_error(operation: &str, package: &str, conflict_details: &str, source: &str) -> JholError {
+    pub fn detailed_resolution_error(
+        operation: &str,
+        package: &str,
+        conflict_details: &str,
+        source: &str,
+    ) -> JholError {
         JholError::Resolution {
             operation: operation.to_string(),
             package: Some(package.to_string()),
@@ -517,7 +588,7 @@ mod tests {
             path: Some("/path/to/file".to_string()),
             source: "Permission denied".to_string(),
         };
-        
+
         let display = format!("{}", error);
         assert!(display.contains("read_file"));
         assert!(display.contains("Permission denied"));
@@ -529,16 +600,14 @@ mod tests {
         let mut logger = PerformanceLogger::new("test_operation");
         logger.add_package("test-package");
         logger.add_user_action("install");
-        
+
         let duration = logger.finish();
         assert!(duration >= 0);
     }
 
     #[test]
     fn test_error_handler() {
-        let handler = ErrorHandler::new()
-            .with_max_retries(2)
-            .with_logging(false);
+        let handler = ErrorHandler::new().with_max_retries(2).with_logging(false);
 
         let error = JholError::Network {
             operation: "fetch".to_string(),
@@ -549,9 +618,11 @@ mod tests {
 
         let result = handler.handle_error(
             error,
-            RecoveryStrategy::Skip { reason: "Package not found".to_string() }
+            RecoveryStrategy::Skip {
+                reason: "Package not found".to_string(),
+            },
         );
-        
+
         assert!(result.is_ok());
     }
 
@@ -569,7 +640,9 @@ mod tests {
 
         let result = handler.handle_error(
             error,
-            RecoveryStrategy::PartialResult { missing_items: vec!["missing-package".to_string()] }
+            RecoveryStrategy::PartialResult {
+                missing_items: vec!["missing-package".to_string()],
+            },
         );
         assert!(result.is_ok());
 
@@ -582,7 +655,9 @@ mod tests {
 
         let result = handler.handle_error(
             error,
-            RecoveryStrategy::DegradeFunctionality { degraded_features: vec!["caching".to_string()] }
+            RecoveryStrategy::DegradeFunctionality {
+                degraded_features: vec!["caching".to_string()],
+            },
         );
         assert!(result.is_ok());
     }
@@ -592,7 +667,11 @@ mod tests {
         // Test cache_error
         let cache_err = utils::cache_error("read_cache", Some("test_key"), "Cache miss");
         match cache_err {
-            JholError::Cache { operation, key, source } => {
+            JholError::Cache {
+                operation,
+                key,
+                source,
+            } => {
                 assert_eq!(operation, "read_cache");
                 assert_eq!(key, Some("test_key".to_string()));
                 assert_eq!(source, "Cache miss");
@@ -601,9 +680,15 @@ mod tests {
         }
 
         // Test registry_error_with_package
-        let registry_err = utils::registry_error_with_package("resolve", "test-pkg", Some("1.0.0"), "Not found");
+        let registry_err =
+            utils::registry_error_with_package("resolve", "test-pkg", Some("1.0.0"), "Not found");
         match registry_err {
-            JholError::Registry { operation, package, version, source } => {
+            JholError::Registry {
+                operation,
+                package,
+                version,
+                source,
+            } => {
                 assert_eq!(operation, "resolve");
                 assert_eq!(package, Some("test-pkg".to_string()));
                 assert_eq!(version, Some("1.0.0".to_string()));
@@ -613,12 +698,25 @@ mod tests {
         }
 
         // Test detailed_resolution_error
-        let resolution_err = utils::detailed_resolution_error("install", "conflicted-pkg", "Version conflict: needs 2.0.0, found 1.0.0", "Conflict");
+        let resolution_err = utils::detailed_resolution_error(
+            "install",
+            "conflicted-pkg",
+            "Version conflict: needs 2.0.0, found 1.0.0",
+            "Conflict",
+        );
         match resolution_err {
-            JholError::Resolution { operation, package, conflict_details, source } => {
+            JholError::Resolution {
+                operation,
+                package,
+                conflict_details,
+                source,
+            } => {
                 assert_eq!(operation, "install");
                 assert_eq!(package, Some("conflicted-pkg".to_string()));
-                assert_eq!(conflict_details, Some("Version conflict: needs 2.0.0, found 1.0.0".to_string()));
+                assert_eq!(
+                    conflict_details,
+                    Some("Version conflict: needs 2.0.0, found 1.0.0".to_string())
+                );
                 assert_eq!(source, "Conflict");
             }
             _ => panic!("Expected Resolution error"),
@@ -629,13 +727,31 @@ mod tests {
     fn test_error_display_formatting() {
         // Test that all error variants display properly
         let errors = vec![
-            utils::io_error("read_file", Some("/test/path"), std::io::Error::new(std::io::ErrorKind::NotFound, "File not found")),
-            utils::network_error_with_status("fetch", Some("https://example.com"), 404, "Not Found"),
+            utils::io_error(
+                "read_file",
+                Some("/test/path"),
+                std::io::Error::new(std::io::ErrorKind::NotFound, "File not found"),
+            ),
+            utils::network_error_with_status(
+                "fetch",
+                Some("https://example.com"),
+                404,
+                "Not Found",
+            ),
             utils::registry_error_with_package("resolve", "test-pkg", Some("1.0.0"), "Not found"),
-            utils::detailed_resolution_error("install", "conflict-pkg", "Version mismatch", "Conflict"),
+            utils::detailed_resolution_error(
+                "install",
+                "conflict-pkg",
+                "Version mismatch",
+                "Conflict",
+            ),
             utils::cache_error("read_cache", Some("cache_key"), "Cache miss"),
             utils::config_error("load_config", Some("registry"), "Invalid URL"),
-            utils::security_error("verify_integrity", Some("/package.tgz"), "Checksum mismatch"),
+            utils::security_error(
+                "verify_integrity",
+                Some("/package.tgz"),
+                "Checksum mismatch",
+            ),
             utils::timeout_error("download", 10000, 5000),
         ];
 
@@ -643,7 +759,10 @@ mod tests {
             let display = format!("{}", error);
             assert!(!display.is_empty(), "Error display should not be empty");
             // Basic check that the display contains expected elements
-            assert!(display.contains(":"), "Error display should contain colon separator");
+            assert!(
+                display.contains(":"),
+                "Error display should contain colon separator"
+            );
         }
     }
 }

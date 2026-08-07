@@ -87,10 +87,7 @@ pub fn build_request(
             .cloned()
             .unwrap_or_else(|| vec![spec.clone()]);
         av.insert(name.clone(), versions.clone());
-        dep_map.insert(
-            (name.clone(), spec.clone()),
-            vec![(name.clone(), versions)],
-        );
+        dep_map.insert((name.clone(), spec.clone()), vec![(name.clone(), versions)]);
     }
     ResolveRequest {
         available_versions: av,
@@ -118,20 +115,14 @@ impl ResolutionDifferential {
     }
 }
 
-/// Compute the resolution differential for a dependency request.
-///
-/// This is the Layer 0 pre-filter. It runs in O(P × C) where P = packages
-/// and C = constraints — strictly cheaper than the O(P × C × V) max-atom
-/// system construction.
-///
-/// For the install fast path, we use the O(edges) degree-sequence spectral
-/// bound (DSSC) instead of building the full O(n²) Gram matrix. The DSSC
-/// gives a conservative lower bound on the spectral gap that is sufficient
-/// to classify Stable vs Fragile for typical npm dependency graphs.
-/// The full matrix computation is only done when `run_all_layers=true`
-/// (accessible via `jhol jagr --run-all-layers` for diagnostics).
-pub fn compute_differential(request: &ResolveRequest) -> ResolutionDifferential {
-    let packages: Vec<&String> = request.available_versions.keys().collect();
+/// Compute the resolution differential directly from borrowed field views,
+/// avoiding the intermediate owned `ResolveRequest` (Phase 3 zero-copy handoff).
+pub fn compute_differential_parts(
+    available_versions: &HashMap<String, Vec<String>>,
+    dependencies: &HashMap<(String, String), Vec<(String, Vec<String>)>>,
+    conflicts: &[(String, String, String, String)],
+) -> ResolutionDifferential {
+    let packages: Vec<&String> = available_versions.keys().collect();
     let n = packages.len();
 
     if n == 0 {
@@ -153,15 +144,11 @@ pub fn compute_differential(request: &ResolveRequest) -> ResolutionDifferential 
         .collect();
 
     // ── O(edges) degree-sequence pass ────────────────────────────────────
-    // Instead of building the full n×n Gram matrix (O(n²) space + O(55n²)
-    // computation), we compute only the degree sequence of the package
-    // constraint graph. This is sufficient for the DSSC spectral bound
-    // and for tightness/conflict-risk scores.
     let mut pkg_degree = vec![0u32; n];
     let mut tight_per_pkg = vec![0u32; n]; // constraints with ≤1 allowed version
     let mut _constraint_count = 0usize; // tracked for future spectral bounds
 
-    for ((from_pkg, _from_ver), deps) in &request.dependencies {
+    for ((from_pkg, _from_ver), deps) in dependencies {
         let Some(&from_idx) = pkg_to_idx.get(from_pkg.as_str()) else {
             continue;
         };
@@ -185,22 +172,6 @@ pub fn compute_differential(request: &ResolveRequest) -> ResolutionDifferential 
     }
 
     // ── Degree-Sequence Spectral Certificate (DSSC) ───────────────────────
-    // The DSSC is JHOL's original bound for dependency graphs:
-    //
-    //   spectral_gap ≥ δ_min / (Δ_max + 1)
-    //
-    // where δ_min = min non-zero degree, Δ_max = max degree.
-    //
-    // Derivation: For a graph with max degree Δ, the largest eigenvalue
-    // of the adjacency matrix satisfies λ₁ ≤ Δ. The spectral gap of AᵀA
-    // (the Gram matrix used in the full analysis) satisfies:
-    //   λ₁(AᵀA) - λ₂(AᵀA) ≥ (number of tight constraints) / (Δ + 1)
-    //
-    // For dependency graphs where tight constraints correspond to packages
-    // with exactly one satisfying version, this gives a tight lower bound
-    // that correctly classifies Stable/Marginal/Fragile in practice.
-    //
-    // This is O(1) after the degree pass — no matrix, no iteration.
     let max_degree = pkg_degree.iter().copied().max().unwrap_or(0) as f64;
     let min_nonzero_degree = pkg_degree
         .iter()
@@ -216,9 +187,6 @@ pub fn compute_differential(request: &ResolveRequest) -> ResolutionDifferential 
         1.0 // no constraints = stable
     };
 
-    // Fiedler value lower bound: λ₂(L) ≥ 2 × δ_min × (1 - cos(π/n)) / n
-    // For small graphs (n ≤ 50), cos(π/n) ≈ 1 - π²/(2n²), so:
-    //   λ₂(L) ≥ δ_min × π² / n³
     let fiedler = if n > 1 {
         let pi = std::f64::consts::PI;
         min_nonzero_degree * pi * pi / (n as f64).powi(3)
@@ -227,7 +195,6 @@ pub fn compute_differential(request: &ResolveRequest) -> ResolutionDifferential 
     };
 
     // ── Marginal scores and conflict risk ─────────────────────────────────
-    // O(n) pass using the pre-computed per-package data.
     let mut marginal_scores: HashMap<String, f64> = HashMap::with_capacity(n);
     let mut conflict_risk: HashMap<String, f64> = HashMap::with_capacity(n);
 
@@ -241,7 +208,7 @@ pub fn compute_differential(request: &ResolveRequest) -> ResolutionDifferential 
     }
 
     // ── Predicted β₁ ─────────────────────────────────────────────────────
-    let conflict_count = request.conflicts.len();
+    let conflict_count = conflicts.len();
     let tight_total = total_tight as usize;
     let predicted_beta1 = (conflict_count + tight_total)
         .saturating_sub(n)
@@ -258,6 +225,26 @@ pub fn compute_differential(request: &ResolveRequest) -> ResolutionDifferential 
         stability,
         conflict_risk,
     }
+}
+
+/// Compute the resolution differential for a dependency request.
+///
+/// This is the Layer 0 pre-filter. It runs in O(P × C) where P = packages
+/// and C = constraints — strictly cheaper than the O(P × C × V) max-atom
+/// system construction.
+///
+/// For the install fast path, we use the O(edges) degree-sequence spectral
+/// bound (DSSC) instead of building the full O(n²) Gram matrix. The DSSC
+/// gives a conservative lower bound on the spectral gap that is sufficient
+/// to classify Stable vs Fragile for typical npm dependency graphs.
+/// The full matrix computation is only done when `run_all_layers=true`
+/// (accessible via `jhol jagr --run-all-layers` for diagnostics).
+pub fn compute_differential(request: &ResolveRequest) -> ResolutionDifferential {
+    compute_differential_parts(
+        &request.available_versions,
+        &request.dependencies,
+        &request.conflicts,
+    )
 }
 
 /// Full O(n²) differential computation — used only for `jhol jagr --run-all-layers`

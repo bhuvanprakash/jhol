@@ -3,8 +3,8 @@
 
 use crate::mpt_store::ContentHash;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 #[derive(Debug, Clone)]
@@ -21,7 +21,10 @@ pub struct IncrementalHasher {
 
 impl IncrementalHasher {
     pub fn new(use_xxhash: bool) -> Self {
-        Self { cache: HashMap::new(), use_xxhash }
+        Self {
+            cache: HashMap::new(),
+            use_xxhash,
+        }
     }
 
     pub fn hash_directory(&mut self, dir: &Path) -> Result<ContentHash, String> {
@@ -31,7 +34,10 @@ impl IncrementalHasher {
             let path = entry.path();
             if path.is_file() {
                 let hash = self.hash_file(&path)?;
-                hashes.push((path.file_name().unwrap().to_string_lossy().to_string(), hash));
+                hashes.push((
+                    path.file_name().unwrap().to_string_lossy().to_string(),
+                    hash,
+                ));
             }
         }
         hashes.sort_by(|a, b| a.0.cmp(&b.0));
@@ -46,8 +52,13 @@ impl IncrementalHasher {
     pub fn hash_file(&mut self, path: &Path) -> Result<ContentHash, String> {
         if let Some(cached) = self.cache.get(path) {
             let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
-            let current_mtime = metadata.modified()
-                .map(|t| t.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis() as u64)
+            let current_mtime = metadata
+                .modified()
+                .map(|t| {
+                    t.duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64
+                })
                 .unwrap_or(0);
             if current_mtime == cached.mtime && metadata.len() == cached.size {
                 return Ok(cached.hash.clone());
@@ -56,13 +67,21 @@ impl IncrementalHasher {
         let content = fs::read(path).map_err(|e| e.to_string())?;
         let hash = self.compute_hash(&content);
         let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
-        self.cache.insert(path.to_path_buf(), CachedHash {
-            mtime: metadata.modified()
-                .map(|t| t.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis() as u64)
-                .unwrap_or(0),
-            size: metadata.len(),
-            hash: hash.clone(),
-        });
+        self.cache.insert(
+            path.to_path_buf(),
+            CachedHash {
+                mtime: metadata
+                    .modified()
+                    .map(|t| {
+                        t.duration_since(SystemTime::UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis() as u64
+                    })
+                    .unwrap_or(0),
+                size: metadata.len(),
+                hash: hash.clone(),
+            },
+        );
         Ok(hash)
     }
 
@@ -78,12 +97,16 @@ impl IncrementalHasher {
         }
     }
 
-    pub fn clear_cache(&mut self) { self.cache.clear(); }
-    pub fn cache_size(&self) -> usize { self.cache.len() }
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+    pub fn cache_size(&self) -> usize {
+        self.cache.len()
+    }
 }
 
-use std::sync::OnceLock;
 use parking_lot::RwLock;
+use std::sync::OnceLock;
 
 fn global_hasher() -> &'static RwLock<IncrementalHasher> {
     static INSTANCE: OnceLock<RwLock<IncrementalHasher>> = OnceLock::new();
