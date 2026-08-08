@@ -27,11 +27,19 @@ pub fn prefetch_from_lockfile(quiet: bool) -> Result<(), JholError> {
         }
         return Ok(());
     }
-    let (resolved_urls, resolved_integrity) = lockfile::read_resolved_urls_and_integrity_from_dir(Path::new("."))
-        .ok_or_else(|| crate::error_handling::utils::config_error("read_resolved_urls", Some("lockfile"), "No package-lock.json or bun.lock found"))?;
+    let (resolved_urls, resolved_integrity) =
+        lockfile::read_resolved_urls_and_integrity_from_dir(Path::new(".")).ok_or_else(|| {
+            crate::error_handling::utils::config_error(
+                "read_resolved_urls",
+                Some("lockfile"),
+                "No package-lock.json or bun.lock found",
+            )
+        })?;
     let cache_dir = std::path::PathBuf::from(utils::get_cache_dir());
     let store_dir = cache_dir.join("store");
-    std::fs::create_dir_all(&store_dir).map_err(|e| crate::error_handling::utils::io_error("create_store_dir", Some("cache/store"), e))?;
+    std::fs::create_dir_all(&store_dir).map_err(|e| {
+        crate::error_handling::utils::io_error("create_store_dir", Some("cache/store"), e)
+    })?;
 
     let mut work: Vec<(String, String, Option<String>)> = Vec::new();
     for spec in &specs {
@@ -49,47 +57,52 @@ pub fn prefetch_from_lockfile(quiet: bool) -> Result<(), JholError> {
         }
     }
 
-    const PREFETCH_CONCURRENCY: usize = 8;
     let mut fetched = 0usize;
-    let mut index_batch: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    for chunk in work.chunks(PREFETCH_CONCURRENCY) {
-        use std::sync::mpsc;
-        use std::thread;
-        let (tx, rx) = mpsc::channel();
-        for (spec, url, integrity) in chunk {
-            let spec = spec.clone();
-            let url = url.clone();
-            let integrity = integrity.clone();
-            let cache_dir = cache_dir.clone();
-            let tx = tx.clone();
+    let mut index_batch: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let cache_dir_clone = cache_dir.clone();
+    let results = crate::pool::parallel_map(
+        work,
+        8, // PREFETCH_CONCURRENCY
+        8, // sequential threshold
+        move |(spec, url, integrity)| {
             if !quiet {
                 println!("Prefetching {}...", spec);
             }
-            thread::spawn(move || {
-                let res = registry::download_tarball_to_store_hash_only(
-                    &url,
-                    &cache_dir,
-                    &spec,
-                    integrity.as_deref(),
-                );
-                let _ = tx.send((spec, res));
-            });
-        }
-        drop(tx);
-        for (spec, res) in rx {
-            let hash = match res {
-                Ok(h) => h,
-                Err(e) => return Err(crate::error_handling::utils::network_error("download_tarball", Some(&spec), e.to_string())),
-            };
-            index_batch.insert(spec, hash);
-            fetched += 1;
-        }
+            let res = registry::download_tarball_to_store_hash_only(
+                &url,
+                &cache_dir_clone,
+                &spec,
+                integrity.as_deref(),
+            );
+            (spec, res)
+        },
+    );
+    for (spec, res) in results {
+        let hash = match res {
+            Ok(h) => h,
+            Err(e) => {
+                return Err(crate::error_handling::utils::network_error(
+                    "download_tarball",
+                    Some(&spec),
+                    e.to_string(),
+                ))
+            }
+        };
+        index_batch.insert(spec, hash);
+        fetched += 1;
     }
 
     if !index_batch.is_empty() {
         let mut index = utils::read_store_index();
         index.extend(index_batch);
-        utils::write_store_index(&index).map_err(|e| crate::error_handling::utils::io_error("write_store_index", Some("cache/index.json"), std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        utils::write_store_index(&index).map_err(|e| {
+            crate::error_handling::utils::io_error(
+                "write_store_index",
+                Some("cache/index.json"),
+                std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
+            )
+        })?;
     }
 
     if !quiet && fetched > 0 {

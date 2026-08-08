@@ -92,7 +92,7 @@ impl PackageIndex {
     pub fn save_user_index(&self) -> Result<(), String> {
         let user_path = self.index_path.join("user-index.json");
 
-        let content = serde_json::to_string_pretty(&self.packages)
+        let content = serde_json::to_string(&self.packages)
             .map_err(|e| format!("Failed to serialize index: {}", e))?;
 
         fs::write(&user_path, content).map_err(|e| format!("Failed to write index: {}", e))?;

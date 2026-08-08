@@ -21,6 +21,9 @@ pub fn run_install_scripts(
     node_modules: &Path,
     allowed: &HashSet<String>,
 ) -> Result<bool, String> {
+    if allowed.is_empty() {
+        return Ok(false);
+    }
     let pkg_json_path = pkg_dir.join("package.json");
     if !pkg_json_path.exists() {
         return Ok(false);

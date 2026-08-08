@@ -1,13 +1,13 @@
 //! Partial solution tracking for PubGrub solver
-//! 
+//!
 //! Tracks the current state of the solver including assignments,
 //! decision levels, and causes for backtracking.
 
+use super::incompatibility::Incompatibility;
 use super::term::Term;
 use super::version_set::{PackedVersion, VersionSet};
-use super::incompatibility::Incompatibility;
-use std::rc::Rc;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 /// An assignment made during solving
 #[derive(Clone, Debug)]
@@ -23,16 +23,16 @@ pub struct Assignment {
 pub struct PartialSolution {
     /// All assignments in order they were made
     assignments: Vec<Assignment>,
-    
+
     /// Current decision level (increments with each decision)
     decision_level: usize,
-    
+
     /// Previous decision level (for backtracking)
     previous_level: usize,
-    
+
     /// Current assignment for each package
     current_assignment: HashMap<String, PackedVersion>,
-    
+
     /// Root requirements that must be satisfied
     pub root_requirements: HashMap<String, VersionSet>,
 }
@@ -69,12 +69,7 @@ impl PartialSolution {
     }
 
     /// Derive an assignment from propagation (not a decision)
-    pub fn derive(
-        &mut self,
-        package: String,
-        version: PackedVersion,
-        cause: Rc<Incompatibility>,
-    ) {
+    pub fn derive(&mut self, package: String, version: PackedVersion, cause: Rc<Incompatibility>) {
         self.assignments.push(Assignment {
             package: package.clone(),
             version,
@@ -123,12 +118,12 @@ impl PartialSolution {
                 return false;
             }
         }
-        
+
         // Check against current assignment (if any)
         if let Some(assigned) = self.current_assignment.get(package) {
             return assigned == version;
         }
-        
+
         true
     }
 
@@ -143,7 +138,7 @@ impl PartialSolution {
     pub fn find_backtrack_level(&self, conflict: &Incompatibility) -> usize {
         // Find the highest decision level among the conflict terms
         let mut max_level = 0;
-        
+
         for term in &conflict.terms {
             for assignment in &self.assignments {
                 if assignment.package == term.package {
@@ -151,7 +146,7 @@ impl PartialSolution {
                 }
             }
         }
-        
+
         // Backtrack to the second-highest decision level
         max_level.saturating_sub(1)
     }
@@ -160,14 +155,15 @@ impl PartialSolution {
     pub fn backtrack(&mut self, level: usize) {
         self.previous_level = self.decision_level;
         self.decision_level = level;
-        
+
         // Remove assignments made after the target level
         self.assignments.retain(|a| a.decision_level <= level);
-        
+
         // Rebuild current assignment from remaining assignments
         self.current_assignment.clear();
         for assignment in &self.assignments {
-            self.current_assignment.insert(assignment.package.clone(), assignment.version);
+            self.current_assignment
+                .insert(assignment.package.clone(), assignment.version);
         }
     }
 
@@ -200,23 +196,20 @@ impl Default for PartialSolution {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::version_set::VersionRange;
+    use super::*;
 
     #[test]
     fn test_decide_and_derive() {
         let mut solution = PartialSolution::new();
-        
+
         // Make a decision
         solution.decide("pkg-a".to_string(), PackedVersion::parse("1.0.0").unwrap());
         assert_eq!(solution.decision_level(), 1);
         assert!(solution.has_decision("pkg-a"));
-        
+
         // Derive another assignment
-        let incompat = Rc::new(Incompatibility::new(
-            vec![],
-            super::super::Cause::Root,
-        ));
+        let incompat = Rc::new(Incompatibility::new(vec![], super::super::Cause::Root));
         solution.derive(
             "pkg-b".to_string(),
             PackedVersion::parse("2.0.0").unwrap(),
@@ -228,17 +221,17 @@ mod tests {
     #[test]
     fn test_backtrack() {
         let mut solution = PartialSolution::new();
-        
+
         solution.decide("pkg-a".to_string(), PackedVersion::parse("1.0.0").unwrap());
         solution.decide("pkg-b".to_string(), PackedVersion::parse("2.0.0").unwrap());
         solution.decide("pkg-c".to_string(), PackedVersion::parse("3.0.0").unwrap());
-        
+
         assert_eq!(solution.decision_level(), 3);
         assert_eq!(solution.assignment_count(), 3);
-        
+
         // Backtrack to level 1
         solution.backtrack(1);
-        
+
         assert_eq!(solution.decision_level(), 1);
         assert!(solution.has_decision("pkg-a"));
         assert!(!solution.has_decision("pkg-b"));
@@ -249,7 +242,7 @@ mod tests {
     fn test_satisfies_term() {
         let mut solution = PartialSolution::new();
         solution.decide("pkg".to_string(), PackedVersion::parse("1.5.0").unwrap());
-        
+
         let term = Term::allowed(
             "pkg".to_string(),
             VersionSet::from_range(VersionRange {
@@ -259,9 +252,9 @@ mod tests {
                 max_inclusive: true,
             }),
         );
-        
+
         assert!(solution.satisfies_term(&term));
-        
+
         let negative_term = Term::disallowed(
             "pkg".to_string(),
             VersionSet::from_range(VersionRange {
@@ -271,7 +264,7 @@ mod tests {
                 max_inclusive: true,
             }),
         );
-        
+
         assert!(!solution.satisfies_term(&negative_term));
     }
 }

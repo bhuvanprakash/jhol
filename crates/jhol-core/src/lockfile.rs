@@ -1,7 +1,7 @@
 //! Read package-lock.json and bun.lock for resolved versions (deterministic installs).
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 fn package_name_from_lockfile_key(key: &str) -> Option<String> {
     if key.is_empty() {
@@ -38,7 +38,11 @@ fn package_name_from_lockfile_key(key: &str) -> Option<String> {
         return None;
     };
 
-    if name.is_empty() { None } else { Some(name) }
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -59,7 +63,8 @@ fn is_safe_lockfile_path(raw: &str) -> bool {
         return false;
     }
     let p = std::path::Path::new(normalized);
-    !p.components().any(|c| matches!(c, std::path::Component::ParentDir))
+    !p.components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
 }
 
 fn is_top_level_lockfile_path(path: &str) -> bool {
@@ -104,14 +109,18 @@ fn current_npm_cpu() -> &'static str {
 }
 
 fn field_allows_current(value: Option<&serde_json::Value>, current: &str) -> bool {
-    let Some(value) = value else { return true; };
+    let Some(value) = value else {
+        return true;
+    };
     let Some(list) = value.as_array() else {
         return value.as_str().map(|s| s == current).unwrap_or(true);
     };
 
     let mut positives = Vec::new();
     for entry in list {
-        let Some(raw) = entry.as_str() else { continue; };
+        let Some(raw) = entry.as_str() else {
+            continue;
+        };
         let token = raw.trim();
         if token.is_empty() {
             continue;
@@ -159,7 +168,8 @@ pub fn detect_lockfile(dir: &Path) -> LockfileKind {
 use std::sync::{OnceLock, RwLock};
 use std::time::SystemTime;
 
-static PKG_JSON_CACHE: OnceLock<RwLock<Option<(SystemTime, HashMap<String, String>)>>> = OnceLock::new();
+static PKG_JSON_CACHE: OnceLock<RwLock<Option<(SystemTime, HashMap<String, String>)>>> =
+    OnceLock::new();
 
 /// Read dependencies from package.json, with caching.
 pub fn read_package_json_deps(path: &Path) -> Option<HashMap<String, String>> {
@@ -209,11 +219,51 @@ fn read_package_json_deps_uncached(path: &Path) -> Option<HashMap<String, String
     Some(deps)
 }
 
-/// Read package-lock.json and return resolved versions: package name -> exact version.
-/// Supports lockfileVersion 2 and 3 (packages key).
-pub fn read_lockfile_resolved(path: &Path) -> Option<HashMap<String, String>> {
-    let s = std::fs::read_to_string(path).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&s).ok()?;
+// ── Shared lockfile content cache ──────────────────────────────────────────
+// All lockfile-reading functions share a single mtime-cached file content read.
+// This avoids redundant read_to_string syscalls within the same install flow.
+
+static LOCKFILE_CONTENT_CACHE: OnceLock<RwLock<Option<(PathBuf, SystemTime, String)>>> =
+    OnceLock::new();
+
+fn lockfile_path(dir: &Path) -> Option<PathBuf> {
+    let bun_lock = dir.join("bun.lock");
+    let npm_shrinkwrap = dir.join("npm-shrinkwrap.json");
+    let npm_lock = dir.join("package-lock.json");
+    if npm_shrinkwrap.exists() {
+        Some(npm_shrinkwrap)
+    } else if npm_lock.exists() {
+        Some(npm_lock)
+    } else if bun_lock.exists() {
+        Some(bun_lock)
+    } else {
+        None
+    }
+}
+
+/// Read lockfile content from dir, cached by mtime. Returns (path, content).
+/// All subsequent calls within the same process reuse the cached content
+/// until the file mtime changes.
+fn cached_lockfile_content(dir: &Path) -> Option<(PathBuf, String)> {
+    let path = lockfile_path(dir)?;
+    let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
+    let cache = LOCKFILE_CONTENT_CACHE.get_or_init(|| RwLock::new(None));
+    if let Ok(guard) = cache.read() {
+        if let Some((ref cached_path, ref cached_mtime, ref content)) = *guard {
+            if cached_path == &path && cached_mtime == &mtime {
+                return Some((path, content.clone()));
+            }
+        }
+    }
+    let content = std::fs::read_to_string(&path).ok()?;
+    if let Ok(mut guard) = cache.write() {
+        *guard = Some((path.clone(), mtime, content.clone()));
+    }
+    Some((path, content))
+}
+
+fn read_lockfile_resolved_from_str(s: &str) -> Option<HashMap<String, String>> {
+    let v: serde_json::Value = serde_json::from_str(s).ok()?;
     let packages = v.get("packages")?.as_object()?;
     let mut resolved = HashMap::new();
     for (key, val) in packages {
@@ -226,19 +276,15 @@ pub fn read_lockfile_resolved(path: &Path) -> Option<HashMap<String, String>> {
     Some(resolved)
 }
 
-/// Read bun.lock (text JSON format) and return resolved versions: package name -> exact version.
-/// Bun lockfile has "packages" object; keys can be "npm:name@version" or "name@version".
-pub fn read_bun_lock_resolved(path: &Path) -> Option<HashMap<String, String>> {
-    let s = std::fs::read_to_string(path).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&s).ok()?;
+fn read_bun_lock_resolved_from_str(s: &str) -> Option<HashMap<String, String>> {
+    let v: serde_json::Value = serde_json::from_str(s).ok()?;
     let packages = v.get("packages")?.as_object()?;
     let mut resolved = HashMap::new();
     for (key, _val) in packages {
         let rest = key.strip_prefix("npm:").unwrap_or(key);
-        // Scoped: @scope/pkg@1.0.0 -> name = @scope/pkg, version = 1.0.0 (rfind from left of last @)
         let at_pos = rest.rfind('@')?;
         if at_pos == 0 {
-            continue; // @ at start is scope, need another @
+            continue;
         }
         let name = rest[..at_pos].to_string();
         let version = rest[at_pos + 1..].to_string();
@@ -247,6 +293,19 @@ pub fn read_bun_lock_resolved(path: &Path) -> Option<HashMap<String, String>> {
         }
     }
     Some(resolved)
+}
+
+/// Read package-lock.json and return resolved versions: package name -> exact version.
+/// Supports lockfileVersion 2 and 3 (packages key).
+pub fn read_lockfile_resolved(path: &Path) -> Option<HashMap<String, String>> {
+    let s = std::fs::read_to_string(path).ok()?;
+    read_lockfile_resolved_from_str(&s)
+}
+
+/// Read bun.lock (text JSON format) and return resolved versions: package name -> exact version.
+pub fn read_bun_lock_resolved(path: &Path) -> Option<HashMap<String, String>> {
+    let s = std::fs::read_to_string(path).ok()?;
+    read_bun_lock_resolved_from_str(&s)
 }
 
 /// Merge package.json deps with lockfile: for each dep, use lockfile version if present.
@@ -271,17 +330,12 @@ pub fn resolve_deps_for_install(
 
 /// Read resolved versions from whichever lockfile exists in dir (package-lock.json or bun.lock).
 pub fn read_resolved_from_dir(dir: &Path) -> Option<HashMap<String, String>> {
-    let bun_lock = dir.join("bun.lock");
-    let npm_shrinkwrap = dir.join("npm-shrinkwrap.json");
-    let npm_lock = dir.join("package-lock.json");
-    if bun_lock.exists() {
-        read_bun_lock_resolved(&bun_lock)
-    } else if npm_shrinkwrap.exists() {
-        read_lockfile_resolved(&npm_shrinkwrap)
-    } else if npm_lock.exists() {
-        read_lockfile_resolved(&npm_lock)
+    let (path, content) = cached_lockfile_content(dir)?;
+    let is_bun = path.to_string_lossy().contains("bun.lock");
+    if is_bun {
+        read_bun_lock_resolved_from_str(&content)
     } else {
-        None
+        read_lockfile_resolved_from_str(&content)
     }
 }
 
@@ -290,12 +344,10 @@ pub fn read_lockfile_resolved_urls(path: &Path) -> Option<HashMap<String, String
     read_lockfile_resolved_urls_with_integrity(path).map(|(urls, _)| urls)
 }
 
-/// Read package-lock.json and return (urls, integrity) maps. Integrity key is name@version -> SRI string.
-pub fn read_lockfile_resolved_urls_with_integrity(
-    path: &Path,
+fn read_lockfile_resolved_urls_with_integrity_from_str(
+    s: &str,
 ) -> Option<(HashMap<String, String>, HashMap<String, String>)> {
-    let s = std::fs::read_to_string(path).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&s).ok()?;
+    let v: serde_json::Value = serde_json::from_str(s).ok()?;
     let packages = v.get("packages")?.as_object()?;
     let mut urls = HashMap::new();
     let mut integrity = HashMap::new();
@@ -314,6 +366,14 @@ pub fn read_lockfile_resolved_urls_with_integrity(
         }
     }
     Some((urls, integrity))
+}
+
+/// Read package-lock.json and return (urls, integrity) maps. Integrity key is name@version -> SRI string.
+pub fn read_lockfile_resolved_urls_with_integrity(
+    path: &Path,
+) -> Option<(HashMap<String, String>, HashMap<String, String>)> {
+    let s = std::fs::read_to_string(path).ok()?;
+    read_lockfile_resolved_urls_with_integrity_from_str(&s)
 }
 
 /// Build npm registry tarball URL for a package version (no packument needed).
@@ -348,43 +408,28 @@ pub fn read_resolved_urls_from_dir(dir: &Path) -> Option<HashMap<String, String>
 pub fn read_resolved_urls_and_integrity_from_dir(
     dir: &Path,
 ) -> Option<(HashMap<String, String>, HashMap<String, String>)> {
-    let npm_shrinkwrap = dir.join("npm-shrinkwrap.json");
-    let npm_lock = dir.join("package-lock.json");
-    let bun_lock = dir.join("bun.lock");
-    if npm_shrinkwrap.exists() {
-        return read_lockfile_resolved_urls_with_integrity(&npm_shrinkwrap);
-    }
-    if npm_lock.exists() {
-        return read_lockfile_resolved_urls_with_integrity(&npm_lock);
-    }
-    if bun_lock.exists() {
-        let resolved = read_bun_lock_resolved(&bun_lock)?;
+    let (path, content) = cached_lockfile_content(dir)?;
+    let is_bun = path.to_string_lossy().contains("bun.lock");
+    if is_bun {
+        let resolved = read_bun_lock_resolved_from_str(&content)?;
         let mut urls = HashMap::new();
         for (name, version) in resolved {
             let spec = format!("{}@{}", name, version);
             urls.insert(spec, tarball_url_from_registry(&name, &version));
         }
-        return Some((urls, HashMap::new()));
+        Some((urls, HashMap::new()))
+    } else {
+        read_lockfile_resolved_urls_with_integrity_from_str(&content)
     }
-    None
 }
 
 /// Check whether all resolved lockfile entries include integrity strings (package-lock.json only).
 pub fn lockfile_integrity_complete(dir: &Path) -> bool {
-    let npm_shrinkwrap = dir.join("npm-shrinkwrap.json");
-    let npm_lock = dir.join("package-lock.json");
-    let lock_path = if npm_shrinkwrap.exists() {
-        npm_shrinkwrap
-    } else {
-        npm_lock
+    let (_, content) = match cached_lockfile_content(dir) {
+        Some(c) => c,
+        None => return true,
     };
-    if !lock_path.exists() {
-        return true;
-    }
-    let Ok(s) = std::fs::read_to_string(&lock_path) else {
-        return false;
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) else {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else {
         return false;
     };
     let Some(packages) = v.get("packages").and_then(|p| p.as_object()) else {
@@ -405,7 +450,9 @@ pub fn lockfile_integrity_complete(dir: &Path) -> bool {
 /// For package-lock.json: uses `packages` entries with `version`.
 /// For bun.lock: uses parsed resolved name/version pairs.
 pub fn read_all_resolved_specs_from_dir(dir: &Path) -> Option<Vec<String>> {
-    static CACHE: std::sync::OnceLock<std::sync::RwLock<Option<(std::time::SystemTime, Vec<String>)>>> = std::sync::OnceLock::new();
+    static CACHE: std::sync::OnceLock<
+        std::sync::RwLock<Option<(std::time::SystemTime, Vec<String>)>>,
+    > = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::RwLock::new(None));
 
     // Find the actual lockfile path and its mtime
@@ -413,10 +460,15 @@ pub fn read_all_resolved_specs_from_dir(dir: &Path) -> Option<Vec<String>> {
     let npm_lock = dir.join("package-lock.json");
     let bun_lock = dir.join("bun.lock");
 
-    let target = if npm_shrinkwrap.exists() { Some(npm_shrinkwrap) }
-        else if npm_lock.exists() { Some(npm_lock) }
-        else if bun_lock.exists() { Some(bun_lock) }
-        else { None };
+    let target = if npm_shrinkwrap.exists() {
+        Some(npm_shrinkwrap)
+    } else if npm_lock.exists() {
+        Some(npm_lock)
+    } else if bun_lock.exists() {
+        Some(bun_lock)
+    } else {
+        None
+    };
     let (target_path, mtime) = match target {
         Some(p) => {
             let m = std::fs::metadata(&p).ok()?.modified().ok()?;
@@ -435,7 +487,9 @@ pub fn read_all_resolved_specs_from_dir(dir: &Path) -> Option<Vec<String>> {
     }
 
     // Read and cache
-    let resolved = if target_path.to_string_lossy().contains("shrinkwrap") || target_path.to_string_lossy().contains("package-lock") {
+    let resolved = if target_path.to_string_lossy().contains("shrinkwrap")
+        || target_path.to_string_lossy().contains("package-lock")
+    {
         read_lockfile_resolved(&target_path)?
     } else {
         read_bun_lock_resolved(&target_path)?
@@ -454,10 +508,8 @@ pub fn read_all_resolved_specs_from_dir(dir: &Path) -> Option<Vec<String>> {
     Some(specs)
 }
 
-
-pub fn read_npm_lock_install_entries(path: &Path) -> Option<Vec<LockfileInstallEntry>> {
-    let s = std::fs::read_to_string(path).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&s).ok()?;
+fn read_npm_lock_install_entries_from_str(s: &str) -> Option<Vec<LockfileInstallEntry>> {
+    let v: serde_json::Value = serde_json::from_str(s).ok()?;
     let packages = v.get("packages")?.as_object()?;
     let mut entries = Vec::new();
 
@@ -473,7 +525,10 @@ pub fn read_npm_lock_install_entries(path: &Path) -> Option<Vec<LockfileInstallE
         };
         let version = val.get("version")?.as_str()?.to_string();
         if !package_supported_on_current_platform(val)
-            && val.get("optional").and_then(|o| o.as_bool()).unwrap_or(false)
+            && val
+                .get("optional")
+                .and_then(|o| o.as_bool())
+                .unwrap_or(false)
         {
             continue;
         }
@@ -482,7 +537,10 @@ pub fn read_npm_lock_install_entries(path: &Path) -> Option<Vec<LockfileInstallE
             .and_then(|r| r.as_str())
             .map(|s| s.to_string())
             .unwrap_or_else(|| tarball_url_from_registry(&name, &version));
-        let integrity = val.get("integrity").and_then(|i| i.as_str()).map(|s| s.to_string());
+        let integrity = val
+            .get("integrity")
+            .and_then(|i| i.as_str())
+            .map(|s| s.to_string());
         let install_path = normalize_lock_install_path(key);
 
         entries.push(LockfileInstallEntry {
@@ -496,23 +554,119 @@ pub fn read_npm_lock_install_entries(path: &Path) -> Option<Vec<LockfileInstallE
         });
     }
 
-    entries.sort_by(|a, b| a.install_path.cmp(&b.install_path).then(a.package.cmp(&b.package)).then(a.version.cmp(&b.version)));
+    entries.sort_by(|a, b| {
+        a.install_path
+            .cmp(&b.install_path)
+            .then(a.package.cmp(&b.package))
+            .then(a.version.cmp(&b.version))
+    });
     Some(entries)
 }
 
-pub fn read_lockfile_install_entries_from_dir(dir: &Path) -> Option<Vec<LockfileInstallEntry>> {
-    let npm_shrinkwrap = dir.join("npm-shrinkwrap.json");
-    if npm_shrinkwrap.exists() {
-        return read_npm_lock_install_entries(&npm_shrinkwrap);
-    }
-    let npm_lock = dir.join("package-lock.json");
-    if npm_lock.exists() {
-        return read_npm_lock_install_entries(&npm_lock);
-    }
+/// Full per-package lockfile data (npm package-lock.json packages entries).
+/// Carries dependency maps so a resolved tree can be rebuilt without metadata.
+pub struct LockfileFullEntry {
+    pub package: String,
+    pub version: String,
+    pub resolved: String,
+    pub integrity: Option<String>,
+    pub dependencies: HashMap<String, String>,
+    pub peer_dependencies: HashMap<String, String>,
+    pub peer_dependencies_meta: HashMap<String, serde_json::Value>,
+}
 
-    let bun_lock = dir.join("bun.lock");
-    if bun_lock.exists() {
-        let resolved = read_bun_lock_resolved(&bun_lock)?;
+fn read_lockfile_full_entries_from_str(s: &str) -> Option<Vec<LockfileFullEntry>> {
+    let v: serde_json::Value = serde_json::from_str(s).ok()?;
+    let packages = v.get("packages")?.as_object()?;
+    let mut entries = Vec::new();
+    for (key, val) in packages {
+        if key.is_empty() {
+            continue;
+        }
+        if !is_safe_lockfile_path(key) {
+            continue;
+        }
+        let Some(name) = package_name_from_lockfile_key(key) else {
+            continue;
+        };
+        let version = val.get("version")?.as_str()?.to_string();
+        if !package_supported_on_current_platform(val)
+            && val
+                .get("optional")
+                .and_then(|o| o.as_bool())
+                .unwrap_or(false)
+        {
+            continue;
+        }
+        let resolved = val
+            .get("resolved")
+            .and_then(|r| r.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| tarball_url_from_registry(&name, &version));
+        let integrity = val
+            .get("integrity")
+            .and_then(|i| i.as_str())
+            .map(|s| s.to_string());
+
+        let mut dependencies = HashMap::new();
+        if let Some(deps) = val.get("dependencies").and_then(|d| d.as_object()) {
+            for (dn, dv) in deps {
+                if let Some(ds) = dv.as_str() {
+                    dependencies.insert(dn.clone(), ds.to_string());
+                }
+            }
+        }
+        let mut peer_dependencies = HashMap::new();
+        if let Some(peers) = val.get("peerDependencies").and_then(|p| p.as_object()) {
+            for (pn, pv) in peers {
+                if let Some(ps) = pv.as_str() {
+                    peer_dependencies.insert(pn.clone(), ps.to_string());
+                }
+            }
+        }
+        let peer_dependencies_meta = val
+            .get("peerDependenciesMeta")
+            .and_then(|m| m.as_object())
+            .map(|m| {
+                m.iter()
+                    .map(|(k, vv)| (k.clone(), vv.clone()))
+                    .collect::<HashMap<_, _>>()
+            })
+            .unwrap_or_default();
+
+        entries.push(LockfileFullEntry {
+            package: name,
+            version,
+            resolved,
+            integrity,
+            dependencies,
+            peer_dependencies,
+            peer_dependencies_meta,
+        });
+    }
+    entries.sort_by(|a, b| a.package.cmp(&b.package).then(a.version.cmp(&b.version)));
+    Some(entries)
+}
+
+/// Read full lockfile package data from dir (npm package-lock.json only; bun.lock returns None).
+pub fn read_lockfile_full_entries_from_dir(dir: &Path) -> Option<Vec<LockfileFullEntry>> {
+    let (path, content) = cached_lockfile_content(dir)?;
+    if path.to_string_lossy().contains("bun.lock") {
+        return None;
+    }
+    read_lockfile_full_entries_from_str(&content)
+}
+
+pub fn read_npm_lock_install_entries(path: &Path) -> Option<Vec<LockfileInstallEntry>> {
+    let s = std::fs::read_to_string(path).ok()?;
+    read_npm_lock_install_entries_from_str(&s)
+}
+
+pub fn read_lockfile_install_entries_from_dir(dir: &Path) -> Option<Vec<LockfileInstallEntry>> {
+    let (path, content) = cached_lockfile_content(dir)?;
+    let is_bun = path.to_string_lossy().contains("bun.lock");
+    if is_bun {
+        let resolved = read_bun_lock_resolved_from_str(&content)?;
         let mut entries = Vec::new();
         for (name, version) in resolved {
             let top = format!("node_modules/{}", name);
@@ -526,18 +680,22 @@ pub fn read_lockfile_install_entries_from_dir(dir: &Path) -> Option<Vec<Lockfile
                 top_level: true,
             });
         }
-        entries.sort_by(|a, b| a.install_path.cmp(&b.install_path).then(a.package.cmp(&b.package)).then(a.version.cmp(&b.version)));
-        return Some(entries);
+        entries.sort_by(|a, b| {
+            a.install_path
+                .cmp(&b.install_path)
+                .then(a.package.cmp(&b.package))
+                .then(a.version.cmp(&b.version))
+        });
+        Some(entries)
+    } else {
+        read_npm_lock_install_entries_from_str(&content)
     }
-
-    None
 }
-
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use super::package_name_from_lockfile_key;
+    use std::collections::HashMap;
 
     #[test]
     fn parse_lockfile_key_nested() {
@@ -566,37 +724,39 @@ mod tests {
     #[test]
     fn top_level_path_detection() {
         assert!(super::is_top_level_lockfile_path("node_modules/react"));
-        assert!(!super::is_top_level_lockfile_path("node_modules/a/node_modules/react"));
+        assert!(!super::is_top_level_lockfile_path(
+            "node_modules/a/node_modules/react"
+        ));
     }
 
     #[test]
     fn safe_path_rejects_parent_dir() {
         assert!(!super::is_safe_lockfile_path("../node_modules/react"));
         assert!(super::is_safe_lockfile_path("node_modules/react"));
-    
-    #[test]
-    fn resolve_deps_for_install_is_stable_sorted() {
-        let mut deps = HashMap::new();
-        deps.insert("z".to_string(), "^1.0.0".to_string());
-        deps.insert("a".to_string(), "^1.0.0".to_string());
-        let out = super::resolve_deps_for_install(&deps, None);
-        assert_eq!(out, vec!["a@^1.0.0".to_string(), "z@^1.0.0".to_string()]);
-    }
 
-    #[test]
-    fn platform_filter_skips_optional_unsupported() {
-        let v = serde_json::json!({
-            "optional": true,
-            "os": ["!darwin"],
-        });
-        let should_install = super::package_supported_on_current_platform(&v)
-            || !v.get("optional").and_then(|o| o.as_bool()).unwrap_or(false);
-        // Test is deterministic on macOS hosts, still valid elsewhere.
-        if super::current_npm_os() == "darwin" {
-            assert!(!should_install);
+        #[test]
+        fn resolve_deps_for_install_is_stable_sorted() {
+            let mut deps = HashMap::new();
+            deps.insert("z".to_string(), "^1.0.0".to_string());
+            deps.insert("a".to_string(), "^1.0.0".to_string());
+            let out = super::resolve_deps_for_install(&deps, None);
+            assert_eq!(out, vec!["a@^1.0.0".to_string(), "z@^1.0.0".to_string()]);
+        }
+
+        #[test]
+        fn platform_filter_skips_optional_unsupported() {
+            let v = serde_json::json!({
+                "optional": true,
+                "os": ["!darwin"],
+            });
+            let should_install = super::package_supported_on_current_platform(&v)
+                || !v.get("optional").and_then(|o| o.as_bool()).unwrap_or(false);
+            // Test is deterministic on macOS hosts, still valid elsewhere.
+            if super::current_npm_os() == "darwin" {
+                assert!(!should_install);
+            }
         }
     }
-}
 
     #[test]
     fn resolve_deps_for_install_is_stable_sorted() {

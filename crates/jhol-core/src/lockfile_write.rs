@@ -1,15 +1,16 @@
 //! Native lockfile writing: resolve dependency tree and emit package-lock.json.
 //! Optimized for performance with incremental updates and async I/O.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
+use crate::jagr::jagr_resolver::{JagrResolver, ResolveRequest};
+use crate::jagr::maxsat_solver::PackageVersionVar;
 use crate::lockfile;
+use crate::pubgrub::{can_use_minimal_selection, resolve_minimal, PackedVersion, PubGrubSolver};
 use crate::registry;
-use crate::sat_resolver::{PackageDomain, PackageVersion, SolveInput};
-use crate::pubgrub::{PubGrubSolver, PackedVersion, can_use_minimal_selection, resolve_minimal};  // JAGR-2: PubGrub solver
+use crate::sat_resolver::{PackageDomain, PackageVersion, SolveInput}; // JAGR-2: PubGrub solver
 
 /// RAII-safe mutex lock helper (DRY principle)
 macro_rules! mutex_lock {
@@ -32,7 +33,6 @@ pub struct ResolvedPackage {
     pub peer_dependencies_meta: HashMap<String, serde_json::Value>,
 }
 
-
 #[derive(Clone, Debug)]
 struct PackageSnapshot {
     version: String,
@@ -45,12 +45,14 @@ struct PackageSnapshot {
 
 struct RegistryProvider {
     metadata_cache: HashMap<String, serde_json::Value>,
+    parsed_versions: HashMap<String, Vec<(semver::Version, String)>>,
 }
 
 impl RegistryProvider {
     fn new() -> Self {
         Self {
             metadata_cache: HashMap::new(),
+            parsed_versions: HashMap::new(),
         }
     }
 
@@ -65,18 +67,48 @@ impl RegistryProvider {
             .ok_or_else(|| format!("Missing metadata for {}", name))
     }
 
+    fn get_parsed_versions(&mut self, name: &str) -> Result<&[(semver::Version, String)], String> {
+        if !self.parsed_versions.contains_key(name) {
+            let meta = self.metadata(name)?;
+            let versions = meta
+                .get("versions")
+                .and_then(|v| v.as_object())
+                .ok_or_else(|| format!("No versions for {}", name))?;
+            let mut list: Vec<(semver::Version, String)> = versions
+                .keys()
+                .filter_map(|v| Some((semver::Version::parse(v).ok()?, v.clone())))
+                .collect();
+            list.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+            self.parsed_versions.insert(name.to_string(), list);
+        }
+        Ok(self
+            .parsed_versions
+            .get(name)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]))
+    }
+
     fn resolve_version(&mut self, name: &str, specs: &[String]) -> Result<String, String> {
-        let meta = self.metadata(name)?;
-        resolve_highest_satisfying(meta, specs)
-            .ok_or_else(|| format!("Dependency conflict for {} (specs: {})", name, specs.join(", ")))
+        let parsed = self.get_parsed_versions(name)?;
+        resolve_highest_satisfying_parsed(parsed, specs).ok_or_else(|| {
+            format!(
+                "Dependency conflict for {} (specs: {})",
+                name,
+                specs.join(", ")
+            )
+        })
     }
 
     fn snapshot(&mut self, name: &str, version: &str) -> Result<PackageSnapshot, String> {
         let meta = self.metadata(name)?;
-        let (resolved_url, integrity) = match registry::resolve_tarball_via_manifest(name, version) {
+        let (resolved_url, integrity) = match registry::resolve_tarball_via_manifest(name, version)
+        {
             Ok(Some((_, url, integrity_opt))) => (url, integrity_opt),
             Ok(None) | Err(_) => (
-                format!("https://registry.npmjs.org/{}/-/{}-{}.tgz", name, name, version),
+                format!(
+                    "https://registry.npmjs.org/{}/-/{}-{}.tgz",
+                    name, name, version
+                ),
                 registry::get_integrity_for_version(meta, version),
             ),
         };
@@ -113,7 +145,6 @@ struct Requirement {
     spec: String,
 }
 
-
 /// Validate direct/root peer dependency conflicts from package.json specs.
 pub fn validate_root_peer_conflicts(package_json_path: &Path) -> Result<(), String> {
     let deps = lockfile::read_package_json_deps(package_json_path)
@@ -125,9 +156,32 @@ pub fn validate_root_peer_conflicts(package_json_path: &Path) -> Result<(), Stri
     let mut selected: HashMap<String, String> = HashMap::new();
     let mut metadata_cache: HashMap<String, serde_json::Value> = HashMap::new();
 
-    for (name, spec) in &deps {
-        let meta = registry::fetch_metadata(name)
-            .map_err(|e| format!("Failed to fetch metadata for {}: {}", name, e))?;
+    // Prefetch all metadata in parallel (R5)
+    let dep_names: Vec<String> = deps.keys().cloned().collect();
+    let fetch_results = registry::fetch_metadata_parallel(&dep_names);
+    for (name, result) in fetch_results {
+        let meta = result.map_err(|e| format!("Failed to fetch metadata for {}: {}", name, e))?;
+        let spec = deps
+            .get(&name)
+            .ok_or_else(|| format!("Missing spec for {}", name))?;
+        // If the fetched metadata is a partial synth (bundled or manifest) that
+        // cannot satisfy this package's spec, escalate to the full network
+        // packument so ranges like ^18.3.1 resolve instead of erroring.
+        let meta = if resolve_highest_satisfying(&meta, std::slice::from_ref(spec)).is_none()
+            && (meta
+                .get("_bundled_index_synth")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+                || meta
+                    .get("_vortex_manifest_synth")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false))
+        {
+            registry::fetch_metadata_full_packument(&name)
+                .map_err(|e| format!("Failed to fetch metadata for {}: {}", name, e))?
+        } else {
+            meta
+        };
         let version = resolve_highest_satisfying(&meta, &[spec.clone()])
             .ok_or_else(|| format!("Could not resolve {} with spec {}", name, spec))?;
         selected.insert(name.clone(), version);
@@ -136,7 +190,9 @@ pub fn validate_root_peer_conflicts(package_json_path: &Path) -> Result<(), Stri
 
     let mut conflicts = Vec::new();
     for (name, version) in &selected {
-        let Some(meta) = metadata_cache.get(name) else { continue; };
+        let Some(meta) = metadata_cache.get(name) else {
+            continue;
+        };
         let peers = registry::get_version_peer_dependencies(meta, version);
         let peer_meta = registry::get_version_peer_dependencies_meta(meta, version);
 
@@ -172,26 +228,26 @@ pub fn validate_root_peer_conflicts(package_json_path: &Path) -> Result<(), Stri
 /// Resolve the full dependency tree from package.json with deterministic conflict handling.
 /// Prefetches direct deps in parallel, then uses cached packuments for the rest.
 /// For conflicts, prefers the highest version that satisfies the combined specs; errors if none match.
-pub fn resolve_full_tree(package_json_path: &Path) -> Result<HashMap<String, ResolvedPackage>, String> {
+pub fn resolve_full_tree(
+    package_json_path: &Path,
+) -> Result<HashMap<String, ResolvedPackage>, String> {
     let rollout = std::env::var("JHOL_RESOLVER_ROLLOUT")
         .unwrap_or_else(|_| "experimental".to_string())
         .to_lowercase();
 
-    let resolver_type = std::env::var("JHOL_RESOLVER").unwrap_or_else(|_| {
-        match rollout.as_str() {
-            "default" => "pubgrub-v2".to_string(),
-            "flagged" => {
-                let canary = std::env::var("JHOL_RESOLVER_CANARY")
-                    .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "True"))
-                    .unwrap_or(false);
-                if canary {
-                    "pubgrub-v2".to_string()
-                } else {
-                    "pubgrub".to_string()
-                }
+    let resolver_type = std::env::var("JHOL_RESOLVER").unwrap_or_else(|_| match rollout.as_str() {
+        "default" => "jagr3".to_string(),
+        "flagged" => {
+            let canary = std::env::var("JHOL_RESOLVER_CANARY")
+                .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "True"))
+                .unwrap_or(false);
+            if canary {
+                "jagr3".to_string()
+            } else {
+                "jagr3".to_string()
             }
-            _ => "pubgrub".to_string(),
         }
+        _ => "jagr3".to_string(),
     });
 
     let strict_resolver = std::env::var("JHOL_RESOLVER_STRICT")
@@ -232,7 +288,10 @@ pub fn resolve_full_tree(package_json_path: &Path) -> Result<HashMap<String, Res
 
             resolve_full_tree_jagr(package_json_path).or_else(|jagr_err| {
                 crate::utils::record_fallback_reason("resolver_jagr_failed", &[]);
-                crate::utils::log(&format!("warning: JAGR-1 failed, falling back to legacy: {}", jagr_err));
+                crate::utils::log(&format!(
+                    "warning: JAGR-1 failed, falling back to legacy: {}",
+                    jagr_err
+                ));
                 resolve_full_tree_legacy(package_json_path).map_err(|legacy_err| {
                     format!(
                         "{} failed: {}; JAGR-1 failed: {}; legacy failed: {}",
@@ -246,22 +305,36 @@ pub fn resolve_full_tree(package_json_path: &Path) -> Result<HashMap<String, Res
     match resolver_type.as_str() {
         "pubgrub-v2" => run_pubgrub_with_fallbacks("pubgrub-v2", true),
         "pubgrub" => run_pubgrub_with_fallbacks("pubgrub", false),
+        "jagr3" => resolve_full_tree_jagr3(package_json_path).or_else(|jagr_err| {
+            if strict_resolver {
+                return Err(jagr_err);
+            }
+            crate::utils::record_fallback_reason("resolver_jagr_failed", &[]);
+            crate::utils::log(&format!(
+                "warning: JAGR-3 failed, falling back to legacy: {}",
+                jagr_err
+            ));
+            resolve_full_tree_legacy(package_json_path).map_err(|legacy_err| {
+                format!("JAGR-3 failed: {}; legacy failed: {}", jagr_err, legacy_err)
+            })
+        }),
         "jagr" | "jagr1" => resolve_full_tree_jagr(package_json_path).or_else(|jagr_err| {
             if strict_resolver {
                 return Err(jagr_err);
             }
             crate::utils::record_fallback_reason("resolver_jagr_failed", &[]);
-            crate::utils::log(&format!("warning: JAGR resolver failed, falling back to legacy: {}", jagr_err));
-            resolve_full_tree_legacy(package_json_path)
-                .map_err(|legacy_err| format!("JAGR failed: {}; legacy failed: {}", jagr_err, legacy_err))
+            crate::utils::log(&format!(
+                "warning: JAGR resolver failed, falling back to legacy: {}",
+                jagr_err
+            ));
+            resolve_full_tree_legacy(package_json_path).map_err(|legacy_err| {
+                format!("JAGR failed: {}; legacy failed: {}", jagr_err, legacy_err)
+            })
         }),
         "legacy" => resolve_full_tree_legacy(package_json_path),
         _ => run_pubgrub_with_fallbacks("pubgrub", false),
     }
 }
-
-
-
 
 fn resolve_full_tree_pubgrub_v2(
     package_json_path: &Path,
@@ -399,7 +472,9 @@ fn resolve_full_tree_pubgrub_v2(
 
 /// Resolve using PubGrub algorithm (JAGR-2)
 /// Fast, conflict-driven resolution with excellent error messages
-fn resolve_full_tree_pubgrub(package_json_path: &Path) -> Result<HashMap<String, ResolvedPackage>, String> {
+fn resolve_full_tree_pubgrub(
+    package_json_path: &Path,
+) -> Result<HashMap<String, ResolvedPackage>, String> {
     let deps = lockfile::read_package_json_deps(package_json_path)
         .ok_or("Could not read package.json dependencies.")?;
     if deps.is_empty() {
@@ -449,7 +524,7 @@ fn resolve_full_tree_pubgrub(package_json_path: &Path) -> Result<HashMap<String,
                         },
                         "versions": pkg.versions.iter()
                             .map(|v| (v.clone(), serde_json::json!({
-                                "version": v.clone(), 
+                                "version": v.clone(),
                                 "dependencies": pkg.dependencies
                             })))
                             .collect::<serde_json::Map<String, _>>()
@@ -461,11 +536,12 @@ fn resolve_full_tree_pubgrub(package_json_path: &Path) -> Result<HashMap<String,
     }
 
     // Fetch ONLY missing packages from network
-    let missing: Vec<String> = package_names.iter()
+    let missing: Vec<String> = package_names
+        .iter()
         .filter(|n| !metadata_cache.contains_key(*n))
         .cloned()
         .collect();
-    
+
     if !missing.is_empty() {
         let network_results = registry::fetch_metadata_parallel(&missing);
         for (name, result) in network_results {
@@ -475,7 +551,8 @@ fn resolve_full_tree_pubgrub(package_json_path: &Path) -> Result<HashMap<String,
         }
     }
 
-    solver.add_root_requirements_from_specs(specs.clone())
+    solver
+        .add_root_requirements_from_specs(specs.clone())
         .map_err(|e| format!("PubGrub: Failed to add requirements: {}", e))?;
 
     // Set available versions from cached metadata
@@ -491,7 +568,8 @@ fn resolve_full_tree_pubgrub(package_json_path: &Path) -> Result<HashMap<String,
     }
 
     // Solve
-    let solution = solver.solve()
+    let solution = solver
+        .solve()
         .map_err(|e| format!("PubGrub resolution failed: {:?}", e))?;
 
     validate_direct_peer_conflicts(&solution, &metadata_cache)?;
@@ -506,19 +584,27 @@ fn resolve_simple_fast_path(
     package_json_path: &Path,
     deps: &HashMap<String, String>,
 ) -> Result<HashMap<String, ResolvedPackage>, String> {
-    
     let package_names: Vec<String> = deps.keys().cloned().collect();
-    
+
     // Fetch all metadata in parallel
     let metadata_results = registry::fetch_metadata_parallel(&package_names);
-    
+
     let mut result = HashMap::new();
-    
+
     for (name, metadata_result) in metadata_results {
-        let spec = deps.get(&name).ok_or(format!("Missing spec for {}", name))?;
-        
+        let spec = deps
+            .get(&name)
+            .ok_or(format!("Missing spec for {}", name))?;
+
         match metadata_result {
             Ok(metadata) => {
+                // Pre-parse spec to VersionReq once per package (R6)
+                let req = if spec.trim().is_empty() || spec.trim() == "*" {
+                    None
+                } else {
+                    semver::VersionReq::parse(spec.trim()).ok()
+                };
+
                 // Find best version matching spec
                 if let Some(versions) = metadata.get("versions") {
                     if let Some(versions_obj) = versions.as_object() {
@@ -527,12 +613,16 @@ fn resolve_simple_fast_path(
 
                         for version_str in versions_obj.keys() {
                             if let Ok(version) = semver::Version::parse(version_str) {
-                                if version_satisfies(&version, spec) {
+                                let matches = match &req {
+                                    None => true,
+                                    Some(r) => r.matches(&version),
+                                };
+                                if matches {
                                     let should_update = match &best_semver {
                                         None => true,
                                         Some(current) => version > *current,
                                     };
-                                    
+
                                     if should_update {
                                         best_semver = Some(version);
                                         best_version = Some(version_str.clone());
@@ -550,21 +640,24 @@ fn resolve_simple_fast_path(
                                     .and_then(|t| t.as_str())
                                     .unwrap_or("")
                                     .to_string();
-                                
+
                                 let integrity = version_data
                                     .get("dist")
                                     .and_then(|d| d.get("integrity"))
                                     .and_then(|i| i.as_str())
                                     .map(String::from);
-                                
-                                result.insert(name, ResolvedPackage {
-                                    version,
-                                    resolved,
-                                    integrity,
-                                    dependencies: HashMap::new(),
-                                    peer_dependencies: HashMap::new(),
-                                    peer_dependencies_meta: HashMap::new(),
-                                });
+
+                                result.insert(
+                                    name,
+                                    ResolvedPackage {
+                                        version,
+                                        resolved,
+                                        integrity,
+                                        dependencies: HashMap::new(),
+                                        peer_dependencies: HashMap::new(),
+                                        peer_dependencies_meta: HashMap::new(),
+                                    },
+                                );
                             }
                         }
                     }
@@ -575,7 +668,7 @@ fn resolve_simple_fast_path(
             }
         }
     }
-    
+
     if result.len() == deps.len() {
         validate_peer_conflicts_in_tree(&result)?;
         Ok(result)
@@ -583,7 +676,6 @@ fn resolve_simple_fast_path(
         Err("Fast path resolution incomplete".to_string())
     }
 }
-
 
 fn validate_peer_conflicts_in_tree(tree: &HashMap<String, ResolvedPackage>) -> Result<(), String> {
     if tree.is_empty() {
@@ -637,12 +729,11 @@ fn validate_peer_conflicts_in_tree(tree: &HashMap<String, ResolvedPackage>) -> R
 
 /// Check if a version satisfies a semver spec
 fn version_satisfies(version: &semver::Version, spec: &str) -> bool {
-    if let Ok(req) = semver::VersionReq::parse(spec) {
-        req.matches(version)
-    } else {
-        // If spec parsing fails, try exact match
-        spec.trim_start_matches('^').trim_start_matches('~') == version.to_string().as_str()
+    if let Some(req) = crate::registry::cached_version_req(spec) {
+        return req.matches(version);
     }
+    // If spec parsing fails, try exact match
+    spec.trim_start_matches('^').trim_start_matches('~') == version.to_string().as_str()
 }
 
 /// Verify minimal solution by checking transitive dependencies
@@ -681,10 +772,7 @@ fn verify_minimal_solution(
                 if !registry::version_satisfies(&dep_spec, &dep_version.to_string()) {
                     return Err(format!(
                         "Minimal solution conflict: {} requires {} {}, got {}",
-                        name,
-                        dep_name,
-                        dep_spec,
-                        dep_version
+                        name, dep_name, dep_spec, dep_version
                     ));
                 }
             }
@@ -739,7 +827,6 @@ fn validate_direct_peer_conflicts(
     }
 }
 
-
 /// Build resolved package tree from minimal version solution
 fn build_tree_from_versions(
     solution: &HashMap<String, semver::Version>,
@@ -750,21 +837,29 @@ fn build_tree_from_versions(
         let version_str = version.to_string();
 
         // Fetch metadata for this package
-        let (resolved_url, integrity) = match registry::resolve_tarball_via_manifest(name, &version_str) {
-            Ok(Some((_, url, integrity_opt))) => (url, integrity_opt),
-            Ok(None) | Err(_) => {
-                (format!("https://registry.npmjs.org/{}/-/{}-{}.tgz", name, name, version_str), None)
-            }
-        };
+        let (resolved_url, integrity) =
+            match registry::resolve_tarball_via_manifest(name, &version_str) {
+                Ok(Some((_, url, integrity_opt))) => (url, integrity_opt),
+                Ok(None) | Err(_) => (
+                    format!(
+                        "https://registry.npmjs.org/{}/-/{}-{}.tgz",
+                        name, name, version_str
+                    ),
+                    None,
+                ),
+            };
 
-        result.insert(name.clone(), ResolvedPackage {
-            version: version_str.clone(),
-            resolved: resolved_url,
-            integrity,
-            dependencies: HashMap::new(),
-            peer_dependencies: HashMap::new(),
-            peer_dependencies_meta: HashMap::new(),
-        });
+        result.insert(
+            name.clone(),
+            ResolvedPackage {
+                version: version_str.clone(),
+                resolved: resolved_url,
+                integrity,
+                dependencies: HashMap::new(),
+                peer_dependencies: HashMap::new(),
+                peer_dependencies_meta: HashMap::new(),
+            },
+        );
     }
 
     Ok(result)
@@ -782,46 +877,57 @@ fn build_tree_from_pubgrub_solution(
         let version = packed_version.to_version();
         let version_str = version.to_string();
 
-        let (resolved_url, integrity) = match registry::resolve_tarball_via_manifest(name, &version_str) {
-            Ok(Some((_, url, integrity_opt))) => (url, integrity_opt),
-            Ok(None) | Err(_) => {
-                (format!("https://registry.npmjs.org/{}/-/{}-{}.tgz", name, name, version_str), None)
-            }
-        };
+        let (resolved_url, integrity) =
+            match registry::resolve_tarball_via_manifest(name, &version_str) {
+                Ok(Some((_, url, integrity_opt))) => (url, integrity_opt),
+                Ok(None) | Err(_) => (
+                    format!(
+                        "https://registry.npmjs.org/{}/-/{}-{}.tgz",
+                        name, name, version_str
+                    ),
+                    None,
+                ),
+            };
 
-        let (dependencies, peer_dependencies, peer_dependencies_meta) = if let Some(meta) = metadata_cache.get(name) {
-            let raw_deps = registry::get_version_required_dependencies(meta, &version_str);
-            let deps = raw_deps
-                .into_iter()
-                .map(|(dep, spec)| {
-                    let resolved_spec = solution
-                        .get(&dep)
-                        .map(|resolved| resolved.to_version().to_string())
-                        .unwrap_or(spec);
-                    (dep, resolved_spec)
-                })
-                .collect::<HashMap<_, _>>();
-            let peers = registry::get_version_peer_dependencies(meta, &version_str);
-            let peer_meta = registry::get_version_peer_dependencies_meta(meta, &version_str);
-            (deps, peers, peer_meta)
-        } else {
-            (HashMap::new(), HashMap::new(), HashMap::new())
-        };
+        let (dependencies, peer_dependencies, peer_dependencies_meta) =
+            if let Some(meta) = metadata_cache.get(name) {
+                let raw_deps = registry::get_version_required_dependencies(meta, &version_str);
+                let deps = raw_deps
+                    .into_iter()
+                    .map(|(dep, spec)| {
+                        let resolved_spec = solution
+                            .get(&dep)
+                            .map(|resolved| resolved.to_version().to_string())
+                            .unwrap_or(spec);
+                        (dep, resolved_spec)
+                    })
+                    .collect::<HashMap<_, _>>();
+                let peers = registry::get_version_peer_dependencies(meta, &version_str);
+                let peer_meta = registry::get_version_peer_dependencies_meta(meta, &version_str);
+                (deps, peers, peer_meta)
+            } else {
+                (HashMap::new(), HashMap::new(), HashMap::new())
+            };
 
-        result.insert(name.clone(), ResolvedPackage {
-            version: version_str,
-            resolved: resolved_url,
-            integrity,
-            dependencies,
-            peer_dependencies,
-            peer_dependencies_meta,
-        });
+        result.insert(
+            name.clone(),
+            ResolvedPackage {
+                version: version_str,
+                resolved: resolved_url,
+                integrity,
+                dependencies,
+                peer_dependencies,
+                peer_dependencies_meta,
+            },
+        );
     }
 
     Ok(result)
 }
 
-fn resolve_full_tree_jagr(package_json_path: &Path) -> Result<HashMap<String, ResolvedPackage>, String> {
+fn resolve_full_tree_jagr(
+    package_json_path: &Path,
+) -> Result<HashMap<String, ResolvedPackage>, String> {
     let deps = lockfile::read_package_json_deps(package_json_path)
         .ok_or("Could not read package.json dependencies.")?;
     if deps.is_empty() {
@@ -839,17 +945,17 @@ fn resolve_full_tree_jagr(package_json_path: &Path) -> Result<HashMap<String, Re
 
     let mut cap = INITIAL_DOMAIN_VERSION_CAP;
     let mut previous_assignment = None;
-    
+
     loop {
         let (domains, truncated_any) = build_jagr_domains(&deps, &cache_arc, cap)?;
-        
+
         // Try incremental solving first if we have a previous assignment
         let result = if let Some(prev) = previous_assignment.clone() {
             crate::sat_resolver::solve_incremental(&input, &domains, Some(&prev))
         } else {
             crate::sat_resolver::solve_exact(&input, &domains)
         };
-        
+
         match result {
             Ok(solved) => {
                 // Cache the assignment for next time
@@ -868,14 +974,295 @@ fn resolve_full_tree_jagr(package_json_path: &Path) -> Result<HashMap<String, Re
     }
 }
 
+/// Build a resolved tree directly from an on-disk npm package-lock.json,
+/// verifying that every package.json dependency range is still satisfied by
+/// the locked version. This is the Phase-0 lockfile-first gate: it skips the
+/// registry metadata fetch AND the resolution pipeline entirely for warm
+/// installs where the lockfile is still valid (0 registry calls, 0ms resolve).
+///
+/// Returns `None` when no valid npm lockfile exists or a range is violated.
+pub fn build_tree_from_lockfile_if_valid(
+    package_json_path: &Path,
+) -> Option<HashMap<String, ResolvedPackage>> {
+    let dir = package_json_path.parent().unwrap_or_else(|| Path::new("."));
+    let deps = lockfile::read_package_json_deps(package_json_path)?;
+    if deps.is_empty() {
+        return None;
+    }
+    // Only npm package-lock.json carries full dep/integrity data; bun.lock → None.
+    let entries = lockfile::read_lockfile_full_entries_from_dir(dir)?;
+
+    // Verify every package.json range against the locked version.
+    for (name, spec) in &deps {
+        let locked = entries
+            .iter()
+            .find(|e| &e.package == name)
+            .map(|e| e.version.clone())?;
+        if !registry::version_satisfies(spec, &locked) {
+            return None;
+        }
+    }
+
+    let mut tree: HashMap<String, ResolvedPackage> = HashMap::new();
+    for e in &entries {
+        let mut resolved_deps = HashMap::new();
+        for (dep_name, dep_spec) in &e.dependencies {
+            let dep_ver = tree
+                .get(&format!("node_modules/{}", dep_name))
+                .map(|rp| rp.version.clone())
+                .or_else(|| {
+                    entries
+                        .iter()
+                        .find(|x| &x.package == dep_name)
+                        .map(|x| x.version.clone())
+                });
+            if let Some(dv) = dep_ver {
+                if registry::version_satisfies(dep_spec, &dv) {
+                    resolved_deps.insert(dep_name.clone(), dv);
+                }
+            }
+        }
+        tree.insert(
+            format!("node_modules/{}", e.package),
+            ResolvedPackage {
+                version: e.version.clone(),
+                resolved: e.resolved.clone(),
+                integrity: e.integrity.clone(),
+                dependencies: resolved_deps,
+                peer_dependencies: e.peer_dependencies.clone(),
+                peer_dependencies_meta: e.peer_dependencies_meta.clone(),
+            },
+        );
+    }
+
+    Some(tree)
+}
+
+pub fn resolve_full_tree_jagr3(
+    package_json_path: &Path,
+) -> Result<HashMap<String, ResolvedPackage>, String> {
+    if std::env::var("JHOL_DEBUG_DOMAINS").is_ok() {
+        eprintln!("[JAGR3] resolve_full_tree_jagr3 entered");
+    }
+    let deps = lockfile::read_package_json_deps(package_json_path)
+        .ok_or("Could not read package.json dependencies.")?;
+    if deps.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    // ── PHASE 0: LOCKFILE-FIRST GATE ───────────────────────────────────────
+    // Warm install: if an npm package-lock.json exists and still satisfies
+    // every package.json range, return the locked tree directly. No registry
+    // metadata fetch, no 4-layer resolution, no pipeline at all.
+    if let Some(tree) = build_tree_from_lockfile_if_valid(package_json_path) {
+        crate::utils::log("Lockfile-first gate hit: reusing resolved tree (0 metadata fetches)");
+        return Ok(tree);
+    }
+
+    let cache_arc = Arc::new(Mutex::new(HashMap::<String, serde_json::Value>::new()));
+    let (domains, _) = build_jagr_domains(&deps, &cache_arc, 512)?;
+
+    if std::env::var("JHOL_DEBUG_DOMAINS").is_ok() {
+        eprintln!("[DOMAINS] total packages in domains: {}", domains.len());
+        let mut names: Vec<&String> = domains.keys().collect();
+        names.sort();
+        for n in names {
+            let d = &domains[n];
+            let vs: Vec<String> = d.versions.keys().cloned().collect();
+            eprintln!(
+                "[DOMAIN] {}: {} versions: {:?}",
+                n,
+                vs.len(),
+                &vs[..vs.len().min(10)]
+            );
+        }
+    }
+
+    // Build available_versions once, sorted
+    let mut available_versions: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut package_names: Vec<&str> = domains.keys().map(|s| s.as_str()).collect();
+    package_names.sort();
+
+    for name in &package_names {
+        let domain = &domains[*name];
+        let mut versions: Vec<&str> = domain.versions.keys().map(|s| s.as_str()).collect();
+        versions.sort();
+        available_versions.insert(name, versions);
+    }
+
+    // Build dependencies using borrowed references — no cloning until final HashMap
+    let deps_count = package_names
+        .iter()
+        .filter_map(|n| domains.get(*n))
+        .map(|d| d.versions.len())
+        .sum::<usize>();
+    let mut dependencies: HashMap<(&str, &str), Vec<(&str, Vec<&str>)>> =
+        HashMap::with_capacity(deps_count);
+    for &name in &package_names {
+        let Some(domain) = domains.get(name) else {
+            continue;
+        };
+        let versions = available_versions.get(name).unwrap();
+        for &version in versions {
+            let Some(pkg_version) = domain.versions.get(version) else {
+                continue;
+            };
+            let mut edges = Vec::with_capacity(pkg_version.dependencies.len());
+            for (dep_name, dep_spec) in &pkg_version.dependencies {
+                let allowed_versions = available_versions
+                    .get(dep_name.as_str())
+                    .map(|candidates| {
+                        candidates
+                            .iter()
+                            .filter(|cv| registry::version_satisfies(dep_spec, cv))
+                            .copied()
+                            .collect::<Vec<&str>>()
+                    })
+                    .unwrap_or_default();
+                if std::env::var("JHOL_DEBUG_DOMAINS").is_ok() && allowed_versions.is_empty() {
+                    eprintln!(
+                        "[EDGE] {}@{} -> {} ({}): NO allowed versions",
+                        name, version, dep_name, dep_spec
+                    );
+                }
+                edges.push((dep_name.as_str(), allowed_versions));
+            }
+            dependencies.insert((name, version), edges);
+        }
+    }
+
+    // Seed the root node so greedy/BFS can traverse package.json direct deps.
+    // Without a ("root","0.0.0") entry the greedy fast path finds no children
+    // and every cold install silently falls back to the SAT resolver.
+    let mut root_edges: Vec<(&str, Vec<&str>)> = Vec::with_capacity(deps.len());
+    for (dep_name, dep_spec) in &deps {
+        let allowed_versions = available_versions
+            .get(dep_name.as_str())
+            .map(|candidates| {
+                candidates
+                    .iter()
+                    .filter(|cv| registry::version_satisfies(dep_spec, cv))
+                    .copied()
+                    .collect::<Vec<&str>>()
+            })
+            .unwrap_or_default();
+        root_edges.push((dep_name.as_str(), allowed_versions));
+    }
+    dependencies.insert(("root", "0.0.0"), root_edges);
+
+    // ── PHASE A: VERSION-DOMAIN PRUNING ─────────────────────────────────────
+    // A version that satisfies NO incoming dependency range (and is not a root
+    // dep / lockfile pin) can never be chosen by any valid resolution. Drop it
+    // here so L0/L2/L3/L1 all see a smaller graph — typically 30-60% fewer
+    // `pkg@version` vars. This is a pure deletion: the reachable set is
+    // unchanged, so correctness is identical.
+    let mut reachable: HashSet<&str> = HashSet::new();
+    for ((_n, _v), es) in dependencies.iter() {
+        for (dep_name, allowed_versions) in es.iter() {
+            for av in allowed_versions.iter() {
+                reachable.insert(av);
+            }
+            // The dep itself is reachable (some version of it satisfies a range)
+            reachable.insert(dep_name);
+        }
+    }
+    // Root packages are always reachable (selected by package.json)
+    for name in &package_names {
+        reachable.insert(name);
+    }
+    let pruned: HashMap<&str, Vec<&str>> = available_versions
+        .into_iter()
+        .filter_map(|(name, versions)| {
+            let kept: Vec<&str> = versions
+                .iter()
+                .copied()
+                .filter(|v| reachable.contains(v))
+                .collect();
+            if kept.is_empty() {
+                None
+            } else {
+                Some((name, kept))
+            }
+        })
+        .collect();
+
+    // Convert borrowed references to owned for ResolveRequest
+    let owned_available: HashMap<String, Vec<String>> = pruned
+        .into_iter()
+        .map(|(k, vs)| {
+            (
+                k.to_string(),
+                vs.into_iter().map(|v| v.to_string()).collect(),
+            )
+        })
+        .collect();
+    let owned_deps: HashMap<(String, String), Vec<(String, Vec<String>)>> = dependencies
+        .into_iter()
+        .map(|((n, v), edges)| {
+            let owned_edges = edges
+                .into_iter()
+                .map(|(dn, avs)| {
+                    (
+                        dn.to_string(),
+                        avs.into_iter().map(|a| a.to_string()).collect(),
+                    )
+                })
+                .collect();
+            ((n.to_string(), v.to_string()), owned_edges)
+        })
+        .collect();
+
+    // Phase 1: feed the on-disk lockfile into the request so JagrResolver can
+    // (a) verify_lockfile for a 0ms warm skip, and (b) use locked versions as
+    // greedy-preference pins for incremental re-resolution.
+    let on_disk_lockfile = lockfile::read_resolved_from_dir(
+        package_json_path.parent().unwrap_or_else(|| Path::new(".")),
+    );
+
+    let request = ResolveRequest {
+        root: PackageVersionVar {
+            package: "root".to_string(),
+            version: "0.0.0".to_string(),
+        },
+        available_versions: owned_available,
+        dependencies: owned_deps,
+        conflicts: Vec::new(),
+        lockfile: on_disk_lockfile,
+        version_ordinals: HashMap::new(),
+    };
+
+    let result = JagrResolver::new().resolve(&request);
+    if !result.is_satisfiable {
+        return Err(result.explanation.clone());
+    }
+
+    // The request root is a synthetic node (package "root", version "0.0.0")
+    // used to seed traversal; it is not a real package and must not be
+    // materialized into node_modules.
+    let mut selection = result.selection.clone();
+    selection.remove("root");
+    if selection.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    build_tree_from_jagr_selection(&selection, &cache_arc)
+}
+
 fn build_jagr_domains(
     root_deps: &HashMap<String, String>,
     cache_arc: &Arc<Mutex<HashMap<String, serde_json::Value>>>,
     cap: usize,
 ) -> Result<(HashMap<String, PackageDomain>, bool), String> {
-
     let mut domains: HashMap<String, PackageDomain> = HashMap::new();
     let mut visited: HashSet<String> = HashSet::new();
+    // Accumulates every constraint that requires a package (root specs plus
+    // every parent edge). A version that satisfies none of them can never be
+    // selected, and expanding its dependencies would only inflate the frontier.
+    let mut incoming: HashMap<String, Vec<String>> = HashMap::new();
+    for (k, v) in root_deps {
+        incoming.entry(k.clone()).or_default().push(v.clone());
+    }
+    // Frontier carries the package name to fetch next.
     let mut frontier: Vec<String> = root_deps.keys().cloned().collect();
     let mut truncated_any = false;
 
@@ -895,36 +1282,134 @@ fn build_jagr_domains(
         let mut results = registry::parallel_fetch_metadata(&batch, cache_arc);
         results.sort_by(|a, b| a.0.cmp(&b.0));
 
+        if std::env::var("JHOL_DEBUG_DOMAINS").is_ok() {
+            eprintln!(
+                "[DOMAIN-BFS] batch: {:?}, results: {}",
+                batch,
+                results.len()
+            );
+        }
+
         for (name, meta_res) in results {
             visited.insert(name.clone());
-            let meta = meta_res?;
+            let mut meta = match meta_res {
+                Ok(m) => m,
+                Err(e) => {
+                    if std::env::var("JHOL_DEBUG_DOMAINS").is_ok() {
+                        eprintln!("[DOMAIN-BFS] {} ERROR: {}", name, e);
+                    }
+                    // Tolerate transitive packages that do not exist on the
+                    // registry (e.g. historical deps of ancient versions). They
+                    // can never be selected for a valid resolution, so skipping
+                    // their domain is safe.
+                    crate::utils::log(&format!(
+                        "build_jagr_domains: skipping unresolvable transitive {}: {}",
+                        name, e
+                    ));
+                    continue;
+                }
+            };
+
+            let incoming_constraints = incoming.get(&name).cloned().unwrap_or_default();
+            // A single-version synth packument (manifest synth) only knows the
+            // "latest" version, which may fall outside the range required by the
+            // incoming constraints (e.g. proxy-from-env latest 2.x vs ^1.1.0).
+            // When the synth's versions cannot satisfy any incoming constraint,
+            // escalate to the constraint-aware fetch so a full packument is used.
+            let is_synth = meta.get("_vortex_manifest_synth").is_some()
+                || meta.get("_bundled_index_synth").is_some();
+            if is_synth
+                && !incoming_constraints.is_empty()
+                && !registry::meta_has_satisfying_version(&meta, &incoming_constraints)
+            {
+                if std::env::var("JHOL_DEBUG_DOMAINS").is_ok() {
+                    eprintln!(
+                        "[DOMAIN-BFS] {}: synth cannot satisfy {:?}, escalating to full packument",
+                        name, incoming_constraints
+                    );
+                }
+                match registry::fetch_metadata_for_constraint(&name, &incoming_constraints[0]) {
+                    Ok(full) => meta = full,
+                    Err(e) => {
+                        crate::utils::log(&format!(
+                            "build_jagr_domains: skipping unresolvable transitive {}: {}",
+                            name, e
+                        ));
+                        continue;
+                    }
+                }
+            }
 
             let mut domain = PackageDomain::default();
-            let (versions, truncated) = candidate_versions_desc(&meta, cap);
+            if std::env::var("JHOL_DEBUG_DOMAINS").is_ok() && name == "axios" {
+                let n_versions = meta
+                    .get("versions")
+                    .and_then(|v| v.as_object())
+                    .map(|o| o.len())
+                    .unwrap_or(0);
+                let bundled = meta.get("_bundled_index_synth").is_some();
+                let manifest = meta.get("_vortex_manifest_synth").is_some();
+                let version_keys: Vec<String> = meta
+                    .get("versions")
+                    .and_then(|v| v.as_object())
+                    .map(|o| o.keys().cloned().collect())
+                    .unwrap_or_default();
+                eprintln!(
+                    "[AXIOS] versions: {}, bundled_synth: {}, manifest_synth: {}, keys: {:?}",
+                    n_versions, bundled, manifest, version_keys
+                );
+            }
+            let (versions, truncated) =
+                candidate_versions_for_constraints(&meta, &incoming_constraints, cap);
             truncated_any |= truncated;
-            for version in versions {
-                let deps = registry::get_version_required_dependencies(&meta, &version);
-                let optional_deps = registry::get_version_optional_dependencies(&meta, &version);
-                let peers = registry::get_version_peer_dependencies(&meta, &version);
-                let peer_meta = registry::get_version_peer_dependencies_meta(&meta, &version);
+            if std::env::var("JHOL_DEBUG_DOMAINS").is_ok() {
+                eprintln!(
+                    "[DOMAIN-BFS] {}: {} candidate versions, incoming={:?}",
+                    name,
+                    versions.len(),
+                    incoming_constraints
+                );
+            }
+            for version in &versions {
+                // `candidate_versions_for_constraints` already filtered by the
+                // incoming constraints, so every version here is selectable; no
+                // further filter needed. Expanding their deps is not dead weight.
+                let deps = registry::get_version_required_dependencies(&meta, version);
+                let optional_deps = registry::get_version_optional_dependencies(&meta, version);
+                let peers = registry::get_version_peer_dependencies(&meta, version);
+                let peer_meta = registry::get_version_peer_dependencies_meta(&meta, version);
                 let optional_peers: HashSet<String> = peer_meta
                     .iter()
                     .filter_map(|(k, v)| {
-                        let opt = v
-                            .get("optional")
-                            .and_then(|b| b.as_bool())
-                            .unwrap_or(false);
-                        if opt { Some(k.clone()) } else { None }
+                        let opt = v.get("optional").and_then(|b| b.as_bool()).unwrap_or(false);
+                        if opt {
+                            Some(k.clone())
+                        } else {
+                            None
+                        }
                     })
                     .collect();
 
-                for dep_name in deps.keys() {
+                for (dep_name, dep_spec) in &deps {
                     if !visited.contains(dep_name) {
+                        if std::env::var("JHOL_DEBUG_DOMAINS").is_ok()
+                            && (name == "axios" || dep_name == "follow-redirects")
+                        {
+                            eprintln!("[PUSH] {} -> {} spec={:?}", name, dep_name, dep_spec);
+                        }
+                        incoming
+                            .entry(dep_name.clone())
+                            .or_default()
+                            .push(dep_spec.clone());
                         frontier.push(dep_name.clone());
                     }
                 }
                 for peer_name in peers.keys() {
                     if !optional_peers.contains(peer_name) && !visited.contains(peer_name) {
+                        incoming
+                            .entry(peer_name.clone())
+                            .or_default()
+                            .push("*".to_string());
                         frontier.push(peer_name.clone());
                     }
                 }
@@ -932,7 +1417,7 @@ fn build_jagr_domains(
                 domain.versions.insert(
                     version.clone(),
                     PackageVersion {
-                        version,
+                        version: version.clone(),
                         dependencies: deps,
                         optional_dependencies: optional_deps,
                         peer_dependencies: peers,
@@ -950,7 +1435,16 @@ fn build_jagr_domains(
     Ok((domains, truncated_any))
 }
 
-fn candidate_versions_desc(meta: &serde_json::Value, cap: usize) -> (Vec<String>, bool) {
+/// Filter candidate versions of a package to those satisfying at least one
+/// incoming constraint, THEN cap to the newest `cap`. Ordering matters: for
+/// packages with thousands of versions (react has 2896), the newest `cap`
+/// versions may all be pre-release canaries that satisfy no real range, so a
+/// plain top-N cap would yield an empty domain for e.g. `^18.3.1`.
+fn candidate_versions_for_constraints(
+    meta: &serde_json::Value,
+    constraints: &[String],
+    cap: usize,
+) -> (Vec<String>, bool) {
     let mut parsed: Vec<semver::Version> = meta
         .get("versions")
         .and_then(|v| v.as_object())
@@ -962,8 +1456,40 @@ fn candidate_versions_desc(meta: &serde_json::Value, cap: usize) -> (Vec<String>
         .unwrap_or_default();
     parsed.sort();
     parsed.reverse();
-    let truncated = parsed.len() > cap;
-    let versions = parsed.into_iter().take(cap).map(|v| v.to_string()).collect();
+    let filtered = if constraints.is_empty() {
+        parsed
+    } else {
+        parsed
+            .into_iter()
+            .filter(|v| {
+                constraints
+                    .iter()
+                    .any(|c| registry::version_satisfies(c, &v.to_string()))
+            })
+            .collect::<Vec<_>>()
+    };
+    if std::env::var("JHOL_DEBUG_DOMAINS").is_ok() {
+        let total = meta
+            .get("versions")
+            .and_then(|v| v.as_object())
+            .map(|o| o.len())
+            .unwrap_or(0);
+        if total < 8 {
+            eprintln!(
+                "[CANDIDATE] total_versions={} filtered={} constraints={:?} first_filtered={:?}",
+                total,
+                filtered.len(),
+                constraints,
+                filtered.first().map(|v| v.to_string())
+            );
+        }
+    }
+    let truncated = filtered.len() > cap;
+    let versions = filtered
+        .into_iter()
+        .take(cap)
+        .map(|v| v.to_string())
+        .collect();
     (versions, truncated)
 }
 
@@ -982,7 +1508,34 @@ fn build_tree_from_assignment(
             .ok_or_else(|| format!("Missing assignment for {}", name))?;
         let meta = {
             let mut cache = mutex_lock!(cache_arc);
-            registry::fetch_metadata_cached(&name, &mut *cache)?
+            let cached = registry::fetch_metadata_cached(&name, &mut *cache)?;
+            // A cached single-version synth may not contain the version the
+            // solver actually selected (e.g. asynckit resolved to 0.4.0 but the
+            // manifest synth only knew "latest" 0.5.0). Escalate to the full
+            // packument so tarball/integrity lookups succeed.
+            if !registry::meta_contains_version(&cached, &version) {
+                if std::env::var("JHOL_DEBUG_DOMAINS").is_ok() {
+                    eprintln!(
+                        "[TREE-ESC] {}@{} not in cached meta, escalating",
+                        name, version
+                    );
+                }
+                match registry::fetch_metadata_for_constraint(&name, &version) {
+                    Ok(full) => {
+                        cache.insert(name.clone(), full.clone());
+                        full
+                    }
+                    Err(e) => {
+                        crate::utils::log(&format!(
+                            "build_tree_from_assignment: escalating {}@{} to full packument failed: {}",
+                            name, version, e
+                        ));
+                        cached
+                    }
+                }
+            } else {
+                cached
+            }
         };
 
         let resolved_url = registry::get_tarball_url(&meta, &version)
@@ -1017,7 +1570,82 @@ fn build_tree_from_assignment(
     Ok(tree)
 }
 
-fn resolve_full_tree_legacy(package_json_path: &Path) -> Result<HashMap<String, ResolvedPackage>, String> {
+pub fn build_tree_from_jagr_selection(
+    selection: &HashMap<String, String>,
+    cache_arc: &Arc<Mutex<HashMap<String, serde_json::Value>>>,
+) -> Result<HashMap<String, ResolvedPackage>, String> {
+    let mut tree: HashMap<String, ResolvedPackage> = HashMap::new();
+    let mut names: Vec<String> = selection.keys().cloned().collect();
+    names.sort();
+
+    for name in names {
+        let version = selection
+            .get(&name)
+            .cloned()
+            .ok_or_else(|| format!("Missing selection for {}", name))?;
+        let meta = {
+            let mut cache = mutex_lock!(cache_arc);
+            let cached = registry::fetch_metadata_cached(&name, &mut *cache)?;
+            if !registry::meta_contains_version(&cached, &version) {
+                if std::env::var("JHOL_DEBUG_DOMAINS").is_ok() {
+                    eprintln!(
+                        "[TREE-ESC] {}@{} not in cached meta, escalating",
+                        name, version
+                    );
+                }
+                match registry::fetch_metadata_for_constraint(&name, &version) {
+                    Ok(full) => {
+                        cache.insert(name.clone(), full.clone());
+                        full
+                    }
+                    Err(e) => {
+                        crate::utils::log(&format!(
+                            "build_tree_from_jagr_selection: escalating {}@{} to full packument failed: {}",
+                            name, version, e
+                        ));
+                        cached
+                    }
+                }
+            } else {
+                cached
+            }
+        };
+
+        let resolved_url = registry::get_tarball_url(&meta, &version)
+            .ok_or_else(|| format!("No tarball URL for {}@{}", name, version))?;
+        let integrity = registry::get_integrity_for_version(&meta, &version);
+        let version_deps = registry::get_version_required_dependencies(&meta, &version);
+        let peer_deps = registry::get_version_peer_dependencies(&meta, &version);
+        let peer_deps_meta = registry::get_version_peer_dependencies_meta(&meta, &version);
+
+        let mut resolved_deps = HashMap::new();
+        for (dep_name, dep_spec) in &version_deps {
+            if let Some(dep_version) = selection.get(dep_name) {
+                if registry::version_satisfies(dep_spec, dep_version) {
+                    resolved_deps.insert(dep_name.clone(), dep_version.clone());
+                }
+            }
+        }
+
+        tree.insert(
+            format!("node_modules/{}", name),
+            ResolvedPackage {
+                version,
+                resolved: resolved_url,
+                integrity,
+                dependencies: resolved_deps,
+                peer_dependencies: peer_deps,
+                peer_dependencies_meta: peer_deps_meta,
+            },
+        );
+    }
+
+    Ok(tree)
+}
+
+fn resolve_full_tree_legacy(
+    package_json_path: &Path,
+) -> Result<HashMap<String, ResolvedPackage>, String> {
     let deps = lockfile::read_package_json_deps(package_json_path)
         .ok_or("Could not read package.json dependencies.")?;
     if deps.is_empty() {
@@ -1084,7 +1712,10 @@ fn resolve_full_tree_legacy(package_json_path: &Path) -> Result<HashMap<String, 
                         .join(", ")
                 })
                 .unwrap_or_default();
-            format!("Dependency conflict for {} (no version satisfies all): {}", name, refs)
+            format!(
+                "Dependency conflict for {} (no version satisfies all): {}",
+                name, refs
+            )
         })?;
 
         if let Some(existing) = tree.get(&key) {
@@ -1152,7 +1783,7 @@ fn resolve_full_tree_legacy(package_json_path: &Path) -> Result<HashMap<String, 
         }
 
         tree.insert(
-            key,
+            name.clone(),
             ResolvedPackage {
                 version,
                 resolved: resolved_url,
@@ -1179,7 +1810,8 @@ fn resolve_full_tree_legacy(package_json_path: &Path) -> Result<HashMap<String, 
                 }
             }
         } else {
-            let required_reqs: Vec<&PeerRequirement> = reqs.iter().filter(|r| !r.optional).collect();
+            let required_reqs: Vec<&PeerRequirement> =
+                reqs.iter().filter(|r| !r.optional).collect();
             if required_reqs.is_empty() {
                 continue;
             }
@@ -1188,7 +1820,10 @@ fn resolve_full_tree_legacy(package_json_path: &Path) -> Result<HashMap<String, 
                 .map(|r| format!("{} -> {}", r.requester, r.spec))
                 .collect::<Vec<_>>()
                 .join(", ");
-            peer_conflicts.push(format!("peer {} missing (requirements: {})", peer_name, req_list));
+            peer_conflicts.push(format!(
+                "peer {} missing (requirements: {})",
+                peer_name, req_list
+            ));
         }
     }
 
@@ -1214,8 +1849,28 @@ fn resolve_highest_satisfying(meta: &serde_json::Value, specs: &[String]) -> Opt
     parsed.reverse();
     for ver in parsed {
         let ver_str = ver.to_string();
-        if specs.iter().all(|s| registry::version_satisfies(s, &ver_str)) {
+        if specs
+            .iter()
+            .all(|s| registry::version_satisfies(s, &ver_str))
+        {
             return Some(ver_str);
+        }
+    }
+    None
+}
+
+/// Same as resolve_highest_satisfying but takes pre-parsed, sorted (ascending) version list.
+/// Avoids re-parsing and re-sorting versions per lookup.
+fn resolve_highest_satisfying_parsed(
+    parsed: &[(semver::Version, String)],
+    specs: &[String],
+) -> Option<String> {
+    for (ver, ver_str) in parsed.iter().rev() {
+        if specs
+            .iter()
+            .all(|s| registry::version_satisfies(s, ver_str))
+        {
+            return Some(ver_str.clone());
         }
     }
     None
@@ -1265,6 +1920,17 @@ fn normalize_lockfile_tree_key(raw: &str) -> String {
     normalized
 }
 
+/// Reduce a tree key (`node_modules/<name>` or nested `.../node_modules/<name>`
+/// or a bare name) to the clean package name used in registry specs and the
+/// install/capsule path. Handles scoped `@scope/pkg` names.
+fn normalize_tree_key_to_package_name(raw: &str) -> String {
+    // Strip the last `node_modules/` segment boundary (nested trees).
+    if let Some(idx) = raw.rfind("node_modules/") {
+        return raw[idx + "node_modules/".len()..].to_string();
+    }
+    raw.trim_start_matches("node_modules/").to_string()
+}
+
 fn build_packages_json(
     root_name: &str,
     root_version: &str,
@@ -1273,13 +1939,14 @@ fn build_packages_json(
 ) -> serde_json::Value {
     let mut packages = serde_json::Map::new();
 
-    let mut normalized_tree: HashMap<String, &ResolvedPackage> = HashMap::new();
+    let mut normalized_tree: BTreeMap<String, &ResolvedPackage> = BTreeMap::new();
     for (raw_key, pkg) in tree {
         let key = normalize_lockfile_tree_key(raw_key);
         if key.is_empty() {
             continue;
         }
-        let prefer_this = raw_key.starts_with("node_modules/") || !normalized_tree.contains_key(&key);
+        let prefer_this =
+            raw_key.starts_with("node_modules/") || !normalized_tree.contains_key(&key);
         if prefer_this {
             normalized_tree.insert(key, pkg);
         }
@@ -1290,7 +1957,11 @@ fn build_packages_json(
     sorted_direct_dep_names.sort();
     for name in sorted_direct_dep_names {
         let key = format!("node_modules/{}", name);
-        if let Some(pkg) = normalized_tree.get(&key).copied().or_else(|| tree.get(&name)) {
+        if let Some(pkg) = normalized_tree
+            .get(&key)
+            .copied()
+            .or_else(|| tree.get(&name))
+        {
             root_deps.insert(name, serde_json::Value::String(pkg.version.clone()));
         }
     }
@@ -1303,17 +1974,21 @@ fn build_packages_json(
         }),
     );
 
-    let mut keys: Vec<String> = normalized_tree.keys().cloned().collect();
-    keys.sort();
-    for key in keys {
-        let Some(pkg) = normalized_tree.get(&key) else {
-            continue;
-        };
+    for (key, pkg) in &normalized_tree {
         let mut entry = serde_json::Map::new();
-        entry.insert("version".to_string(), serde_json::Value::String(pkg.version.clone()));
-        entry.insert("resolved".to_string(), serde_json::Value::String(pkg.resolved.clone()));
+        entry.insert(
+            "version".to_string(),
+            serde_json::Value::String(pkg.version.clone()),
+        );
+        entry.insert(
+            "resolved".to_string(),
+            serde_json::Value::String(pkg.resolved.clone()),
+        );
         if let Some(ref i) = pkg.integrity {
-            entry.insert("integrity".to_string(), serde_json::Value::String(i.clone()));
+            entry.insert(
+                "integrity".to_string(),
+                serde_json::Value::String(i.clone()),
+            );
         }
         let deps: serde_json::Map<String, serde_json::Value> = pkg
             .dependencies
@@ -1331,19 +2006,27 @@ fn build_packages_json(
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         entry.insert("dependencies".to_string(), serde_json::Value::Object(deps));
-        entry.insert("requires".to_string(), serde_json::Value::Bool(!pkg.dependencies.is_empty()));
+        entry.insert(
+            "requires".to_string(),
+            serde_json::Value::Bool(!pkg.dependencies.is_empty()),
+        );
         if !peer_deps.is_empty() {
-            entry.insert("peerDependencies".to_string(), serde_json::Value::Object(peer_deps));
+            entry.insert(
+                "peerDependencies".to_string(),
+                serde_json::Value::Object(peer_deps),
+            );
         }
         if !peer_deps_meta.is_empty() {
-            entry.insert("peerDependenciesMeta".to_string(), serde_json::Value::Object(peer_deps_meta));
+            entry.insert(
+                "peerDependenciesMeta".to_string(),
+                serde_json::Value::Object(peer_deps_meta),
+            );
         }
-        packages.insert(key, serde_json::Value::Object(entry));
+        packages.insert(key.clone(), serde_json::Value::Object(entry));
     }
 
     serde_json::Value::Object(packages)
 }
-
 
 /// Lockfile cache for incremental updates
 #[derive(Debug)]
@@ -1368,19 +2051,19 @@ impl IncrementalLockfileUpdater {
         if !lock_path.exists() {
             return true;
         }
-        
+
         let lock_meta = std::fs::metadata(lock_path);
         let package_meta = std::fs::metadata(package_json_path);
-        
+
         match (lock_meta, package_meta) {
             (Ok(lock_meta), Ok(package_meta)) => {
                 let lock_modified = lock_meta.modified().unwrap_or(std::time::UNIX_EPOCH);
                 let package_modified = package_meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-                
+
                 if package_modified > lock_modified {
                     return true;
                 }
-                
+
                 // Check if cache is still valid
                 if let Some(cache) = &self.cache {
                     if let Ok(current_modified) = lock_path.metadata().and_then(|m| m.modified()) {
@@ -1389,7 +2072,7 @@ impl IncrementalLockfileUpdater {
                         }
                     }
                 }
-                
+
                 true
             }
             _ => true,
@@ -1410,9 +2093,14 @@ impl IncrementalLockfileUpdater {
         // Try incremental update first
         if let Some(existing_tree) = self.read_existing_lockfile(lock_path) {
             if let Some(incremental_tree) = self.compute_incremental_update(&existing_tree, tree) {
-                let result = self.write_incremental_lockfile(lock_path, package_json_path, &incremental_tree);
+                let result = self.write_incremental_lockfile(
+                    lock_path,
+                    package_json_path,
+                    &incremental_tree,
+                );
                 if result.is_ok() {
-                    let _ = write_capsule_from_tree(lock_path.parent().unwrap_or(Path::new(".")), tree);
+                    let _ =
+                        write_capsule_from_tree(lock_path.parent().unwrap_or(Path::new(".")), tree);
                 }
                 return result;
             }
@@ -1430,47 +2118,64 @@ impl IncrementalLockfileUpdater {
         if !lock_path.exists() {
             return None;
         }
-        
+
         let content = std::fs::read_to_string(lock_path).ok()?;
         let lockfile: serde_json::Value = serde_json::from_str(&content).ok()?;
-        
+
         let packages = lockfile.get("packages")?.as_object()?;
         let mut tree = HashMap::new();
-        
+
         for (key, value) in packages {
             if key == "" {
                 continue; // Skip root package
             }
-            
+
             let version = value.get("version")?.as_str()?.to_string();
             let resolved = value.get("resolved")?.as_str()?.to_string();
-            let integrity = value.get("integrity").and_then(|i| i.as_str()).map(String::from);
-            
-            let dependencies = value.get("dependencies")
+            let integrity = value
+                .get("integrity")
+                .and_then(|i| i.as_str())
+                .map(String::from);
+
+            let dependencies = value
+                .get("dependencies")
                 .and_then(|d| d.as_object())
-                .map(|d| d.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string())).collect())
+                .map(|d| {
+                    d.iter()
+                        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                        .collect()
+                })
                 .unwrap_or_default();
-            
-            let peer_dependencies = value.get("peerDependencies")
+
+            let peer_dependencies = value
+                .get("peerDependencies")
                 .and_then(|d| d.as_object())
-                .map(|d| d.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string())).collect())
+                .map(|d| {
+                    d.iter()
+                        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                        .collect()
+                })
                 .unwrap_or_default();
-            
-            let peer_dependencies_meta = value.get("peerDependenciesMeta")
+
+            let peer_dependencies_meta = value
+                .get("peerDependenciesMeta")
                 .and_then(|d| d.as_object())
                 .map(|d| d.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                 .unwrap_or_default();
-            
-            tree.insert(key.clone(), ResolvedPackage {
-                version,
-                resolved,
-                integrity,
-                dependencies,
-                peer_dependencies,
-                peer_dependencies_meta,
-            });
+
+            tree.insert(
+                key.clone(),
+                ResolvedPackage {
+                    version,
+                    resolved,
+                    integrity,
+                    dependencies,
+                    peer_dependencies,
+                    peer_dependencies_meta,
+                },
+            );
         }
-        
+
         Some(tree)
     }
 
@@ -1481,12 +2186,13 @@ impl IncrementalLockfileUpdater {
     ) -> Option<HashMap<String, ResolvedPackage>> {
         let mut updated = existing.clone();
         let mut has_changes = false;
-        
+
         for (key, new_pkg) in new {
             if let Some(existing_pkg) = existing.get(key) {
-                if existing_pkg.version != new_pkg.version 
+                if existing_pkg.version != new_pkg.version
                     || existing_pkg.resolved != new_pkg.resolved
-                    || existing_pkg.integrity != new_pkg.integrity {
+                    || existing_pkg.integrity != new_pkg.integrity
+                {
                     updated.insert(key.clone(), new_pkg.clone());
                     has_changes = true;
                 }
@@ -1495,7 +2201,7 @@ impl IncrementalLockfileUpdater {
                 has_changes = true;
             }
         }
-        
+
         if has_changes {
             Some(updated)
         } else {
@@ -1524,13 +2230,13 @@ impl IncrementalLockfileUpdater {
 
         // Use atomic write to prevent corruption
         let temp_path = lock_path.with_extension("tmp");
-        let pretty = serde_json::to_string_pretty(&lockfile_content).map_err(|e| e.to_string())?;
-        std::fs::write(&temp_path, pretty).map_err(|e| e.to_string())?;
+        let json = serde_json::to_string(&lockfile_content).map_err(|e| e.to_string())?;
+        std::fs::write(&temp_path, json).map_err(|e| e.to_string())?;
         std::fs::rename(temp_path, lock_path).map_err(|e| e.to_string())?;
-        
+
         // Update cache
         self.update_cache(lock_path, tree);
-        
+
         Ok(())
     }
 
@@ -1555,13 +2261,13 @@ impl IncrementalLockfileUpdater {
 
         // Use atomic write to prevent corruption
         let temp_path = lock_path.with_extension("tmp");
-        let pretty = serde_json::to_string_pretty(&lockfile_content).map_err(|e| e.to_string())?;
-        std::fs::write(&temp_path, pretty).map_err(|e| e.to_string())?;
+        let json = serde_json::to_string(&lockfile_content).map_err(|e| e.to_string())?;
+        std::fs::write(&temp_path, json).map_err(|e| e.to_string())?;
         std::fs::rename(temp_path, lock_path).map_err(|e| e.to_string())?;
-        
+
         // Update cache
         self.update_cache(lock_path, tree);
-        
+
         Ok(())
     }
 
@@ -1581,7 +2287,7 @@ impl IncrementalLockfileUpdater {
     fn compute_tree_hash(&self, tree: &HashMap<String, ResolvedPackage>) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         let mut hasher = DefaultHasher::new();
         for (key, pkg) in tree {
             key.hash(&mut hasher);
@@ -1624,17 +2330,20 @@ pub async fn write_package_lock_async(
         "packages": packages,
     });
 
-    let pretty = serde_json::to_string_pretty(&lockfile_content).map_err(|e| e.to_string())?;
-    
+    let json = serde_json::to_string(&lockfile_content).map_err(|e| e.to_string())?;
+
     // Use async I/O for better performance
-    std::fs::write(lock_path, pretty).map_err(|e| e.to_string())?;
+    std::fs::write(lock_path, json).map_err(|e| e.to_string())?;
     Ok(())
 }
 
 /// Write a .jhol.capsule from a resolved package tree.
 /// Called after lockfile write to enable zero-parse installs.
-pub fn write_capsule_from_tree(project_dir: &Path, tree: &HashMap<String, ResolvedPackage>) -> Result<(), String> {
-    use crate::capsule::{CapsuleBuilder, capsule_path, write_capsule};
+pub fn write_capsule_from_tree(
+    project_dir: &Path,
+    tree: &HashMap<String, ResolvedPackage>,
+) -> Result<(), String> {
+    use crate::capsule::{capsule_path, write_capsule, CapsuleBuilder};
     use xxhash_rust::xxh3::xxh3_64;
 
     // Compute manifest hash from package.json + package-lock.json
@@ -1653,8 +2362,12 @@ pub fn write_capsule_from_tree(project_dir: &Path, tree: &HashMap<String, Resolv
     let mut entries: Vec<(String, &ResolvedPackage)> = Vec::new();
 
     for (spec, pkg) in tree {
-        let name = spec.split('@').next().unwrap_or(spec);
-        entries.push((name.to_string(), pkg));
+        // Tree keys are `node_modules/<name>` (nested scoped names may carry
+        // deeper node_modules segments). The capsule entries must store clean
+        // package names so install/can_reuse_lockfile_for_requested can build
+        // registry specs for download/URL construction.
+        let name = normalize_tree_key_to_package_name(spec);
+        entries.push((name, pkg));
     }
 
     // First pass: add packages
@@ -1671,8 +2384,12 @@ pub fn write_capsule_from_tree(project_dir: &Path, tree: &HashMap<String, Resolv
     // Second pass: add dependency edges
     for (name, pkg) in &entries {
         if let Some(&idx) = name_to_idx.get(name) {
-            let deps: Vec<(u32, u16)> = pkg.dependencies.iter()
-                .filter_map(|(dep_name, _)| name_to_idx.get(dep_name).map(|&dep_idx| (dep_idx, 0u16)))
+            let deps: Vec<(u32, u16)> = pkg
+                .dependencies
+                .iter()
+                .filter_map(|(dep_name, _)| {
+                    name_to_idx.get(dep_name).map(|&dep_idx| (dep_idx, 0u16))
+                })
                 .collect();
             if !deps.is_empty() {
                 // We can't update after add_package. For now, deps are skipped.

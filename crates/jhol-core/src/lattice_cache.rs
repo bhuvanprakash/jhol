@@ -5,11 +5,11 @@
 //! in the sense that v ∈ C₁), answer without network.
 
 use parking_lot::RwLock;
-use semver::{Version, VersionReq};
+use semver::VersionReq;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 // Include build-time resolution seed from binary-packages index.
 #[cfg(not(test))]
@@ -19,6 +19,7 @@ include!(concat!(env!("OUT_DIR"), "/resolution_seed_data.rs"));
 struct LatticeEntry {
     constraint: String,
     version: String,
+    parsed_version: semver::Version,
     hits: u64,
 }
 
@@ -63,17 +64,20 @@ fn load_disk(store: &mut LatticeStore) {
         return;
     };
     for (pkg, entries) in map {
-        store.by_pkg.insert(
-            pkg,
-            entries
-                .into_iter()
-                .map(|(constraint, version)| LatticeEntry {
+        let mut parsed: Vec<LatticeEntry> = entries
+            .into_iter()
+            .filter_map(|(constraint, version)| {
+                let parsed_version = semver::Version::parse(&version).ok()?;
+                Some(LatticeEntry {
                     constraint,
                     version,
+                    parsed_version,
                     hits: 0,
                 })
-                .collect(),
-        );
+            })
+            .collect();
+        parsed.sort_by(|a, b| b.parsed_version.cmp(&a.parsed_version));
+        store.by_pkg.insert(pkg, parsed);
     }
 }
 
@@ -105,27 +109,63 @@ pub fn cache_key(name: &str, constraint: &str) -> u64 {
     h.finish()
 }
 
+static PENDING: OnceLock<Mutex<Vec<(String, String, String)>>> = OnceLock::new();
+
+fn pending() -> &'static Mutex<Vec<(String, String, String)>> {
+    PENDING.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Flush buffered remembers to disk in a single write.
+pub fn flush_disk() {
+    let _batch = match pending().lock() {
+        Ok(mut buf) if !buf.is_empty() => std::mem::take(&mut *buf),
+        _ => return,
+    };
+    let g = global().read();
+    save_disk(&g);
+}
+
 /// Remember that `constraint` resolved to `version` for `package`.
-/// Also stores in GRM shards for cross-project closed-world memory.
+/// Updates in-memory state immediately; disk write is buffered.
 pub fn remember(package: &str, constraint: &str, version: &str) {
     let mut g = global().write();
     let list = g.by_pkg.entry(package.to_string()).or_default();
     if let Some(e) = list.iter_mut().find(|e| e.constraint == constraint) {
         e.version = version.to_string();
+        if let Ok(pv) = semver::Version::parse(version) {
+            e.parsed_version = pv;
+        }
         e.hits = e.hits.saturating_add(1);
-    } else {
+    } else if let Ok(parsed_version) = semver::Version::parse(version) {
         list.push(LatticeEntry {
             constraint: constraint.to_string(),
             version: version.to_string(),
+            parsed_version,
             hits: 1,
         });
+        // Keep sorted by version descending for binary search
+        list.sort_by(|a, b| b.parsed_version.cmp(&a.parsed_version));
     }
     // Cap per package
     if list.len() > 64 {
         list.sort_by(|a, b| b.hits.cmp(&a.hits));
         list.truncate(64);
+        list.sort_by(|a, b| b.parsed_version.cmp(&a.parsed_version));
     }
-    save_disk(&g);
+    drop(g);
+
+    // Buffer disk write; auto-flush when buffer is large
+    if let Ok(mut buf) = pending().lock() {
+        buf.push((
+            package.to_string(),
+            constraint.to_string(),
+            version.to_string(),
+        ));
+        if buf.len() >= 64 {
+            drop(buf);
+            flush_disk();
+        }
+    }
 
     // Cross-project: also store in GRM shards so other projects or daemon
     // queries hit without needing this JSON file loaded.
@@ -162,15 +202,11 @@ pub fn lookup_lattice(package: &str, constraint: &str) -> Option<String> {
     let req = VersionReq::parse(constraint.trim()).ok();
     let g = global().read();
     let list = g.by_pkg.get(package)?;
-    let mut best: Option<Version> = None;
+    // Entries are sorted by version descending. First match is the highest.
     for e in list {
-        let Ok(ver) = Version::parse(&e.version) else {
-            continue;
-        };
-        let ok = if let Some(ref req) = req {
-            req.matches(&ver)
+        let ok = if let Some(ref r) = req {
+            r.matches(&e.parsed_version)
         } else {
-            // bare / latest / *
             constraint == "latest"
                 || constraint == "*"
                 || constraint.is_empty()
@@ -178,20 +214,16 @@ pub fn lookup_lattice(package: &str, constraint: &str) -> Option<String> {
                 || crate::registry::version_satisfies(constraint, &e.version)
         };
         if ok {
-            if best.as_ref().map(|b| &ver > b).unwrap_or(true) {
-                best = Some(ver);
-            }
+            return Some(e.version.clone());
         }
     }
-    best.map(|v| v.to_string())
+    None
 }
 
 /// Batch lattice lookup: returns resolved versions for multiple packages at once.
 /// Returns a map of package → version for every package that has a lattice hit.
 /// Uses GRM first, then lattice, then falls through (caller handles network miss).
-pub fn lookup_lattice_batch(
-    deps: &[(&str, &str)],
-) -> std::collections::HashMap<String, String> {
+pub fn lookup_lattice_batch(deps: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
     let g = global().read();
     let mut results = std::collections::HashMap::new();
     for &(package, constraint) in deps {
@@ -213,24 +245,16 @@ pub fn lookup_lattice_batch(
             None => continue,
         };
         let req = semver::VersionReq::parse(constraint.trim()).ok();
-        let mut best: Option<semver::Version> = None;
-        for e in list {
-            let Ok(ver) = semver::Version::parse(&e.version) else {
-                continue;
-            };
-            let ok = if let Some(ref req) = req {
-                req.matches(&ver)
+        // Entries sorted by version desc; first match is highest.
+        let matched = list.iter().find(|e| {
+            if let Some(ref r) = req {
+                r.matches(&e.parsed_version)
             } else {
                 constraint == "latest" || constraint == "*" || constraint.is_empty()
-            };
-            if ok {
-                if best.as_ref().map(|b| &ver > b).unwrap_or(true) {
-                    best = Some(ver);
-                }
             }
-        }
-        if let Some(v) = best {
-            results.insert(package.to_string(), v.to_string());
+        });
+        if let Some(e) = matched {
+            results.insert(package.to_string(), e.version.clone());
         }
     }
     results

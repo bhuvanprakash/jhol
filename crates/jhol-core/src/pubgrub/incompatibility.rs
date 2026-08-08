@@ -1,27 +1,24 @@
 //! Incompatibilities and derivation trees for PubGrub solver
-//! 
+//!
 //! An incompatibility is a set of terms that cannot all be true simultaneously.
 //! Derivation trees provide human-readable error explanations.
 
 use super::term::Term;
-use std::rc::Rc;
 use std::fmt;
+use std::rc::Rc;
 
 /// Why an incompatibility exists
 #[derive(Clone, Debug)]
 pub enum Cause {
     /// Root package requirements
     Root,
-    
+
     /// Package dependency: pkg1 depends on pkg2
-    Dependency {
-        package: String,
-        dependent: String,
-    },
-    
+    Dependency { package: String, dependent: String },
+
     /// User-specified constraints (overrides, resolutions)
     Custom(String),
-    
+
     /// Derived from two other incompatibilities (conflict resolution)
     Derived {
         conflict1: Rc<Incompatibility>,
@@ -62,10 +59,7 @@ impl Incompatibility {
                 Term::exact(package.clone(), &package_version),
                 Term::disallowed(dependent.clone(), dependent_version_set),
             ],
-            cause: Cause::Dependency {
-                package,
-                dependent,
-            },
+            cause: Cause::Dependency { package, dependent },
         })
     }
 
@@ -100,7 +94,11 @@ impl Incompatibility {
 
 impl fmt::Debug for Incompatibility {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Incompatibility {{ terms: {:?}, cause: {:?} }}", self.terms, self.cause)
+        write!(
+            f,
+            "Incompatibility {{ terms: {:?}, cause: {:?} }}",
+            self.terms, self.cause
+        )
     }
 }
 
@@ -134,13 +132,13 @@ impl DerivationTree {
     /// Format as a human-readable error message
     pub fn format_message(&self) -> String {
         let mut message = String::from("❌ Resolution failed:\n\n");
-        
+
         message.push_str("The following packages have incompatible version requirements:\n\n");
-        
+
         // Group terms by package
-        let mut package_terms: std::collections::HashMap<String, Vec<&Term>> = 
+        let mut package_terms: std::collections::HashMap<String, Vec<&Term>> =
             std::collections::HashMap::new();
-        
+
         for term in &self.conflict.terms {
             package_terms
                 .entry(term.package.clone())
@@ -152,8 +150,16 @@ impl DerivationTree {
         for (package, terms) in &package_terms {
             message.push_str(&format!("  📦 {}:\n", package));
             for term in terms {
-                let polarity = if term.is_positive { "requires" } else { "excludes" };
-                message.push_str(&format!("    {} {}\n", polarity, format_version_set(&term.version_set)));
+                let polarity = if term.is_positive {
+                    "requires"
+                } else {
+                    "excludes"
+                };
+                message.push_str(&format!(
+                    "    {} {}\n",
+                    polarity,
+                    format_version_set(&term.version_set)
+                ));
             }
             message.push('\n');
         }
@@ -203,28 +209,32 @@ fn format_version_set(vs: &VersionSet) -> String {
         return "∅".to_string();
     }
 
-    let parts: Vec<String> = vs.ranges.iter().map(|range| {
-        let min_ver = range.min.to_version();
-        let max_ver = range.max.to_version();
-        
-        let min_str = if range.min_inclusive {
-            format!("{}", min_ver)
-        } else {
-            format!(">{}", min_ver)
-        };
-        
-        let max_str = if range.max_inclusive {
-            format!("{}", max_ver)
-        } else {
-            format!("<{}", max_ver)
-        };
-        
-        if min_ver == max_ver && range.min_inclusive && range.max_inclusive {
-            format!("{}", min_ver)
-        } else {
-            format!("{} - {}", min_str, max_str)
-        }
-    }).collect();
+    let parts: Vec<String> = vs
+        .ranges
+        .iter()
+        .map(|range| {
+            let min_ver = range.min.to_version();
+            let max_ver = range.max.to_version();
+
+            let min_str = if range.min_inclusive {
+                format!("{}", min_ver)
+            } else {
+                format!(">{}", min_ver)
+            };
+
+            let max_str = if range.max_inclusive {
+                format!("{}", max_ver)
+            } else {
+                format!("<{}", max_ver)
+            };
+
+            if min_ver == max_ver && range.min_inclusive && range.max_inclusive {
+                format!("{}", min_ver)
+            } else {
+                format!("{} - {}", min_str, max_str)
+            }
+        })
+        .collect();
 
     parts.join(" | ")
 }
@@ -234,8 +244,8 @@ pub use super::version_set::VersionSet;
 
 #[cfg(test)]
 mod tests {
+    use super::super::version_set::{PackedVersion, VersionRange};
     use super::*;
-    use super::super::version_set::{VersionRange, PackedVersion};
 
     #[test]
     fn test_incompatibility_creation() {
@@ -243,7 +253,7 @@ mod tests {
             Term::allowed("pkg-a".to_string(), VersionSet::any()),
             Term::disallowed("pkg-b".to_string(), VersionSet::any()),
         ];
-        
+
         let incompat = Incompatibility::new(terms, Cause::Root);
         assert_eq!(incompat.term_count(), 2);
         assert!(!incompat.is_unit());
@@ -252,24 +262,30 @@ mod tests {
     #[test]
     fn test_derivation_tree_format() {
         let terms = vec![
-            Term::allowed("react".to_string(), VersionSet::from_range(VersionRange {
-                min: PackedVersion::parse("18.0.0").unwrap(),
-                max: PackedVersion::parse("18.255.255").unwrap(),
-                min_inclusive: true,
-                max_inclusive: true,
-            })),
-            Term::disallowed("react".to_string(), VersionSet::from_range(VersionRange {
-                min: PackedVersion::parse("17.0.0").unwrap(),
-                max: PackedVersion::parse("17.255.255").unwrap(),
-                min_inclusive: true,
-                max_inclusive: true,
-            })),
+            Term::allowed(
+                "react".to_string(),
+                VersionSet::from_range(VersionRange {
+                    min: PackedVersion::parse("18.0.0").unwrap(),
+                    max: PackedVersion::parse("18.255.255").unwrap(),
+                    min_inclusive: true,
+                    max_inclusive: true,
+                }),
+            ),
+            Term::disallowed(
+                "react".to_string(),
+                VersionSet::from_range(VersionRange {
+                    min: PackedVersion::parse("17.0.0").unwrap(),
+                    max: PackedVersion::parse("17.255.255").unwrap(),
+                    min_inclusive: true,
+                    max_inclusive: true,
+                }),
+            ),
         ];
-        
+
         let incompat = Incompatibility::new(terms, Cause::Root);
         let tree = DerivationTree::new(Rc::new(incompat), vec![]);
         let message = tree.format_message();
-        
+
         assert!(message.contains("react"));
         assert!(message.contains("Resolution failed"));
     }

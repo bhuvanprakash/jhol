@@ -8,7 +8,6 @@ pub mod binary_cache;
 pub mod binary_manifest;
 pub mod bucket_vsids;
 pub mod capsule;
-pub mod jagrs;
 pub mod cas;
 pub mod cdn;
 pub mod config;
@@ -17,17 +16,19 @@ pub mod doctor;
 pub mod enterprise;
 pub mod error_handling;
 pub mod exec;
+pub mod file_lock;
 pub mod global_cache;
 pub mod global_cache_2;
-pub mod file_lock;
 pub mod http_client;
 pub mod install;
+pub mod jagrs;
 pub mod lockfile;
 pub mod lockfile_write;
 pub mod offline_cache;
 pub mod optimized_download;
 pub mod osv;
 pub mod package_index;
+pub mod pool;
 pub mod prefetch;
 pub mod progress;
 pub mod pubgrub;
@@ -47,16 +48,16 @@ pub mod zero_copy_metadata;
 pub mod binary_lockfile;
 pub mod crypto;
 pub mod distributed_grm;
+pub mod feature_graph;
 pub mod grm;
 pub mod incremental_hashing;
 pub mod incremental_resolver;
 pub mod jagr;
+pub mod lattice_cache;
 pub mod lock_free_grm;
 pub mod mpt_store;
-pub mod second_order_markov;
-pub mod lattice_cache;
 pub mod sat_resolver;
-pub mod feature_graph;
+pub mod second_order_markov;
 pub mod spectral_sparsifier;
 
 #[cfg(target_os = "linux")]
@@ -71,22 +72,25 @@ mod sat_resolver_tests;
 
 // ── Re-exports for CLI ──────────────────────────────────────────────────────────
 
-pub use audit::{generate_sbom, run_audit, run_audit_fix, run_audit_gate, run_audit_raw, SbomFormat};
+pub use audit::{
+    generate_sbom, run_audit, run_audit_fix, run_audit_gate, run_audit_raw, SbomFormat,
+};
 pub use backend::{resolve_backend, Backend};
 pub use cdn::{esm_sh_url, fetch_esm_to_file};
-pub use config::{apply_enterprise_network_env, load_config, load_jagr_config, telemetry_enabled, Config, JagrConfig};
+pub use config::{
+    apply_enterprise_network_env, load_config, load_jagr_config, telemetry_enabled, Config,
+    JagrConfig,
+};
 pub use doctor::{check_dependencies, explain_project_health, fix_dependencies};
 pub use exec::{exec_binary, find_binary_in_node_modules};
 pub use install::{
     install_lockfile_only, install_package, resolve_install_from_package_json, InstallOptions,
 };
 pub use lockfile::{
-    detect_lockfile, lockfile_integrity_complete,
-    read_resolved_from_dir, read_all_resolved_specs_from_dir, LockfileKind,
+    detect_lockfile, lockfile_integrity_complete, read_all_resolved_specs_from_dir,
+    read_resolved_from_dir, LockfileKind,
 };
-pub use lockfile_write::{
-    resolve_full_tree, write_package_lock, ResolvedPackage,
-};
+pub use lockfile_write::{resolve_full_tree, write_package_lock, ResolvedPackage};
 pub use progress::{snapshot as progress_snapshot, ProgressSnapshot};
 pub use run::run_script;
 pub use utils::{
@@ -101,8 +105,8 @@ pub use workspaces::list_workspace_roots;
 // pub use jagr::JagrResolver;
 
 // ── External function re-exports (needed by main.rs) ──────────────────────────
-pub use utils::log;
 pub use prefetch::prefetch_from_lockfile;
+pub use utils::log;
 
 /// Check whether the current lockfile + package.json fingerprint matches
 /// the last-recorded install fingerprint (fast no-op path).
@@ -140,8 +144,7 @@ pub fn has_jhol_lockfile(_project_dir: &std::path::Path) -> bool {
 
 // ── Audit re-exports (may be replaced by the full audit module later) ─────────
 pub use audit::{
-    run_audit_filtered, run_audit_fix_filtered, run_audit_gate_filtered,
-    run_audit_raw_filtered,
+    run_audit_filtered, run_audit_fix_filtered, run_audit_gate_filtered, run_audit_raw_filtered,
 };
 
 // ── JAGR stubs (to be replaced by the full jagr module) ───────────────────────
@@ -212,15 +215,27 @@ pub struct JagrAnalysisReport {
 
 impl std::fmt::Display for JagrAnalysisReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "JAGR({}) β₁={} satisfiable={}", self.strategy_used, self.betti_1, self.is_satisfiable)
+        write!(
+            f,
+            "JAGR({}) β₁={} satisfiable={}",
+            self.strategy_used, self.betti_1, self.is_satisfiable
+        )
     }
 }
 
 impl JagrAnalysisReport {
-    pub fn derivation_nodes_for_graph_export(&self) -> Vec<String> { vec![] }
-    pub fn derivation_edge_count_at(&self, _i: usize) -> usize { 0 }
-    pub fn selection_with_explanations(&self) -> Vec<(String, String)> { vec![] }
-    pub fn high_risk_packages(&self, _threshold: f64) -> Vec<(String, f64)> { vec![] }
+    pub fn derivation_nodes_for_graph_export(&self) -> Vec<String> {
+        vec![]
+    }
+    pub fn derivation_edge_count_at(&self, _i: usize) -> usize {
+        0
+    }
+    pub fn selection_with_explanations(&self) -> Vec<(String, String)> {
+        vec![]
+    }
+    pub fn high_risk_packages(&self, _threshold: f64) -> Vec<(String, f64)> {
+        vec![]
+    }
 }
 
 /// Analyze a project manifest and return a JAGR report.
@@ -230,21 +245,40 @@ pub fn jagr_analyze_project_manifest(path: &std::path::Path) -> Result<JagrAnaly
         stability: StabilityClass::Stable,
         topology_hash: 0,
         module_count: 0,
-        betti_0: 0, betti_1: 0, betti_2: 0,
-        snf_satisfied: false, snf_trivial: false, snf_difficulty: String::new(),
+        betti_0: 0,
+        betti_1: 0,
+        betti_2: 0,
+        snf_satisfied: false,
+        snf_trivial: false,
+        snf_difficulty: String::new(),
         gluing_has_obstruction: false,
-        is_satisfiable: true, cost: 0.0, strategy_used: "stub".into(),
+        is_satisfiable: true,
+        cost: 0.0,
+        strategy_used: "stub".into(),
         layer_times_ms: std::collections::HashMap::new(),
-        layer1_cost: 0.0, layer1_satisfiable: true, layer1_variant: "none".into(),
-        layer3_satisfiable: true, layer3_kind: "none".into(),
-        derivation_node_count: 0, derivation_edge_count: 0, selection: std::collections::HashMap::new(),
-        explanation: String::new(), manifest_path: path.to_string_lossy().to_string(),
-        root_name: String::new(), root_version: String::new(),
-        package_count: 0, version_pair_count: 0, edge_count: 0,
-        package: String::new(), from_version: String::new(), to_version: String::new(),
+        layer1_cost: 0.0,
+        layer1_satisfiable: true,
+        layer1_variant: "none".into(),
+        layer3_satisfiable: true,
+        layer3_kind: "none".into(),
+        derivation_node_count: 0,
+        derivation_edge_count: 0,
+        selection: std::collections::HashMap::new(),
+        explanation: String::new(),
+        manifest_path: path.to_string_lossy().to_string(),
+        root_name: String::new(),
+        root_version: String::new(),
+        package_count: 0,
+        version_pair_count: 0,
+        edge_count: 0,
+        package: String::new(),
+        from_version: String::new(),
+        to_version: String::new(),
         risk: UpgradeRisk::SNFStable,
-        betti_1_before: 0, betti_1_after: 0,
-        snf_satisfied_before: false, snf_satisfied_after: false,
+        betti_1_before: 0,
+        betti_1_after: 0,
+        snf_satisfied_before: false,
+        snf_satisfied_after: false,
         recommendation: String::new(),
         differential: None,
         fiedler_value: 0.0,
@@ -265,7 +299,10 @@ pub fn jagr_read_betti_history(path: &std::path::Path) -> Vec<BettiHistoryEntry>
     vec![]
 }
 
-pub fn jagr_save_audit_trail(_report: &JagrAnalysisReport, _path: &std::path::Path) -> Result<(), String> {
+pub fn jagr_save_audit_trail(
+    _report: &JagrAnalysisReport,
+    _path: &std::path::Path,
+) -> Result<(), String> {
     Ok(())
 }
 
@@ -273,9 +310,7 @@ pub fn jagr_load_audit_trail(_path: &std::path::Path) -> Result<JagrAnalysisRepo
     jagr_analyze_project_manifest(_path)
 }
 
-pub fn jagr_compare_resolvers(
-    _path: &std::path::Path,
-) -> Result<Vec<JagrAnalysisReport>, String> {
+pub fn jagr_compare_resolvers(_path: &std::path::Path) -> Result<Vec<JagrAnalysisReport>, String> {
     let r = jagr_analyze_project_manifest(_path)?;
     Ok(vec![r.clone(), r])
 }
@@ -295,16 +330,11 @@ pub fn jagr_simulate_upgrade(
     jagr_analyze_project_manifest(_path)
 }
 
-pub fn jagr_upgrade_plan(
-    _path: &std::path::Path,
-) -> Result<Vec<JagrAnalysisReport>, String> {
+pub fn jagr_upgrade_plan(_path: &std::path::Path) -> Result<Vec<JagrAnalysisReport>, String> {
     Ok(vec![])
 }
 
-pub fn jagr_why_package_deep(
-    _path: &std::path::Path,
-    _pkg: &str,
-) -> Result<String, String> {
+pub fn jagr_why_package_deep(_path: &std::path::Path, _pkg: &str) -> Result<String, String> {
     Ok("JAGR analysis not available in this build.".to_string())
 }
 

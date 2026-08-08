@@ -13,7 +13,8 @@
 //! - Mayer-Vietoris sequence = local-to-global gluing
 
 use super::tropical_polyhedron::TropicalPolyhedron;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// Simplicial complex built from tropical polyhedron cells
 #[derive(Debug, Clone)]
@@ -213,24 +214,26 @@ fn build_simplicial_complex(polyhedron: &TropicalPolyhedron) -> TropicalSimplici
     }
 
     // Deduplicate vertices
-    let mut unique_vertices = Vec::new();
+    let mut vertex_set: HashMap<(usize, u64), TropicalVertex> = HashMap::new();
     for v in vertices {
-        let exists = unique_vertices.iter().any(|u: &TropicalVertex| {
-            u.var_idx == v.var_idx && (u.version - v.version).abs() < 1e-9
-        });
-        if !exists {
-            unique_vertices.push(v);
-        }
+        vertex_set
+            .entry((v.var_idx, v.version.to_bits()))
+            .or_insert(v);
     }
+    let mut unique_vertices: Vec<TropicalVertex> = vertex_set.into_values().collect();
 
-    // Build vertex index list (linear search)
+    // Build vertex index lookup
+    let vertex_index: HashMap<(usize, u64), usize> = unique_vertices
+        .iter()
+        .enumerate()
+        .map(|(i, v)| ((v.var_idx, v.version.to_bits()), i))
+        .collect();
     let find_vertex = |var: usize, ver: f64| -> Option<usize> {
-        unique_vertices
-            .iter()
-            .position(|u| u.var_idx == var && (u.version - ver).abs() < 1e-9)
+        vertex_index.get(&(var, ver.to_bits())).copied()
     };
 
     // Build simplices
+    let mut seen_simplices: HashSet<Vec<usize>> = HashSet::new();
     for hs in &polyhedron.halfspaces {
         let mut simplex = Vec::new();
         for &var in &hs.left_vars {
@@ -264,7 +267,7 @@ fn build_simplicial_complex(polyhedron: &TropicalPolyhedron) -> TropicalSimplici
         if simplex.len() > 1 {
             simplex.sort();
             simplex.dedup();
-            if !simplices.contains(&simplex) {
+            if seen_simplices.insert(simplex.clone()) {
                 simplices.push(simplex);
             }
         }
@@ -321,24 +324,22 @@ pub fn build_boundary_maps(simplices: &[Vec<usize>]) -> HashMap<usize, Vec<Vec<i
 
         let mut matrix = vec![vec![0isize; d_minus_1_simplices.len()]; d_simplices.len()];
 
-        // Map from (d-1)-simplex to its index
-        let mut face_to_idx = HashMap::new();
+        // Map from (d-1)-simplex to its index — use Arc<[usize]> keys to avoid clone
+        let mut face_to_idx: HashMap<Arc<[usize]>, usize> = HashMap::new();
         for (idx, &simp_idx) in d_minus_1_simplices.iter().enumerate() {
-            let face = &simplices[simp_idx];
-            face_to_idx.insert(face.clone(), idx);
+            let face: Arc<[usize]> = simplices[simp_idx].clone().into();
+            face_to_idx.insert(face, idx);
         }
 
         for (row, &simp_idx) in d_simplices.iter().enumerate() {
             let simplex = &simplices[simp_idx];
-            // Boundary: sum of faces with alternating signs
             for (i, _) in simplex.iter().enumerate() {
-                let mut face = simplex.clone();
+                let mut face: Vec<usize> = simplex.clone();
                 face.remove(i);
                 face.sort();
 
-                if let Some(&col) = face_to_idx.get(&face) {
-                    // Sign: (-1)^i in standard homology
-                    // In tropical/cohomology, we use signs
+                let face_arc: Arc<[usize]> = face.into();
+                if let Some(&col) = face_to_idx.get(&face_arc) {
                     matrix[row][col] = if i % 2 == 0 { 1 } else { -1 };
                 }
             }
@@ -592,7 +593,7 @@ pub fn compute_sheaf_cohomology(sheaf: &TropicalSheaf) -> SheafCohomology {
 
     // Build coboundary maps δ^d: C^d(F) → C^{d+1}(F)
     // where C^d(F) has dimension = sum of simplex_stalk_dim over d-simplices
-    let mut coboundary_maps: HashMap<usize, Vec<Vec<f64>>> = HashMap::new();
+    let mut coboundary_maps: HashMap<usize, Vec<Vec<(usize, f64)>>> = HashMap::new();
 
     for d in 0..max_dim {
         let d_simplices = &by_dim.get(d).cloned().unwrap_or_default();
@@ -618,14 +619,15 @@ pub fn compute_sheaf_cohomology(sheaf: &TropicalSheaf) -> SheafCohomology {
         }
 
         // Build face index map: face → position in d-simplices
-        let mut face_to_idx: HashMap<Vec<usize>, (usize, usize)> = HashMap::new();
+        let mut face_to_idx: HashMap<Arc<[usize]>, (usize, usize)> = HashMap::new();
         for (pos, (face, _)) in d_canonical.iter().enumerate() {
-            face_to_idx.insert(face.clone(), (pos, d_canonical[pos].1));
+            let face_arc: Arc<[usize]> = face.clone().into();
+            face_to_idx.insert(face_arc, (pos, d_canonical[pos].1));
         }
 
         let rows = dp1_canonical.len();
         let cols = d_canonical.len();
-        let mut matrix = vec![vec![0.0f64; cols]; rows];
+        let mut matrix: Vec<Vec<(usize, f64)>> = vec![Vec::new(); rows];
 
         for (row, (sigma, sigma_stalk_d)) in dp1_canonical.iter().enumerate() {
             if *sigma_stalk_d == 0 {
@@ -637,7 +639,8 @@ pub fn compute_sheaf_cohomology(sheaf: &TropicalSheaf) -> SheafCohomology {
                 face.remove(i);
                 face.sort();
 
-                if let Some(&(col, face_stalk_d)) = face_to_idx.get(&face) {
+                let face_arc: Arc<[usize]> = face.clone().into();
+                if let Some(&(col, face_stalk_d)) = face_to_idx.get(&face_arc) {
                     if face_stalk_d == 0 {
                         continue;
                     }
@@ -662,7 +665,7 @@ pub fn compute_sheaf_cohomology(sheaf: &TropicalSheaf) -> SheafCohomology {
                     };
 
                     let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
-                    matrix[row][col] += sign * restriction_rank as f64;
+                    matrix[row].push((col, sign * restriction_rank as f64));
                 }
             }
         }
@@ -685,13 +688,13 @@ pub fn compute_sheaf_cohomology(sheaf: &TropicalSheaf) -> SheafCohomology {
         let coboundary_d_minus_1 = coboundary_maps.get(&(d.saturating_sub(1)));
 
         let ker_dim = if let Some(mat) = coboundary_d {
-            kernel_dimension_f64(mat)
+            kernel_dimension_f64_sparse(mat)
         } else {
             d_cochain_dim
         };
 
         let im_dim = if let Some(mat) = coboundary_d_minus_1 {
-            image_dimension_f64(mat)
+            image_dimension_f64_sparse(mat)
         } else {
             0
         };
@@ -816,6 +819,57 @@ fn image_dimension(matrix: &[Vec<isize>]) -> usize {
     }
 
     rank
+}
+
+/// Convert sparse coboundary matrix to dense for kernel/image computation.
+/// Sparse format: Vec<Vec<(col_index, value)>> — empty rows are zero-filled.
+fn sparse_to_dense(sparse: &[Vec<(usize, f64)>], cols: usize) -> Vec<Vec<f64>> {
+    let rows = sparse.len();
+    let mut dense = vec![vec![0.0f64; cols]; rows];
+    for (row, entries) in sparse.iter().enumerate() {
+        for &(col, val) in entries {
+            if row < rows && col < cols {
+                dense[row][col] = val;
+            }
+        }
+    }
+    dense
+}
+
+/// Sparse-aware wrapper: converts to dense only when needed.
+/// First pass determines actual column count from max index.
+fn kernel_dimension_f64_sparse(matrix: &[Vec<(usize, f64)>]) -> usize {
+    if matrix.is_empty() {
+        return 0;
+    }
+    let cols = matrix
+        .iter()
+        .flat_map(|r| r.iter())
+        .map(|&(c, _)| c)
+        .max()
+        .map(|c| c + 1)
+        .unwrap_or(0);
+    if cols == 0 {
+        return matrix.len();
+    }
+    kernel_dimension_f64(&sparse_to_dense(matrix, cols))
+}
+
+fn image_dimension_f64_sparse(matrix: &[Vec<(usize, f64)>]) -> usize {
+    if matrix.is_empty() {
+        return 0;
+    }
+    let cols = matrix
+        .iter()
+        .flat_map(|r| r.iter())
+        .map(|&(c, _)| c)
+        .max()
+        .map(|c| c + 1)
+        .unwrap_or(0);
+    if cols == 0 {
+        return 0;
+    }
+    image_dimension_f64(&sparse_to_dense(matrix, cols))
 }
 
 /// Compute kernel dimension of an f64 matrix (RREF-based)

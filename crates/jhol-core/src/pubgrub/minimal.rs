@@ -1,10 +1,10 @@
 //! JAGR-3: Minimal Version Selection
-//! 
+//!
 //! O(n) resolution instead of O(2^n) search.
 //! Based on Russ Cox's insight: when constraints specify minimums,
 //! the minimum satisfying all is THE answer (no backtracking needed).
 
-use semver::{Version, VersionReq, Comparator, Op};
+use semver::{Comparator, Op, Version, VersionReq};
 use std::collections::HashMap;
 
 /// Resolution error types
@@ -22,8 +22,15 @@ pub enum ResolutionError {
 impl std::fmt::Display for ResolutionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ResolutionError::Unsatisfiable { package, constraints } => {
-                write!(f, "Cannot resolve {}: conflicting constraints {:?}", package, constraints)
+            ResolutionError::Unsatisfiable {
+                package,
+                constraints,
+            } => {
+                write!(
+                    f,
+                    "Cannot resolve {}: conflicting constraints {:?}",
+                    package, constraints
+                )
             }
             ResolutionError::NoMinimumVersion { package } => {
                 write!(f, "No minimum version found for {}", package)
@@ -49,7 +56,7 @@ impl MinimalVersionSelector {
             constraints: HashMap::new(),
         }
     }
-    
+
     /// Add a version constraint
     pub fn add_constraint(&mut self, package: &str, req: VersionReq) {
         // Extract minimum version from this constraint
@@ -64,21 +71,21 @@ impl MinimalVersionSelector {
                 })
                 .or_insert(min);
         }
-        
+
         // Store constraint for validation
         self.constraints
             .entry(package.to_string())
             .or_default()
             .push(req);
     }
-    
+
     /// Resolve all packages in O(n) time
     pub fn resolve(self) -> Result<HashMap<String, Version>, ResolutionError> {
         let mut solution = HashMap::new();
-        
+
         for (package, min_version) in self.minima {
             let constraints = self.constraints.get(&package).unwrap();
-            
+
             // Verify this minimum satisfies ALL constraints
             if !constraints.iter().all(|c| c.matches(&min_version)) {
                 return Err(ResolutionError::Unsatisfiable {
@@ -86,13 +93,13 @@ impl MinimalVersionSelector {
                     constraints: constraints.clone(),
                 });
             }
-            
+
             solution.insert(package, min_version);
         }
-        
+
         Ok(solution)
     }
-    
+
     /// Check if we can use minimal selection (all constraints are minimums)
     pub fn is_suitable(&self) -> bool {
         // Minimal selection works when all constraints specify minimums
@@ -131,18 +138,24 @@ impl VersionReqExt for VersionReq {
             // Wildcard (*) matches everything, minimum is 0.0.0
             return Some(Version::new(0, 0, 0));
         }
-        
+
         // For multiple comparators, find the maximum minimum
         let mut max_min: Option<Version> = None;
-        
+
         for comparator in &self.comparators {
             let min = comparator_minimum(comparator);
             max_min = Some(match max_min {
                 None => min,
-                Some(current) => if min > current { min } else { current },
+                Some(current) => {
+                    if min > current {
+                        min
+                    } else {
+                        current
+                    }
+                }
             });
         }
-        
+
         max_min
     }
 }
@@ -152,7 +165,7 @@ fn comparator_minimum(comparator: &Comparator) -> Version {
     let major = comparator.major;
     let minor = comparator.minor.unwrap_or(0);
     let patch = comparator.patch.unwrap_or(0);
-    
+
     match comparator.op {
         Op::Exact => {
             // Must be exact version
@@ -226,46 +239,45 @@ pub fn can_use_minimal_selection(deps: &HashMap<String, String>) -> bool {
 }
 
 /// Fast path resolution using minimal version selection
-pub fn resolve_minimal(deps: &HashMap<String, String>) -> Result<HashMap<String, Version>, ResolutionError> {
+pub fn resolve_minimal(
+    deps: &HashMap<String, String>,
+) -> Result<HashMap<String, Version>, ResolutionError> {
     let mut selector = MinimalVersionSelector::new();
-    
+
     for (name, spec) in deps {
         if let Ok(req) = spec.parse::<VersionReq>() {
             selector.add_constraint(name, req);
         }
     }
-    
+
     selector.resolve()
 }
 
 /// Early conflict detection - detect obvious conflicts before search
 pub fn detect_early_conflicts(deps: &HashMap<String, String>) -> Vec<String> {
     let mut conflicts = Vec::new();
-    
+
     // Group constraints by package
     let mut constraints_by_pkg: HashMap<String, Vec<VersionReq>> = HashMap::new();
     for (pkg, spec) in deps {
         if let Ok(req) = spec.parse::<VersionReq>() {
-            constraints_by_pkg
-                .entry(pkg.clone())
-                .or_default()
-                .push(req);
+            constraints_by_pkg.entry(pkg.clone()).or_default().push(req);
         }
     }
-    
+
     // Check for obvious conflicts
     for (pkg, constraints) in constraints_by_pkg {
         // Check 1: Mutually exclusive major versions
         if let Some(reason) = check_mutually_exclusive(&constraints) {
             conflicts.push(format!("{}: {}", pkg, reason));
         }
-        
+
         // Check 2: No version satisfies all constraints
         if let Some(reason) = check_no_common_version(&constraints) {
             conflicts.push(format!("{}: {}", pkg, reason));
         }
     }
-    
+
     conflicts
 }
 
@@ -277,11 +289,11 @@ fn check_mutually_exclusive(constraints: &[VersionReq]) -> Option<String> {
             majors.push(comparator.major);
         }
     }
-    
+
     if majors.len() > 1 {
         let min_major = majors.iter().min().unwrap();
         let max_major = majors.iter().max().unwrap();
-        
+
         if max_major > min_major {
             return Some(format!(
                 "Conflicting major versions: ^{}.x.x and ^{}.x.x",
@@ -289,7 +301,7 @@ fn check_mutually_exclusive(constraints: &[VersionReq]) -> Option<String> {
             ));
         }
     }
-    
+
     None
 }
 
@@ -301,7 +313,8 @@ fn check_no_common_version(constraints: &[VersionReq]) -> Option<String> {
             None => Some(req.clone()),
             Some(current) => {
                 // Simplified intersection check
-                if let (Some(min1), Some(min2)) = (current.minimum_version(), req.minimum_version()) {
+                if let (Some(min1), Some(min2)) = (current.minimum_version(), req.minimum_version())
+                {
                     if min1 > min2 {
                         Some(current)
                     } else {
@@ -313,13 +326,13 @@ fn check_no_common_version(constraints: &[VersionReq]) -> Option<String> {
             }
         };
     }
-    
+
     if let Some(final_req) = intersection {
         if final_req.comparators.is_empty() && !constraints.is_empty() {
             return Some("No version satisfies all constraints".to_string());
         }
     }
-    
+
     None
 }
 
@@ -332,9 +345,9 @@ mod tests {
         let mut deps = HashMap::new();
         deps.insert("react".to_string(), "^18.0.0".to_string());
         deps.insert("lodash".to_string(), "^4.17.0".to_string());
-        
+
         let result = resolve_minimal(&deps).unwrap();
-        
+
         assert_eq!(result.get("react").unwrap().major, 18);
         assert_eq!(result.get("lodash").unwrap().major, 4);
     }
@@ -345,7 +358,7 @@ mod tests {
         selector.add_constraint("pkg", VersionReq::parse("^1.0.0").unwrap());
         selector.add_constraint("pkg", VersionReq::parse(">=1.2.0").unwrap());
         selector.add_constraint("pkg", VersionReq::parse("~1.1.0").unwrap());
-        
+
         // `~1.1.0` is below 1.2.0, so this set is unsatisfiable.
         assert!(selector.resolve().is_err());
     }
@@ -355,9 +368,9 @@ mod tests {
         let mut selector = MinimalVersionSelector::new();
         selector.add_constraint("pkg", VersionReq::parse("^1.0.0").unwrap());
         selector.add_constraint("pkg", VersionReq::parse("^2.0.0").unwrap());
-        
+
         let result = selector.resolve();
-        
+
         // Should fail (no version satisfies both ^1.0.0 and ^2.0.0)
         assert!(result.is_err());
     }
@@ -368,7 +381,7 @@ mod tests {
         deps_good.insert("pkg".to_string(), "^1.0.0".to_string());
         deps_good.insert("pkg2".to_string(), ">=2.0.0".to_string());
         assert!(can_use_minimal_selection(&deps_good));
-        
+
         let mut deps_bad = HashMap::new();
         deps_bad.insert("pkg".to_string(), "<2.0.0".to_string());
         assert!(!can_use_minimal_selection(&deps_bad));
