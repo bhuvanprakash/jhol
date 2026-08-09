@@ -35,7 +35,10 @@ static ENV_CACHE: OnceLock<RwLock<HashMap<&'static str, Option<String>>>> = Once
 
 /// Invalidate the entire env var cache (called when env vars change at runtime).
 pub fn invalidate_env_cache() {
-    if let Ok(mut guard) = ENV_CACHE.get_or_init(|| RwLock::new(HashMap::new())).write() {
+    if let Ok(mut guard) = ENV_CACHE
+        .get_or_init(|| RwLock::new(HashMap::new()))
+        .write()
+    {
         guard.clear();
     }
 }
@@ -51,18 +54,24 @@ pub const FALLBACK_TELEMETRY_NAME: &str = "fallback_telemetry.json";
 /// otherwise Windows: %USERPROFILE%\.jhol-cache, Unix: $HOME/.jhol-cache
 pub fn get_cache_dir() -> String {
     static CACHE: OnceLock<String> = OnceLock::new();
-    CACHE.get_or_init(|| {
-        if let Ok(dir) = env::var("JHOL_CACHE_DIR") {
-            return dir;
-        }
-        let base = if cfg!(target_os = "windows") {
-            env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string())
-        } else {
-            env::var("HOME").unwrap_or_else(|_| ".".to_string())
-        };
-        let sep = if cfg!(target_os = "windows") { "\\" } else { "/" };
-        format!("{}{}.jhol-cache", base, sep)
-    }).clone()
+    CACHE
+        .get_or_init(|| {
+            if let Ok(dir) = env::var("JHOL_CACHE_DIR") {
+                return dir;
+            }
+            let base = if cfg!(target_os = "windows") {
+                env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string())
+            } else {
+                env::var("HOME").unwrap_or_else(|_| ".".to_string())
+            };
+            let sep = if cfg!(target_os = "windows") {
+                "\\"
+            } else {
+                "/"
+            };
+            format!("{}{}.jhol-cache", base, sep)
+        })
+        .clone()
 }
 
 pub fn init_cache() -> Result<()> {
@@ -158,7 +167,10 @@ pub fn store_unpacked_dir() -> PathBuf {
 /// Return sharded path for a given hash: store_unpacked/ab/<full_hash>
 pub fn sharded_unpacked_path(hash: &str) -> PathBuf {
     let shard = if hash.len() >= 2 { &hash[..2] } else { "xx" };
-    cache_dir_path().join("store_unpacked").join(shard).join(hash)
+    cache_dir_path()
+        .join("store_unpacked")
+        .join(shard)
+        .join(hash)
 }
 
 /// Whether to use symlinks/junctions when installing from store (JHOL_LINK=0 to disable).
@@ -207,6 +219,134 @@ pub fn link_package_from_store(
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Repair the store so runtime `require()` works for link-mode installs.
+///
+/// `node_modules/<pkg>` is a symlink into `store_unpacked/<shard>/<hash>/`.
+/// Node resolves `require('dep')` from the *realpath* of the requiring file,
+/// so a dependency looked up from inside that store dir never reaches the
+/// project's `node_modules`. This creates, inside each store package, a
+/// `node_modules/<dep>` symlink to the installed dependency's store dir —
+/// the pnpm virtual-store layout. Idempotent and additive: existing links are
+/// brushed aside and recreated, so re-runs and shared store packages converge.
+pub fn relink_store_dependencies(node_modules: &Path) {
+    if !use_link() {
+        return;
+    }
+    let Ok(resolved) = collect_store_links(node_modules) else {
+        return;
+    };
+    // resolved: node_modules/<name> -> store_unpacked/<shard>/<hash> (realpath),
+    // plus its package.json `dependencies` map (dep name -> constraint).
+    for (pkg_name, (store_realpath, deps)) in &resolved {
+        if deps.is_empty() {
+            continue;
+        }
+        // Build node_modules.dirs to hold sibling links for this store package.
+        let dep_link_dir = store_realpath.join("node_modules");
+        let _ = fs::create_dir_all(&dep_link_dir);
+        for dep_name in deps.keys() {
+            let Some((dep_realpath, _)) = resolved.get(dep_name) else {
+                continue;
+            };
+            let link_target = dep_link_dir.join(dep_name);
+            // Replace any stale link with a fresh one.
+            if fs::symlink_metadata(&link_target).is_ok() {
+                let _ = fs::remove_file(&link_target);
+                let _ = fs::remove_dir(&link_target);
+            }
+            #[cfg(unix)]
+            let _ = std::os::unix::fs::symlink(dep_realpath, &link_target);
+            #[cfg(windows)]
+            let _ = std::os::windows::fs::symlink_dir(dep_realpath, &link_target);
+        }
+        // Ensure scoped deps are reachable: for @scope/pkg deps, the link
+        // target must be nested, so create the scope dir manually.
+        for dep_name in deps.keys() {
+            if let Some((_, _)) = resolved.get(dep_name) {
+                if dep_name.starts_with('@') {
+                    let link_target = dep_link_dir.join(dep_name);
+                    if let Some(parent) = link_target.parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Walk `node_modules` and return, per installed package:
+/// (realpath in store, package.json `dependencies` map).
+fn collect_store_links(
+    node_modules: &Path,
+) -> std::result::Result<HashMap<String, (std::path::PathBuf, HashMap<String, String>)>, String> {
+    let mut resolved: HashMap<String, (std::path::PathBuf, HashMap<String, String>)> =
+        HashMap::new();
+    let Ok(entries) = fs::read_dir(node_modules) else {
+        return Err("missing node_modules".to_string());
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') || name == ".bin" {
+            continue;
+        }
+        let entry_path = entry.path();
+        if name.starts_with('@') && entry_path.is_dir() {
+            if let Ok(scoped) = fs::read_dir(&entry_path) {
+                for scoped_entry in scoped.flatten() {
+                    let scoped_name = scoped_entry.file_name().to_string_lossy().into_owned();
+                    let full = format!("{}/{}", name, scoped_name);
+                    if let Some((real, deps)) =
+                        resolve_single_link(node_modules, &full, &scoped_entry.path())
+                    {
+                        resolved.insert(full, (real, deps));
+                    }
+                }
+            }
+            continue;
+        }
+        if let Some((real, deps)) = resolve_single_link(node_modules, &name, &entry_path) {
+            resolved.insert(name, (real, deps));
+        }
+    }
+    Ok(resolved)
+}
+
+fn resolve_single_link(
+    node_modules: &Path,
+    name: &str,
+    entry_path: &Path,
+) -> Option<(std::path::PathBuf, HashMap<String, String>)> {
+    // Realpath so we land in the store even if this dir is a symlink chain.
+    let real = std::fs::canonicalize(entry_path).ok()?;
+    if !real.join("package.json").exists() {
+        return None;
+    }
+    let content = std::fs::read_to_string(real.join("package.json")).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let mut deps: HashMap<String, String> = HashMap::new();
+    // required deps are always resolved
+    if let Some(deps_obj) = json.get("dependencies").and_then(|v| v.as_object()) {
+        for (k, v) in deps_obj {
+            deps.insert(k.clone(), v.as_str().unwrap_or("").to_string());
+        }
+    }
+    // peer deps are required at runtime (elect from the installed tree if present)
+    if let Some(peers) = json.get("peerDependencies").and_then(|v| v.as_object()) {
+        for (k, v) in peers {
+            deps.entry(k.clone()).or_insert_with(|| v.as_str().unwrap_or("").to_string());
+        }
+    }
+    // optional deps point at packages that may or may not be installed; only
+    // those actually present in this tree will resolve to a link.
+    if let Some(optional) = json.get("optionalDependencies").and_then(|v| v.as_object()) {
+        for (k, v) in optional {
+            deps.entry(k.clone()).or_insert_with(|| v.as_str().unwrap_or("").to_string());
+        }
+    }
+    let _ = node_modules;
+    Some((real, deps))
 }
 
 /// Index path: cache_dir/store_index.json (pkg@version -> hash)
@@ -1001,7 +1141,10 @@ pub fn load_expansion_cache(packages: &[&str]) -> Option<Vec<String>> {
     }
 }
 
-pub fn save_expansion_cache(packages: &[&str], specs: &[String]) -> std::result::Result<(), String> {
+pub fn save_expansion_cache(
+    packages: &[&str],
+    specs: &[String],
+) -> std::result::Result<(), String> {
     if packages.is_empty() || specs.is_empty() {
         return Ok(());
     }

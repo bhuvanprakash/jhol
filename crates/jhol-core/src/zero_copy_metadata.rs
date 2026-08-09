@@ -68,31 +68,33 @@ impl MmapMetadataStore {
                 .map(|m| m.len() > 0)
                 .unwrap_or(false)
         {
-            let file = File::open(&store_path)
-                .map_err(|e| format!("Failed to open store: {}", e))?;
-            let mmap = unsafe { Mmap::map(&file) }
-                .map_err(|e| format!("Failed to mmap store: {}", e))?;
+            let file =
+                File::open(&store_path).map_err(|e| format!("Failed to open store: {}", e))?;
+            let mmap =
+                unsafe { Mmap::map(&file) }.map_err(|e| format!("Failed to mmap store: {}", e))?;
             Some(mmap)
         } else {
             File::create(&store_path).ok();
             None
         };
-        Ok(Self { store_path, mmap, index })
+        Ok(Self {
+            store_path,
+            mmap,
+            index,
+        })
     }
 
     pub fn global() -> parking_lot::MutexGuard<'static, MmapMetadataStore> {
         static INST: std::sync::OnceLock<parking_lot::Mutex<MmapMetadataStore>> =
             std::sync::OnceLock::new();
         INST.get_or_init(|| {
-            parking_lot::Mutex::new(
-                MmapMetadataStore::new(default_store_path()).unwrap_or_else(|_| {
-                    MmapMetadataStore {
-                        store_path: default_store_path(),
-                        mmap: None,
-                        index: HashMap::new(),
-                    }
-                }),
-            )
+            parking_lot::Mutex::new(MmapMetadataStore::new(default_store_path()).unwrap_or_else(
+                |_| MmapMetadataStore {
+                    store_path: default_store_path(),
+                    mmap: None,
+                    index: HashMap::new(),
+                },
+            ))
         })
         .lock()
     }
@@ -102,7 +104,10 @@ impl MmapMetadataStore {
         if index_path.exists() {
             if let Ok(data) = fs::read(&index_path) {
                 if let Ok(index_vec) = bincode::deserialize::<StoreIndex>(&data) {
-                    return index_vec.into_iter().map(|(k, v1, v2)| (k, (v1, v2))).collect();
+                    return index_vec
+                        .into_iter()
+                        .map(|(k, v1, v2)| (k, (v1, v2)))
+                        .collect();
                 }
             }
         }
@@ -121,7 +126,8 @@ impl MmapMetadataStore {
         let offset = file.metadata().map(|m| m.len()).unwrap_or(0);
         file.write_all(&serialized)
             .map_err(|e| format!("Failed to write: {}", e))?;
-        self.index.insert(name.to_string(), (offset, serialized.len() as u64));
+        self.index
+            .insert(name.to_string(), (offset, serialized.len() as u64));
         self.save_index()?;
         self.remap()?;
         Ok(())
@@ -148,10 +154,17 @@ impl MmapMetadataStore {
 
     /// Store packument metadata after fetching from registry.
     /// Called by registry after successful packument fetch.
-    pub fn store_packument(name: &str, version: &str, deps: &[(String, String)],
-        opt_deps: &[(String, String)], peer_deps: &[(String, String)],
-        dev_deps: &[(String, String)], tarball_url: &str, integrity: Option<&str>,
-        bin: Option<&[String]>, scripts: &[(String, String)],
+    pub fn store_packument(
+        name: &str,
+        version: &str,
+        deps: &[(String, String)],
+        opt_deps: &[(String, String)],
+        peer_deps: &[(String, String)],
+        dev_deps: &[(String, String)],
+        tarball_url: &str,
+        integrity: Option<&str>,
+        bin: Option<&[String]>,
+        scripts: &[(String, String)],
     ) {
         let mut store = Self::global();
         let meta = PackageMetadata {
@@ -202,25 +215,27 @@ impl MmapMetadataStore {
 
     fn save_index(&self) -> Result<(), String> {
         let index_path = self.store_path.with_extension("idx");
-        let index_vec: StoreIndex = self.index.iter()
+        let index_vec: StoreIndex = self
+            .index
+            .iter()
             .map(|(k, (o, l))| (k.clone(), *o, *l))
             .collect();
         let serialized = bincode::serialize(&index_vec)
             .map_err(|e| format!("Failed to serialize index: {}", e))?;
-        fs::write(&index_path, &serialized)
-            .map_err(|e| format!("Failed to write index: {}", e))?;
+        fs::write(&index_path, &serialized).map_err(|e| format!("Failed to write index: {}", e))?;
         Ok(())
     }
 
     fn remap(&mut self) -> Result<(), String> {
         self.mmap = None;
-        let file = File::open(&self.store_path)
-            .map_err(|e| format!("Failed to open store: {}", e))?;
-        let metadata = file.metadata()
+        let file =
+            File::open(&self.store_path).map_err(|e| format!("Failed to open store: {}", e))?;
+        let metadata = file
+            .metadata()
             .map_err(|e| format!("Failed to stat store: {}", e))?;
         if metadata.len() > 0 {
-            let mmap = unsafe { Mmap::map(&file) }
-                .map_err(|e| format!("Failed to mmap store: {}", e))?;
+            let mmap =
+                unsafe { Mmap::map(&file) }.map_err(|e| format!("Failed to mmap store: {}", e))?;
             self.mmap = Some(mmap);
         }
         Ok(())
@@ -235,9 +250,7 @@ pub struct MetadataStoreStats {
 }
 
 /// Cache packument metadata from registry JSON in zero-copy store.
-pub fn cache_packument_metadata(name: &str, version: &str,
-    data: &serde_json::Value)
-{
+pub fn cache_packument_metadata(name: &str, version: &str, data: &serde_json::Value) {
     let mut deps = Vec::new();
     if let Some(d) = data.get("dependencies").and_then(|v| v.as_object()) {
         for (k, v) in d {
@@ -262,15 +275,19 @@ pub fn cache_packument_metadata(name: &str, version: &str,
             dev_deps.push((k.clone(), v.as_str().unwrap_or("*").to_string()));
         }
     }
-    let tarball_url = data.get("dist")
+    let tarball_url = data
+        .get("dist")
         .and_then(|d| d.get("tarball").and_then(|t| t.as_str()))
         .unwrap_or("")
         .to_string();
-    let integrity = data.get("dist")
+    let integrity = data
+        .get("dist")
         .and_then(|d| d.get("integrity").and_then(|i| i.as_str()));
     let bin: Option<Vec<String>> = data.get("bin").map(|b| {
         if let Some(obj) = b.as_object() {
-            obj.values().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+            obj.values()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
         } else if let Some(s) = b.as_str() {
             vec![s.to_string()]
         } else {
@@ -284,8 +301,16 @@ pub fn cache_packument_metadata(name: &str, version: &str,
         }
     }
     MmapMetadataStore::store_packument(
-        name, version, &deps, &opt_deps, &peer_deps, &dev_deps,
-        &tarball_url, integrity, bin.as_deref(), &scripts,
+        name,
+        version,
+        &deps,
+        &opt_deps,
+        &peer_deps,
+        &dev_deps,
+        &tarball_url,
+        integrity,
+        bin.as_deref(),
+        &scripts,
     );
 }
 
@@ -346,6 +371,9 @@ mod tests {
         assert_eq!(retrieved.optional_dependencies[0].0, "fsevents");
         assert_eq!(retrieved.peer_dependencies[0].0, "react");
         assert_eq!(retrieved.dev_dependencies[0].0, "typescript");
-        assert_eq!(retrieved.dist.tarball_url, "https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz");
+        assert_eq!(
+            retrieved.dist.tarball_url,
+            "https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz"
+        );
     }
 }

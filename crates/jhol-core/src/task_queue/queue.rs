@@ -177,23 +177,21 @@ where
         }
     }
 
-    /// Try to steal work from other workers
+    /// Try to steal work from other workers (no alloc per idle check)
     fn try_steal(stealers: &[Stealer<T>], worker_id: usize) -> Steal<T> {
-        let mut indices: Vec<usize> = (0..stealers.len()).filter(|&i| i != worker_id).collect();
-        
-        // Simple shuffle
-        for i in (1..indices.len()).rev() {
-            let j = rand::random::<usize>() % (i + 1);
-            indices.swap(i, j);
+        let n = stealers.len();
+        if n <= 1 {
+            return Steal::Empty;
         }
-        
-        for &idx in &indices {
+        // Round-robin starting from a random offset — no allocation, no shuffle.
+        let offset = if n > 1 { rand::random::<usize>() % (n - 1) } else { 0 };
+        for i in 0..n - 1 {
+            let idx = (worker_id + 1 + offset + i) % n;
             match stealers[idx].steal() {
                 Steal::Success(task) => return Steal::Success(task),
                 Steal::Empty | Steal::Retry => continue,
             }
         }
-        
         Steal::Empty
     }
 

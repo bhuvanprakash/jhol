@@ -4,19 +4,17 @@
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
 pub struct MirrorEntry {
-    pub package: String,
-    pub version: String,
-    pub resolved_version: String,
+    pub package: Arc<str>,
+    pub version: Arc<str>,
     pub integrity: Option<String>,
     pub resolved_url: Option<String>,
     pub tarball_url: Option<String>,
     pub deps: HashMap<String, String>,
-    pub dependencies: HashMap<String, String>,
     pub dep_signature: String,
 }
 
@@ -37,7 +35,7 @@ pub struct Prediction {
 }
 
 struct Section {
-    entries: HashMap<String, MirrorEntry>,
+    entries: Arc<HashMap<String, MirrorEntry>>,
     stored_at: Instant,
 }
 
@@ -46,6 +44,8 @@ pub struct Mirror {
     sections: DashMap<u64, Section>,
     /// package → latest entry (cross-project)
     by_pkg: DashMap<String, MirrorEntry>,
+    /// tracks which section fingerprints contributed to each by_pkg entry (for M3 prune)
+    pkg_sources: DashMap<String, Vec<u64>>,
     stats: RwLock<MirrorStats>,
 }
 
@@ -54,6 +54,7 @@ impl Mirror {
         Self {
             sections: DashMap::new(),
             by_pkg: DashMap::new(),
+            pkg_sources: DashMap::new(),
             stats: RwLock::new(MirrorStats::default()),
         }
     }
@@ -61,11 +62,15 @@ impl Mirror {
     pub fn store_section(&self, fingerprint: u64, entries: HashMap<String, MirrorEntry>) {
         for (k, v) in &entries {
             self.by_pkg.insert(k.clone(), v.clone());
+            self.pkg_sources
+                .entry(k.clone())
+                .or_default()
+                .push(fingerprint);
         }
         self.sections.insert(
             fingerprint,
             Section {
-                entries,
+                entries: Arc::new(entries),
                 stored_at: Instant::now(),
             },
         );
@@ -75,12 +80,14 @@ impl Mirror {
         s.fresh_entries = s.total_entries;
     }
 
-    pub fn get_section(&self, fingerprint: u64) -> Option<HashMap<String, MirrorEntry>> {
+    pub fn get_section(&self, fingerprint: u64) -> Option<Arc<HashMap<String, MirrorEntry>>> {
         let sec = self.sections.get(&fingerprint)?;
         if sec.stored_at.elapsed() > Duration::from_secs(3600) {
             return None;
         }
-        self.stats.write().hits = self.stats.write().hits.saturating_add(1);
+        let mut s = self.stats.write();
+        s.hits = s.hits.saturating_add(1);
+        drop(s);
         Some(sec.entries.clone())
     }
 
@@ -93,29 +100,30 @@ impl Mirror {
                 crate::registry::version_satisfies(range, version)
             };
             if ok {
-                self.stats.write().hits = self.stats.write().hits.saturating_add(1);
+                let mut s = self.stats.write();
+                s.hits = s.hits.saturating_add(1);
+                drop(s);
                 return Some(e.clone());
             }
         }
         // Lattice fallback
         if let Some(v) = crate::lattice_cache::lookup_lattice(name, range) {
-            self.stats.write().hits = self.stats.write().hits.saturating_add(1);
-            use std::hash::Hasher;
-            let mut h2 = std::collections::hash_map::DefaultHasher::new();
-            let hash = format!("{:x}", Hasher::finish(&h2));
+            let mut s = self.stats.write();
+            s.hits = s.hits.saturating_add(1);
+            drop(s);
             return Some(MirrorEntry {
-                package: name.to_string(),
-                version: v.clone(),
-                resolved_version: v.clone(),
+                package: Arc::from(name),
+                version: Arc::from(v.as_str()),
                 integrity: None,
                 resolved_url: None,
                 tarball_url: None,
                 deps: HashMap::new(),
-                dependencies: HashMap::new(),
-                dep_signature: hash,
+                dep_signature: String::new(),
             });
         }
-        self.stats.write().misses = self.stats.write().misses.saturating_add(1);
+        let mut s = self.stats.write();
+        s.misses = s.misses.saturating_add(1);
+        drop(s);
         None
     }
 
@@ -125,14 +133,26 @@ impl Mirror {
 
     pub fn prune(&self) -> Result<usize, String> {
         let before = self.by_pkg.len();
+        // Collect expired fingerprints
+        let expired: Vec<u64> = self
+            .sections
+            .iter()
+            .filter(|sec| sec.stored_at.elapsed() > Duration::from_secs(3600))
+            .map(|sec| *sec.key())
+            .collect();
         // Remove expired sections
-        self.sections.retain(|_, sec| sec.stored_at.elapsed() <= Duration::from_secs(3600));
-        // Rebuild by_pkg from remaining sections
-        self.by_pkg.clear();
-        for ref_multi in self.sections.iter() {
-            for (k, v) in &ref_multi.entries {
-                self.by_pkg.insert(k.clone(), v.clone());
-            }
+        for fp in &expired {
+            self.sections.remove(fp);
+        }
+        // Prune by_pkg entries that no longer have any source section
+        if !expired.is_empty() {
+            self.pkg_sources.retain(|pkg, sources| {
+                sources.retain(|fp| !expired.contains(fp));
+                if sources.is_empty() {
+                    self.by_pkg.remove(pkg);
+                }
+                !sources.is_empty()
+            });
         }
         let after = self.by_pkg.len();
         let mut s = self.stats.write();
@@ -153,17 +173,10 @@ impl Mirror {
     }
 
     pub fn stats(&self) -> MirrorStats {
+        // Running counters only — no section scan (N16)
         let mut s = self.stats.read().clone();
-        let now = std::time::Instant::now();
-        let mut fresh = 0u64;
-        for ref_multi in self.sections.iter() {
-            if ref_multi.stored_at.elapsed() <= Duration::from_secs(3600) {
-                fresh = fresh.saturating_add(ref_multi.entries.len() as u64);
-            }
-        }
         s.total_entries = self.by_pkg.len() as u64;
-        s.fresh_entries = fresh;
-        s.expired_entries = s.total_entries.saturating_sub(fresh);
+        s.expired_entries = s.total_entries.saturating_sub(s.fresh_entries);
         s
     }
 
@@ -193,12 +206,14 @@ pub fn global_mirror() -> &'static Mirror {
 /// Fingerprint package.json deps map.
 pub fn fingerprint_deps(deps: &HashMap<String, String>) -> u64 {
     use std::hash::{Hash, Hasher};
-    let mut pairs: Vec<_> = deps.iter().collect();
-    pairs.sort_by(|a, b| a.0.cmp(b.0));
+    let mut keys: Vec<&String> = deps.keys().collect();
+    keys.sort();
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    for (k, v) in pairs {
+    for k in keys {
         k.hash(&mut h);
-        v.hash(&mut h);
+        if let Some(v) = deps.get(k) {
+            v.hash(&mut h);
+        }
     }
     Hasher::finish(&h)
 }
@@ -218,9 +233,8 @@ pub fn record_resolution(
         entries.insert(
             name.clone(),
             MirrorEntry {
-                package: name.clone(),
-                version: pkg.version.clone(),
-                resolved_version: pkg.version.clone(),
+                package: Arc::from(name.as_str()),
+                version: Arc::from(pkg.version.as_str()),
                 integrity: pkg.integrity.clone(),
                 resolved_url: if pkg.resolved.is_empty() {
                     None
@@ -233,7 +247,6 @@ pub fn record_resolution(
                     Some(pkg.resolved.clone())
                 },
                 deps: pkg.dependencies.clone(),
-                dependencies: pkg.dependencies.clone(),
                 dep_signature: dep_sig,
             },
         );
@@ -259,11 +272,7 @@ pub fn record_resolution(
 /// SNR: store a speculative neighbor resolution.
 /// Keyed by (parent_fingerprint, edit_descriptor).
 /// edit_descriptor describes the change (e.g., "add:react@^18", "update:lodash@^5").
-pub fn snr_put(
-    parent_fp: u64,
-    edit: &str,
-    entries: HashMap<String, MirrorEntry>,
-) {
+pub fn snr_put(parent_fp: u64, edit: &str, entries: HashMap<String, MirrorEntry>) {
     // Store under a composite key: hash(parent_fp || edit)
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -274,10 +283,7 @@ pub fn snr_put(
 }
 
 /// SNR: retrieve a speculative neighbor resolution.
-pub fn snr_get(
-    parent_fp: u64,
-    edit: &str,
-) -> Option<HashMap<String, MirrorEntry>> {
+pub fn snr_get(parent_fp: u64, edit: &str) -> Option<Arc<HashMap<String, MirrorEntry>>> {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     parent_fp.hash(&mut hasher);
@@ -288,12 +294,14 @@ pub fn snr_get(
 
 fn dep_signature(deps: &HashMap<String, String>) -> String {
     use std::hash::{Hash, Hasher};
-    let mut pairs: Vec<_> = deps.iter().collect();
-    pairs.sort_by(|a, b| a.0.cmp(b.0));
+    let mut keys: Vec<&String> = deps.keys().collect();
+    keys.sort();
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    for (k, v) in pairs {
+    for k in keys {
         k.hash(&mut h);
-        v.hash(&mut h);
+        if let Some(v) = deps.get(k) {
+            v.hash(&mut h);
+        }
     }
     format!("{:x}", Hasher::finish(&h))
 }

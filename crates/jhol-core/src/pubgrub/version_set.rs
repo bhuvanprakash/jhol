@@ -1,9 +1,9 @@
 //! Version sets and range arithmetic for PubGrub solver
-//! 
+//!
 //! Implements efficient version range operations with packed u64 representation
 //! for fast SIMD-accelerated comparisons.
 
-use semver::{Version, VersionReq, Comparator, Op};
+use semver::{Comparator, Op, Version, VersionReq};
 use std::cmp::Ordering;
 
 /// Packed version for fast comparison (stores major.minor.patch in u64)
@@ -30,7 +30,8 @@ impl PackedVersion {
 
     /// Create from semver Version
     pub fn from_version(version: &Version) -> Self {
-        let packed = (version.major << 40) | ((version.minor as u64) << 20) | (version.patch as u64);
+        let packed =
+            (version.major << 40) | ((version.minor as u64) << 20) | (version.patch as u64);
         Self { packed }
     }
 
@@ -237,8 +238,12 @@ impl VersionRange {
             return None;
         }
 
-        let new_min = PackedVersion { packed: new_min_packed };
-        let new_max = PackedVersion { packed: new_max_packed };
+        let new_min = PackedVersion {
+            packed: new_min_packed,
+        };
+        let new_max = PackedVersion {
+            packed: new_max_packed,
+        };
 
         Some(Self {
             min: new_min,

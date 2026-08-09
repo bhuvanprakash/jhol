@@ -17,7 +17,9 @@ pub fn list_workspace_roots(dir: &Path) -> Result<Vec<PathBuf>, String> {
             if w.is_array() {
                 w.as_array().map(|a| a.to_vec())
             } else {
-                w.get("packages").and_then(|p| p.as_array()).map(|a| a.to_vec())
+                w.get("packages")
+                    .and_then(|p| p.as_array())
+                    .map(|a| a.to_vec())
             }
         })
         .unwrap_or_default();

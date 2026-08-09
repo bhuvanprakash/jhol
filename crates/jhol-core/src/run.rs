@@ -54,12 +54,12 @@ pub fn run_script(
 
     if let Ok(s) = std::fs::read_to_string(&package_json_path) {
         if let Ok(pkg_json) = serde_json::from_str::<serde_json::Value>(&s) {
-        if let Some(name) = pkg_json.get("name").and_then(|n| n.as_str()) {
-            env.insert("npm_package_name".to_string(), name.to_string());
-        }
-        if let Some(ver) = pkg_json.get("version").and_then(|v| v.as_str()) {
-            env.insert("npm_package_version".to_string(), ver.to_string());
-        }
+            if let Some(name) = pkg_json.get("name").and_then(|n| n.as_str()) {
+                env.insert("npm_package_name".to_string(), name.to_string());
+            }
+            if let Some(ver) = pkg_json.get("version").and_then(|v| v.as_str()) {
+                env.insert("npm_package_version".to_string(), ver.to_string());
+            }
         }
     }
 
@@ -70,9 +70,7 @@ pub fn run_script(
     };
 
     #[cfg(windows)]
-    let (shell, shell_arg, script_arg) = {
-        ("cmd".to_string(), "/c", script_cmd)
-    };
+    let (shell, shell_arg, script_arg) = { ("cmd".to_string(), "/c", script_cmd) };
 
     let status = std::process::Command::new(&shell)
         .arg(shell_arg)

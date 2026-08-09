@@ -68,12 +68,22 @@ impl SpectralSparsifier {
     /// Compute effective resistance between two nodes using random projection.
     /// O(k log n) per query with k = 30 random vectors (BSS approximation).
     pub fn effective_resistance(&self, from: &str, to: &str) -> f64 {
-        let fi = match self.node_idx.get(from) { Some(&i) => i, None => return f64::INFINITY };
-        let ti = match self.node_idx.get(to) { Some(&i) => i, None => return f64::INFINITY };
-        if fi == ti { return 0.0; }
+        let fi = match self.node_idx.get(from) {
+            Some(&i) => i,
+            None => return f64::INFINITY,
+        };
+        let ti = match self.node_idx.get(to) {
+            Some(&i) => i,
+            None => return f64::INFINITY,
+        };
+        if fi == ti {
+            return 0.0;
+        }
 
         let n = self.nodes.len();
-        if n < 2 { return f64::INFINITY; }
+        if n < 2 {
+            return f64::INFINITY;
+        }
 
         let mut laplacian: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
         for e in &self.edges {
@@ -92,7 +102,9 @@ impl SpectralSparsifier {
         let mut r = b.clone();
         let mut p = r.clone();
         let mut rr: f64 = r.iter().map(|v| v * v).sum();
-        if rr < 1e-30 { return 0.0; }
+        if rr < 1e-30 {
+            return 0.0;
+        }
 
         let max_iter = 20usize;
         for _ in 0..max_iter {
@@ -105,13 +117,20 @@ impl SpectralSparsifier {
                 ap[i] = sum;
             }
 
-            let alpha = rr / ap.iter().zip(p.iter()).map(|(a, pp)| a * pp).sum::<f64>().max(1e-30);
+            let alpha = rr
+                / ap.iter()
+                    .zip(p.iter())
+                    .map(|(a, pp)| a * pp)
+                    .sum::<f64>()
+                    .max(1e-30);
             for i in 0..n {
                 x[i] += alpha * p[i];
                 r[i] -= alpha * ap[i];
             }
             let new_rr: f64 = r.iter().map(|v| v * v).sum();
-            if new_rr < 1e-30 { break; }
+            if new_rr < 1e-30 {
+                break;
+            }
             let beta = new_rr / rr.max(1e-30);
             for i in 0..n {
                 p[i] = r[i] + beta * p[i];
@@ -130,7 +149,9 @@ impl SpectralSparsifier {
 
     /// Get top-k most impactful packages.
     pub fn top_k_impactful(&self, k: usize) -> Vec<(String, f64)> {
-        let mut impacts: Vec<(String, f64)> = self.nodes.iter()
+        let mut impacts: Vec<(String, f64)> = self
+            .nodes
+            .iter()
             .filter(|n| *n != "root")
             .map(|n| (n.clone(), self.effective_resistance("root", n)))
             .collect();

@@ -156,7 +156,6 @@ fn test_solver_stats() {
 
     let result = solver.solve();
     assert!(result.is_ok());
-
 }
 
 #[test]

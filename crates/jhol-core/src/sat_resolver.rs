@@ -1,14 +1,14 @@
 //! Exact dependency resolver prototype using SAT-style backtracking.
 //! This is intentionally self-contained so we can validate solver math
 //! before wiring it into the full online registry pipeline.
-//! 
+//!
 //! Enhanced with JAGR-1 optimizations: watched literals, conflict analysis, and incremental solving.
 //! Implements formal CSP/SAT-style mathematical model with semver interval arithmetic.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::time::{Duration, Instant};
-use std::path::Path;
 use std::fs;
+use std::path::Path;
+use std::time::{Duration, Instant};
 
 use semver::{Version, VersionReq};
 
@@ -86,7 +86,7 @@ struct WatchedClause {
     id: usize,
     literals: Vec<(String, String)>, // (package, version) pairs
     watch_indices: [usize; 2],       // Indices of the two watched literals
-    reason: String,                   // Why this clause exists
+    reason: String,                  // Why this clause exists
 }
 
 /// Semver interval for efficient range arithmetic
@@ -100,19 +100,24 @@ impl SemverInterval {
     fn new(min: Version, max: Option<Version>) -> Self {
         Self { min, max }
     }
-    
+
     fn contains(&self, version: &Version) -> bool {
         version >= &self.min && self.max.as_ref().map_or(true, |max| version <= max)
     }
-    
+
     fn intersects(&self, other: &Self) -> bool {
-        self.contains(&other.min) || other.contains(&self.min) ||
-        self.max.as_ref().map_or(false, |max| other.contains(max)) ||
-        other.max.as_ref().map_or(false, |max| self.contains(max))
+        self.contains(&other.min)
+            || other.contains(&self.min)
+            || self.max.as_ref().map_or(false, |max| other.contains(max))
+            || other.max.as_ref().map_or(false, |max| self.contains(max))
     }
-    
+
     fn intersection(&self, other: &Self) -> Option<Self> {
-        let new_min = if self.min >= other.min { self.min.clone() } else { other.min.clone() };
+        let new_min = if self.min >= other.min {
+            self.min.clone()
+        } else {
+            other.min.clone()
+        };
         let new_max = match (&self.max, &other.max) {
             (Some(a), Some(b)) => Some(if a <= b { a.clone() } else { b.clone() }),
             (Some(a), None) => Some(a.clone()),
@@ -150,7 +155,7 @@ impl PersistentCache {
             fingerprint: None,
         }
     }
-    
+
     fn load_unsat_cache(&self) -> HashSet<String> {
         if let Some(dir) = &self.cache_dir {
             let cache_file = Path::new(dir).join("jhol_unsat_cache.json");
@@ -162,19 +167,19 @@ impl PersistentCache {
         }
         HashSet::new()
     }
-    
+
     fn save_unsat_cache(&self, cache: &HashSet<String>) {
         if let Some(dir) = &self.cache_dir {
             let cache_file = Path::new(dir).join("jhol_unsat_cache.json");
             if let Some(parent) = cache_file.parent() {
                 let _ = fs::create_dir_all(parent);
             }
-            if let Ok(content) = serde_json::to_string_pretty(cache) {
+            if let Ok(content) = serde_json::to_string(cache) {
                 let _ = fs::write(cache_file, content);
             }
         }
     }
-    
+
     fn load_conflict_clauses(&self) -> Vec<ConflictClause> {
         if let Some(dir) = &self.cache_dir {
             let cache_file = Path::new(dir).join("jhol_conflict_clauses.json");
@@ -186,52 +191,66 @@ impl PersistentCache {
         }
         Vec::new()
     }
-    
+
     fn save_conflict_clauses(&self, clauses: &[ConflictClause]) {
         if let Some(dir) = &self.cache_dir {
             let cache_file = Path::new(dir).join("jhol_conflict_clauses.json");
             if let Some(parent) = cache_file.parent() {
                 let _ = fs::create_dir_all(parent);
             }
-            if let Ok(content) = serde_json::to_string_pretty(clauses) {
+            if let Ok(content) = serde_json::to_string(clauses) {
                 let _ = fs::write(cache_file, content);
             }
         }
     }
-    
+
     fn compute_fingerprint(&self, domains: &HashMap<String, PackageDomain>) -> RegistryFingerprint {
         use sha2::Digest;
         let mut hasher = sha2::Sha256::default();
-        
+
         // Hash all package domains for fingerprinting
         let mut packages: Vec<&String> = domains.keys().collect();
         packages.sort_unstable();
-        
+
         for pkg in packages {
             if let Some(domain) = domains.get(pkg) {
                 let mut versions: Vec<&String> = domain.versions.keys().collect();
                 versions.sort_unstable();
-                
+
                 for version in versions {
                     if let Some(pv) = domain.versions.get(version) {
                         hasher.update(format!("{}@{}", pkg, version).as_bytes());
-                        hasher.update(pv.dependencies.keys().cloned().collect::<Vec<_>>().join(",").as_bytes());
-                        hasher.update(pv.peer_dependencies.keys().cloned().collect::<Vec<_>>().join(",").as_bytes());
+                        hasher.update(
+                            pv.dependencies
+                                .keys()
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join(",")
+                                .as_bytes(),
+                        );
+                        hasher.update(
+                            pv.peer_dependencies
+                                .keys()
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join(",")
+                                .as_bytes(),
+                        );
                     }
                 }
             }
         }
-        
+
         let result = hasher.finalize();
         let content_hash = format!("{:x}", result);
-        
+
         RegistryFingerprint {
             etag: None,
             last_modified: None,
             content_hash,
         }
     }
-    
+
     fn is_cache_valid(&self, current_fingerprint: &RegistryFingerprint) -> bool {
         match &self.fingerprint {
             Some(cached) => cached.content_hash == current_fingerprint.content_hash,
@@ -259,8 +278,8 @@ struct SearchCtx {
     decision_stack: Vec<(String, String)>, // Track decision path for conflict analysis
     implication_graph: HashMap<String, Vec<String>>, // Track implications for conflict analysis
     clause_database: HashMap<String, ConflictClause>, // Indexed conflict clauses for faster lookup
-    restart_counter: usize, // Track restarts for periodic restart strategy
-    restart_frequency: usize, // Dynamic restart frequency
+    restart_counter: usize,                // Track restarts for periodic restart strategy
+    restart_frequency: usize,              // Dynamic restart frequency
     // Incremental solving support
     previous_assignment: Option<HashMap<String, String>>, // Previous solution for incremental solving
     incremental_mode: bool, // Whether we're in incremental solving mode
@@ -314,7 +333,8 @@ pub fn solve_exact_with_stats(
     // Save constraints to persistent cache (lazy save - only if cache dir exists)
     if cache_dir.is_some() {
         ctx.persistent_cache.save_unsat_cache(&ctx.unsat_cache);
-        ctx.persistent_cache.save_conflict_clauses(&ctx.conflict_clauses);
+        ctx.persistent_cache
+            .save_conflict_clauses(&ctx.conflict_clauses);
     }
 
     Ok((
@@ -360,14 +380,15 @@ fn dfs(
 
     // Apply conflict clauses to filter candidates
     candidates.retain(|version| {
-        !ctx.conflict_clauses.iter().any(|clause| {
-            clause.package == pkg && clause.conflicting_versions.contains(version)
-        })
+        !ctx.conflict_clauses
+            .iter()
+            .any(|clause| clause.package == pkg && clause.conflicting_versions.contains(version))
     });
 
     // Apply learned forbid constraints
     candidates.retain(|version| {
-        !ctx.learned_forbid.contains(&(state_key.clone(), pkg.clone(), version.clone()))
+        !ctx.learned_forbid
+            .contains(&(state_key.clone(), pkg.clone(), version.clone()))
     });
 
     let mut last_err: Option<SolveError> = None;
@@ -377,14 +398,15 @@ fn dfs(
 
         // Track decision for conflict analysis
         ctx.decision_stack.push((pkg.clone(), version.clone()));
-        ctx.implication_graph.insert(format!("{}@{}", pkg, version), Vec::new());
+        ctx.implication_graph
+            .insert(format!("{}@{}", pkg, version), Vec::new());
 
         match dfs(branch, domains, ctx) {
             Ok(done) => return Ok(done),
             Err(e) => {
                 ctx.learned_forbid
                     .insert((state_key.clone(), pkg.clone(), version.clone()));
-                
+
                 // Enhanced conflict analysis and clause learning
                 if let SolveError::Unsat(ref msg) = e {
                     let conflict_clause = learn_conflict_clause_enhanced(ctx, &pkg, &version, msg);
@@ -394,18 +416,18 @@ fn dfs(
                         ctx.clause_database.insert(clause_key, clause.clone());
                     }
                 }
-                
+
                 last_err = Some(e)
             }
         }
-        
+
         // Backtrack decision stack
         ctx.decision_stack.pop();
     }
 
     ctx.unsat_cache.insert(state_key);
     ctx.decision_level -= 1;
-    
+
     // Periodic restart strategy
     ctx.restart_counter += 1;
     if ctx.restart_counter % 100 == 0 {
@@ -415,8 +437,9 @@ fn dfs(
             ctx.learned_forbid.clear();
         }
     }
-    
-    Err(last_err.unwrap_or_else(|| SolveError::Unsat(format!("No satisfying assignment for {}", pkg))))
+
+    Err(last_err
+        .unwrap_or_else(|| SolveError::Unsat(format!("No satisfying assignment for {}", pkg))))
 }
 
 /// Add a watched clause for faster unit propagation
@@ -490,14 +513,20 @@ fn propagate_watched_literals(
                     if let Some(candidates) = candidates_for(state, pkg, domains).ok() {
                         if candidates.contains(ver) {
                             // Found a new literal to watch
-                            let old_key = format!("{}@{}", clause.literals[old_watch_idx].0, clause.literals[old_watch_idx].1);
+                            let old_key = format!(
+                                "{}@{}",
+                                clause.literals[old_watch_idx].0, clause.literals[old_watch_idx].1
+                            );
                             if let Some(watches) = ctx.watched_literals.get_mut(&old_key) {
                                 watches.retain(|&id| id != clause_id);
                             }
 
                             clause.watch_indices[0] = idx;
                             let new_key = format!("{}@{}", pkg, ver);
-                            ctx.watched_literals.entry(new_key).or_default().push(clause_id);
+                            ctx.watched_literals
+                                .entry(new_key)
+                                .or_default()
+                                .push(clause_id);
                             found_new_watch = true;
                             break;
                         }
@@ -545,7 +574,7 @@ fn propagate_watched_literals(
 fn propagate_with_watched_literals(
     state: &mut State,
     domains: &HashMap<String, PackageDomain>,
-    ctx: &mut SearchCtx
+    ctx: &mut SearchCtx,
 ) -> Result<(), SolveError> {
     // First do standard propagation to handle initial constraints
     propagate(state, domains)?;
@@ -561,7 +590,7 @@ fn learn_conflict_clause_enhanced(
     ctx: &mut SearchCtx,
     package: &str,
     version: &str,
-    reason: &str
+    reason: &str,
 ) -> Option<ConflictClause> {
     // Extract minimal conflict set from decision stack using 1-UIP (Unique Implication Point)
     let mut conflict_versions = Vec::new();
@@ -594,7 +623,11 @@ fn learn_conflict_clause_enhanced(
     literals.push((package.to_string(), version.to_string()));
 
     // Add to watched clause database for O(1) propagation
-    add_watched_clause(ctx, literals, format!("learned from conflict at {}@{}", package, version));
+    add_watched_clause(
+        ctx,
+        literals,
+        format!("learned from conflict at {}@{}", package, version),
+    );
 
     Some(clause)
 }
@@ -606,10 +639,7 @@ fn format_human_readable_conflict(
     version: &str,
     contributing_decisions: &[(String, String)],
 ) -> String {
-    let mut explanation = format!(
-        "Conflict: {}@{} cannot be satisfied",
-        package, version
-    );
+    let mut explanation = format!("Conflict: {}@{} cannot be satisfied", package, version);
 
     if !contributing_decisions.is_empty() {
         explanation.push_str(" due to:");
@@ -625,9 +655,15 @@ fn format_human_readable_conflict(
 
         for (pkg, versions) in package_explanations {
             if versions.len() == 1 {
-                explanation.push_str(&format!("\n  - {}@{} requires incompatible version", pkg, versions[0]));
+                explanation.push_str(&format!(
+                    "\n  - {}@{} requires incompatible version",
+                    pkg, versions[0]
+                ));
             } else {
-                explanation.push_str(&format!("\n  - {}@{} (among others) requires incompatible version", pkg, versions[0]));
+                explanation.push_str(&format!(
+                    "\n  - {}@{} (among others) requires incompatible version",
+                    pkg, versions[0]
+                ));
             }
         }
     }
@@ -664,11 +700,11 @@ pub fn solve_incremental(
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .map(|ms| Duration::from_millis(ms));
-    
+
     // Set up incremental solving context
     ctx.previous_assignment = previous_assignment.cloned();
     ctx.incremental_mode = true;
-    
+
     // Pre-assign packages that are likely to remain the same
     if let Some(prev) = &ctx.previous_assignment {
         for (pkg, version) in prev {
@@ -677,7 +713,7 @@ pub fn solve_incremental(
             }
         }
     }
-    
+
     let solved = dfs(state, domains, &mut ctx)?;
     Ok(SolveResult {
         assignment: solved.assignment,
@@ -704,7 +740,7 @@ fn is_compatible_with_previous(
 fn is_version_compatible(version1: &str, version2: &str) -> bool {
     let v1 = Version::parse(version1);
     let v2 = Version::parse(version2);
-    
+
     match (v1, v2) {
         (Ok(v1), Ok(v2)) => {
             // For semver, consider compatible if major versions match
@@ -714,7 +750,10 @@ fn is_version_compatible(version1: &str, version2: &str) -> bool {
     }
 }
 
-fn propagate(state: &mut State, domains: &HashMap<String, PackageDomain>) -> Result<(), SolveError> {
+fn propagate(
+    state: &mut State,
+    domains: &HashMap<String, PackageDomain>,
+) -> Result<(), SolveError> {
     loop {
         expand_assignments(state, domains)?;
         validate_assignments(state, domains)?;
@@ -749,7 +788,10 @@ fn propagate(state: &mut State, domains: &HashMap<String, PackageDomain>) -> Res
     Ok(())
 }
 
-fn expand_assignments(state: &mut State, domains: &HashMap<String, PackageDomain>) -> Result<(), SolveError> {
+fn expand_assignments(
+    state: &mut State,
+    domains: &HashMap<String, PackageDomain>,
+) -> Result<(), SolveError> {
     loop {
         let mut next_to_expand: Option<(String, String)> = None;
         for (pkg, version) in &state.assignment {
@@ -806,11 +848,17 @@ fn expand_assignments(state: &mut State, domains: &HashMap<String, PackageDomain
     Ok(())
 }
 
-fn validate_assignments(state: &State, domains: &HashMap<String, PackageDomain>) -> Result<(), SolveError> {
+fn validate_assignments(
+    state: &State,
+    domains: &HashMap<String, PackageDomain>,
+) -> Result<(), SolveError> {
     // First validate all package assignments satisfy their requirements
     for (pkg, version) in &state.assignment {
         let Some(_dom) = domains.get(pkg) else {
-            return Err(SolveError::Unsat(format!("{} assigned but domain is missing", pkg)));
+            return Err(SolveError::Unsat(format!(
+                "{} assigned but domain is missing",
+                pkg
+            )));
         };
         if !version_satisfies_all(state, pkg, version) {
             return Err(SolveError::Unsat(conflict_message(state, pkg)));
@@ -836,10 +884,13 @@ fn validate_assignments(state: &State, domains: &HashMap<String, PackageDomain>)
 }
 
 /// Validate peer dependency constraints across the entire assignment
-fn validate_peer_dependencies(state: &State, domains: &HashMap<String, PackageDomain>) -> Result<(), SolveError> {
+fn validate_peer_dependencies(
+    state: &State,
+    domains: &HashMap<String, PackageDomain>,
+) -> Result<(), SolveError> {
     // Collect all peer dependency requirements
     let mut peer_requirements: HashMap<String, Vec<(String, String, bool)>> = HashMap::new();
-    
+
     for (pkg, version) in &state.assignment {
         if let Some(domain) = domains.get(pkg) {
             if let Some(pv) = domain.versions.get(version) {
@@ -853,7 +904,7 @@ fn validate_peer_dependencies(state: &State, domains: &HashMap<String, PackageDo
             }
         }
     }
-    
+
     // Check each peer dependency for conflicts
     for (peer_pkg, requirements) in peer_requirements {
         // If there are multiple requirements for the same peer, they must all be satisfied by the same version
@@ -880,11 +931,14 @@ fn validate_peer_dependencies(state: &State, domains: &HashMap<String, PackageDo
             }
         }
     }
-    
+
     Ok(())
 }
 
-fn choose_branch_variable(state: &State, domains: &HashMap<String, PackageDomain>) -> Option<String> {
+fn choose_branch_variable(
+    state: &State,
+    domains: &HashMap<String, PackageDomain>,
+) -> Option<String> {
     let mut best: Option<(String, usize)> = None;
     for pkg in sorted_requirement_keys(state) {
         if state.assignment.contains_key(pkg) || !has_mandatory_requirement(state, pkg) {
@@ -900,10 +954,17 @@ fn choose_branch_variable(state: &State, domains: &HashMap<String, PackageDomain
     best.map(|(p, _)| p)
 }
 
-fn candidates_for(state: &State, pkg: &str, domains: &HashMap<String, PackageDomain>) -> Result<Vec<String>, SolveError> {
+fn candidates_for(
+    state: &State,
+    pkg: &str,
+    domains: &HashMap<String, PackageDomain>,
+) -> Result<Vec<String>, SolveError> {
     let Some(domain) = domains.get(pkg) else {
         if has_mandatory_requirement(state, pkg) {
-            return Err(SolveError::Unsat(format!("{} required but no versions available", pkg)));
+            return Err(SolveError::Unsat(format!(
+                "{} required but no versions available",
+                pkg
+            )));
         }
         return Ok(Vec::new());
     };
@@ -995,7 +1056,14 @@ fn conflict_message(state: &State, pkg: &str) -> String {
         .get(pkg)
         .map(|rs| {
             rs.iter()
-                .map(|r| format!("{} -> {}{}", r.requester, r.spec, if r.optional { " (optional)" } else { "" }))
+                .map(|r| {
+                    format!(
+                        "{} -> {}{}",
+                        r.requester,
+                        r.spec,
+                        if r.optional { " (optional)" } else { "" }
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", ")
         })
@@ -1066,13 +1134,26 @@ mod tests {
         domains.insert("c".to_string(), domain(&[pv("2.2.0", &[], &[], &[], &[])]));
 
         let mut input = SolveInput::default();
-        input.root_requirements.insert("a".to_string(), "^1.0.0".to_string());
-        input.root_requirements.insert("c".to_string(), "^2.0.0".to_string());
+        input
+            .root_requirements
+            .insert("a".to_string(), "^1.0.0".to_string());
+        input
+            .root_requirements
+            .insert("c".to_string(), "^2.0.0".to_string());
 
         let solved = solve_exact(&input, &domains).expect("should solve");
-        assert_eq!(solved.assignment.get("a").map(String::as_str), Some("1.0.0"));
-        assert_eq!(solved.assignment.get("b").map(String::as_str), Some("1.1.0"));
-        assert_eq!(solved.assignment.get("c").map(String::as_str), Some("2.2.0"));
+        assert_eq!(
+            solved.assignment.get("a").map(String::as_str),
+            Some("1.0.0")
+        );
+        assert_eq!(
+            solved.assignment.get("b").map(String::as_str),
+            Some("1.1.0")
+        );
+        assert_eq!(
+            solved.assignment.get("c").map(String::as_str),
+            Some("2.2.0")
+        );
     }
 
     #[test]
@@ -1091,8 +1172,12 @@ mod tests {
         );
 
         let mut input = SolveInput::default();
-        input.root_requirements.insert("x".to_string(), "^1.0.0".to_string());
-        input.root_requirements.insert("a".to_string(), "^1.0.0".to_string());
+        input
+            .root_requirements
+            .insert("x".to_string(), "^1.0.0".to_string());
+        input
+            .root_requirements
+            .insert("a".to_string(), "^1.0.0".to_string());
 
         let err = solve_exact(&input, &domains).unwrap_err();
         match err {
@@ -1110,8 +1195,12 @@ mod tests {
         domains.insert("c".to_string(), domain(&[pv("1.4.0", &[], &[], &[], &[])]));
 
         let mut input = SolveInput::default();
-        input.root_requirements.insert("a".to_string(), "^1.0.0".to_string());
-        input.root_requirements.insert("c".to_string(), "^1.0.0".to_string());
+        input
+            .root_requirements
+            .insert("a".to_string(), "^1.0.0".to_string());
+        input
+            .root_requirements
+            .insert("c".to_string(), "^1.0.0".to_string());
 
         let err = solve_exact(&input, &domains).unwrap_err();
         match err {
@@ -1124,13 +1213,7 @@ mod tests {
         let mut domains = HashMap::new();
         domains.insert(
             "plugin".to_string(),
-            domain(&[pv(
-                "1.0.0",
-                &[],
-                &[],
-                &[("react", "^18.0.0")],
-                &["react"],
-            )]),
+            domain(&[pv("1.0.0", &[], &[], &[("react", "^18.0.0")], &["react"])]),
         );
 
         let mut input = SolveInput::default();
@@ -1138,8 +1221,12 @@ mod tests {
             .root_requirements
             .insert("plugin".to_string(), "^1.0.0".to_string());
 
-        let solved = solve_exact(&input, &domains).expect("optional peer should not block resolution");
-        assert_eq!(solved.assignment.get("plugin").map(String::as_str), Some("1.0.0"));
+        let solved =
+            solve_exact(&input, &domains).expect("optional peer should not block resolution");
+        assert_eq!(
+            solved.assignment.get("plugin").map(String::as_str),
+            Some("1.0.0")
+        );
         assert!(!solved.assignment.contains_key("react"));
     }
 
@@ -1187,7 +1274,9 @@ mod tests {
         );
 
         let mut input = SolveInput::default();
-        input.root_requirements.insert("a".to_string(), "^1.0.0".to_string());
+        input
+            .root_requirements
+            .insert("a".to_string(), "^1.0.0".to_string());
 
         let (_result, stats) = solve_exact_with_stats(&input, &domains).expect("solve with stats");
         assert!(stats.nodes_visited >= 1);

@@ -1,5 +1,5 @@
 //! Terms for PubGrub solver
-//! 
+//!
 //! A term represents a constraint on a package version, either positive (allowed)
 //! or negative (disallowed).
 
@@ -38,8 +38,10 @@ impl Term {
     /// Create a term that requires an exact version
     pub fn exact(package: String, version: &str) -> Self {
         let vs = VersionSet::from_range(super::version_set::VersionRange {
-            min: super::version_set::PackedVersion::parse(version).unwrap_or(super::version_set::PackedVersion { packed: 0 }),
-            max: super::version_set::PackedVersion::parse(version).unwrap_or(super::version_set::PackedVersion { packed: 0 }),
+            min: super::version_set::PackedVersion::parse(version)
+                .unwrap_or(super::version_set::PackedVersion { packed: 0 }),
+            max: super::version_set::PackedVersion::parse(version)
+                .unwrap_or(super::version_set::PackedVersion { packed: 0 }),
             min_inclusive: true,
             max_inclusive: true,
         });
@@ -102,7 +104,10 @@ impl Term {
     }
 
     /// Get the highest allowed version from available versions
-    pub fn highest_allowed(&self, available: &[super::version_set::PackedVersion]) -> Option<super::version_set::PackedVersion> {
+    pub fn highest_allowed(
+        &self,
+        available: &[super::version_set::PackedVersion],
+    ) -> Option<super::version_set::PackedVersion> {
         if self.is_positive {
             self.version_set.highest(available)
         } else {
@@ -171,8 +176,8 @@ impl TermSet {
 
 #[cfg(test)]
 mod tests {
+    use super::super::version_set::{PackedVersion, VersionRange, VersionSet};
     use super::*;
-    use super::super::version_set::{VersionSet, VersionRange, PackedVersion};
 
     #[test]
     fn test_term_intersect_positive() {
