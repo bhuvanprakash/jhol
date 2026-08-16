@@ -1,0 +1,23 @@
+[package]
+name = "jhol-pipeline"
+version = "0.1.0"
+edition = "2021"
+description = "JGrid instant materialization pipeline for Jhol"
+
+[dependencies]
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+sha2 = "0.10"
+hex = "0.4"
+memmap2 = "0.9"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+libc = "0.2"
+flate2 = "1.0"
+tar = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+criterion = "0.5"
+
+[[bench]]
+name = "materialization"
+harness = false
