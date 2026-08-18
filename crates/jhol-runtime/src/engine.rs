@@ -193,16 +193,16 @@ impl Runtime {
                 EXIT_CODE.store(code, Ordering::Relaxed);
                 true
             });
-        let _ = self
-            .context
-            .add_callback("__jhol_set_timeout", |callback: String, ms: i32| -> i32 {
-                timer::set_timeout(callback, ms.max(0) as u32) as i32
-            });
-        let _ = self
-            .context
-            .add_callback("__jhol_set_interval", |callback: String, ms: i32| -> i32 {
-                timer::set_interval(callback, ms.max(0) as u32) as i32
-            });
+        let _ =
+            self.context
+                .add_callback("__jhol_set_timeout", |callback: String, ms: i32| -> i32 {
+                    timer::set_timeout(callback, ms.max(0) as u32) as i32
+                });
+        let _ =
+            self.context
+                .add_callback("__jhol_set_interval", |callback: String, ms: i32| -> i32 {
+                    timer::set_interval(callback, ms.max(0) as u32) as i32
+                });
         let _ = self
             .context
             .add_callback("__jhol_cancel_timer", |id: i32| -> bool {
@@ -210,9 +210,11 @@ impl Runtime {
                 true
             });
         // rt-jit: pattern-matching native JIT callbacks
-        let _ = self.context.add_callback("__jhol_jit_fib", |n: f64| -> f64 {
-            crate::jit::jit_fib(n as i64) as f64
-        });
+        let _ = self
+            .context
+            .add_callback("__jhol_jit_fib", |n: f64| -> f64 {
+                crate::jit::jit_fib(n as i64) as f64
+            });
         let _ = self
             .context
             .add_callback("__jhol_jit_loop_sum", |n: f64| -> f64 {
@@ -292,7 +294,8 @@ impl Runtime {
                 .add_callback("__jhol_ws_connect", |url: String| -> String {
                     match tungstenite::connect(&url) {
                         Ok((mut socket, _)) => {
-                            let _ = socket.send(tungstenite::Message::Text("jhol ws connected".into()));
+                            let _ =
+                                socket.send(tungstenite::Message::Text("jhol ws connected".into()));
                             "{\"ok\":true}".to_string()
                         }
                         Err(e) => format!("{{\"ok\":false,\"error\":\"{}\"}}", e),
@@ -301,12 +304,11 @@ impl Runtime {
         }
         #[cfg(not(feature = "websocket"))]
         {
-            let _ = self.context.add_callback(
-                "__jhol_ws_connect",
-                |_url: String| -> String {
+            let _ = self
+                .context
+                .add_callback("__jhol_ws_connect", |_url: String| -> String {
                     "{\"ok\":false,\"error\":\"websocket feature not enabled\"}".to_string()
-                },
-            );
+                });
         }
 
         // rt-11: child_process spawn
@@ -337,32 +339,37 @@ impl Runtime {
         {
             let _ = self
                 .context
-                .add_callback("__jhol_db_open", |_path: String| -> String { "{\"ok\":false}".to_string() });
+                .add_callback("__jhol_db_open", |_path: String| -> String {
+                    "{\"ok\":false}".to_string()
+                });
             let _ = self
                 .context
-                .add_callback("__jhol_db_exec", |_id: i32, _sql: String| -> String { "{\"ok\":false}".to_string() });
+                .add_callback("__jhol_db_exec", |_id: i32, _sql: String| -> String {
+                    "{\"ok\":false}".to_string()
+                });
             let _ = self
                 .context
-                .add_callback("__jhol_db_close", |_id: i32, _: String| -> String { "{\"ok\":true}".to_string() });
+                .add_callback("__jhol_db_close", |_id: i32, _: String| -> String {
+                    "{\"ok\":true}".to_string()
+                });
         }
         #[cfg(not(feature = "sqlite"))]
         {
-            let _ = self.context.add_callback(
-                "__jhol_db_open",
-                |_path: String| -> String {
+            let _ = self
+                .context
+                .add_callback("__jhol_db_open", |_path: String| -> String {
                     "{\"ok\":false,\"error\":\"sqlite feature not enabled\"}".to_string()
-                },
-            );
-            let _ = self.context.add_callback(
-                "__jhol_db_exec",
-                |_id: i32, _sql: String| -> String {
-                    "{\"ok\":false,\"error\":\"sqlite feature not enabled\"}".to_string()
-                },
-            );
-            let _ = self.context.add_callback(
-                "__jhol_db_close",
-                |_id: i32, _: String| -> String { "{\"ok\":true}".to_string() },
-            );
+                });
+            let _ =
+                self.context
+                    .add_callback("__jhol_db_exec", |_id: i32, _sql: String| -> String {
+                        "{\"ok\":false,\"error\":\"sqlite feature not enabled\"}".to_string()
+                    });
+            let _ = self
+                .context
+                .add_callback("__jhol_db_close", |_id: i32, _: String| -> String {
+                    "{\"ok\":true}".to_string()
+                });
         }
 
         // rt-13: File watcher via mtime poll
@@ -558,11 +565,17 @@ if(!globalThis.process.env)globalThis.process.env={};
                 if let Ok(compiled) = func.try_into_compiled_function() {
                     let bytes = to_bytecode(raw, &compiled);
                     let _ = crate::bytecode_cache::save(hash, &bytes);
-                    run_compiled_function(&compiled)
-                        .map_err(|e| RuntimeError::Internal(format!("Bootstrap failed: {}", format_error(&e))))?;
+                    run_compiled_function(&compiled).map_err(|e| {
+                        RuntimeError::Internal(format!("Bootstrap failed: {}", format_error(&e)))
+                    })?;
                 }
             }
-            Err(e) => return Err(RuntimeError::Internal(format!("Bootstrap failed: {}", format_error(&e)))),
+            Err(e) => {
+                return Err(RuntimeError::Internal(format!(
+                    "Bootstrap failed: {}",
+                    format_error(&e)
+                )))
+            }
         }
         // L5: lazy — spectral cycle detection deferred to explicit call
         // spectral_radius() no longer called at bootstrap. No O(n³) startup penalty.
@@ -587,7 +600,8 @@ if(!globalThis.process.env)globalThis.process.env={};
                     if resolved.format == ModuleFormat::Native {
                         return None;
                     }
-                    let cpath = std::fs::canonicalize(&resolved.path).unwrap_or_else(|_| resolved.path.clone());
+                    let cpath = std::fs::canonicalize(&resolved.path)
+                        .unwrap_or_else(|_| resolved.path.clone());
                     let raw = std::fs::read_to_string(&cpath).ok()?;
                     let mtime = std::fs::metadata(&cpath).ok()?.modified().ok()?;
                     let js = if transpile::needs_transpile(&cpath) {
@@ -754,7 +768,11 @@ var require = globalThis.require;
         }
 
         let global_code = EXIT_CODE.load(Ordering::Relaxed);
-        Ok(if global_code != 0 { global_code } else { self.exit_code })
+        Ok(if global_code != 0 {
+            global_code
+        } else {
+            self.exit_code
+        })
     }
 
     pub fn exit_code(&self) -> i32 {

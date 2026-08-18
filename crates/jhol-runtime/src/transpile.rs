@@ -25,7 +25,9 @@ fn export_type_re() -> &'static regex_lite::Regex {
 #[cfg_attr(feature = "swc-transpile", allow(dead_code))]
 fn type_decl_re() -> &'static regex_lite::Regex {
     static RE: OnceLock<regex_lite::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex_lite::Regex::new(r#"(?m)^\s*(export\s+)?(type|interface|enum)\s+\w+"#).unwrap())
+    RE.get_or_init(|| {
+        regex_lite::Regex::new(r#"(?m)^\s*(export\s+)?(type|interface|enum)\s+\w+"#).unwrap()
+    })
 }
 
 /// Returns true if the source likely contains TypeScript-specific syntax.
@@ -76,7 +78,10 @@ mod swc_backend {
         let cm = Lrc::<SourceMap>::default();
         let _handler =
             Handler::with_tty_emitter(ColorConfig::Always, false, false, Some(cm.clone()));
-        let fm = cm.new_source_file(FileName::Custom(filename.to_string()).into(), source.to_string());
+        let fm = cm.new_source_file(
+            FileName::Custom(filename.to_string()).into(),
+            source.to_string(),
+        );
 
         let is_tsx = filename.ends_with(".tsx");
         let is_ts = filename.ends_with(".ts");

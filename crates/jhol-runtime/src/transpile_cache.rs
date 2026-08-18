@@ -24,7 +24,11 @@ fn cache_dir() -> PathBuf {
 }
 
 fn feature_salt() -> u64 {
-    if cfg!(feature = "swc-transpile") { 1 } else { 0 }
+    if cfg!(feature = "swc-transpile") {
+        1
+    } else {
+        0
+    }
 }
 
 fn cache_path(source_hash: u64) -> PathBuf {

@@ -36,7 +36,10 @@ impl PartialOrd for TimerEntry {
 impl Ord for TimerEntry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Min-heap: earliest deadline first, then smallest id.
-        other.deadline.cmp(&self.deadline).then_with(|| other.id.cmp(&self.id))
+        other
+            .deadline
+            .cmp(&self.deadline)
+            .then_with(|| other.id.cmp(&self.id))
     }
 }
 

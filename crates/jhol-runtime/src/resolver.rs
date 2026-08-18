@@ -177,7 +177,8 @@ impl ModuleResolver {
             return Ok(None);
         }
         let content = fs::read_to_string(&pkg_json_path).map_err(RuntimeError::IoError)?;
-        let pkg: serde_json::Value = serde_json::from_str(&content).map_err(RuntimeError::JsonError)?;
+        let pkg: serde_json::Value =
+            serde_json::from_str(&content).map_err(RuntimeError::JsonError)?;
 
         if let Some(exports) = pkg.get("exports") {
             let target = if subpath.is_empty() {
@@ -233,7 +234,11 @@ impl ModuleResolver {
         Ok(None)
     }
 
-    fn find_in_node_modules(&self, start_dir: &Path, specifier: &str) -> RuntimeResult<Option<PathBuf>> {
+    fn find_in_node_modules(
+        &self,
+        start_dir: &Path,
+        specifier: &str,
+    ) -> RuntimeResult<Option<PathBuf>> {
         let (package_name, subpath) = if specifier.starts_with('@') {
             let parts: Vec<&str> = specifier.splitn(3, '/').collect();
             if parts.len() >= 2 {
@@ -343,9 +348,7 @@ impl ModuleResolver {
             )));
         }
 
-        if specifier.starts_with("./")
-            || specifier.starts_with("../")
-            || specifier.starts_with('/')
+        if specifier.starts_with("./") || specifier.starts_with("../") || specifier.starts_with('/')
         {
             let base_dir = if base.is_dir() {
                 base.to_path_buf()
@@ -402,10 +405,7 @@ impl ModuleResolver {
         }
 
         {
-            let persistent = self
-                .persistent
-                .read()
-                .unwrap_or_else(|e| e.into_inner());
+            let persistent = self.persistent.read().unwrap_or_else(|e| e.into_inner());
             if let Some(entry) = persistent.get(&key) {
                 if let Ok(meta) = fs::metadata(&entry.path) {
                     if let Ok(mtime) = meta.modified() {
@@ -415,9 +415,11 @@ impl ModuleResolver {
                         if dur.as_secs() == entry.mtime_secs
                             && dur.subsec_nanos() == entry.mtime_nanos
                         {
-                            if let Ok(module) =
-                                Self::load_module_at(&entry.path, entry.format.clone(), entry.is_external)
-                            {
+                            if let Ok(module) = Self::load_module_at(
+                                &entry.path,
+                                entry.format.clone(),
+                                entry.is_external,
+                            ) {
                                 let arc = Arc::new(module);
                                 self.memory.insert(key, Arc::clone(&arc));
                                 return Ok(arc);
@@ -429,7 +431,8 @@ impl ModuleResolver {
         }
 
         let resolved_path = self.resolve_path(specifier, base)?;
-        let module = Self::load_module_at(&resolved_path, Self::format_for_path(&resolved_path), false)?;
+        let module =
+            Self::load_module_at(&resolved_path, Self::format_for_path(&resolved_path), false)?;
         let arc = Arc::new(module);
         self.memory.insert(key, Arc::clone(&arc));
 

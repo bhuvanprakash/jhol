@@ -5,9 +5,9 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 pub mod bytecode_cache;
 pub mod engine;
 pub mod errors;
+pub mod jit;
 #[cfg(feature = "jsc-engine")]
 pub mod jsc_engine;
-pub mod jit;
 pub mod module_cache;
 pub mod modules;
 pub mod resolver;

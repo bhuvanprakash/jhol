@@ -31,23 +31,26 @@ fn optimize_fib(code: &str) -> String {
         let param = caps.get(2).unwrap().as_str();
         let body = caps.get(3).unwrap().as_str();
         if is_fib_body(name, param, body) {
-            format!("function {}({}) {{ return __jhol_jit_fib({}); }}", name, param, param)
+            format!(
+                "function {}({}) {{ return __jhol_jit_fib({}); }}",
+                name, param, param
+            )
         } else {
             caps.get(0).unwrap().as_str().to_string()
         }
-    }).into_owned()
+    })
+    .into_owned()
 }
 
 fn is_fib_body(name: &str, param: &str, body: &str) -> bool {
     let expected_if = format!("if ({} < 2) return {};", param, param);
-    let expected_return = format!(
-        "return {}({} - 1) + {}({} - 2);",
-        name, param, name, param
-    );
+    let expected_return = format!("return {}({} - 1) + {}({} - 2);", name, param, name, param);
     let normalized: String = body.chars().filter(|c| !c.is_whitespace()).collect();
     let norm_expected_if: String = expected_if.chars().filter(|c| !c.is_whitespace()).collect();
-    let norm_expected_return: String =
-        expected_return.chars().filter(|c| !c.is_whitespace()).collect();
+    let norm_expected_return: String = expected_return
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
     normalized == format!("{}{}", norm_expected_if, norm_expected_return)
 }
 
@@ -76,7 +79,8 @@ fn optimize_loop_sum(code: &str) -> String {
         } else {
             caps.get(0).unwrap().as_str().to_string()
         }
-    }).into_owned()
+    })
+    .into_owned()
 }
 
 /// Native implementation of Fibonacci used by the JIT rewrite.

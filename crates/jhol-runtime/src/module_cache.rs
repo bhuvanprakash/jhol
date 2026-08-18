@@ -18,8 +18,8 @@ use crate::transpile;
 /// Pre-compile a single module file to QuickJS bytecode and store it in the
 /// on-disk bytecode cache.  Returns the number of bytes written.
 pub fn precompile_file(path: &Path) -> RuntimeResult<usize> {
-    let canonical = std::fs::canonicalize(path)
-        .map_err(|_| RuntimeError::FileNotFound(path.to_path_buf()))?;
+    let canonical =
+        std::fs::canonicalize(path).map_err(|_| RuntimeError::FileNotFound(path.to_path_buf()))?;
     let source = std::fs::read_to_string(&canonical).map_err(RuntimeError::IoError)?;
     let filename = canonical.to_str().unwrap_or("unknown").to_string();
 

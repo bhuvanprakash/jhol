@@ -18,9 +18,7 @@ use std::time::{Instant, SystemTime};
 
 use dashmap::DashMap;
 
-use javascriptcore::sys::{
-    JSContextRef, JSObjectRef, JSValueRef, OpaqueJSValue,
-};
+use javascriptcore::sys::{JSContextRef, JSObjectRef, JSValueRef, OpaqueJSValue};
 use javascriptcore::{evaluate_script, sys, JSContext, JSValue};
 
 use crate::errors::{RuntimeError, RuntimeResult};
@@ -206,7 +204,9 @@ unsafe extern "C" fn set_timeout_cb(
     _exception: *mut JSValueRef,
 ) -> *const OpaqueJSValue {
     let callback = arg_string(ctx, argument_count, arguments).unwrap_or_default();
-    let ms = arg_number(ctx, argument_count, arguments, 1).unwrap_or(0.0).max(0.0) as u32;
+    let ms = arg_number(ctx, argument_count, arguments, 1)
+        .unwrap_or(0.0)
+        .max(0.0) as u32;
     let id = timer::set_timeout(callback, ms);
     js_number(ctx, id as f64)
 }
@@ -220,7 +220,9 @@ unsafe extern "C" fn set_interval_cb(
     _exception: *mut JSValueRef,
 ) -> *const OpaqueJSValue {
     let callback = arg_string(ctx, argument_count, arguments).unwrap_or_default();
-    let ms = arg_number(ctx, argument_count, arguments, 1).unwrap_or(0.0).max(0.0) as u32;
+    let ms = arg_number(ctx, argument_count, arguments, 1)
+        .unwrap_or(0.0)
+        .max(0.0) as u32;
     let id = timer::set_interval(callback, ms);
     js_number(ctx, id as f64)
 }
@@ -390,7 +392,11 @@ unsafe extern "C" fn jit_loop_sum_cb(
     js_number(ctx, crate::jit::jit_loop_sum(n) as f64)
 }
 
-fn register_callback(ctx: &JSContext, name: &str, cb: javascriptcore::sys::JSObjectCallAsFunctionCallback) {
+fn register_callback(
+    ctx: &JSContext,
+    name: &str,
+    cb: javascriptcore::sys::JSObjectCallAsFunctionCallback,
+) {
     let global = ctx.global_object().expect("global object");
     let func = JSValue::new_function(ctx, name, cb);
     let _ = global.set_property(name, func);
@@ -508,7 +514,10 @@ impl JscRuntime {
         let canonical = std::fs::canonicalize(path)
             .map_err(|_| RuntimeError::FileNotFound(path.to_path_buf()))?;
         let filename = canonical.to_str().unwrap_or("unknown").to_string();
-        self.working_dir = canonical.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        self.working_dir = canonical
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_default();
 
         // File-content cache: avoid re-reading unchanged files between runs.
         let source = if let Some(entry) = file_cache().get(&canonical) {
@@ -545,9 +554,7 @@ impl JscRuntime {
 
     fn read_and_cache_file(&self, path: &Path) -> RuntimeResult<String> {
         let source = std::fs::read_to_string(path).map_err(RuntimeError::IoError)?;
-        let mtime = std::fs::metadata(path)
-            .ok()
-            .and_then(|m| m.modified().ok());
+        let mtime = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
         if let Some(mt) = mtime {
             file_cache().insert(path.to_path_buf(), (mt, Arc::from(source.clone())));
         }
@@ -574,10 +581,10 @@ impl JscRuntime {
         let hash_input = format!("{}\0{}\0{}", filename, _dirname, code);
         let hash = crate::transpile_cache::key(&hash_input);
 
-        let escaped_filename =
-            serde_json::to_string(filename).map_err(|e| RuntimeError::Internal(format!("json: {}", e)))?;
-        let escaped_dirname =
-            serde_json::to_string(&_dirname).map_err(|e| RuntimeError::Internal(format!("json: {}", e)))?;
+        let escaped_filename = serde_json::to_string(filename)
+            .map_err(|e| RuntimeError::Internal(format!("json: {}", e)))?;
+        let escaped_dirname = serde_json::to_string(&_dirname)
+            .map_err(|e| RuntimeError::Internal(format!("json: {}", e)))?;
 
         // Compile the user code as a Function object with Node-like
         // (module,exports,require,__filename,__dirname) parameters, cache it in
