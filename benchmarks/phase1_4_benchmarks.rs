@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
 use jhol_core::binary_lockfile::BinaryLockfile;
-use jhol_core::crypto::{QuantumResistantSigner, sign_package, verify_package};
+use jhol_core::crypto::{sign_package, verify_package, QuantumResistantSigner};
 use jhol_core::grm::{ResolutionRecord, ResolutionSource};
 use jhol_core::incremental_hashing::{clear_hash_cache, hash_file_cached, IncrementalHasher};
 use jhol_core::incremental_resolver::{IncrementalResolver, PackageNode};
