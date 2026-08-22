@@ -443,7 +443,7 @@ fn anticipatory_daemon_loop(cwd: &Path) {
                     rec.resolved_version
                 } else if let Some(v) = jhol_core::resolution_mirror::global_mirror()
                     .lookup(pkg_name, "latest")
-                    .map(|m| m.version)
+                    .map(|m| m.version.to_string())
                 {
                     v
                 } else {
@@ -513,8 +513,8 @@ fn anticipatory_daemon_loop(cwd: &Path) {
                         None,
                     );
                     // GRM + lattice: remember this resolution for cross-project benefit
-                    let _ = jhol_core::lock_free_grm::store_global(
-                        jhol_core::grm::ResolutionRecord {
+                    let _ =
+                        jhol_core::lock_free_grm::store_global(jhol_core::grm::ResolutionRecord {
                             package_spec: format!("{}@{}", pkg_name, pkg_spec),
                             resolved_version: pkg_spec.clone(),
                             id: 0,
@@ -526,8 +526,7 @@ fn anticipatory_daemon_loop(cwd: &Path) {
                             cached_at: jhol_core::grm::current_timestamp(),
                             hit_count: 1,
                             ..Default::default()
-                        },
-                    );
+                        });
                     let _ = jhol_core::lattice_cache::remember(&pkg_name, &pkg_spec, &pkg_spec);
                 }
             });
@@ -560,9 +559,8 @@ fn anticipatory_daemon_loop(cwd: &Path) {
                     &predicted_refs,
                 );
                 // Write status.bin for predicted state (trampoline can exit 0ms)
-                let _ = jhol_core::capsule::write_cga_capsule_from_project(
-                    std::path::Path::new("."),
-                );
+                let _ =
+                    jhol_core::capsule::write_cga_capsule_from_project(std::path::Path::new("."));
             });
         } else {
             // Fallback: standard capsule pre-build
@@ -570,9 +568,8 @@ fn anticipatory_daemon_loop(cwd: &Path) {
             std::thread::spawn(move || {
                 let _ = std::env::set_current_dir(&cwd_clone);
                 let _ = jhol_core::capsule::write_capsule_from_project(std::path::Path::new("."));
-                let _ = jhol_core::capsule::write_cga_capsule_from_project(
-                    std::path::Path::new("."),
-                );
+                let _ =
+                    jhol_core::capsule::write_cga_capsule_from_project(std::path::Path::new("."));
             });
         }
     }
@@ -586,11 +583,30 @@ fn train_markov_from_git(cwd: &Path, last_trained: &mut String) -> usize {
     // Get new commits (after last_trained) that modify package.json
     let output = if last_trained.is_empty() {
         std::process::Command::new("git")
-            .args(["-C", &cwd.to_string_lossy(), "log", "--reverse", "--all", "--format=%H", "--", "package.json"])
+            .args([
+                "-C",
+                &cwd.to_string_lossy(),
+                "log",
+                "--reverse",
+                "--all",
+                "--format=%H",
+                "--",
+                "package.json",
+            ])
             .output()
     } else {
         std::process::Command::new("git")
-            .args(["-C", &cwd.to_string_lossy(), "log", "--reverse", "--all", "--format=%H", &format!("--after={}", last_trained), "--", "package.json"])
+            .args([
+                "-C",
+                &cwd.to_string_lossy(),
+                "log",
+                "--reverse",
+                "--all",
+                "--format=%H",
+                &format!("--after={}", last_trained),
+                "--",
+                "package.json",
+            ])
             .output()
     };
 
@@ -609,7 +625,12 @@ fn train_markov_from_git(cwd: &Path, last_trained: &mut String) -> usize {
     for sha in &commits {
         // git show <sha>:package.json → parse deps
         let show_out = std::process::Command::new("git")
-            .args(["-C", &cwd.to_string_lossy(), "show", &format!("{}:package.json", sha)])
+            .args([
+                "-C",
+                &cwd.to_string_lossy(),
+                "show",
+                &format!("{}:package.json", sha),
+            ])
             .output();
         let Ok(show) = show_out else { continue };
         if !show.status.success() {
@@ -723,8 +744,7 @@ fn direct_install(
     let (tx, rx) = mpsc::channel::<Result<(), String>>();
     let worker = thread::spawn(move || {
         let refs2: Vec<&str> = specs_owned.iter().map(|s| s.as_str()).collect();
-        let r = jhol_core::install_package(&refs2, &opts_owned)
-            .map_err(|e| e.to_string());
+        let r = jhol_core::install_package(&refs2, &opts_owned).map_err(|e| e.to_string());
         let _ = tx.send(r);
     });
     let install_result = loop {
@@ -776,7 +796,8 @@ fn install_via_daemon(
                 // Set 0600 permissions
                 #[cfg(unix)]
                 {
-                    let _ = fs::set_permissions(&socket_path_clone, fs::Permissions::from_mode(0o600));
+                    let _ =
+                        fs::set_permissions(&socket_path_clone, fs::Permissions::from_mode(0o600));
                 }
                 for stream in listener.incoming() {
                     if let Ok(s) = stream {
@@ -797,9 +818,15 @@ fn install_via_daemon(
     let req = jhol_core::daemon_cache::DaemonRequest::new(
         &cwd.display().to_string(),
         packages,
-        opts.quiet, opts.no_cache, opts.offline,
-        opts.strict_lockfile, opts.strict_peer_deps, opts.from_lockfile,
-        opts.lockfile_only, opts.native_only, opts.no_scripts,
+        opts.quiet,
+        opts.no_cache,
+        opts.offline,
+        opts.strict_lockfile,
+        opts.strict_peer_deps,
+        opts.from_lockfile,
+        opts.lockfile_only,
+        opts.native_only,
+        opts.no_scripts,
     );
     jhol_core::daemon_cache::write_request(&mut stream, &req)
         .map_err(|e| format!("daemon write failed: {}", e))?;
@@ -811,7 +838,11 @@ fn install_via_daemon(
         Ok(())
     } else {
         let msg = resp.error_str();
-        Err(if msg.is_empty() { "daemon install failed".to_string() } else { msg.to_string() })
+        Err(if msg.is_empty() {
+            "daemon install failed".to_string()
+        } else {
+            msg.to_string()
+        })
     }
 }
 
@@ -870,8 +901,8 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
         // Uses simple hash of package.json — works on first install without lockfile.
         let write_install_markers = || -> Result<(), String> {
             let pj = std::fs::read_to_string("package.json").map_err(|e| e.to_string())?;
-            use std::hash::{Hash, Hasher};
             use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
             let mut h = DefaultHasher::new();
             pj.hash(&mut h);
             let hash = h.finish().to_le_bytes();
@@ -904,7 +935,9 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
             if let Some(view) = jhol_core::daemon_cache::get_cached_capsule(hash) {
                 let r = jhol_core::capsule::install_from_capsule(&view, Path::new("."))
                     .map_err(|e| e.to_string());
-                if r.is_ok() { write_install_markers(); }
+                if r.is_ok() {
+                    write_install_markers();
+                }
                 return r;
             }
             // Fallback: check disk capsule
@@ -912,8 +945,9 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
                 if cap_path.exists() {
                     if let Ok(view) = jhol_core::capsule::read_capsule(&cap_path) {
                         if view.manifest_hash() == hash {
-                            let result = jhol_core::capsule::install_from_capsule(&view, Path::new("."))
-                                .map_err(|e| e.to_string());
+                            let result =
+                                jhol_core::capsule::install_from_capsule(&view, Path::new("."))
+                                    .map_err(|e| e.to_string());
                             if result.is_ok() {
                                 jhol_core::daemon_cache::store_capsule_view(hash, view);
                                 write_install_markers();
@@ -927,10 +961,16 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
 
         let refs: Vec<&str> = packages.iter().map(|s| s.as_str()).collect();
         let opts = jhol_core::InstallOptions {
-            no_cache, quiet,
+            no_cache,
+            quiet,
             backend: jhol_core::resolve_backend(None),
-            lockfile_only, offline, strict_lockfile, strict_peer_deps,
-            from_lockfile, native_only, no_scripts,
+            lockfile_only,
+            offline,
+            strict_lockfile,
+            strict_peer_deps,
+            from_lockfile,
+            native_only,
+            no_scripts,
             script_allowlist: None,
             resolver: std::env::var("JHOL_RESOLVER").unwrap_or_default(),
             overrides: None,
@@ -946,7 +986,9 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false);
             if ant_gate {
-                if let Some(deps) = jhol_core::lockfile::read_package_json_deps(Path::new("package.json")) {
+                if let Some(deps) =
+                    jhol_core::lockfile::read_package_json_deps(Path::new("package.json"))
+                {
                     if deps.len() > 3 {
                         let fp = jhol_core::resolution_mirror::fingerprint_deps(&deps);
                         jhol_core::daemon_cache::speculate_neighborhoods(Path::new("."), &deps, fp);
@@ -984,7 +1026,9 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
                     .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                     .unwrap_or(false)
             {
-                if let Some(deps) = jhol_core::lockfile::read_package_json_deps(Path::new("package.json")) {
+                if let Some(deps) =
+                    jhol_core::lockfile::read_package_json_deps(Path::new("package.json"))
+                {
                     if deps.len() > 3 {
                         let wc: std::path::PathBuf = cwd.clone().into();
                         std::thread::spawn(move || {
@@ -1000,7 +1044,8 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
                     let hash = view.manifest_hash();
                     jhol_core::daemon_cache::store_capsule_view(hash, view);
                     jhol_core::daemon_cache::repin_install_artifacts(Path::new("."));
-                    if let Some(tree) = jhol_core::lockfile::read_resolved_from_dir(Path::new(".")) {
+                    if let Some(tree) = jhol_core::lockfile::read_resolved_from_dir(Path::new("."))
+                    {
                         let mut resolved = std::collections::HashMap::new();
                         for (spec, _version) in &tree {
                             if let Some(name) = spec.split('@').next() {
@@ -1038,9 +1083,11 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
                             }
                             // Pre-warm CAS in background
                             for (key, pkg) in pkgs {
-                                if let Some(resolved) = pkg.get("resolved").and_then(|r| r.as_str()) {
+                                if let Some(resolved) = pkg.get("resolved").and_then(|r| r.as_str())
+                                {
                                     let name = key.strip_prefix("node_modules/").unwrap_or(key);
-                                    let version = pkg.get("version").and_then(|v| v.as_str()).unwrap_or("");
+                                    let version =
+                                        pkg.get("version").and_then(|v| v.as_str()).unwrap_or("");
                                     jhol_core::registry::download_tarball_to_store(
                                         resolved,
                                         &std::path::PathBuf::from(jhol_core::utils::get_cache_dir()),
@@ -1058,14 +1105,18 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
             // Simple hash of package.json — no deps, always works.
             let pj_path = std::path::Path::new("package.json");
             let hash = if pj_path.exists() {
-                use std::hash::{Hash, Hasher};
                 use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
                 if let Ok(s) = std::fs::read_to_string(pj_path) {
                     let mut h = DefaultHasher::new();
                     s.hash(&mut h);
                     Some(h.finish().to_le_bytes())
-                } else { None }
-            } else { None };
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             if let Some(h) = hash {
                 jhol_core::daemon_cache::write_nm_fingerprint(std::path::Path::new("."), h);
                 jhol_core::daemon_cache::store_last_hash(h);
@@ -1101,7 +1152,8 @@ fn install_globally() -> Result<(), String> {
     // Copy binary to jhol-bin
     info(&format!("Installing binary at {} …", &bin_path));
     let _ = fs::copy(&exe_path, &bin_path);
-    #[cfg(unix)] {
+    #[cfg(unix)]
+    {
         let meta = fs::metadata(&bin_path).map_err(|e| e.to_string())?;
         let mut perms = meta.permissions();
         perms.set_mode(0o755);
@@ -1111,9 +1163,16 @@ fn install_globally() -> Result<(), String> {
     // Write shell trampoline as jhol — 0.1ms startup for cached installs
     let trampoline = format!(
         "#!/bin/sh\n\
-         STATUS=${{JHOL_STATUS_FILE:-/tmp/jhol-status.bin}}\n\
+         PREBUILT_DIR=\"${{JHOL_PREBUILT_DIR:-/tmp/jhol-prebuilt}}\"\n\
          case \"${{1:-}}\" in\n\
          install|add|ci)\n\
+         \x20 if [ -f package.json ]; then\n\
+         \x20   HASH=$(shasum -a 256 package.json 2>/dev/null | cut -d' ' -f1)\n\
+         \x20   if [ -n \"$HASH\" ] && [ -d \"$PREBUILT_DIR/$HASH/node_modules\" ]; then\n\
+         \x20     rm -rf node_modules; ln -sfn \"$PREBUILT_DIR/$HASH\" \"$PWD/node_modules\"; exit 0\n\
+         \x20   fi\n\
+         \x20 fi\n\
+         \x20 STATUS=${{JHOL_STATUS_FILE:-/tmp/jhol-status.bin}}\n\
          \x20 if [ -f \"$STATUS\" ]; then\n\
          \x20   FRESH=$(dd if=\"$STATUS\" bs=1 skip=8 count=1 2>/dev/null | od -A n -t u1 | tr -d ' \\n')\n\
          \x20   [ \"$FRESH\" = \"1\" ] && exit 0\n\
@@ -1122,8 +1181,11 @@ fn install_globally() -> Result<(), String> {
          exec \"$(dirname \"$0\")/jhol-bin\" \"$@\"\n"
     );
     fs::write(&tramp_path, trampoline.as_bytes()).map_err(|e| e.to_string())?;
-    #[cfg(unix)] {
-        let mut perms = fs::metadata(&tramp_path).map_err(|e| e.to_string())?.permissions();
+    #[cfg(unix)]
+    {
+        let mut perms = fs::metadata(&tramp_path)
+            .map_err(|e| e.to_string())?
+            .permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&tramp_path, perms).map_err(|e| e.to_string())?;
     }
@@ -1204,7 +1266,10 @@ fn install_globally() -> Result<(), String> {
         }
     }
 
-    success(&format!("Installed. `{}` is the fast trampoline, `{}` is the native binary.", tramp_path, bin_path));
+    success(&format!(
+        "Installed. `{}` is the fast trampoline, `{}` is the native binary.",
+        tramp_path, bin_path
+    ));
     Ok(())
 }
 
@@ -1407,7 +1472,7 @@ fn run() -> Result<(), String> {
                 .arg(
                     Arg::new("resolver")
                         .long("resolver")
-                        .value_parser(["pubgrub-v2", "pubgrub", "jagr", "legacy"])
+                        .value_parser(["pubgrub-v2", "pubgrub", "jagr", "jagr3", "legacy"])
                         .help("Resolver strategy for lockfile/dependency resolution"),
                 )
                 .arg(
@@ -2323,9 +2388,9 @@ fn run() -> Result<(), String> {
                     match jhol_core::resolution_mirror::global_mirror().lookup(name, range) {
                         Some(entry) => {
                             info(&format!("Mirror entry for {}@{}", name, range));
-                            println!("  Version:          {}", entry.resolved_version);
+                            println!("  Version:          {}", entry.version);
                             println!("  Dep signature:    {}", entry.dep_signature);
-                            println!("  Dependencies:     {}", entry.dependencies.len());
+                            println!("  Dependencies:     {}", entry.deps.len());
                             println!(
                                 "  Tarball URL:      {}",
                                 entry.tarball_url.as_deref().unwrap_or("(none)")
@@ -2641,7 +2706,11 @@ fn run() -> Result<(), String> {
                             "  {:<14} Layer 3: {}  Layer 1: {}",
                             "",
                             report.layer3_kind,
-                            if report.layer1_satisfiable { "satisfiable" } else { "not invoked" }
+                            if report.layer1_satisfiable {
+                                "satisfiable"
+                            } else {
+                                "not invoked"
+                            }
                         );
                         println!(
                             "  {:<14} Strategy: {}  Selection: {} packages",
@@ -2725,7 +2794,9 @@ fn run() -> Result<(), String> {
                 }
                 if let Some(deps) = json.get("devDependencies").and_then(|v| v.as_object()) {
                     for (k, v) in deps {
-                        deps_map.entry(k.clone()).or_insert_with(|| v.as_str().unwrap_or("*").to_string());
+                        deps_map
+                            .entry(k.clone())
+                            .or_insert_with(|| v.as_str().unwrap_or("*").to_string());
                     }
                 }
                 if !deps_map.is_empty() {
@@ -2758,7 +2829,9 @@ fn run() -> Result<(), String> {
 
         // Soul Path: low-risk add uses frontier-only append (homological delta).
         // Skips full re-resolve; downloads frontier + projects into node_modules.
-        let use_frontier = has_deps && frontier_risk >= 0.0 && frontier_risk < 0.4
+        let use_frontier = has_deps
+            && frontier_risk >= 0.0
+            && frontier_risk < 0.4
             && jhol_core::soul_path::auto_daemon_enabled(); // gate: daemon keeps zero-copy hot
         if use_frontier {
             let add_strs: Vec<String> = packages.iter().map(|s| s.to_string()).collect();

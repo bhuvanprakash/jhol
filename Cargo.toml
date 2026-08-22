@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/jhol-core", "crates/jhol-runtime"]
+members = [".", "crates/jhol-core", "crates/jhol-runtime", "crates/jhol-pipeline"]
 resolver = "2"
 
 [profile.release]

@@ -62,14 +62,10 @@ fn main() {
         .filter(|p| p.exists())
         .unwrap_or_else(|| Path::new("jhol").to_path_buf());
 
-    let err = Command::new(&real_jhol)
-        .args(&args[1..])
-        .exec();
+    let err = Command::new(&real_jhol).args(&args[1..]).exec();
 
     // If exec fails (shouldn't happen), fall back to PATH
-    let err = Command::new("jhol")
-        .args(&args[1..])
-        .exec();
+    let err = Command::new("jhol").args(&args[1..]).exec();
 
     // If we get here, exec failed
     eprintln!("{}: failed to execute jhol: {}", bin_name, err);
@@ -82,7 +78,8 @@ fn forward_to_daemon(socket_path: &Path, args: &[String]) {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| ".".to_string());
 
-    let packages: Vec<String> = args[2..].iter()
+    let packages: Vec<String> = args[2..]
+        .iter()
         .filter(|a| !a.starts_with('-'))
         .cloned()
         .collect();
@@ -116,7 +113,10 @@ fn forward_to_daemon(socket_path: &Path, args: &[String]) {
             if parsed.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
                 std::process::exit(0);
             } else {
-                let err = parsed.get("error").and_then(|v| v.as_str()).unwrap_or("daemon install failed");
+                let err = parsed
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("daemon install failed");
                 eprintln!("{}", err);
                 std::process::exit(1);
             }
