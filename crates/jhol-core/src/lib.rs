@@ -53,6 +53,7 @@ pub mod grm;
 pub mod incremental_hashing;
 pub mod incremental_resolver;
 pub mod jagr;
+pub mod jagr_infinite;
 pub mod lattice_cache;
 pub mod lock_free_grm;
 pub mod mpt_store;
@@ -90,7 +91,9 @@ pub use lockfile::{
     detect_lockfile, lockfile_integrity_complete, read_all_resolved_specs_from_dir,
     read_resolved_from_dir, LockfileKind,
 };
-pub use lockfile_write::{resolve_full_tree, write_package_lock, ResolvedPackage};
+pub use lockfile_write::{
+    resolve_full_tree, resolve_full_tree_jagr_infinite, write_package_lock, ResolvedPackage,
+};
 pub use progress::{snapshot as progress_snapshot, ProgressSnapshot};
 pub use run::run_script;
 pub use utils::{

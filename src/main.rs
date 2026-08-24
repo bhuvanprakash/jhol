@@ -1472,7 +1472,7 @@ fn run() -> Result<(), String> {
                 .arg(
                     Arg::new("resolver")
                         .long("resolver")
-                        .value_parser(["pubgrub-v2", "pubgrub", "jagr", "jagr3", "legacy"])
+                        .value_parser(["pubgrub-v2", "pubgrub", "jagr", "jagr3", "jagr-infinite", "legacy"])
                         .help("Resolver strategy for lockfile/dependency resolution"),
                 )
                 .arg(

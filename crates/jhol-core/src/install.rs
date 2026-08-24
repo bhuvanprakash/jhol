@@ -826,6 +826,33 @@ fn expand_with_transitive_dependencies(packages: &[&str]) -> Result<Vec<String>,
                 for (pkg_name, result) in fetch_results {
                     match result {
                         Ok(meta) => {
+                            // A single-version synth packument (bundled index or
+                            // manifest) can shadow the real one and cannot satisfy
+                            // a ranged constraint (e.g. @types/node ^22.13.1 on a
+                            // fresh cache). Escalate to the full packument exactly
+                            // like the lockfile writer does.
+                            let pkg_constraints =
+                                constraints.get(&pkg_name).cloned().unwrap_or_default();
+                            let is_synth = meta
+                                .get("_bundled_index_synth")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false)
+                                || meta
+                                    .get("_vortex_manifest_synth")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
+                            let meta = if is_synth
+                                && !crate::registry::meta_has_satisfying_version(
+                                    &meta,
+                                    &pkg_constraints,
+                                ) {
+                                match crate::registry::fetch_metadata_full_packument(&pkg_name) {
+                                    Ok(full) => full,
+                                    Err(_) => meta, // keep synth; error reported downstream
+                                }
+                            } else {
+                                meta
+                            };
                             metadata_cache.insert(pkg_name.clone(), meta.clone());
                             if transitive_cache_enabled() {
                                 if let Ok(mut cache) = transitive_metadata_snapshot().lock() {
@@ -1200,6 +1227,28 @@ fn get_cached_tarball_fast(
                     }
                 }
                 return Some(store_file);
+            }
+            // PRW deliberately embeds NO tarballs (binary stays small) and
+            // get_bundled_tarball always returns None. The on-disk
+            // binary-packages/index.json + *.jhol archives still hold 200
+            // pre-packed packages — materialise from those so bundled packages
+            // install without any network fetch (and work in --offline).
+            if let Some((pkg, ver)) = crate::registry::split_binary_spec(candidate) {
+                if let Ok(Some(tgz)) = crate::registry::load_binary_tarball(&pkg, &ver) {
+                    use sha2::{Digest, Sha256};
+                    let hash = hex::encode(Sha256::digest(&tgz));
+                    let store_file = store_dir.join(format!("{}.tgz", hash));
+                    if !store_file.exists() {
+                        if let Some(parent) = store_file.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        if std::fs::write(&store_file, &tgz).is_ok() {
+                            let updates = batch_updates.get_or_insert_with(HashMap::new);
+                            updates.insert(candidate.to_string(), hash);
+                        }
+                    }
+                    return Some(store_file);
+                }
             }
         }
         // Flush batch index writes once (P2)
@@ -2325,7 +2374,9 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     // Phase 4: Pre-seed store_index with all 200 bundled package hashes.
     // This lets get_cached_tarball_fast return hits immediately for any
     // bundled package without going through the lazy materialisation path.
+    profiler.mark("install_pkg_start");
     crate::registry::preseed_store_index();
+    profiler.mark("after_preseed");
 
     let download_conc = download_concurrency();
     let cache_install_conc = cache_install_concurrency().max(1);
@@ -2343,6 +2394,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
 
     // Capsule-first fast path: mmap'd zero-parse graph → install.
     if !options.lockfile_only && !options.no_cache {
+        profiler.mark("before_capsule");
         match try_capsule_install(Path::new("."), options.quiet) {
             Ok(true) => {
                 profiler.mark("capsule_fast_path");
@@ -2368,6 +2420,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     // Phase 5: DSSC-First Resolution — check spectral certs before full pipeline.
     // If all root packages are Stable-certified, skip Knot/SAT/topology entirely.
     if !options.lockfile_only {
+        profiler.mark("after_capsule");
         match dssc_first_install(packages, options, &mut profiler) {
             Ok(true) => {
                 remember_installed_packages(Path::new("node_modules"));
@@ -2436,6 +2489,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
                     packages.iter().map(|p| (*p).to_string()).collect()
                 }
             };
+            profiler.mark("after_expansion");
             let _ = crate::utils::save_expansion_cache(packages, &fresh);
             fresh
         };
@@ -2456,6 +2510,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     // Tries L0 → L1 → L2 fallback with mmap'd zero-copy reads.
     #[cfg(feature = "pipeline")]
     if !options.lockfile_only && !options.no_cache {
+        profiler.mark("before_jgrid");
         match try_jgrid_install(&requested_packages, options) {
             Ok(true) => {
                 profiler.mark("jgrid_fast_path");
@@ -2482,6 +2537,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     } else {
         utils::read_store_index()
     };
+    profiler.mark("after_store_index");
 
     // Topological wave optimization: use capsule to skip entire waves
     // of already-installed packages. Only process waves with missing packages.
@@ -2537,6 +2593,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     } else {
         std::collections::HashSet::new()
     };
+    profiler.mark("after_wave_skip");
 
     // Fast batch path: when all packages are exact-version specs (already resolved
     // by expansion cache) and the store index is populated, resolve them in a tight
@@ -2571,6 +2628,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         } else {
             // Batch path failed mid-way; fall through to sequential loop
             seen_packages.clear();
+            profiler.mark("batch_failed_midway");
         }
     }
 
@@ -2606,9 +2664,17 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
             }
 
             if !options.no_cache {
+                let start_fast = std::time::Instant::now();
                 if let Some(tarball) =
                     get_cached_tarball_fast(package, &cache_dir_for_lookup, &store_index)
                 {
+                    if std::env::var("JHOL_DEBUG_JINF").is_ok() {
+                        crate::utils::log(&format!(
+                            "[JINF] cache_fast {} {:?}",
+                            package,
+                            start_fast.elapsed()
+                        ));
+                    }
                     if !options.quiet {
                         crate::utils::log(&format!("Installing {} from cache...", package));
                     }
