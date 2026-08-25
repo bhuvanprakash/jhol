@@ -27,6 +27,34 @@ pub(crate) fn cached_version_req(spec: &str) -> Option<VersionReq> {
     parsed
 }
 
+/// True when `spec` is a bare, exact version pin (e.g. `4.1.6`, `v4.1.6`,
+/// `=4.1.6`). npm treats these as EXACT matches; `semver::VersionReq` parses a
+/// bare `4.1.6` as `^4.1.6` (caret), which wrongly matches 4.2.11. Any helper
+/// that must honour npm semantics for legacy pins must check this first.
+pub fn is_exact_version_pin(spec: &str) -> bool {
+    let s = spec.trim();
+    if s.is_empty() {
+        return false;
+    }
+    let bare = s
+        .strip_prefix('v')
+        .or_else(|| s.strip_prefix('=').map(|x| x.trim()))
+        .unwrap_or(s);
+    // A pin is exact iff it is a full three-part version (or has a prerelease/
+    // build) with no operator, wildcard, hyphen range, or partial component.
+    if bare.contains('x') || bare.contains('*') || bare.contains('-') {
+        return false;
+    }
+    if let Ok(v) = semver::Version::parse(bare) {
+        let _ = v;
+        // Reject partial pins like `1.2` or `1` (npm treats those as ranges,
+        // not exact).
+        let parts: Vec<&str> = bare.split('.').collect();
+        return parts.len() >= 3;
+    }
+    false
+}
+
 /// Global packument read-cache for O(1) lookup without holding a lock.
 /// Updated by fetch_metadata and fetch_metadata_parallel after each network fetch.
 /// This is the fast path: predictor prefetches -> cache populated -> warm installs hit this.
@@ -142,9 +170,28 @@ fn write_packument_cache(
     Ok(())
 }
 
+/// Returns true when `JHOL_OFFLINE=1`/`true` (or config offline) is set. In
+/// offline mode the registry layer must NEVER touch the network — missing
+/// entries fail fast with a clear error instead of hanging on a socket.
+pub fn offline_mode() -> bool {
+    let env = std::env::var("JHOL_OFFLINE").unwrap_or_default();
+    if env == "1" || env.eq_ignore_ascii_case("true") {
+        return true;
+    }
+    crate::config::global_config()
+        .map(|c| c.offline.unwrap_or(false))
+        .unwrap_or(false)
+}
+
 /// Fetch packument bytes via the shared HTTP client (connection pooling).
 /// Supports ETags for conditional requests and abbreviated format.
 fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>, String> {
+    if offline_mode() {
+        return Err(format!(
+            "offline mode: packument for {} not in cache (no network allowed)",
+            package
+        ));
+    }
     let path = if package.starts_with('@') {
         package.replace('/', "%2F")
     } else {
@@ -1173,6 +1220,28 @@ pub fn version_satisfies(spec: &str, version: &str) -> bool {
     if spec.is_empty() || spec == "*" {
         return Version::parse(version).is_ok();
     }
+    // npm semantics: a bare version pin (e.g. `4.1.6`) is EXACT, NOT caret.
+    // `semver::VersionReq::parse("4.1.6")` behaves like `^4.1.6` and wrongly
+    // satisfies 4.2.11. Honour the exact pin before building a VersionReq.
+    if is_exact_version_pin(spec) {
+        return {
+            let v = Version::parse(version);
+            match v {
+                Ok(v) => {
+                    let bare = spec
+                        .trim()
+                        .strip_prefix('v')
+                        .or_else(|| spec.trim().strip_prefix('=').map(|x| x.trim()))
+                        .unwrap_or(spec.trim());
+                    match Version::parse(bare) {
+                        Ok(pin) => v == pin,
+                        Err(_) => false,
+                    }
+                }
+                Err(_) => false,
+            }
+        };
+    }
     // npm supports `||` for OR-combined ranges (e.g. `^3.0.0 || ^4.0.0`); the
     // `semver` crate's VersionReq::parse rejects it, so split on `||` and accept
     // if any alternative matches.
@@ -1236,7 +1305,13 @@ pub fn resolve_range(version_strings: &[String], range: &str) -> Option<String> 
     let mut satisfying: Vec<Version> = version_strings
         .iter()
         .filter_map(|s| Version::parse(s).ok())
-        .filter(|v| req.matches(v))
+        .filter(|v| {
+            if is_exact_version_pin(range) {
+                version_satisfies(range, &v.to_string())
+            } else {
+                req.matches(v)
+            }
+        })
         .collect();
     satisfying.sort();
     satisfying.last().map(|v| v.to_string())
@@ -1254,7 +1329,11 @@ pub fn resolve_range_from_parsed(
     }
     let req = semver::VersionReq::parse(range).ok()?;
     for (ver, ver_str) in parsed.iter().rev() {
-        if req.matches(ver) {
+        if is_exact_version_pin(range) {
+            if version_satisfies(range, &ver.to_string()) {
+                return Some(ver_str.to_string());
+            }
+        } else if req.matches(ver) {
             return Some(ver_str.to_string());
         }
     }
@@ -1686,7 +1765,26 @@ fn decode_binary_package_archive(data: &[u8]) -> Result<Vec<u8>, String> {
     Ok(tarball)
 }
 
-fn load_binary_tarball(package: &str, version: &str) -> Result<Option<Vec<u8>>, String> {
+/// Split a `name@version` or `@scope/name@version` spec into (name, version).
+/// PRW mode embeds no tarballs, so on-disk lookups use the parts.
+pub fn split_binary_spec(spec: &str) -> Option<(String, String)> {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return None;
+    }
+    let at = spec.rfind('@')?;
+    if at == 0 {
+        return None;
+    }
+    let name = &spec[..at];
+    let version = &spec[at + 1..];
+    if name.is_empty() || version.is_empty() {
+        return None;
+    }
+    Some((name.to_string(), version.to_string()))
+}
+
+pub fn load_binary_tarball(package: &str, version: &str) -> Result<Option<Vec<u8>>, String> {
     let dir = match binary_packages_dir() {
         Some(dir) => dir,
         None => return Ok(None),
@@ -2298,12 +2396,24 @@ pub fn get_bundled_cache() -> &'static Mutex<HashMap<String, Vec<u8>>> {
 /// This lets `get_cached_tarball_fast` immediately find bundled packages
 /// without falling through to the materialisation path.
 pub fn preseed_store_index() {
-    let hashes = bundled_data::get_bundled_hashes();
-    if hashes.is_empty() {
-        return;
-    }
     let mut index = crate::utils::read_store_index();
     let mut changed = false;
+    // PRW mode: the embedded hash table is empty. Seed from the on-disk
+    // binary-packages index.json instead so cached lookups hit immediately.
+    if let Some(dir) = binary_packages_dir() {
+        let index_path = dir.join("index.json");
+        if let Ok(raw) = std::fs::read_to_string(&index_path) {
+            if let Ok(spec_map) = serde_json::from_str::<HashMap<String, String>>(&raw) {
+                for (spec, hash) in spec_map {
+                    if !index.contains_key(&spec) {
+                        index.insert(spec, hash);
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+    let hashes = bundled_data::get_bundled_hashes();
     for (spec, hash) in hashes {
         if !index.contains_key(*spec) {
             index.insert(spec.to_string(), hash.to_string());

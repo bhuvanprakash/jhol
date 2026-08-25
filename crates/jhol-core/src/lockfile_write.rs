@@ -5,8 +5,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use serde::{Deserialize, Serialize};
+
 use crate::jagr::jagr_resolver::{JagrResolver, ResolveRequest};
 use crate::jagr::maxsat_solver::PackageVersionVar;
+pub use crate::jagr_infinite::resolve_full_tree_jagr_infinite;
 use crate::lockfile;
 use crate::pubgrub::{can_use_minimal_selection, resolve_minimal, PackedVersion, PubGrubSolver};
 use crate::registry;
@@ -23,7 +26,7 @@ macro_rules! mutex_lock {
 }
 
 /// One resolved package entry for the lockfile.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResolvedPackage {
     pub version: String,
     pub resolved: String,
@@ -151,6 +154,35 @@ pub fn validate_root_peer_conflicts(package_json_path: &Path) -> Result<(), Stri
         .ok_or("Could not read package.json dependencies.")?;
     if deps.is_empty() {
         return Ok(());
+    }
+
+    // Fast path: a committed lockfile whose direct ranges still hold already
+    // had its peer edges validated at write time, so the redundant metadata
+    // re-fetch below is skipped. Stale or missing lockfiles fall through.
+    let lockfile_path = package_json_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("package-lock.json");
+    if lockfile_path.exists() {
+        let stale = std::fs::read_to_string(&lockfile_path)
+            .ok()
+            .and_then(|data| serde_json::from_str::<serde_json::Value>(&data).ok())
+            .and_then(|v| v.get("packages").cloned())
+            .and_then(|p| p.as_object().map(|o| o.clone()))
+            .map(|packages| {
+                deps.iter().any(|(name, spec)| {
+                    packages
+                        .get(format!("node_modules/{}", name).as_str())
+                        .and_then(|info| info.get("version"))
+                        .and_then(|v| v.as_str())
+                        .map(|ver| !crate::registry::version_satisfies(spec, ver))
+                        .unwrap_or(true)
+                })
+            })
+            .unwrap_or(true);
+        if !stale {
+            return Ok(());
+        }
     }
 
     let mut selected: HashMap<String, String> = HashMap::new();
@@ -316,6 +348,19 @@ pub fn resolve_full_tree(
             ));
             resolve_full_tree_legacy(package_json_path).map_err(|legacy_err| {
                 format!("JAGR-3 failed: {}; legacy failed: {}", jagr_err, legacy_err)
+            })
+        }),
+        "jagr-infinite" => resolve_full_tree_jagr_infinite(package_json_path).or_else(|jagr_err| {
+            if strict_resolver {
+                return Err(jagr_err);
+            }
+            crate::utils::record_fallback_reason("resolver_jagr_infinite_failed", &[]);
+            crate::utils::log(&format!(
+                "warning: JAGR-∞ failed, falling back to legacy: {}",
+                jagr_err
+            ));
+            resolve_full_tree_legacy(package_json_path).map_err(|legacy_err| {
+                format!("JAGR-∞ failed: {}; legacy failed: {}", jagr_err, legacy_err)
             })
         }),
         "jagr" | "jagr1" => resolve_full_tree_jagr(package_json_path).or_else(|jagr_err| {
