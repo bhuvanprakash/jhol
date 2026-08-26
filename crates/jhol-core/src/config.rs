@@ -192,6 +192,12 @@ pub fn load_config(dir: &Path) -> Config {
     load_config_cached(dir)
 }
 
+/// Load the config for the current working directory (cached). Used by
+/// registry/network layers that need cheap config access without a dir.
+pub fn global_config() -> Option<Config> {
+    Some(load_config(Path::new(".")))
+}
+
 fn load_config_uncached(dir: &Path) -> Config {
     let mut cfg = Config::default();
     let home = dirs_home();

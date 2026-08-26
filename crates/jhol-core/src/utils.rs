@@ -335,14 +335,16 @@ fn resolve_single_link(
     // peer deps are required at runtime (elect from the installed tree if present)
     if let Some(peers) = json.get("peerDependencies").and_then(|v| v.as_object()) {
         for (k, v) in peers {
-            deps.entry(k.clone()).or_insert_with(|| v.as_str().unwrap_or("").to_string());
+            deps.entry(k.clone())
+                .or_insert_with(|| v.as_str().unwrap_or("").to_string());
         }
     }
     // optional deps point at packages that may or may not be installed; only
     // those actually present in this tree will resolve to a link.
     if let Some(optional) = json.get("optionalDependencies").and_then(|v| v.as_object()) {
         for (k, v) in optional {
-            deps.entry(k.clone()).or_insert_with(|| v.as_str().unwrap_or("").to_string());
+            deps.entry(k.clone())
+                .or_insert_with(|| v.as_str().unwrap_or("").to_string());
         }
     }
     let _ = node_modules;
