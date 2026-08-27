@@ -97,6 +97,26 @@ fn save_trans_expansion_cache(cache_key: &str, result: &[String]) {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lockfile_driven_install_prefers_store_filling_materializer() {
+        let options = InstallOptions {
+            from_lockfile: true,
+            ..InstallOptions::default()
+        };
+
+        assert!(prefer_lockfile_materialization(&options));
+    }
+
+    #[test]
+    fn non_lockfile_install_does_not_force_lockfile_materializer() {
+        assert!(!prefer_lockfile_materialization(&InstallOptions::default()));
+    }
+}
+
 fn load_trans_expansion_cache(cache_key: &str) -> Option<Vec<String>> {
     if let Ok(dir) = trans_expansion_cache_dir() {
         let hash = trans_expansion_cache_key_hash(cache_key);
@@ -1496,6 +1516,13 @@ pub struct InstallOptions {
     pub script_allowlist: Option<std::collections::HashSet<String>>,
 }
 
+/// Lockfile entries carry exact tarball URLs, integrity values, and placement
+/// paths. Use their materializer before capsule replay because it fills a cold
+/// content store; the capsule path only reuses material already in that store.
+fn prefer_lockfile_materialization(options: &InstallOptions) -> bool {
+    options.from_lockfile
+}
+
 impl Default for InstallOptions {
     fn default() -> Self {
         Self {
@@ -2392,6 +2419,15 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     let worker_pool_seq_threshold = worker_pool_sequential_threshold();
     let legacy_chunk_scheduler = use_legacy_chunk_scheduler();
 
+    if prefer_lockfile_materialization(options) && install_lockfile_layout(options)? {
+        sync_hidden_lockfile();
+        let _ = crate::capsule::write_capsule_from_project(Path::new("."));
+        remember_installed_packages(Path::new("node_modules"));
+        crate::utils::relink_store_dependencies(Path::new("node_modules"));
+        write_install_markers();
+        return Ok(());
+    }
+
     // Capsule-first fast path: mmap'd zero-parse graph → install.
     if !options.lockfile_only && !options.no_cache {
         profiler.mark("before_capsule");
@@ -2495,16 +2531,6 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         };
         specs
     };
-
-    if options.from_lockfile {
-        if install_lockfile_layout(options)? {
-            sync_hidden_lockfile();
-            let _ = crate::capsule::write_capsule_from_project(Path::new("."));
-            remember_installed_packages(Path::new("node_modules"));
-            crate::utils::relink_store_dependencies(Path::new("node_modules"));
-            return Ok(());
-        }
-    }
 
     // JGrid Pipeline: content-addressed, clone-ready materialization.
     // Tries L0 → L1 → L2 fallback with mmap'd zero-copy reads.

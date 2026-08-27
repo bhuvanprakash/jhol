@@ -535,6 +535,7 @@ fn read_npm_lock_install_entries_from_str(s: &str) -> Option<Vec<LockfileInstall
         let resolved = val
             .get("resolved")
             .and_then(|r| r.as_str())
+            .filter(|url| !url.trim().is_empty())
             .map(|s| s.to_string())
             .unwrap_or_else(|| tarball_url_from_registry(&name, &version));
         let integrity = val
@@ -601,6 +602,7 @@ fn read_lockfile_full_entries_from_str(s: &str) -> Option<Vec<LockfileFullEntry>
         let resolved = val
             .get("resolved")
             .and_then(|r| r.as_str())
+            .filter(|url| !url.trim().is_empty())
             .map(|s| s.to_string())
             .unwrap_or_else(|| tarball_url_from_registry(&name, &version));
         let integrity = val
@@ -696,6 +698,24 @@ pub fn read_lockfile_install_entries_from_dir(dir: &Path) -> Option<Vec<Lockfile
 mod tests {
     use super::package_name_from_lockfile_key;
     use std::collections::HashMap;
+
+    #[test]
+    fn empty_resolved_url_uses_registry_tarball_url() {
+        let lockfile = r#"{
+            "lockfileVersion": 3,
+            "packages": {
+                "": { "name": "fixture" },
+                "node_modules/lodash": { "version": "4.17.21", "resolved": "" }
+            }
+        }"#;
+
+        let entries = super::read_npm_lock_install_entries_from_str(lockfile).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].resolved,
+            super::tarball_url_from_registry("lodash", "4.17.21")
+        );
+    }
 
     #[test]
     fn parse_lockfile_key_nested() {

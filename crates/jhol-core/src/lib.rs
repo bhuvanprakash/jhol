@@ -137,12 +137,39 @@ pub fn lockfile_fingerprint_matches() -> bool {
     stored_arr == computed
 }
 
-/// Check whether a jhol-specific lockfile exists.
-pub fn has_jhol_lockfile(_project_dir: &std::path::Path) -> bool {
-    let lock_path = _project_dir.join("package-lock.json");
-    std::fs::read_to_string(lock_path)
-        .map(|contents| contents.contains("\"jhol\""))
+/// Check whether an installable lockfile exists.
+///
+/// npm-compatible package locks are authoritative too; requiring a private
+/// marker wrongly sent them through cache-only capsule replay.
+pub fn has_jhol_lockfile(project_dir: &std::path::Path) -> bool {
+    crate::lockfile::read_lockfile_install_entries_from_dir(project_dir)
+        .map(|entries| !entries.is_empty())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod lockfile_presence_tests {
+    #[test]
+    fn npm_lockfile_is_authoritative_without_jhol_marker() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("package-lock.json"),
+            r#"{
+                "lockfileVersion": 3,
+                "packages": {
+                    "": { "name": "fixture" },
+                    "node_modules/a": {
+                        "version": "1.0.0",
+                        "resolved": "https://registry.npmjs.org/a/-/a-1.0.0.tgz",
+                        "integrity": "sha512-test"
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert!(super::has_jhol_lockfile(temp.path()));
+    }
 }
 
 // ── Audit re-exports (may be replaced by the full audit module later) ─────────
