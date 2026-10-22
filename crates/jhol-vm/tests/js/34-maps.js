@@ -1,0 +1,17 @@
+const m = new Map();
+m.set("a", 1);
+m.set("b", 2);
+m.set("c", 3);
+console.log(m.size);
+console.log(m.get("a"));
+console.log(m.has("b"));
+console.log(m.has("z"));
+m.delete("c");
+console.log(m.size);
+let entries = [];
+for (const [k, v] of m) entries.push(k + "=" + v);
+console.log(entries.join(","));
+console.log([...m.keys()].join(","));
+console.log([...m.values()].join(","));
+const obj = Object.fromEntries(m);
+console.log(obj.a + "," + obj.b);

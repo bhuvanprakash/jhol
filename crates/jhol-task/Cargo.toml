@@ -1,0 +1,18 @@
+[package]
+name = "jhol-task"
+version = "0.1.0"
+edition = "2021"
+description = "Task / process DAG readiness and scheduling policies"
+license-file = "../../LICENSE"
+publish = false
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+toml = "1.1.6"
+jhol-graph = { path = "../jhol-graph" }
+jhol-policy = { path = "../jhol-policy" }
+
+[dev-dependencies]
+tempfile = "3"

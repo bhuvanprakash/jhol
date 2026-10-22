@@ -1,0 +1,12 @@
+console.log(1 < 2);
+console.log(2 > 1);
+console.log(3 <= 3);
+console.log(4 >= 5);
+console.log(1 == "1");
+console.log(1 === "1");
+console.log(null == undefined);
+console.log(null === undefined);
+console.log(0 == false);
+console.log(1 !== "1");
+console.log("a" < "b");
+console.log(2 != 3);

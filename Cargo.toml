@@ -1,12 +1,34 @@
 [workspace]
-members = [".", "crates/jhol-core", "crates/jhol-runtime", "crates/jhol-pipeline"]
+members = [
+    ".",
+    "crates/jhol-core",
+    "crates/jhol-runtime",
+    "crates/jhol-bundle",
+    # Blueprint foundation crates (Phase B) — contracts first, extract further later
+    "crates/jhol-graph",
+    "crates/jhol-policy",
+    "crates/jhol-receipt",
+    "crates/jhol-adapters",
+    "crates/jhol-task",
+    "crates/jhol-env",
+    "crates/jhol-diff",
+    "crates/jhol-ai",
+    "crates/jhol-db",
+    # Phase D optional remote CAS (not a default binary dep)
+    "crates/jhol-remote",
+    "crates/jhol-trampoline",
+    "crates/jhol-vm",
+]
 resolver = "2"
 
 [profile.release]
 panic = "abort"
-lto = "thin"
+lto = "fat"
 codegen-units = 1
 strip = true
+
+[profile.release.package.jhol-trampoline]
+opt-level = "z"
 
 [package]
 name = "jhol"
@@ -19,25 +41,50 @@ repository = "https://github.com/bhuvanprakash/jhol"
 readme = "README.md"
 keywords = ["package-manager", "npm", "cache", "offline"]
 categories = ["command-line-utilities", "development-tools"]
+build = false
 
 [features]
-default = ["http-reqwest", "runtime"]
+default = ["runtime", "bundle", "bundle-swc", "http-reqwest"]  # bundler + runtime ship in the box; http-reqwest enables the optional reqwest HTTP/2 download path. Measurement does not show a hot-path win (the changelog's "no longer default" entry is stale — the module is not called by default installs); set JHOL_NO_HTTP2=1 to force the ureq path.
 http-reqwest = ["jhol-core/http-reqwest"]
+hardware-sha = ["jhol-core/hardware-sha"]
 runtime = ["jhol-runtime"]
 runtime-server = ["jhol-runtime", "jhol-runtime/http-server"]
 runtime-websocket = ["jhol-runtime", "jhol-runtime/websocket"]
 runtime-sqlite = ["jhol-runtime", "jhol-runtime/sqlite"]
+# `jhol build`: TypeScript/JSX/React/CSS bundler (crates/jhol-bundle).
+# Optional: `swc-backend` for full TS/JSX, `lightningcss` for CSS minification.
+bundle = ["dep:jhol-bundle"]
+bundle-swc = ["bundle", "jhol-bundle/swc-backend"]
+bundle-css = ["bundle", "jhol-bundle/lightningcss"]
+js-engine = ["jhol-runtime", "jhol-runtime/jsc-engine"]
+jholvm = ["jhol-runtime", "jhol-runtime/jholvm"]
 
 [dependencies]
 jhol-core = { version = "1.0.2", path = "crates/jhol-core" }
 jhol-runtime = { version = "1.0.2", path = "crates/jhol-runtime", optional = true }
+jhol-bundle = { version = "1.0.2", path = "crates/jhol-bundle", optional = true }
+jhol-adapters = { path = "crates/jhol-adapters" }
+jhol-env = { path = "crates/jhol-env" }
+jhol-receipt = { path = "crates/jhol-receipt" }
+jhol-diff = { path = "crates/jhol-diff" }
+jhol-graph = { path = "crates/jhol-graph" }
+jhol-policy = { path = "crates/jhol-policy" }
+jhol-ai = { path = "crates/jhol-ai" }
+jhol-db = { path = "crates/jhol-db" }
+jhol-task = { path = "crates/jhol-task" }
 clap = { version = "4.5", features = ["cargo"] }
+# main.rs uses dirs::config_dir() inside #[cfg(target_os = "linux")], which macOS
+# builds never compile - so this dependency was missing without anyone noticing.
+dirs = "5.0"
 clap_complete = "4"
 colored = "2.1"
 indicatif = "0.17"
 serde_json = "1.0"
+rayon = "1.8"
+globset = "0.4"
 ratatui = { version = "0.26.3", default-features = false, features = ["crossterm"] }
 crossterm = "0.27"
+mimalloc = { version = "0.1", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
@@ -46,6 +93,17 @@ dashmap = "6.1"
 parking_lot = "0.12"
 serde = { version = "1.0", features = ["derive"] }
 criterion = "0.5"
+
+# Primary engine on Apple: JavaScriptCore backend (own JIT) replaces QuickJS for
+# `jhol run` on macOS. QuickJS stays the portable fallback elsewhere; the
+# dispatch lives in jhol-runtime's lib.rs.
+[target.'cfg(target_os = "macos")'.dependencies]
+jhol-runtime = { version = "1.0.2", path = "crates/jhol-runtime", optional = true, features = ["jsc-engine"] }
+
+[[bench]]
+name = "materialization"
+path = "benchmarks/materialization.rs"
+harness = false
 
 [[bench]]
 name = "phase1_4_benchmarks"

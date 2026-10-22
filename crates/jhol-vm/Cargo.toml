@@ -1,0 +1,19 @@
+[package]
+name = "jhol-vm"
+version = "1.0.2"
+edition = "2021"
+description = "JholVM — Jhol's own native JavaScript engine: hand-written lexer, Pratt parser, bytecode compiler, register VM with inline caches, and a mark-sweep GC over one flat arena"
+license-file = "../../LICENSE"
+repository = "https://github.com/bhuvanprakash/jhol"
+readme = "README.md"
+keywords = ["javascript", "engine", "vm", "interpreter", "jit"]
+categories = ["compilers", "virtual-machine"]
+
+[features]
+default = []
+# Emit per-run GC / IC counters to stderr when JHOL_VM_STATS=1.
+stats = []
+
+[dependencies]
+libc = "0.2"
+thiserror = "2.0"

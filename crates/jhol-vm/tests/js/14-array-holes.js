@@ -1,0 +1,12 @@
+const a = [1, 2, 3];
+a.length = 5;
+console.log(a.length);
+console.log(a[3]);
+console.log(a[4] === undefined);
+console.log(a[2]);
+a[6] = 7;
+console.log(a.length);
+console.log(a[5] === undefined);
+const b = [1, , 3];
+console.log(b.length);
+console.log(b[1] === undefined);

@@ -1,0 +1,18 @@
+[package]
+name = "jhol-adapters"
+version = "0.1.0"
+edition = "2021"
+description = "Ecosystem adapter trait, registry, and native JS/Python/Rust integrations"
+license-file = "../../LICENSE"
+publish = false
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+jhol-policy = { path = "../jhol-policy" }
+jhol-receipt = { path = "../jhol-receipt" }
+jhol-graph = { path = "../jhol-graph" }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,16 @@
+const x = 5;
+console.log(x > 3 ? "big" : "small");
+console.log(x > 3 ? (x > 10 ? "huge" : "medium") : "small");
+console.log(false || "default");
+console.log(true && "yes");
+console.log(null ?? "fallback");
+console.log(0 || "zero-or");
+console.log(undefined ?? "u");
+const obj = { a: { b: { c: 42 } } };
+console.log(obj?.a?.b?.c);
+console.log(obj?.a?.z?.c);
+let counter = 0;
+const inc = () => { counter++; return true; };
+console.log(false && inc());
+console.log(counter);
+console.log((1, 2, 3));

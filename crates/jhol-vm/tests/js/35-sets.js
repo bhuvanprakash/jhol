@@ -1,0 +1,16 @@
+const s = new Set();
+s.add(1);
+s.add(2);
+s.add(2);
+s.add(3);
+console.log(s.size);
+console.log(s.has(2));
+console.log(s.has(9));
+s.delete(1);
+console.log(s.size);
+console.log([...s].join(","));
+console.log(Array.from(s).join("+"));
+const arr = [1, 1, 2, 3, 3, 4];
+const deduped = [...new Set(arr)];
+console.log(deduped.join(","));
+console.log(Array.from(new Set("hello")).join(""));

@@ -1,0 +1,18 @@
+const [a, b] = [1, 2];
+console.log(a + "-" + b);
+const [c, d, e = 9] = [3, 4];
+console.log(c + "," + d + "," + e);
+const [, second] = ["skip", "keep"];
+console.log(second);
+const { x, y } = { x: 10, y: 20 };
+console.log(x + "/" + y);
+const { x: px, z: pz = 99 } = { x: 1 };
+console.log(px + ":" + pz);
+let m = 1;
+let n = 2;
+[m, n] = [n, m];
+console.log(m + "," + n);
+const { p: { q } } = { p: { q: "nested" } };
+console.log(q);
+const [first, ...rest] = [1, 2, 3, 4];
+console.log(first + "|" + rest.join(","));

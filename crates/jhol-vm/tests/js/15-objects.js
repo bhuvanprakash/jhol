@@ -1,0 +1,18 @@
+const o = { a: 1, b: 2 };
+console.log(o.a);
+o.c = 3;
+console.log(o.c);
+console.log("a" in o);
+console.log("z" in o);
+delete o.b;
+console.log("b" in o);
+console.log(o.b === undefined);
+const p = { x: 10, y: 20 };
+console.log(Object.keys(p).join(","));
+console.log(Object.values(p).join(","));
+console.log(Object.entries(p).map(e => e.join("=")).join(","));
+const q = Object.assign({}, p, { z: 30 });
+console.log(q.x + "," + q.y + "," + q.z);
+const f = Object.freeze({ n: 1 });
+f.n = 5;
+console.log(f.n);

@@ -1,0 +1,17 @@
+[package]
+name = "jhol-receipt"
+version = "0.1.0"
+edition = "2021"
+description = "Portable execution receipts for Jhol plans and syncs"
+license-file = "../../LICENSE"
+publish = false
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+thiserror = "1.0"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"

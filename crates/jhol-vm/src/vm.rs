@@ -1,0 +1,3369 @@
+//! The JholVM interpreter.
+//!
+//! One flat register-file loop drives every function: `Call` pushes a frame and
+//! the same loop keeps going, so a JavaScript call costs a frame push and *no*
+//! Rust stack frame. Exceptions unwind through a handler table rather than
+//! through `?`, which is what lets `try/catch` work across nested calls.
+//!
+//! # Inline caches
+//!
+//! Every `GetProp`/`SetProp`/`GetGlobal` site owns an [`Ic`] slot indexed by its
+//! instruction index. The first execution runs the slow path and records the
+//! object's shape plus the slot the key was found in; from then on the site
+//! validates with one shape compare and reads the slot directly. The slot is
+//! re-validated against the key on every hit, so a stale index can never escape
+//! even if two shapes collide.
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+use std::sync::Arc;
+
+use crate::arena::{self, Arena};
+use crate::bytecode::*;
+use crate::errors::{range_error, reference_error, throw_string, type_error, VmError, VmResult};
+use crate::objects::*;
+use crate::value::{f64_to_js_string, ArithOp, Value};
+
+const MAX_FRAMES: usize = 900;
+pub const ITER_SYM: &str = "@@iterator";
+const ENUM_KEYS: &str = "__jhol_enum_keys";
+/// Register slots the VM reserves in every non-arrow frame, mirroring the
+/// compiler's layout: 0 = `this`, 1 = `new.target`.
+const THIS_SLOT: u32 = 0;
+const NEWTARGET_SLOT: u32 = 1;
+
+type PropStore = HashMap<u32, Vec<u8>>;
+
+struct Frame {
+    func: *mut JFunction,
+    /// Raw pointer into the closure's `Arc<FnProto>` (the `JFunction` this frame
+    /// was entered for keeps that `Arc` alive for the frame's whole lifetime).
+    proto: *const FnProto,
+    reg_base: usize,
+    arg_base: usize,
+    /// Absolute stack index where this frame's register window starts; the stack
+    /// is truncated back here on return. This is *not* `arg_base`, which points
+    /// into the caller's register array.
+    stack_base: usize,
+    argc: u32,
+    ip: usize,
+    this_val: Value,
+    new_target: Value,
+    super_ctor: Value,
+    /// Where the return value should be written, in absolute stack terms.
+    ret: Option<(usize, u32)>,
+    /// Some(index) when this frame is a suspended generator body.
+    gen: Option<usize>,
+    /// Per-slot string accumulation buffers. A slot that is the target of
+    /// `s += x` keeps its bytes here instead of allocating a new string per
+    /// append; `FlushStr` writes them back to the register. Because this is
+    /// never a `Value`, no other binding can observe or alias it.
+    builders: Vec<Option<Vec<u8>>>,
+    /// Temporary registers spilled during a call (receiver/callee pairs).
+    _scratch: u32,
+}
+
+impl Frame {
+    /// Borrow this frame's function prototype. Safe because the `JFunction`
+    /// this frame runs keeps the `Arc<FnProto>` alive until the frame is popped.
+    #[inline]
+    fn proto_ref(&self) -> &FnProto {
+        unsafe { &*self.proto }
+    }
+}
+
+struct Handler {
+    /// Frame index this handler belongs to.
+    frame_idx: usize,
+    catch_ip: usize,
+    /// Absolute index of the register that receives the thrown value.
+    slot: usize,
+}
+
+/// Dispatch cache for the top frame.
+///
+/// Every instruction used to re-derive the frame's raw pointers from
+/// `frames[fi].proto`, which is three separate dependent loads through an
+/// `Arc` (`code`, `consts`, `ics`) plus two Vec bounds checks — all of it
+/// identical from one instruction to the next. The cache holds them instead
+/// and is rebuilt only when the frame stack actually changes depth, which is
+/// exactly when the top frame can change.
+#[derive(Clone, Copy)]
+struct FrameCache {
+    /// `frames.len()` the cache was built for; `usize::MAX` forces a build.
+    len: usize,
+    fi: usize,
+    reg_base: usize,
+    code: *const Instr,
+    consts: *const ConstVal,
+    ics: *const Ic,
+}
+
+pub struct Vm {
+    pub stack: Vec<Value>,
+    pub frames: Vec<Frame>,
+    fc: FrameCache,
+    /// Bumped every time an accessor is installed anywhere. Together with a
+    /// prototype's identity it answers "can any setter intercept here?" without
+    /// re-walking the chain on every store.
+    /// The installed arena, captured once. `Vm` cannot outlive it: `Engine`
+    /// installs the arena before building the VM and uninstalls on drop, and no
+    /// sub-engine is ever created while one is live. Kept as a null-checked
+    /// pointer so a VM built without an arena still falls back to TLS.
+    /// Compiled counted loops, keyed by (proto address, loop-head ip). The
+    /// per-site `Ic` holds a raw code pointer for the hot check; this map owns
+    /// the executable memory.
+    jit: std::collections::HashMap<(usize, usize), crate::jit::JitLoop>,
+    arena_ptr: *mut Arena,
+    accessor_epoch: u64,
+    /// Memo for that question: `(proto identity, epoch, has_setter)`.
+    setter_scan: Option<(u64, u64, bool)>,
+    /// Per-key memo for `setter_can_intercept`: an exact
+    /// `(own shape, proto identity, epoch, key)` whose prototype chain was
+    /// already scanned for this key's `#set:` slot and came back empty, so the
+    /// store is a plain own definition.
+    ///
+    /// The coarse chain test is true for almost every object — `Object.prototype`
+    /// owns an accessor — so without this every ordinary property write walked
+    /// its prototype chain. Exact match only: a wrong entry would silently skip
+    /// a setter.
+    set_clear: [(u64, u64, u64, u64); 8],
+    set_clear_used: u32,
+    pub handlers: Vec<Handler>,
+    pub globals: *mut JObject,
+    protos: Vec<Arc<FnProto>>,
+    /// Roots that the GC must see but that live outside the register file.
+    roots: Vec<Value>,
+    last_result: Value,
+    pending: Option<VmError>,
+    /// Return value of the most recently invoked *native* function. A native
+    /// call leaves no frame behind, so `run_until` cannot observe its value;
+    /// this bridges the gap for builtin-to-JS call sites.
+    pub native_result: Value,
+    /// Suspended generator bodies, indexed by their object's `#gen` slot.
+    pub gens: Vec<GenState>,
+    pub exit_code: i32,
+    pub timers: Vec<Timer>,
+    pub timer_seq: u64,
+    pub proto_strings: HashMap<PropKey, Vec<u8>>,
+    proto_string: *mut JObject,
+    proto_object: *mut JObject,
+    proto_function: *mut JFunction,
+    proto_array: *mut JObject,
+    /// `Number.prototype` (and `Boolean.prototype`): primitives have no heap
+    /// object to hang a prototype on, so they look it up here.
+    proto_number: *mut JObject,
+    empty_array_shape: u32,
+    empty_obj_shape: u32,
+    obj_named_fn_fn: Option<NativeFn>,
+    global_ic: HashMap<u32, Value>,
+    pub depth_guard: usize,
+}
+
+#[derive(Clone)]
+pub struct Timer {
+    pub id: u64,
+    pub kind: TimerKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TimerKind {
+    Timeout,
+    Interval,
+}
+
+pub struct Engine {
+    pub vm: Vm,
+    started: bool,
+}
+
+impl Drop for Engine {
+    fn drop(&mut self) {
+        // Release the arena this engine installed, so a process (or a test
+        // suite) that builds several engines does not leak one reservation each.
+        crate::arena::Arena::uninstall();
+    }
+}
+
+#[derive(Clone)]
+pub struct TimerEntry {
+    pub id: u64,
+    pub kind: TimerKind,
+    pub fire_at: std::time::Instant,
+    pub interval: u64,
+    pub cb: Value,
+    pub args: Vec<Value>,
+}
+
+impl Vm {
+    /// The arena, reached through the pointer captured at VM construction
+    /// rather than an 8ns thread-local lookup. Mirrors what `arena::active()`
+    /// returned — it hands out the same `&'static mut` today.
+    #[inline]
+    pub fn arena_ref(&self) -> &'static mut Arena {
+        let p = self.arena_ptr;
+        if !p.is_null() {
+            unsafe { &mut *p }
+        } else {
+            arena::active()
+        }
+    }
+
+    #[inline]
+    pub fn arena(&mut self) -> &'static mut Arena {
+        self.arena_ref()
+    }
+
+    /// Register read. Bounds are a compile-time invariant: every frame resizes
+    /// the stack to its `nslots` on entry, so the index is always in range.
+    #[inline]
+    fn ld(&self, base: usize, r: u32) -> Value {
+        unsafe { *self.stack.get_unchecked(base + r as usize) }
+    }
+
+    #[inline]
+    fn st(&mut self, base: usize, r: u32, v: Value) {
+        unsafe {
+            *self.stack.get_unchecked_mut(base + r as usize) = v;
+        }
+    }
+
+    // ---------------- allocation helpers ----------------
+
+    #[cfg(test)]
+    pub(crate) fn compiled_loop_count(&self) -> usize { self.jit.len() }
+
+    pub fn new_string(&mut self, s: &str) -> Value {
+        Value::from_ptr(self.arena().alloc_string(s))
+    }
+
+    pub fn new_string_utf16(&mut self, units: &[u16]) -> Value {
+        Value::from_ptr(self.arena().alloc_string_utf16(units))
+    }
+
+    pub fn new_object(&mut self) -> Value {
+        let shape = self.empty_obj_shape;
+        let proto = Value::from_ptr(self.proto_object as *mut JObject);
+        Value::from_ptr(self.arena().alloc_object(shape, proto))
+    }
+
+    pub fn new_array(&mut self) -> Value {
+        let shape = self.empty_array_shape;
+        let proto = Value::from_ptr(self.proto_array);
+        Value::from_ptr(self.arena().alloc_array(shape, proto))
+    }
+
+    pub fn new_array_with(&mut self, items: Vec<Value>) -> Value {
+        let v = self.new_array();
+        unsafe {
+            for it in items {
+                self.as_array_mut(v).push(it);
+            }
+        }
+        v
+    }
+
+    pub fn new_function_native(&mut self, name: &str, f: NativeFn, len: u32) -> Value {
+        let proto_obj = Value::UNDEFINED;
+        let fnv = self.arena().alloc_function(JFunction::native(Value::UNDEFINED, f, proto_obj));
+        let v = Value::from_ptr(fnv);
+        let nm = self.new_string(name);
+        unsafe {
+            (*fnv).name = nm;
+            (*fnv).proto = Value::from_ptr(self.proto_function as *mut JFunction);
+            let _ = len;
+        }
+        v
+    }
+
+    /// True when `v` might have an accessor in its prototype chain. Objects
+    /// never get this bit unless an accessor is actually installed on them.
+    pub fn has_accessors(&mut self, v: Value) -> bool {
+        if !v.is_ptr() {
+            return false;
+        }
+        unsafe {
+            let tag = v.obj_tag();
+            match tag {
+                Some(TAG_OBJECT) => {
+                    v.as_object().hdr.flags & FLAG_ACCESSOR != 0
+                        || v.as_object().proto.is_ptr()
+                            && self.has_accessors(v.as_object().proto)
+                }
+                // `proto` sits at a different offset in JArray than in JObject,
+                // so the two layouts must not be read through the same cast.
+                Some(TAG_ARRAY) => {
+                    v.as_array().hdr.flags & FLAG_ACCESSOR != 0
+                        || v.as_array().proto.is_ptr()
+                            && self.has_accessors(v.as_array().proto)
+                }
+                Some(TAG_STRING) => false,
+                Some(TAG_FUNCTION) => {
+                    v.as_function().hdr.flags & FLAG_ACCESSOR != 0
+                        || v.as_function().proto.is_ptr()
+                            && self.has_accessors(v.as_function().proto)
+                }
+                _ => false,
+            }
+        }
+    }
+
+    /// Memoized dispatch, tagged by pointer so a `Number`/`Boolean` primitive
+    /// does not run the tag checks twice.
+    #[inline]
+    pub fn proto_of(&mut self, v: Value) -> Value {
+        match unsafe { v.obj_tag() } {
+            Some(TAG_OBJECT) => unsafe { v.as_object().proto },
+            Some(TAG_ARRAY) => unsafe { v.as_array().proto },
+            Some(TAG_FUNCTION) => unsafe { v.as_function().proto },
+            Some(TAG_STRING) => Value::from_ptr(self.proto_string),
+            _ => {
+                if v.is_number() || v.is_bool() {
+                    Value::from_ptr(self.proto_number)
+                } else {
+                    Value::UNDEFINED
+                }
+            }
+        }
+    }
+
+    pub fn as_object_mut(&mut self, v: Value) -> &'static mut JObject {
+        unsafe { v.as_object_mut() }
+    }
+    pub fn as_array_mut(&mut self, v: Value) -> &'static mut JArray {
+        unsafe { v.as_array_mut() }
+    }
+
+    // ---------------- property access ----------------
+
+    pub fn get_prop(&mut self, obj: Value, key: PropKey) -> VmResult<Value> {
+        self.get_prop_ic(obj, key, None)
+    }
+
+    fn accessor_keys(&mut self, base: u32, prefix: &str) -> u32 {
+        self.arena().accessor_sym(base, prefix)
+    }
+
+    /// Own-property read for objects and functions (they share the layout).
+    #[inline]
+    fn own_get(&mut self, v: Value, key: PropKey) -> Option<Value> {
+        unsafe {
+            match v.obj_tag() {
+                Some(TAG_OBJECT) => v.as_object().get(key),
+                Some(TAG_FUNCTION) => v.as_function().get(key),
+                _ => None,
+            }
+        }
+    }
+
+    #[inline]
+    fn own_set(&mut self, v: Value, key: PropKey, val: Value) {
+        unsafe {
+            match v.obj_tag() {
+                Some(TAG_OBJECT) => {
+                    v.as_object_mut().set(key, val);
+                }
+                Some(TAG_FUNCTION) => {
+                    v.as_function_mut().set(key, val);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[inline]
+    fn own_delete(&mut self, v: Value, key: PropKey) -> bool {
+        unsafe {
+            match v.obj_tag() {
+                Some(TAG_OBJECT) => v.as_object_mut().delete(key),
+                Some(TAG_FUNCTION) => v.as_function_mut().delete(key),
+                _ => false,
+            }
+        }
+    }
+
+    /// Create an own property, growing the object's shape through the arena's
+    /// transition table so inline caches stay cheap.
+    fn own_define(&mut self, v: Value, key: PropKey, val: Value) {
+        unsafe {
+            match v.obj_tag() {
+                Some(TAG_OBJECT) => {
+                    let o = v.as_object_mut();
+                    // Grow the hidden class only when the key set really
+                    // changes. Transitioning on an overwrite minted a fresh
+                    // shape for every store to an existing property, and each
+                    // shape copied its parent's key list — quadratic time and
+                    // memory for something as ordinary as `o.x = v` in a loop.
+                    if o.find_index(key).is_none() {
+                        o.shape = self.arena().shape_for(o.shape, key);
+                    }
+                    o.set(key, val);
+                }
+                Some(TAG_FUNCTION) => {
+                    let f = v.as_function_mut();
+                    if f.find_index(key).is_none() {
+                        f.shape = self.arena().shape_for(f.shape, key);
+                    }
+                    f.set(key, val);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Read `obj`'s own property (or run its own getter). `receiver` is the
+    /// object the chain started from: an accessor found on a prototype still
+    /// runs with the *receiver* as `this`, not with the prototype.
+    fn get_own_or_accessor(
+        &mut self,
+        obj: Value,
+        key: PropKey,
+        receiver: Value,
+        want_getter: bool,
+    ) -> VmResult<Value> {
+        // An index key is a real property on an object too (`cache[n] = v`), so
+        // it resolves here rather than being dropped outright.
+        let sym = match key {
+            PropKey::Sym(s) => s,
+            PropKey::Idx(_) => {
+                return Ok(unsafe {
+                    match obj.obj_tag() {
+                        Some(TAG_OBJECT) => obj.as_object().get(key).unwrap_or(Value::UNDEFINED),
+                        Some(TAG_ARRAY) => match key {
+                            PropKey::Idx(i) => obj.as_array().get_raw(i).unwrap_or(Value::UNDEFINED),
+                            PropKey::Sym(_) => Value::UNDEFINED,
+                        },
+                        _ => Value::UNDEFINED,
+                    }
+                });
+            }
+        };
+        let acc = self.accessor_keys(sym, if want_getter { "#get:" } else { "#set:" });
+        let direct = match unsafe { obj.obj_tag() } {
+            Some(TAG_OBJECT) => unsafe { obj.as_object() }.get(key),
+            Some(TAG_FUNCTION) => unsafe { obj.as_function() }.get(key),
+            Some(TAG_ARRAY) => match key {
+                PropKey::Idx(i) => unsafe { obj.as_array() }.get_raw(i),
+                PropKey::Sym(_) => None,
+            },
+            _ => None,
+        };
+        if direct.is_some() {
+            return Ok(direct.unwrap());
+        }
+        if let Some(v) = self.own_get(obj, PropKey::Sym(acc)) {
+            if v.is_function() && want_getter {
+                return self.call0(v, receiver);
+            }
+            if v.is_function() && !want_getter {
+                return Ok(v);
+            }
+        }
+        Ok(Value::UNDEFINED)
+    }
+
+    /// Core read path. `ic` is the call site's cache slot, when there is one.
+    fn get_prop_ic(&mut self, obj: Value, key: PropKey, mut ic: Option<&mut Ic>) -> VmResult<Value> {
+        if obj.is_undefined() || obj.is_null() {
+            return Err(type_error(&format!(
+                "cannot read properties of {} (reading '{}')",
+                if obj.is_null() { "null" } else { "undefined" },
+                self.prop_name(key)
+            )));
+        }
+        let cur_is_object = obj.is_object();
+        if !cur_is_object {
+            // Arrays and functions have their own fast paths.
+            match unsafe { obj.obj_tag() } {
+                Some(TAG_ARRAY) => {
+                    let a = unsafe { obj.as_array() };
+                    if let PropKey::Sym(_) = key {
+                        if self.is_length_key(key) {
+                            return Ok(Value::from_i32(a.len as i32));
+                        }
+                    }
+                    if let PropKey::Idx(i) = key {
+                        return Ok(a.get(i));
+                    }
+                }
+                Some(TAG_FUNCTION) => {
+                    if let PropKey::Sym(_) = key {
+                        if self.is_length_key(key) {
+                            let arity = unsafe { obj.as_function().arity() };
+                            return Ok(Value::from_i32(arity as i32));
+                        }
+                        if self.key_name(key) == "prototype" {
+                            return Ok(unsafe { obj.as_function().proto_obj });
+                        }
+                    }
+                }
+                Some(TAG_STRING) => {
+                    // `as_str()` is a zero-copy view into the arena. Copying the
+                    // string here used to run on EVERY property read of a
+                    // primitive — `s.charCodeAt(i)` in a loop therefore copied
+                    // the whole (growing) string twice per call, O(n²).
+                    if let PropKey::Idx(i) = key {
+                        let i = i as usize;
+                        if let Some(unit) = unsafe { obj.as_string() }.code_unit(i) {
+                            return Ok(self.new_string_utf16(&[unit]));
+                        }
+                        return Ok(Value::UNDEFINED);
+                    }
+                    if self.is_length_key(key) {
+                        let len = unsafe { obj.as_string().utf16_len as usize };
+                        return Ok(Value::from_i32(len as i32));
+                    }
+                    // Method names (`s.charCodeAt`) need no content at all —
+                    // fall through to the prototype chain below.
+                }
+                _ => {}
+            }
+        }
+
+        // Monomorphic inline-cache fast path — with cached function pointer.
+        if let Some(ref mut ic) = ic {
+            if ic.state >= 1 && obj.is_object() {
+                let o = unsafe { obj.as_object() };
+                if ic.key == key {
+                    if let Some(slot) = ic.slot_for(o.shape) {
+                        if let Some((k, v)) = o.get_at(slot as usize) {
+                            if k == key {
+                                ic.hits += 1;
+                                return Ok(v);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Array-method prototype cache — the same trick as the string one
+        // below, and the reason `arr.push(x)` in a loop no longer walks to
+        // Array.prototype (and computes a `#get:` symbol) on every iteration.
+        if obj.is_array() {
+            if let Some(ref mut ic) = ic {
+                if ic.has_arr && ic.key == key {
+                    let p = Value::from_ptr(self.proto_array);
+                    if p.is_object() {
+                        let o = unsafe { p.as_object() };
+                        if o.shape == ic.arr_shape {
+                            if let Some((k, v)) = o.get_at(ic.arr_slot as usize) {
+                                if k == key {
+                                    ic.hits += 1;
+                                    return Ok(v);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // String-primitive prototype cache. A primitive has no shape of its
+        // own, so validate against String.prototype's shape instead; the slot
+        // is then read straight out of the prototype.
+        if obj.is_string() {
+            if let Some(ref mut ic) = ic {
+                if ic.has_str && ic.key == key {
+                    let p = Value::from_ptr(self.proto_string);
+                    if p.is_object() {
+                        let o = unsafe { p.as_object() };
+                        if o.shape == ic.str_shape {
+                            if let Some((k, v)) = o.get_at(ic.str_slot as usize) {
+                                if k == key {
+                                    ic.hits += 1;
+                                    return Ok(v);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Slow path: own properties, then the prototype chain. Objects, arrays
+        // and functions all carry a property bag, so all three must be walked.
+        let mut cur = obj;
+        let mut guard = 0usize;
+        loop {
+            if cur.is_object() || cur.is_array() || cur.is_function() {
+                let found = self.get_own_or_accessor(cur, key, obj, true)?;
+                if !found.is_undefined() {
+                    // Only record an IC for the object itself: a prototype hit
+                    // is not a shape the receiver can validate against.
+                    if let Some(ref mut ic) = ic {
+                        if cur.bits() == obj.bits() {
+                            self.record_ic(ic, cur, key);
+                        }
+                        if obj.is_string() {
+                            self.record_str_ic(ic, obj, key);
+                        }
+                        if obj.is_array() {
+                            self.record_arr_ic(ic, key);
+                        }
+                    }
+                    return Ok(found);
+                }
+            } else if cur.is_string() {
+                if self.is_length_key(key) {
+                    let len = unsafe { cur.as_string().utf16_len as usize };
+                    return Ok(Value::from_i32(len as i32));
+                }
+            }
+            cur = self.proto_of(cur);
+            if !(cur.is_object() || cur.is_array() || cur.is_function() || cur.is_string()) {
+                break;
+            }
+            guard += 1;
+            if guard > 64 {
+                break;
+            }
+        }
+        Ok(Value::UNDEFINED)
+    }
+
+    /// Flag `obj` as carrying an accessor, so `set_prop` knows to scan.
+    pub fn mark_accessor(&mut self, obj: Value) {
+        // Any cached "this chain has no setter" answer is now suspect.
+        self.accessor_epoch = self.accessor_epoch.wrapping_add(1);
+        if obj.is_object() || obj.is_function() {
+            unsafe {
+                let h = match obj.obj_tag() {
+                    Some(TAG_OBJECT) => &mut obj.as_object_mut().hdr,
+                    Some(TAG_FUNCTION) => &mut obj.as_function_mut().hdr,
+                    _ => return,
+                };
+                h.flags |= FLAG_ACCESSOR;
+            }
+        }
+    }
+
+    /// Does `key` name one of the hidden `#get:`/`#set:` accessor slots?
+    fn is_accessor_key(&mut self, key: PropKey) -> bool {
+        match key {
+            PropKey::Sym(s) => {
+                let name = self.arena().sym_name(s);
+                name.starts_with("#get:") || name.starts_with("#set:")
+            }
+            PropKey::Idx(_) => false,
+        }
+    }
+
+    /// Cache where String.prototype keeps `key`, validated later against the
+    /// prototype's shape.
+    fn record_str_ic(&mut self, ic: &mut Ic, obj: Value, key: PropKey) {
+        if !obj.is_string() {
+            return;
+        }
+        let p = Value::from_ptr(self.proto_string);
+        if !p.is_object() {
+            return;
+        }
+        let o = unsafe { p.as_object() };
+        if let Some(slot) = o.find_index(key) {
+            ic.str_shape = o.shape;
+            ic.str_slot = slot as u32;
+            ic.has_str = true;
+        }
+    }
+
+    /// Cache where `Array.prototype` keeps `key`, validated later against the
+    /// prototype's shape. Mirrors `record_str_ic`; arrays own no property bag.
+    fn record_arr_ic(&mut self, ic: &mut Ic, key: PropKey) {
+        let p = Value::from_ptr(self.proto_array);
+        if !p.is_object() {
+            return;
+        }
+        let o = unsafe { p.as_object() };
+        if let Some(slot) = o.find_index(key) {
+            ic.arr_shape = o.shape;
+            ic.arr_slot = slot as u32;
+            ic.has_arr = true;
+        }
+    }
+
+    /// Can anything intercept a store of `key` to `obj` — an own accessor or
+    /// one up its prototype chain?
+    ///
+    /// The answer is recomputed only when the receiver's prototype changes or
+    /// an accessor is installed somewhere (which bumps `accessor_epoch`). The
+    /// flag invariant makes it sound: every path that installs a getter or
+    /// setter marks the object that owns it, and `has_accessors` reads each
+    /// tag's own `proto` offset rather than one layout.
+    ///
+    /// The chain test alone answers too coarsely to be useful: `Object.prototype`
+    /// owns an accessor, so "some accessor exists on this chain" is true for
+    /// nearly every object, and an ordinary `o.x = v` would then scan the chain
+    /// for `x`'s `#set:` slot on every store. The real answer is stable while
+    /// the receiver's own shape, its prototype and the epoch are, so it is
+    /// memoized per key.
+    fn setter_can_intercept(&mut self, obj: Value, key: PropKey) -> bool {
+        // Own accessors are a per-object flag, not a chain property. The
+        // receiver's own shape is only known for plain objects, and only those
+        // take part in the memo.
+        let mut shape = 0u64;
+        let mut memoizable = false;
+        unsafe {
+            match obj.obj_tag() {
+                Some(TAG_OBJECT) => {
+                    let o = obj.as_object();
+                    if o.hdr.flags & FLAG_ACCESSOR != 0 {
+                        return true;
+                    }
+                    shape = o.shape as u64;
+                    memoizable = true;
+                }
+                Some(TAG_ARRAY) => {
+                    if obj.as_array().hdr.flags & FLAG_ACCESSOR != 0 {
+                        return true;
+                    }
+                }
+                Some(TAG_FUNCTION) => {
+                    if obj.as_function().hdr.flags & FLAG_ACCESSOR != 0 {
+                        return true;
+                    }
+                }
+                _ => return true,
+            }
+        }
+        let proto = self.proto_of(obj);
+        if !proto.is_ptr() {
+            return false;
+        }
+        let pb = proto.bits();
+        let epoch = self.accessor_epoch;
+        let memo = (shape, pb, epoch, key.discriminant());
+        let slot = (memo.3 as usize ^ (shape as usize).wrapping_mul(31)) & 7;
+        if memoizable && self.set_clear_used & (1 << slot) != 0 && self.set_clear[slot] == memo {
+            return false;
+        }
+        let has = match self.setter_scan {
+            Some((b, e, has)) if b == pb && e == epoch => has,
+            _ => {
+                let has = self.has_accessors(proto);
+                self.setter_scan = Some((pb, epoch, has));
+                has
+            }
+        };
+        if !has {
+            return false;
+        }
+        // A setter for a symbol key lives at its `#set:` symbol; an indexed
+        // write cannot name one.
+        let acc = match key {
+            PropKey::Sym(sym) => self.arena().accessor_sym(sym, "#set:"),
+            PropKey::Idx(_) => return false,
+        };
+        if self.chain_setter(obj, acc) {
+            return true;
+        }
+        if memoizable {
+            self.set_clear[slot] = memo;
+            self.set_clear_used |= 1 << slot;
+        }
+        false
+    }
+
+    /// Does anything on the chain from `cur` upwards hold a function at
+    /// accessor symbol `acc`? Mirrors the store slow path's scan.
+    fn chain_setter(&mut self, mut cur: Value, acc: u32) -> bool {
+        let mut guard = 0;
+        while guard < 64 {
+            if cur.is_object() || cur.is_array() || cur.is_function() {
+                if let Some(s) = self.own_get(cur, PropKey::Sym(acc)) {
+                    if s.is_function() {
+                        return true;
+                    }
+                }
+            }
+            if !cur.is_ptr() {
+                break;
+            }
+            cur = self.proto_of(cur);
+            guard += 1;
+        }
+        false
+    }
+
+    fn record_ic(&mut self, ic: &mut Ic, obj: Value, key: PropKey) {
+        if !obj.is_object() {
+            return;
+        }
+        let o = unsafe { obj.as_object() };
+        if let Some(slot) = o.find_index(key) {
+            let sh = o.shape;
+            if ic.state == 0 {
+                ic.shape = sh;
+                ic.slot = slot as u32;
+                ic.key = key;
+                ic.state = 1;
+            } else if ic.shape != sh && ic.shape2 != sh && ic.shape3 != sh {
+                // Three layouts are recorded, then the site is treated as
+                // megamorphic: past that point another compare is worse than
+                // just walking, which is what the old two-shape cap did from
+                // the third shape onwards.
+                match ic.state {
+                    1 => {
+                        ic.shape2 = sh;
+                        ic.slot2 = slot as u32;
+                        ic.state = 2;
+                    }
+                    2 => {
+                        ic.shape3 = sh;
+                        ic.slot3 = slot as u32;
+                        ic.state = 3;
+                    }
+                    _ => ic.state = 4,
+                }
+            }
+        }
+    }
+
+    fn is_length_key(&mut self, key: PropKey) -> bool {
+        match key {
+            PropKey::Sym(s) => self.arena().sym_name(s) == "length",
+            PropKey::Idx(_) => false,
+        }
+    }
+
+    fn key_name(&mut self, key: PropKey) -> String {
+        match key {
+            PropKey::Sym(s) => self.arena_ref().sym_name(s).to_string(),
+            PropKey::Idx(_) => String::new(),
+        }
+    }
+
+    pub fn prop_name(&self, key: PropKey) -> String {
+        match key {
+            PropKey::Sym(s) => self.arena_ref().sym_name(s).to_string(),
+            PropKey::Idx(i) => i.to_string(),
+        }
+    }
+
+    pub fn key_from_value(&mut self, v: Value) -> PropKey {
+        if v.is_smi() || v.is_double() {
+            if v.is_smi() {
+                let i = v.as_i64();
+                if i >= 0 && i <= u32::MAX as i64 {
+                    return PropKey::Idx(i as u32);
+                }
+            }
+            let f = v.as_f64();
+            if f.fract() == 0.0 && f >= 0.0 && f <= u32::MAX as f64 {
+                return PropKey::Idx(f as u32);
+            }
+            let s = f64_to_js_string(f);
+            let sym = self.arena().intern_sym(&s);
+            return PropKey::Sym(sym);
+        }
+        if v.is_string() {
+            let s = unsafe { v.as_string().as_str() };
+            // A numerically-shaped string still indexes arrays.
+            if let Ok(n) = s.parse::<u32>() {
+                return PropKey::Idx(n);
+            }
+            let sym = self.arena().intern_sym(s);
+            return PropKey::Sym(sym);
+        }
+        PropKey::Sym(0)
+    }
+
+    /// Assign a property: write through a prototype accessor when one exists,
+    /// otherwise create/overwrite an own property.
+    pub fn set_prop(&mut self, obj: Value, key: PropKey, val: Value) -> VmResult<()> {
+        if obj.is_undefined() || obj.is_null() {
+            return Err(type_error("cannot set properties of null or undefined"));
+        }
+        if let Some(TAG_ARRAY) = unsafe { obj.obj_tag() } {
+            if let PropKey::Idx(i) = key {
+                self.as_array_mut(obj).set(i, val);
+                return Ok(());
+            }
+            // `arr.length = n` resizes rather than adding a property.
+            if self.is_length_key(key) {
+                let n = self.to_uint32(val).unwrap_or(0);
+                self.as_array_mut(obj).set_len(n);
+                return Ok(());
+            }
+        }
+        // Only a *setter* on the prototype intercepts an assignment. A writable
+        // data property on the prototype does NOT: `obj.x = v` creates an own
+        // property. Writing data through instead made `P_C.constructor = C`
+        // overwrite `Shape.prototype.constructor`, which turned every later
+        // `super()` into a recursive call back into the subclass.
+        //
+        // Only symbol keys can name an accessor, and the accessor symbol depends
+        // only on the key — so compute it once instead of once per prototype
+        // level. A store to an indexed array slot skips the scan entirely.
+        // Fast path: nothing on the object or up its chain can intercept, so
+        // skip the scan and the `#set:` symbol computation entirely. This is the
+        // common case — plain property writes on ordinary objects.
+        //
+        // Only objects, arrays and functions take it; primitives keep the old
+        // path so string/number prototype behavior is untouched.
+        if (obj.is_object() || obj.is_array() || obj.is_function())
+            && !self.setter_can_intercept(obj, key)
+        {
+            self.own_define(obj, key, val);
+            if obj.is_function() && self.key_name(key) == "prototype" {
+                unsafe { obj.as_function_mut() }.proto_obj = val;
+            }
+            return Ok(());
+        }
+
+        let acc = match key {
+            PropKey::Sym(sym) => Some(self.arena().accessor_sym(sym, "#set:")),
+            PropKey::Idx(_) => None,
+        };
+        let mut cur = obj;
+        let mut guard = 0;
+        loop {
+            if acc.is_some() && (cur.is_object() || cur.is_array() || cur.is_function()) {
+                let acc = acc.unwrap();
+                if let Some(setter) = self.own_get(cur, PropKey::Sym(acc)) {
+                    if setter.is_function() {
+                        self.call_direct_args(setter, obj, &[val])?;
+                        return Ok(());
+                    }
+                }
+            }
+            cur = self.proto_of(cur);
+            guard += 1;
+            if guard > 64 {
+                break;
+            }
+        }
+        // Assigning `.prototype` on a function retargets `new`, since
+        // instances take their prototype from that property.
+        self.own_define(obj, key, val);
+        if obj.is_function() && self.key_name(key) == "prototype" {
+            unsafe { obj.as_function_mut() }.proto_obj = val;
+        }
+        Ok(())
+    }
+
+    /// `Object.defineProperty`-style: always creates the property.
+    pub fn define_prop(&mut self, obj: Value, key: PropKey, val: Value) {
+        if let Some(TAG_ARRAY) = unsafe { obj.obj_tag() } {
+            if let PropKey::Idx(i) = key {
+                self.as_array_mut(obj).set(i, val);
+                return;
+            }
+        }
+        if !(obj.is_object() || obj.is_function()) {
+            return;
+        }
+        self.own_define(obj, key, val);
+    }
+
+    pub fn delete_prop(&mut self, obj: Value, key: PropKey) -> Value {
+        if obj.is_array() {
+            if let PropKey::Idx(i) = key {
+                return Value::TRUE;
+            }
+        }
+        if !obj.is_object() {
+            return Value::TRUE;
+        }
+        let o = self.as_object_mut(obj);
+        Value::from_bool(o.delete(key))
+    }
+
+    pub fn has_prop(&mut self, obj: Value, key: PropKey) -> bool {
+        let mut cur = obj;
+        let mut guard = 0;
+        while (cur.is_object() || cur.is_array() || cur.is_function() || cur.is_string()) && guard < 64 {
+            if self.own_get(cur, key).is_some() {
+                return true;
+            }
+            if cur.is_string() && self.is_length_key(key) {
+                return true;
+            }
+            cur = self.proto_of(cur);
+            guard += 1;
+        }
+        false
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeError;
+
+/// Converts any value to a JS string, allocating lazily.
+// ---------------------------------------------------------------------------
+// conversions
+// ---------------------------------------------------------------------------
+
+impl Vm {
+    pub fn to_string(&mut self, v: Value) -> VmResult<String> {
+        let prim = self.to_primitive(v, false)?;
+        // `to_primitive` hands back the same value for anything it cannot
+        // unwrap; only objects mean "give up" here, because a primitive is
+        // already its own string.
+        if prim.bits() == v.bits() && v.is_ptr() && !v.is_string() {
+            return Ok("[object Object]".into());
+        }
+        if prim.is_string() {
+            return Ok(unsafe { prim.as_string().as_str().to_string() });
+        }
+        if prim.is_smi() || prim.is_double() {
+            return Ok(f64_to_js_string(prim.as_f64()));
+        }
+        if prim.is_bool() {
+            return Ok(if prim.as_bool() { "true".into() } else { "false".into() });
+        }
+        if prim.is_null() {
+            return Ok("null".into());
+        }
+        if prim.is_undefined() {
+            return Ok("undefined".into());
+        }
+        if prim.is_array() {
+            let a = unsafe { prim.as_array() };
+            let mut parts: Vec<String> = Vec::with_capacity(a.data.len());
+            for x in a.data.iter() {
+                if x.is_empty() {
+                    parts.push(String::new());
+                } else {
+                    parts.push(self.to_string(*x)?);
+                }
+            }
+            return Ok(parts.join(","));
+        }
+        if prim.is_function() {
+            let n = unsafe { prim.as_function().name };
+            let name = if n.is_string() { unsafe { n.as_string().as_str().to_string() } } else { String::new() };
+            return Ok(format!("function {}() {{ [native code] }}", name));
+        }
+        Ok("[object Object]".into())
+    }
+
+    pub fn to_number(&mut self, v: Value) -> VmResult<f64> {
+        match () {
+            _ if v.is_smi() => Ok(v.as_i64() as f64),
+            _ if v.is_double() => Ok(f64::from_bits(v.bits())),
+            _ if v.is_bool() => Ok(if v.as_bool() { 1.0 } else { 0.0 }),
+            _ if v.is_null() => Ok(0.0),
+            _ if v.is_undefined() => Ok(f64::NAN),
+            _ if v.is_string() => {
+                let s = unsafe { v.as_string().as_str().to_string() };
+                let t = s.trim();
+                if t.is_empty() {
+                    return Ok(0.0);
+                }
+                if let Some(hex) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+                    if let Ok(n) = i64::from_str_radix(hex, 16) {
+                        return Ok(n as f64);
+                    }
+                    return Ok(f64::NAN);
+                }
+                Ok(t.parse::<f64>().unwrap_or(f64::NAN))
+            }
+            _ => {
+                let p = self.to_primitive(v, true)?;
+                // `to_primitive` only unwraps objects; if it hands back the same
+                // value we would recurse forever.
+                if p.bits() == v.bits() && v.is_ptr() {
+                    return Ok(f64::NAN);
+                }
+                self.to_number(p)
+            }
+        }
+    }
+
+    /// `to_primitive` with the default hint (`hint=false` means prefer valueOf).
+    pub fn to_primitive(&mut self, v: Value, number_hint: bool) -> VmResult<Value> {
+        if !v.is_ptr() {
+            return Ok(v);
+        }
+        let has_valueof = match unsafe { v.obj_tag() } {
+            Some(TAG_OBJECT) | Some(TAG_ARRAY) | Some(TAG_FUNCTION) => true,
+            _ => false,
+        };
+        if !has_valueof {
+            return Ok(v);
+        }
+        let order: [&str; 2] = if number_hint {
+            ["valueOf", "toString"]
+        } else {
+            ["toString", "valueOf"]
+        };
+        for name in order {
+            let sym = self.arena().intern_sym(name);
+            let f = self.get_prop(v, PropKey::Sym(sym))?;
+            if f.is_function() {
+                let base = self.stack.len();
+                self.stack.push(f);
+                self.stack.push(v);
+                let r = self.call_direct(f, v, 0)?;
+                self.stack.truncate(base);
+                if r.is_ptr() && !r.is_function() {
+                    return Ok(r);
+                }
+            } else {
+                let _ = f;
+            }
+        }
+        Err(type_error("cannot convert object to primitive value"))
+    }
+
+    pub fn to_int32(&mut self, v: Value) -> VmResult<i32> {
+        let n = self.to_number(v)?;
+        Ok(js_to_int32(n))
+    }
+
+    pub fn to_uint32(&mut self, v: Value) -> VmResult<u32> {
+        let n = self.to_number(v)?;
+        Ok(js_to_uint32(n))
+    }
+
+    // ---------------- calling ----------------
+
+    /// Call with arguments already laid out at `stack[arg_base .. arg_base+argc]`.
+    /// `ret` says where the result goes when this is a bytecode call.
+    pub fn call_value(
+        &mut self,
+        callee: Value,
+        this: Value,
+        arg_base: usize,
+        argc: u32,
+        ret: Option<(usize, u32)>,
+    ) -> VmResult<()> {
+        if !callee.is_function() {
+            let n = self.to_string(callee).unwrap_or_default();
+            return Err(type_error(&format!("{} is not a function", n)));
+        }
+        let f = unsafe { callee.as_function() };
+        if !f.bound.is_empty() {
+            let target = f.this_val;
+            let n = f.bound.len();
+            let mut argv: Vec<Value> = Vec::with_capacity(n + argc as usize);
+            for b in f.bound.iter() {
+                argv.push(*b);
+            }
+            for i in 0..argc {
+                argv.push(self.stack[arg_base + i as usize]);
+            }
+            return self.call_bound(target, this, &argv, ret);
+        }
+        match f.kind {
+            FnKind::Native(f) => {
+                // Inline the argument buffer for small calls: the vast
+                // majority of native calls (arr.push, arr.map, console.log)
+                // pass a handful of arguments, and a heap Vec per call was
+                // pure allocation traffic. Stack-allocated is also
+                // reentrancy-safe — a native that calls back into JS cannot
+                // clobber it the way a shared scratch buffer would.
+                const INLINE: usize = 8;
+                let n = argc as usize;
+                if n <= INLINE {
+                    let mut inline = [Value::UNDEFINED; INLINE];
+                    inline[..n].copy_from_slice(&self.stack[arg_base..arg_base + n]);
+                    let r = f(self, this, &inline[..n])?;
+                    self.native_result = r;
+                    if let Some((cb, d)) = ret {
+                        self.st(cb, d, r);
+                    } else {
+                        self.roots.push(r);
+                    }
+                    return Ok(());
+                }
+                let mut args: Vec<Value> = Vec::with_capacity(n);
+                for i in 0..n {
+                    args.push(self.stack[arg_base + i]);
+                }
+                let r = f(self, this, &args)?;
+                self.native_result = r;
+                if let Some((cb, d)) = ret {
+                    self.st(cb, d, r);
+                } else {
+                    self.roots.push(r);
+                }
+                Ok(())
+            }
+            FnKind::Bytecode(ref proto) => {
+                // No `Arc::clone` here: this is the hot call path (millions of
+                // calls in recursive/lambda-heavy code) and two atomic RMWs per
+                // call were pure overhead. The `JFunction` in the arena holds
+                // the only `Arc` that matters, and `callee` keeps it rooted on
+                // the operand stack for the whole call.
+                let proto: *const FnProto = &**proto;
+                let proto = unsafe { &*proto };
+                if proto.is_generator {
+                    return self.make_generator(callee, proto, this, arg_base, argc, ret);
+                }
+                // Whole-function native code, when it exists. Everything is a
+                // raw pointer into the operand stack; nothing in the native
+                // call tree allocates or grows the stack, so the pointer stays
+                // valid for the call and no collection can run while it is
+                // live. A non-zero status means "guard failed": fall through
+                // and let the interpreter evaluate the call properly.
+                let entry = proto.jit_entry.load(std::sync::atomic::Ordering::Relaxed);
+                if !entry.is_null() {
+                    let sbase = self.stack.as_mut_ptr();
+                    // SAFETY: `ret` names a slot of the caller's register
+                    // window, which is inside `stack`.
+                    let out: *mut Value = match ret {
+                        Some((cb, d)) => unsafe { sbase.add(cb + d as usize) },
+                        None => &mut self.native_result as *mut Value,
+                    };
+                    let args: *const Value = unsafe { sbase.add(arg_base) };
+                    let fun: extern "C" fn(
+                        *const Value,
+                        u32,
+                        u32,
+                        *mut Value,
+                        *const *mut crate::objects::JCell,
+                        u64,
+                    ) -> u32 = unsafe { std::mem::transmute(entry) };
+                    // x5 carries `this`: slot 0 for a non-arrow callee, ignored
+                    // by an arrow (its `this` is lexical).
+                    let st = fun(
+                        args,
+                        argc,
+                        self.frames.len() as u32,
+                        out,
+                        f.upvalues.as_ptr(),
+                        this.0,
+                    );
+                    if st == 0 {
+                        return Ok(());
+                    }
+                    let d = proto
+                        .jit_deopts
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if d + 1 >= crate::jit::NATIVE_DEOPT_LIMIT {
+                        proto.jit_entry.store(
+                            std::ptr::null_mut(),
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                    }
+                } else {
+                    let n = proto.jit_calls.load(std::sync::atomic::Ordering::Relaxed);
+                    if n < crate::jit::NATIVE_CALL_AFTER {
+                        proto
+                            .jit_calls
+                            .store(n + 1, std::sync::atomic::Ordering::Relaxed);
+                    } else if n == crate::jit::NATIVE_CALL_AFTER {
+                        proto
+                            .jit_calls
+                            .store(n + 1, std::sync::atomic::Ordering::Relaxed);
+                        if let Some(e) = crate::jit::try_compile_func(proto) {
+                            proto
+                                .jit_entry
+                                .store(e as *mut u8, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                }
+                self.enter_frame(callee, proto, this, arg_base, argc, Value::UNDEFINED, ret)
+            }
+        }
+    }
+
+    fn call_bound(
+        &mut self,
+        target: Value,
+        this: Value,
+        argv: &[Value],
+        ret: Option<(usize, u32)>,
+    ) -> VmResult<()> {
+        if !target.is_function() {
+            return Err(type_error("bound target is not a function"));
+        }
+        let base = self.stack.len();
+        self.stack.extend_from_slice(argv);
+        let r = self.call_value(target, this, base, argv.len() as u32, ret);
+        self.stack.truncate(base);
+        r
+    }
+
+    /// Direct call used by internals (`call`/`apply`/array methods) where the
+    /// arguments come from a slice rather than the register file.
+    pub fn call_direct(
+        &mut self,
+        callee: Value,
+        this: Value,
+        argc: u32,
+    ) -> VmResult<Value> {
+        let base = self.stack.len();
+        for _ in 0..argc {
+            self.stack.push(Value::UNDEFINED);
+        }
+        let depth = self.frames.len();
+        self.native_result = Value::UNDEFINED;
+        self.call_value(callee, this, base, argc, None)?;
+        // A bytecode callee pushes a frame and waits to be run; everything else
+        // (natives, generators, whole-function native code) has already left
+        // its answer in `native_result`. Deciding on the frame count rather
+        // than on the value keeps a call that legitimately returns `undefined`
+        // from being mistaken for one that never ran.
+        let r = if self.frames.len() > depth {
+            self.run_until(depth)?
+        } else {
+            self.native_result
+        };
+        self.stack.truncate(base);
+        Ok(r)
+    }
+
+    pub fn call_direct_args(&mut self, callee: Value, this: Value, args: &[Value]) -> VmResult<Value> {
+        let base = self.stack.len();
+        self.stack.extend_from_slice(args);
+        let depth = self.frames.len();
+        self.native_result = Value::UNDEFINED;
+        self.call_value(callee, this, base, args.len() as u32, None)?;
+        let r = if self.frames.len() > depth {
+            self.run_until(depth)?
+        } else {
+            self.native_result
+        };
+        self.stack.truncate(base);
+        Ok(r)
+    }
+
+    fn take_ret(&mut self) -> VmResult<Value> {
+        match self.roots.pop() {
+            Some(v) => Ok(v),
+            None => Ok(Value::UNDEFINED),
+        }
+    }
+
+    /// Pop the top frame and release everything it owns.
+    ///
+    /// Handlers installed by the frame are dropped with it. `handle_exception`
+    /// skips handlers whose frame is gone, so leaving them behind was harmless
+    /// while every return bounced back out to `run()` — but now a whole call
+    /// tree can run inside one `step()` invocation, and a `try` body that
+    /// returns without executing its `PopTry` would otherwise accumulate one
+    /// dead handler per call.
+    #[inline]
+    fn pop_frame(&mut self) -> Frame {
+        let f = self.frames.pop().unwrap();
+        while let Some(h) = self.handlers.last() {
+            if h.frame_idx >= self.frames.len() {
+                self.handlers.pop();
+            } else {
+                break;
+            }
+        }
+        self.stack.truncate(f.stack_base);
+        if let Some(g) = f.gen {
+            self.gens[g].done = true;
+        }
+        f
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn enter_frame(
+        &mut self,
+        func: Value,
+        proto: &FnProto,
+        this: Value,
+        arg_base: usize,
+        argc: u32,
+        new_target: Value,
+        ret: Option<(usize, u32)>,
+    ) -> VmResult<()> {
+        if self.frames.len() >= MAX_FRAMES {
+            return Err(throw_string("RangeError", "Maximum call stack size exceeded"));
+        }
+        let nslots = proto.nslots;
+        let reg_base = self.stack.len();
+        // Reserve up front: growing the operand stack one frame per
+        // call would re-copy the whole stack on every doubling.
+        if self.stack.capacity() < reg_base + nslots + 4096 {
+            self.stack.reserve(4096);
+        }
+        self.stack.resize(reg_base + nslots, Value::UNDEFINED);
+        let is_arrow = proto.is_arrow;
+        if !is_arrow {
+            let this_v = if this.is_undefined() { Value::UNDEFINED } else { this };
+            self.stack[reg_base + THIS_SLOT as usize] = this_v;
+            self.stack[reg_base + NEWTARGET_SLOT as usize] = Value::UNDEFINED;
+        }
+        let nparams = proto.nparams;
+        let copy = (argc as usize).min(nparams);
+        // Arrows own no `this`/`new.target` registers, so their parameters start
+        // at slot 0 instead of slot 2.
+        let param_base = if is_arrow { 0 } else { 2 };
+        for i in 0..copy {
+            self.stack[reg_base + param_base + i] = self.stack[arg_base + i];
+        }
+        let super_ctor = Value::UNDEFINED;
+        self.frames.push(Frame {
+            func: unsafe { func.as_function_mut() },
+            proto: proto as *const FnProto,
+            reg_base,
+            arg_base,
+            stack_base: reg_base,
+            argc,
+            ip: 0,
+            this_val: if is_arrow { this } else { self.stack[reg_base + THIS_SLOT as usize] },
+            new_target: if is_arrow {
+                Value::UNDEFINED
+            } else {
+                new_target
+            },
+            super_ctor,
+            ret,
+            gen: None,
+            // Empty, not `vec![None; nslots]`: the array only holds
+            // string-accumulator buffers, which most frames never use, and
+            // allocating it per call was one heap allocation per function
+            // invocation. The append/flush paths grow it on demand.
+            builders: Vec::new(),
+            _scratch: 0,
+        });
+        self.invalidate_frame_cache();
+        Ok(())
+    }
+
+    /// Fill a freshly created closure's upvalue array from the currently
+    /// running frame, boxing captured locals into cells on first use.
+    fn capture_upvalues(&mut self, proto: &FnProto, reg_base: usize, closure: Value) {
+        if proto.upval_desc.is_empty() {
+            return;
+        }
+        let mut upvals: Vec<*mut JCell> = Vec::with_capacity(proto.upval_desc.len());
+        let fi = self.frames.len() - 1;
+        for (from_local, index) in proto.upval_desc.iter() {
+            if *from_local {
+                let slot_abs = reg_base + *index as usize;
+                let cur = self.stack[slot_abs];
+                let cell = if cur.is_cell() {
+                    unsafe { cur.as_cell_mut() }
+                } else {
+                    let c = self.arena().alloc_cell(cur);
+                    let cv = Value::from_ptr(c);
+                    self.stack[slot_abs] = cv;
+                    c
+                };
+                upvals.push(cell);
+            } else {
+                let cell = unsafe {
+                    let fp = self.frames[fi].func;
+                    let slot = (*fp).upvalues.as_ptr().add(*index as usize);
+                    *slot
+                };
+                upvals.push(cell);
+            }
+        }
+        // The closure being created is the one most recently allocated.
+        if closure.is_function() {
+            unsafe {
+                closure.as_function_mut().upvalues = upvals;
+            }
+        }
+    }
+
+    pub fn new_closure(&mut self, proto_idx: u32) -> Value {
+        let proto = self.protos[proto_idx as usize].clone();
+        let v = self.new_function_native("", |_, _, _| Ok(Value::UNDEFINED), 0);
+        let f = unsafe { v.as_function_mut() };
+        f.name = Value::UNDEFINED;
+        f.kind = FnKind::Bytecode(proto.clone());
+        f.proto = Value::from_ptr(self.proto_function as *mut JFunction);
+        f.proto_obj = Value::UNDEFINED;
+        let _ = proto;
+        v
+    }
+}
+
+pub fn js_to_int32(n: f64) -> i32 {
+    if n.is_nan() || n.is_infinite() {
+        return 0;
+    }
+    let mut m = n.trunc();
+    let two32 = 4294967296.0f64;
+    m = m % two32;
+    if m < 0.0 {
+        m += two32;
+    }
+    m as i64 as i32
+}
+
+#[inline]
+pub(crate) fn int32_bitop(op: u8, x: i32, y: i32) -> Value {
+    if op == 5 { return Value::from_i64(((x as u32) >> (y & 31)) as i64); }
+    Value::from_i32(match op {
+        0 => x & y, 1 => x | y, 2 => x ^ y,
+        3 => x.wrapping_shl((y & 31) as u32), _ => x.wrapping_shr((y & 31) as u32),
+    })
+}
+
+pub fn js_to_uint32(n: f64) -> u32 {
+    js_to_int32(n) as u32
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TimerStore {
+    pub next_id: u64,
+}
+
+// ---------------------------------------------------------------------------
+// timers (single-threaded event loop)
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static TIMERS: RefCell<Vec<TimerEntry>> = RefCell::new(Vec::new());
+}
+
+pub fn push_timer(t: TimerEntry) {
+    TIMERS.with(|m| m.borrow_mut().push(t));
+}
+
+/// Pop every timer whose deadline has passed. Intervals are re-armed.
+pub fn take_due_timers(now: std::time::Instant) -> Vec<TimerEntry> {
+    let mut due: Vec<TimerEntry> = Vec::new();
+    let mut rearm: Vec<TimerEntry> = Vec::new();
+    TIMERS.with(|m| {
+        let mut v = m.borrow_mut();
+        let mut keep: Vec<TimerEntry> = Vec::new();
+        for t in v.drain(..) {
+            if t.fire_at <= now {
+                due.push(t.clone());
+                if t.kind == TimerKind::Interval {
+                    rearm.push(TimerEntry {
+                        fire_at: now + std::time::Duration::from_millis(t.interval),
+                        ..t
+                    });
+                }
+            } else {
+                keep.push(t);
+            }
+        }
+        *v = keep;
+    });
+    for t in rearm {
+        push_timer(t);
+    }
+    due
+}
+
+pub fn timer_count() -> usize {
+    TIMERS.with(|m| m.borrow().len())
+}
+
+pub fn clear_timers() {
+    TIMERS.with(|m| m.borrow_mut().clear());
+}
+
+// ---------------------------------------------------------------------------
+// comparisons & operators
+// ---------------------------------------------------------------------------
+
+impl Vm {
+    pub fn loose_eq(&mut self, a: Value, b: Value) -> VmResult<bool> {
+        if a.is_null() && b.is_undefined() || a.is_undefined() && b.is_null() {
+            return Ok(true);
+        }
+        let both_prim =
+            !(a.is_ptr() && !a.is_function()) || !(b.is_ptr() && !b.is_function());
+        if both_prim {
+            if a.is_number() && b.is_string() {
+                return Ok(a.as_f64() == self.to_number(b)?);
+            }
+            if a.is_string() && b.is_number() {
+                return Ok(self.to_number(a)? == b.as_f64());
+            }
+            if a.is_bool() && !b.is_bool() {
+                let n = if a.as_bool() { 1.0 } else { 0.0 };
+                return Ok(n == self.to_number(b)?);
+            }
+            if b.is_bool() && !a.is_bool() {
+                let n = if b.as_bool() { 1.0 } else { 0.0 };
+                return Ok(self.to_number(a)? == n);
+            }
+            return Ok(self.strict_eq(a, b)?);
+        }
+        let pa = self.to_primitive(a, false)?;
+        let pb = self.to_primitive(b, false)?;
+        self.loose_eq(pa, pb)
+    }
+
+    pub fn strict_eq(&mut self, a: Value, b: Value) -> VmResult<bool> {
+        if a.is_number() && b.is_number() {
+            if a.is_nan() || b.is_nan() {
+                return Ok(false);
+            }
+            return Ok(a.as_f64() == b.as_f64());
+        }
+        if a.is_string() && b.is_string() {
+            let x = unsafe { a.as_string() };
+            let y = unsafe { b.as_string() };
+            return Ok(if x.ascii != 0 && y.ascii != 0 {
+                unsafe { x.as_str() == y.as_str() }
+            } else { x.code_units().eq(y.code_units()) });
+        }
+        if a.is_ptr() && b.is_ptr() {
+            return Ok(a.bits() == b.bits());
+        }
+        // `===` is strict: `null !== undefined`, so only bit identity counts.
+        Ok(a.bits() == b.bits())
+    }
+
+    /// `<`, `>`, `<=`, `>=` with the string/numeric split.
+    pub fn compare(&mut self, a: Value, b: Value, op: u8) -> VmResult<Value> {
+        // Numeric fast path. Loop tests are number-vs-number millions of times;
+        // the general path below pays `to_primitive` twice, two `to_number`
+        // calls and a string branch. Semantics are identical: `to_primitive` is
+        // the identity on numbers, `to_number` too, and NaN compares false —
+        // which the general path also produces.
+        if a.is_number() && b.is_number() {
+            let x = a.as_f64();
+            let y = b.as_f64();
+            let r = if x.is_nan() || y.is_nan() {
+                false
+            } else {
+                match op {
+                    0 => x < y,
+                    1 => x > y,
+                    2 => x <= y,
+                    _ => x >= y,
+                }
+            };
+            return Ok(Value::from_bool(r));
+        }
+        let pa = self.to_primitive(a, true)?;
+        let pb = self.to_primitive(b, true)?;
+        let r = if pa.is_string() && pb.is_string() {
+            let order = unsafe { pa.as_string() }.code_units().cmp(unsafe { pb.as_string() }.code_units());
+            match op {
+                0 => order.is_lt(),
+                1 => order.is_gt(),
+                2 => !order.is_gt(),
+                _ => !order.is_lt(),
+            }
+        } else {
+            let x = self.to_number(pa)?;
+            let y = self.to_number(pb)?;
+            if x.is_nan() || y.is_nan() {
+                false
+            } else {
+                match op {
+                    0 => x < y,
+                    1 => x > y,
+                    2 => x <= y,
+                    _ => x >= y,
+                }
+            }
+        };
+        Ok(Value::from_bool(r))
+    }
+
+    pub fn instance_of(&mut self, a: Value, ctor: Value) -> VmResult<bool> {
+        if !ctor.is_function() {
+            return Err(type_error("Right-hand side of 'instanceof' is not callable"));
+        }
+        let proto = unsafe { ctor.as_function().proto_obj };
+        let mut cur = self.proto_of(a);
+        let mut guard = 0;
+        while cur.is_object() && guard < 1024 {
+            if cur.bits() == proto.bits() {
+                return Ok(true);
+            }
+            cur = self.proto_of(cur);
+            guard += 1;
+        }
+        Ok(false)
+    }
+
+    pub fn arith(&mut self, op: ArithOp, a: Value, b: Value) -> VmResult<Value> {
+        match op {
+            ArithOp::Add => {
+                if let Some(v) = a.try_num_add(&b) {
+                    return Ok(v);
+                }
+                let pa = self.to_primitive(a, false)?;
+                let pb = self.to_primitive(b, false)?;
+                if pa.is_string() || pb.is_string() {
+                    if (pa.is_string() && unsafe { pa.as_string() }.ascii == 0)
+                        || (pb.is_string() && unsafe { pb.as_string() }.ascii == 0) {
+                        let mut units: Vec<u16> = if pa.is_string() { unsafe { pa.as_string() }.code_units().collect() }
+                            else { self.to_string(pa)?.encode_utf16().collect() };
+                        if pb.is_string() { units.extend(unsafe { pb.as_string() }.code_units()); }
+                        else { units.extend(self.to_string(pb)?.encode_utf16()); }
+                        return Ok(self.new_string_utf16(&units));
+                    }
+                    let s = format!("{}{}", self.to_string(pa)?, self.to_string(pb)?);
+                    return Ok(self.new_string(&s));
+                }
+                let x = self.to_number(pa)?;
+                let y = self.to_number(pb)?;
+                Ok(Value::from_f64(x + y))
+            }
+            other => {
+                // Numeric fast path for +, -, *, /, % on two already-numeric
+                // operands. `to_number` on a Smi is nearly free, but the f64
+                // `%`/`**` it fed reached libm; the integer remainder path in
+                // `try_num_binop` keeps `i % n` in registers.
+                if let Some(v) = a.try_num_binop(&b, other) {
+                    return Ok(v);
+                }
+                let x = self.to_number(a)?;
+                let y = self.to_number(b)?;
+                Ok(Value::from_f64(match other {
+                    ArithOp::Sub => x - y,
+                    ArithOp::Mul => x * y,
+                    ArithOp::Div => x / y,
+                    ArithOp::Mod => crate::value::js_mod(x, y),
+                    ArithOp::Pow => x.powf(y),
+                    ArithOp::Add => unreachable!(),
+                }))
+            }
+        }
+    }
+
+    pub fn bitop(&mut self, op: u8, a: Value, b: Value) -> VmResult<Value> {
+        let x = if a.is_smi() { a.as_i64() as i32 } else { self.to_int32(a)? };
+        let y = if b.is_smi() { b.as_i64() as i32 } else { self.to_int32(b)? };
+        Ok(int32_bitop(op, x, y))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// the interpreter
+// ---------------------------------------------------------------------------
+
+impl Vm {
+    /// Execute one instruction.
+    /// Rebuild the dispatch cache from the current top frame.
+    fn refresh_frame_cache(&mut self) {
+        let fi = self.frames.len() - 1;
+        let f = &self.frames[fi];
+        let (reg_base, ip) = (f.reg_base, f.ip);
+        let proto = f.proto_ref();
+        let (code, consts, ics) = (
+            proto.code.as_ptr(),
+            proto.consts.as_ptr(),
+            proto.ics.as_ptr(),
+        );
+        self.fc = FrameCache {
+            len: fi + 1,
+            fi,
+            reg_base,
+            code,
+            consts,
+            ics,
+        };
+        let _ = ip;
+    }
+
+    /// The top frame's *identity* changed. `frames.len()` alone cannot catch
+    /// this — a previous call may have left the cache built for a different
+    /// frame that happened to sit at the same depth — so a push always drops
+    /// the cache instead of trusting the length comparison in `step`.
+    #[inline]
+    fn invalidate_frame_cache(&mut self) {
+        self.fc.len = usize::MAX;
+    }
+
+    fn step(&mut self) -> VmResult<Step> {
+        // A push or pop of the frame stack is the only thing that can change
+        // which frame is on top, so that single length comparison replaces the
+        // per-instruction Arc walks entirely.
+        if self.fc.len != self.frames.len() {
+            self.refresh_frame_cache();
+        }
+        // The instruction pointer stays in a register for as long as we stay
+        // in this frame. It is published back to the frame only when the frame
+        // stack changes (a call) or the frame is left (return/yield/error) —
+        // previously every single instruction paid a bounds-checked
+        // read-modify-write through `frames`, plus a `Result`/`Step` round trip
+        // back to the caller for an answer nobody read.
+        'frames: loop {
+        let fi = self.fc.fi;
+        let reg_base = self.fc.reg_base;
+        let code_ptr = self.fc.code;
+        let consts_ptr = self.fc.consts;
+        let ics_ptr = self.fc.ics;
+        let mut ip = self.frames[fi].ip;
+
+        macro_rules! next {
+            () => {{
+                ip += 1;
+                continue;
+            }};
+        }
+        /// Publish the return address and restart on whatever frame is now on
+        /// top — a call may have pushed one, so every cached frame pointer has
+        /// to be rebuilt before the next instruction is fetched.
+        macro_rules! frame_change {
+            () => {{
+                self.frames[fi].ip = ip + 1;
+                if self.fc.len != self.frames.len() {
+                    self.refresh_frame_cache();
+                }
+                continue 'frames;
+            }};
+        }
+        macro_rules! jump {
+            ($t:expr) => {{
+                ip = $t;
+                continue;
+            }};
+        }
+
+        loop {
+        let ins = unsafe { *code_ptr.add(ip) };
+        let a = ins.a;
+        let b = ins.b;
+        let c = ins.c;
+        match ins.op {
+            Op::Nop => next!(),
+            Op::Move => {
+                let v = self.ld(reg_base, b);
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::LoadK => {
+                let k = unsafe { &*consts_ptr.add(b as usize) }.clone();
+                let v = self.const_value(&k)?;
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::LoadUndefined => {
+                self.st(reg_base, a, Value::UNDEFINED);
+                next!()
+            }
+            Op::LoadNull => {
+                self.st(reg_base, a, Value::NULL);
+                next!()
+            }
+            Op::LoadTrue => {
+                self.st(reg_base, a, Value::TRUE);
+                next!()
+            }
+            Op::LoadFalse => {
+                self.st(reg_base, a, Value::FALSE);
+                next!()
+            }
+            Op::LoadThis => {
+                let v = self.frames[fi].this_val;
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::LoadNewTarget => {
+                let v = self.frames[fi].new_target;
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::NewObject => {
+                let v = self.new_object();
+                // `b` is a capacity hint: object literals count the properties
+                // they are about to store.
+                if b > 0 {
+                    unsafe { v.as_object_mut() }.reserve(b as usize);
+                }
+                self.st(reg_base, a, v);
+                next!()
+            }
+            // Fused object literal: `a` = destination, `b` = const index of the
+            // static key list, `c` = register base holding the values in the
+            // same order. The whole literal — allocation, key list, shape and
+            // property bag — is built here, so a literal no longer pays one
+            // `DefProp` dispatch plus one `shape_for` transition (which was the
+            // hottest leaf in `gc_stress`) per property.
+            Op::NewObjectLit => {
+                let keys: &[PropKey] = match unsafe { &*consts_ptr.add(b as usize) } {
+                    ConstVal::Keys(k) => k,
+                    _ => &[],
+                };
+                let n = keys.len();
+                // The literal's shape depends only on its static key list, so
+                // it is walked once per call site and cached in the site's IC.
+                let cached = unsafe { (*ics_ptr.add(ip)).obj_shape };
+                let shape = if cached != 0 {
+                    cached
+                } else {
+                    let mut s = self.empty_obj_shape;
+                    for k in keys {
+                        s = self.arena().shape_for(s, *k);
+                    }
+                    unsafe { (*(ics_ptr.add(ip) as *mut Ic)).obj_shape = s };
+                    s
+                };
+                let proto = Value::from_ptr(self.proto_object as *mut JObject);
+                let o = self.arena().alloc_object(shape, proto);
+                let v = Value::from_ptr(o);
+                unsafe {
+                    let ob = &mut *o;
+                    ob.reserve(n);
+                    for (i, k) in keys.iter().enumerate() {
+                        ob.push_prop(*k, self.ld(reg_base, c + i as u32));
+                    }
+                    if n > DENSE_MAX {
+                        ob.rebuild_index();
+                    }
+                }
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::NewArray => {
+                let n = b as usize;
+                let v = self.new_array();
+                let base = a as usize + 1;
+                for i in 0..n {
+                    let x = self.ld(reg_base, (base + i) as u32);
+                    self.as_array_mut(v).push(x);
+                }
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::NewArrayLen => next!(),
+            // Load convention: `a` = destination register, `b` = source.
+            Op::LocalAddKJ => {
+                let cur = self.ld(reg_base, a);
+                // `i++` / `i += k` in a loop: the constant is a number, so the
+                // `ConstVal` clone and the `const_value` dispatch go away, and
+                // with them the `arith` call on the overwhelmingly common
+                // integer increment. Non-numeric constants and non-numeric
+                // accumulators take the unchanged `arith` path.
+                let cv = unsafe { &*consts_ptr.add(b as usize) };
+                let y = match cv {
+                    ConstVal::Num(n) => Value::from_f64(*n),
+                    other => {
+                        let k = other.clone();
+                        self.const_value(&k)?
+                    }
+                };
+                let v = match cur.try_num_add(&y) {
+                    Some(v) => v,
+                    None => self.arith(ArithOp::Add, cur, y)?,
+                };
+                self.st(reg_base, a, v);
+                jump!(c as usize);
+            }
+            Op::LocalAddK => {
+                let cur = self.ld(reg_base, a);
+                let cv = unsafe { &*consts_ptr.add(b as usize) };
+                let y = match cv {
+                    ConstVal::Num(n) => Value::from_f64(*n),
+                    other => {
+                        let k = other.clone();
+                        self.const_value(&k)?
+                    }
+                };
+                let v = match cur.try_num_add(&y) {
+                    Some(v) => v,
+                    None => self.arith(ArithOp::Add, cur, y)?,
+                };
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::LocalAdd => {
+                let cur = self.ld(reg_base, a);
+                let rhs = self.ld(reg_base, b);
+                // Same `arith` path as `Op::Add`, so string concat, numeric
+                // fast paths and coercion stay byte-for-byte identical — the
+                // numeric case is just settled before the call.
+                let v = match cur.try_num_add(&rhs) {
+                    Some(v) => v,
+                    None => self.arith(ArithOp::Add, cur, rhs)?,
+                };
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::GetLocal => {
+                let v = self.ld(reg_base, b);
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::SetLocal => {
+                let v = self.ld(reg_base, b);
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::CellGet => {
+                let cellv = self.ld(reg_base, b);
+                let v = unsafe { (*cellv.as_cell_mut()).v };
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::CellSet => {
+                let cellv = self.ld(reg_base, a);
+                let v = self.ld(reg_base, b);
+                unsafe {
+                    (*cellv.as_cell_mut()).v = v;
+                }
+                next!()
+            }
+            // `s += x` on a local accumulator: append into the frame's byte
+            // buffer instead of allocating a new string. This is the whole
+            // fix for the O(n^2) string build — 200k appends become one
+            // amortised Vec growth rather than 200k full copies.
+            Op::AppendStr => {
+                let v = self.ld(reg_base, b);
+                let fi2 = self.frames.len() - 1;
+                let current = self.ld(reg_base, a);
+                if (v.is_string() && unsafe { v.as_string() }.ascii == 0)
+                    || (current.is_string() && unsafe { current.as_string() }.ascii == 0) {
+                    if let Some(buf) = self.frames[fi2].builders.get_mut(a as usize).and_then(Option::take) {
+                        let value = self.new_string(std::str::from_utf8(&buf).expect("string accumulator UTF-8"));
+                        self.st(reg_base, a, value);
+                    }
+                    let value = self.arith(ArithOp::Add, self.ld(reg_base, a), v)?;
+                    self.st(reg_base, a, value);
+                    next!();
+                }
+                let appended = {
+                    let s = self.to_string(v).unwrap_or_default();
+                    let slot = a as usize;
+                    let frame = &mut self.frames[fi2];
+                    if slot >= frame.builders.len() {
+                        frame.builders.resize(slot + 1, None);
+                    }
+                    let buf = frame.builders[slot].get_or_insert_with(|| {
+                        // Seed from the current register value on first append.
+                        let cur = self.stack[reg_base + slot];
+                        match cur.as_str() {
+                            Some(sv) => sv.as_bytes().to_vec(),
+                            None => Vec::new(),
+                        }
+                    });
+                    buf.extend_from_slice(s.as_bytes());
+                    buf.len()
+                };
+                let _ = appended;
+                next!()
+            }
+            // Any read of an accumulated local materialises it once and drops
+            // the buffer, so later reads take the normal path.
+            Op::FlushStr => {
+                let slot = a as usize;
+                let fi2 = self.frames.len() - 1;
+                let flushed = self.frames[fi2].builders.get(slot).and_then(|b| b.clone());
+                if let Some(buf) = flushed {
+                    let sv = String::from_utf8(buf).unwrap_or_default();
+                    let v = self.new_string(&sv);
+                    self.frames[fi2].builders[slot] = None;
+                    self.st(reg_base, a, v);
+                }
+                next!()
+            }
+            Op::CreateCell => {
+                let cur = self.ld(reg_base, a);
+                if !cur.is_cell() {
+                    let cp = self.arena().alloc_cell(cur);
+                    self.st(reg_base, a, Value::from_ptr(cp));
+                }
+                next!()
+            }
+            Op::RebindCell => {
+                let v = self.ld(reg_base, b);
+                let cp = self.arena().alloc_cell(v);
+                self.st(reg_base, a, Value::from_ptr(cp));
+                next!()
+            }
+            Op::GetUpval => {
+                let cell = unsafe {
+                    let fp = self.frames[fi].func;
+                    let slot = (*fp).upvalues.as_ptr().add(b as usize);
+                    *slot
+                };
+                let v = unsafe { (*cell).v };
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::SetUpval => {
+                let cell = unsafe {
+                    let fp = self.frames[fi].func;
+                    let slot = (*fp).upvalues.as_ptr().add(a as usize);
+                    *slot
+                };
+                let v = self.ld(reg_base, b);
+                unsafe {
+                    (*cell).v = v;
+                }
+                next!()
+            }
+            Op::BuildRest => {
+                let ab = self.frames[fi].arg_base;
+                let argc = self.frames[fi].argc;
+                let start = b as usize;
+                let v = self.new_array();
+                for i in start..argc as usize {
+                    let x = self.stack[ab + i];
+                    self.as_array_mut(v).push(x);
+                }
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::NewClosure => {
+                let k = unsafe { &*consts_ptr.add(b as usize) }.clone();
+                let idx = match k {
+                    ConstVal::Fn(i) => i,
+                    _ => 0,
+                };
+                let v = self.new_closure(idx);
+                let fp = self.protos[idx as usize].clone();
+                // Capture cells now, while this frame is still the closure's
+                // lexical parent. Rewiring on every call would be wrong for
+                // recursion: the enclosing frame of a self-call is the function
+                // itself, not the scope that created the closure.
+                        self.capture_upvalues(&fp, reg_base, v);
+                unsafe {
+                    let f = v.as_function_mut();
+                    f.kind = FnKind::Bytecode(fp);
+                    if let Some(n) = self.frames.get(fi) {
+                        let name = unsafe { (*n.func).name };
+                        let _ = name;
+                    }
+                }
+                // Give user functions a `prototype` object.
+                if !unused(v) {
+                    let po = self.new_object();
+                    unsafe {
+                        (*v.as_function_mut()).proto_obj = po;
+                        let pn = self.new_string("prototype");
+                        let _ = pn;
+                    }
+                }
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::GetGlobal => {
+                let k = unsafe { &*consts_ptr.add(b as usize) }.clone();
+                let sym = match k {
+                    ConstVal::Str(s) => match s.as_key_str() {
+                        Some(t) => self.arena().intern_sym(t),
+                        None => 0,
+                    },
+                    _ => 0,
+                };
+                let v = unsafe { (*self.globals).get(PropKey::Sym(sym)) }.unwrap_or(Value::UNDEFINED);
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::SetGlobal => {
+                let k = unsafe { &*consts_ptr.add(a as usize) }.clone();
+                let sym = self.const_sym(&k);
+                let v = self.ld(reg_base, b);
+                self.set_prop(Value::from_ptr(self.globals), PropKey::Sym(sym), v)?;
+                next!()
+            }
+            Op::DefGlobal => {
+                let k = unsafe { &*consts_ptr.add(a as usize) }.clone();
+                let sym = self.const_sym(&k);
+                let v = self.ld(reg_base, b);
+                self.define_prop(Value::from_ptr(self.globals), PropKey::Sym(sym), v);
+                next!()
+            }
+            Op::GetProp => {
+                let obj = self.ld(reg_base, b);
+                // The key lives in the IC entry this instruction already owns.
+                // Re-deriving it via `frames[fi].proto.ics[ip]` walked two
+                // bounds-checked `Vec`s on every property read.
+                let mut ic = unsafe { &mut *(ics_ptr.add(ip) as *mut Ic) };
+                let key = ic.key;
+                // Monomorphic hit without the call. `get_prop_ic` is far too
+                // large to inline into the dispatch loop, so a cached `o.a`
+                // used to pay a call and a full prologue (null check, tag
+                // switch, array/string/function probes) before reaching the
+                // three loads the cache actually needs.
+                if obj.is_object() {
+                    let o = unsafe { obj.as_object() };
+                    if let Some(slot) = ic.slot_for(o.shape) {
+                        if let Some((k, v)) = o.get_at(slot as usize) {
+                            if k == key {
+                                ic.hits += 1;
+                                self.st(reg_base, a, v);
+                                next!()
+                            }
+                        }
+                    }
+                }
+                let v = self.get_prop_ic(obj, key, Some(&mut ic))?;
+                drop(ic);
+                self.st(reg_base, a, v);
+                next!()
+            }
+            // Layout for all three: `a` = object, `b` = key constant index,
+            // `c` = value. `GetProp` differs only in that `a` is the destination.
+            Op::SetProp => {
+                let obj = self.ld(reg_base, a);
+                let key = unsafe { (*ics_ptr.add(ip)).key };
+                let v = self.ld(reg_base, c);
+                self.set_prop(obj, key, v)?;
+                next!()
+            }
+            Op::DefProp => {
+                let obj = self.ld(reg_base, a);
+                let key = unsafe { (*ics_ptr.add(ip)).key };
+                let v = self.ld(reg_base, c);
+                // Nothing reads FLAG_ACCESSOR any more; the accessor scan is a
+                // plain prototype walk. Keep the flag out so it cannot drift
+                // out of sync with the walk.
+                self.define_prop(obj, key, v);
+                next!()
+            }
+            Op::DeleteProp => {
+                let obj = self.ld(reg_base, b);
+                let key = unsafe { (*ics_ptr.add(ip)).key };
+                let v = self.delete_prop(obj, key);
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::GetIndex => {
+                let obj = self.ld(reg_base, b);
+                let kv = self.ld(reg_base, c);
+                let v = self.get_index(obj, kv)?;
+                self.st(reg_base, a, v);
+                next!()
+            }
+            // Layout matches the compiler: `a` = object, `b` = key, `c` = value.
+            Op::SetIndex => {
+                let obj = self.ld(reg_base, a);
+                let kv = self.ld(reg_base, b);
+                let val = self.ld(reg_base, c);
+                self.set_index(obj, kv, val)?;
+                next!()
+            }
+            Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Mod | Op::Pow => {
+                let x = self.ld(reg_base, b);
+                let y = self.ld(reg_base, c);
+                let op = match ins.op {
+                    Op::Add => ArithOp::Add,
+                    Op::Sub => ArithOp::Sub,
+                    Op::Mul => ArithOp::Mul,
+                    Op::Div => ArithOp::Div,
+                    Op::Mod => ArithOp::Mod,
+                    _ => ArithOp::Pow,
+                };
+                // Two already-numeric operands never reach `arith`'s slow
+                // paths, so the numeric test is done here instead of paying a
+                // call and a `VmResult` for it on every `i - 1` / `x * 2`.
+                let fast = if ins.op == Op::Add {
+                    x.try_num_add(&y)
+                } else {
+                    x.try_num_binop(&y, op)
+                };
+                if let Some(v) = fast {
+                    self.st(reg_base, a, v);
+                    next!()
+                }
+                let v = self.arith(op, x, y)?;
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::Neg => {
+                let x = self.ld(reg_base, b);
+                let n = self.to_number(x)?;
+                self.st(reg_base, a, Value::from_f64(-n));
+                next!()
+            }
+            Op::Not => {
+                let x = self.ld(reg_base, b);
+                self.st(reg_base, a, Value::from_bool(!x.to_bool()));
+                next!()
+            }
+            Op::BitNot => {
+                let x = self.to_int32(self.ld(reg_base, b))?;
+                self.st(reg_base, a, Value::from_i32(!x));
+                next!()
+            }
+            Op::TypeOf => {
+                let x = self.ld(reg_base, b);
+                let t = x.type_of();
+                let v = self.new_string(t);
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::In => {
+                let x = self.ld(reg_base, b);
+                let y = self.ld(reg_base, c);
+                let k = self.key_from_value(x);
+                let r = self.has_prop(y, k);
+                self.st(reg_base, a, Value::from_bool(r));
+                next!()
+            }
+            Op::InstanceOf => {
+                let x = self.ld(reg_base, b);
+                let y = self.ld(reg_base, c);
+                let r = self.instance_of(x, y)?;
+                self.st(reg_base, a, Value::from_bool(r));
+                next!()
+            }
+            Op::BitAnd | Op::BitOr | Op::BitXor | Op::Shl | Op::Shr | Op::UShr => {
+                let x = self.ld(reg_base, b);
+                let y = self.ld(reg_base, c);
+                let op = match ins.op {
+                    Op::BitAnd => 0u8,
+                    Op::BitOr => 1,
+                    Op::BitXor => 2,
+                    Op::Shl => 3,
+                    Op::Shr => 4,
+                    _ => 5,
+                };
+                // `(i & 1)`, `n >> 2` — two Smis are the whole story, and
+                // `bitop` is a real call, so the integer case is settled here.
+                // The coercion branch below stays identical to `bitop`'s.
+                if x.is_smi() && y.is_smi() {
+                    let xi = x.as_i64() as i32;
+                    let yi = y.as_i64() as i32;
+                    self.st(
+                        reg_base,
+                        a,
+                        int32_bitop(op, xi, yi),
+                    );
+                    next!();
+                }
+                let v = self.bitop(op, x, y)?;
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::Eq => {
+                let x = self.ld(reg_base, b);
+                let y = self.ld(reg_base, c);
+                let r = self.loose_eq(x, y)?;
+                self.st(reg_base, a, Value::from_bool(r));
+                next!()
+            }
+            Op::StrictEq => {
+                let x = self.ld(reg_base, b);
+                let y = self.ld(reg_base, c);
+                // Smi encoding is canonical, so two integers are `===` exactly
+                // when their bits match. Everything else (strings by content,
+                // objects by identity) still goes through `strict_eq`.
+                let r = if x.is_smi() && y.is_smi() {
+                    x.0 == y.0
+                } else {
+                    self.strict_eq(x, y)?
+                };
+                self.st(reg_base, a, Value::from_bool(r));
+                next!()
+            }
+            // `dst = regs[b] <op> consts[c]`. One decode, one dispatch: the
+            // `LoadK` that used to materialise the constant is gone, and when
+            // the left operand is a local the `GetLocal` is gone too.
+            Op::BinOpK(sub) => {
+                let x = self.ld(reg_base, b);
+                let cv = unsafe { &*consts_ptr.add(c as usize) };
+                let y = match cv {
+                    ConstVal::Num(n) => Value::from_f64(*n),
+                    other => {
+                        let k = other.clone();
+                        self.const_value(&k)?
+                    }
+                };
+                let v = if sub <= 4 {
+                    let op = match sub {
+                        0 => ArithOp::Add,
+                        1 => ArithOp::Sub,
+                        2 => ArithOp::Mul,
+                        3 => ArithOp::Div,
+                        _ => ArithOp::Mod,
+                    };
+                    // Two numeric operands never reach `arith`'s coercion
+                    // paths, and `arith` is not inlined into the dispatch loop,
+                    // so the check that always succeeds is done here instead.
+                    match if sub == 0 {
+                        x.try_num_add(&y)
+                    } else {
+                        x.try_num_binop(&y, op)
+                    } {
+                        Some(v) => v,
+                        None => self.arith(op, x, y)?,
+                    }
+                } else if x.is_number() && y.is_number() {
+                    let xf = x.as_f64();
+                    let yf = y.as_f64();
+                    Value::from_bool(
+                        !(xf.is_nan() || yf.is_nan())
+                            && match sub {
+                                5 => xf < yf,
+                                6 => xf > yf,
+                                7 => xf <= yf,
+                                _ => xf >= yf,
+                            },
+                    )
+                } else {
+                    self.compare(x, y, sub - 5)?
+                };
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::Lt | Op::Gt | Op::Le | Op::Ge => {
+                let x = self.ld(reg_base, b);
+                let y = self.ld(reg_base, c);
+                let op = match ins.op {
+                    Op::Lt => 0u8,
+                    Op::Gt => 1,
+                    Op::Le => 2,
+                    _ => 3,
+                };
+                // Numeric comparison inlined: `if (n < 2)` in a recursive
+                // function called `compare` on every execution, which showed up
+                // as the second-hottest leaf in that benchmark. Semantics match
+                // `compare`'s number branch exactly (NaN compares false).
+                if x.is_number() && y.is_number() {
+                    let xf = x.as_f64();
+                    let yf = y.as_f64();
+                    let r = !(xf.is_nan() || yf.is_nan())
+                        && match op {
+                            0 => xf < yf,
+                            1 => xf > yf,
+                            2 => xf <= yf,
+                            _ => xf >= yf,
+                        };
+                    self.st(reg_base, a, Value::from_bool(r));
+                    next!();
+                }
+                let v = self.compare(x, y, op)?;
+                self.st(reg_base, a, v);
+                next!()
+            }
+            Op::Jump => jump!(c as usize),
+            Op::JumpLocalCmp => {
+                // Counted-loop JIT. The site counts its own executions; after
+                // enough back-edges the loop is compiled to native code and
+                // runs to completion in one call. Any guard failure
+                // deoptimizes to this very instruction, which the interpreter
+                // then evaluates normally.
+                {
+                    // SAFETY: `ics_ptr` indexes this frame's own inline-cache
+                    // vector, which has one entry per instruction.
+                    let ic = unsafe { &mut *(ics_ptr.add(ip) as *mut Ic) };
+                    match ic.jit_state {
+                        2 => {
+                            // SAFETY: `reg_base + nslots` was resized on frame
+                            // entry, so the pointer stays inside the stack.
+                            let regs =
+                                unsafe { self.stack.as_mut_ptr().add(reg_base) };
+                            let status = unsafe { crate::jit::run_raw(ic.jit_code, regs, self.frames.len() as u32) };
+                            if status == 1 { jump!(ic.jit_exit as usize); }
+                            ic.jit_state = 3;
+                            if status >= 2 { jump!((status - 2) as usize); }
+                        }
+                        0 | 1 => {
+                            ic.hits = ic.hits.saturating_add(1);
+                            if ic.hits as u32 >= 64 {
+                                let plen = self.frames[fi].proto_ref().code.len();
+                                // The whole function, not just the loop from
+                                // here on: the compiler has to be able to see
+                                // whether anything after the loop still looks
+                                // at a register it is about to treat as a dead
+                                // object literal.
+                                let slice =
+                                    unsafe { std::slice::from_raw_parts(code_ptr, plen) };
+                                let paddr = self.frames[fi].proto as usize;
+                                let region_slots = self.frames[fi].proto_ref().nslots as u32;
+                                let region_safe = self.frames[fi].proto_ref().local_cells.is_empty();
+                                let arena_base = unsafe { (*self.arena_ptr).base() as usize };
+                                let mut consts_num = |idx: usize| -> Option<f64> {
+                                    let k =
+                                        unsafe { &*consts_ptr.add(idx) }.clone();
+                                    // `const_value` needs `&mut Vm`; the JIT
+                                    // compile path owns `&mut self` here, so
+                                    // resolve through a short reborrow.
+                                    let vm: &mut Vm = self;
+                                    let r = vm.const_value(&k);
+                                    if std::env::var_os("JHOL_JIT_DEBUG").is_some() {
+                                        eprintln!("[jit] consts({}) -> {:?}", idx, &r);
+                                    }
+                                    match r {
+                                        Ok(v) if v.is_number() => Some(v.as_f64()),
+                                        _ => None,
+                                    }
+                                };
+                                // The literal's static key list, straight out of
+                                // the constant pool. `Keys` is a boxed slice, so
+                                // borrowing it here is cheap and stable.
+                                let mut consts_keys = |idx: usize| -> Option<Vec<PropKey>> {
+                                    match unsafe { &*consts_ptr.add(idx) } {
+                                        ConstVal::Keys(k) => Some(k.to_vec()),
+                                        _ => None,
+                                    }
+                                };
+                                match crate::jit::try_compile(
+                                    slice,
+                                    ip,
+                                    c as usize,
+                                    &mut consts_num,
+                                    &mut consts_keys,
+                                    ics_ptr,
+                                ).or_else(|| if region_safe {
+                                    crate::jit::try_compile_region(slice, ip, region_slots, &mut consts_num, ics_ptr, arena_base)
+                                } else { None }) {
+                                    Some(jl) => {
+                                        let exit = jl.exit_ip as u32;
+                                        let code_p = jl.code;
+                                        let nbytes = jl.len;
+                                        self.jit.insert((paddr, ip), jl);
+                                        ic.jit_code = code_p;
+                                        ic.jit_exit = exit;
+                                        ic.jit_state = 2;
+                                        if std::env::var_os("JHOL_JIT_DEBUG").is_some() {
+                                            eprintln!("[jit] compiled loop at ip={} ({} bytes)", ip, nbytes);
+                                        }
+                                    }
+                                    None => {
+                                        ic.jit_state = 3;
+                                        if std::env::var_os("JHOL_JIT_DEBUG").is_some() {
+                                            eprintln!("[jit] ineligible loop at ip={}", ip);
+                                        }
+                                    }
+                                }
+                            } else {
+                                ic.jit_state = 1;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let x = self.ld(reg_base, a);
+                let code = (b >> 24) as u8;
+                let k = unsafe { &*consts_ptr.add((b & 0x00FF_FFFF) as usize) }.clone();
+                let y = self.const_value(&k)?;
+                // Numeric fast path, resolved here rather than inside
+                // `compare`: a loop test runs millions of times and the call
+                // alone cost more than the whole handler. Semantics match
+                // `compare` exactly for numbers — `to_primitive` and
+                // `to_number` are the identity, and NaN compares false — so
+                // the fused and unfused forms still cannot drift.
+                if x.is_number() && y.is_number() {
+                    let xf = x.as_f64();
+                    let yf = y.as_f64();
+                    let taken = (xf.is_nan() || yf.is_nan())
+                        || match code {
+                            0 => !(xf < yf),
+                            1 => !(xf > yf),
+                            2 => !(xf <= yf),
+                            _ => !(xf >= yf),
+                        };
+                    if taken {
+                        jump!(c as usize);
+                    }
+                    next!()
+                }
+                let v = self.compare(x, y, code)?;
+                if !v.to_bool() {
+                    jump!(c as usize);
+                }
+                next!()
+            }
+            Op::JumpIfFalse => {
+                let x = self.ld(reg_base, a);
+                if !x.to_bool() {
+                    jump!(c as usize);
+                }
+                next!()
+            }
+            Op::JumpIfTrue => {
+                let x = self.ld(reg_base, a);
+                if x.to_bool() {
+                    jump!(c as usize);
+                }
+                next!()
+            }
+            Op::JumpIfNilish => {
+                let x = self.ld(reg_base, a);
+                if x.is_nil() {
+                    jump!(c as usize);
+                }
+                next!()
+            }
+            Op::JumpIfNotNilish => {
+                let x = self.ld(reg_base, a);
+                if !x.is_nil() {
+                    jump!(c as usize);
+                }
+                next!()
+            }
+            Op::JumpIfNilishKeep => {
+                let x = self.ld(reg_base, a);
+                if x.is_nil() {
+                    jump!(c as usize);
+                }
+                next!()
+            }
+            Op::Select => next!(),
+            Op::Call => {
+                let callee = self.ld(reg_base, b);
+                let arg_base = reg_base + b as usize + 1;
+                self.call_value(callee, Value::UNDEFINED, arg_base, c, Some((reg_base, a)))?;
+                frame_change!()
+            }
+            Op::CallThis => {
+                let this_v = self.ld(reg_base, b);
+                let callee = self.ld(reg_base, b + 1);
+                let arg_base = reg_base + b as usize + 2;
+                self.call_value(callee, this_v, arg_base, c, Some((reg_base, a)))?;
+                frame_change!()
+            }
+            Op::CallMethod => {
+                let recv = self.ld(reg_base, b);
+                let mut ic = unsafe { &mut *(ics_ptr.add(ip) as *mut Ic) };
+                let key = ic.key;
+                let f = self.get_prop_ic(recv, key, Some(&mut ic))?;
+                let arg_base = reg_base + b as usize + 1;
+                self.call_value(f, recv, arg_base, c, Some((reg_base, a)))?;
+                frame_change!()
+            }
+            Op::Construct => {
+                let callee = self.ld(reg_base, b);
+                let arg_base = reg_base + b as usize + 1;
+                let v = self.construct(callee, arg_base, c)?;
+                self.st(reg_base, a, v);
+                frame_change!()
+            }
+            Op::ConstructSuper => {
+                let callee = self.ld(reg_base, b);
+                let arg_base = reg_base + b as usize + 1;
+                let v = self.construct_super(callee, arg_base, c)?;
+                self.stack[reg_base + THIS_SLOT as usize] = v;
+                // `frame.this_val` was cached at entry from the placeholder
+                // object; `super` replaces it, and every later `this` read in
+                // this frame has to see the new one.
+                self.frames[fi].this_val = v;
+                self.st(reg_base, a, v);
+                frame_change!()
+            }
+            Op::Return => {
+                let v = self.ld(reg_base, a);
+                let f = self.pop_frame();
+                match f.ret {
+                    Some((cb, d)) => {
+                        self.st(cb, d, v);
+                        // Resume the caller *inside* this dispatch loop rather
+                        // than returning to `run()` and re-entering. A return
+                        // used to cost a `step()` round trip plus a second
+                        // frame-cache rebuild on the way back in; now the whole
+                        // call tree runs in one `step()` invocation, which is
+                        // the hot path of every recursive call. `ret` is only
+                        // ever `Some` for a frame that has a caller below it, so
+                        // refreshing the cache here is always in range.
+                        self.refresh_frame_cache();
+                        continue 'frames;
+                    }
+                    None => {
+                        self.last_result = v;
+                        return Ok(Step::Done(v));
+                    }
+                }
+            }
+            /// Suspend. The frame is snapshotted into its generator state and
+            /// popped, so the register file is left exactly as it was between
+            /// frames; a later `next()` pushes the snapshot back and resumes.
+            Op::Yield => {
+                let v = self.ld(reg_base, a);
+                let gen = match self.frames[fi].gen {
+                    Some(g) => g,
+                    None => return Err(type_error("yield outside a generator")),
+                };
+                let gs = &mut self.gens[gen];
+                gs.started = true;
+                gs.ip = ip + 1;
+                gs.regs = self.stack[reg_base..reg_base + gs.proto.nslots].to_vec();
+                let f = self.frames.pop().unwrap();
+                self.stack.truncate(f.stack_base);
+                return Ok(Step::Yield(v));
+            }
+            Op::Throw => {
+                let v = self.ld(reg_base, a);
+                return Err(crate::errors::Thrown::new(v).into());
+            }
+            Op::SetProto => {
+                let o = self.ld(reg_base, a);
+                let p = self.ld(reg_base, b);
+                if o.is_object() {
+                    unsafe { o.as_object_mut() }.proto = p;
+                } else if o.is_array() {
+                    unsafe { o.as_array_mut() }.proto = p;
+                }
+                next!()
+            }
+            // `b` is the register that receives the thrown value; `c` is the
+            // handler entry point, patched once the try body has been compiled.
+            Op::PushTry => {
+                let slot = reg_base + b as usize;
+                self.handlers.push(Handler {
+                    frame_idx: fi,
+                    catch_ip: c as usize,
+                    slot,
+                });
+                next!()
+            }
+            Op::PopTry => {
+                self.handlers.pop();
+                next!()
+            }
+            Op::CloseUpvalues => next!(),
+        }
+        } // inner instruction loop
+        } // 'frames: every frame change restarts with fresh pointers
+    }
+
+    /// Element read with the array fast path (no property-key allocation).
+    pub fn get_index(&mut self, obj: Value, key: Value) -> VmResult<Value> {
+        if let Some(TAG_ARRAY) = unsafe { obj.obj_tag() } {
+            if key.is_smi() {
+                let i = key.as_i64();
+                if i >= 0 && i < 4096 {
+                    return Ok(unsafe { obj.as_array() }.get(i as u32));
+                }
+            }
+        }
+        let k = self.key_from_value(key);
+        self.get_prop(obj, k)
+    }
+
+    pub fn set_index(&mut self, obj: Value, key: Value, val: Value) -> VmResult<()> {
+        if let Some(TAG_ARRAY) = unsafe { obj.obj_tag() } {
+            if key.is_smi() {
+                let i = key.as_i64();
+                if i >= 0 && i < 4096 {
+                    self.as_array_mut(obj).set(i as u32, val);
+                    return Ok(());
+                }
+            }
+        }
+        let k = self.key_from_value(key);
+        self.set_prop(obj, k, val)
+    }
+
+    fn const_value(&mut self, k: &ConstVal) -> VmResult<Value> {
+        match k {
+            ConstVal::Undefined => Ok(Value::UNDEFINED),
+            ConstVal::Null => Ok(Value::NULL),
+            ConstVal::True => Ok(Value::TRUE),
+            ConstVal::False => Ok(Value::FALSE),
+            ConstVal::Num(n) => Ok(Value::from_f64(*n)),
+            ConstVal::BigInt(i) => Ok(Value::from_i64(*i)),
+            ConstVal::Str(s) => Ok(*s),
+            ConstVal::Fn(_) => Ok(Value::UNDEFINED),
+            // Structural, not a value: `Op::NewObjectLit` reads it directly from
+            // the const pool rather than materialising it.
+            ConstVal::Keys(_) => Ok(Value::UNDEFINED),
+        }
+    }
+
+    fn const_sym(&mut self, k: &ConstVal) -> u32 {
+        match k {
+            ConstVal::Str(s) => match s.as_key_str() {
+                Some(t) => self.arena().intern_sym(t),
+                None => 0,
+            },
+            _ => 0,
+        }
+    }
+
+    pub fn construct(&mut self, callee: Value, arg_base: usize, argc: u32) -> VmResult<Value> {
+        if !callee.is_function() {
+            return Err(type_error("value is not a constructor"));
+        }
+        let f = unsafe { callee.as_function() };
+        let is_native = matches!(f.kind, FnKind::Native(_));
+
+        let _ = fallback_unused();
+        let default_proto = if f.proto_obj.is_object() {
+            f.proto_obj
+        } else {
+            Value::from_ptr(self.proto_object as *mut JObject)
+        };
+        let this = Value::from_ptr(self.arena().alloc_object(0, default_proto));
+        if is_native {
+            // Native constructors (`new Map()`, `new Error()`) are allowed: they
+            // get a fresh `this` and may either mutate it or return an object.
+            let mut args: Vec<Value> = Vec::with_capacity(argc as usize);
+            for i in 0..argc {
+                args.push(self.stack[arg_base + i as usize]);
+            }
+            let f = match f.kind {
+                FnKind::Native(nf) => nf,
+                _ => unreachable!(),
+            };
+            let r = f(self, this, &args)?;
+            self.native_result = r;
+            let out = if r.is_ptr() && !r.is_function() { r } else { this };
+            return Ok(out);
+        }
+        let proto = match &unsafe { callee.as_function() }.kind {
+            FnKind::Bytecode(p) => p.clone(),
+            _ => unreachable!(),
+        };
+        let depth = self.frames.len();
+        self.enter_frame(callee, &proto, this, arg_base, argc, callee, None)?;
+        let v = self.run_until(depth)?;
+        if v.is_ptr() && !v.is_function() {
+            Ok(v)
+        } else {
+            Ok(this)
+        }
+    }
+
+    /// `super(...args)` in a derived constructor.
+    ///
+    /// The parent constructor is derived at runtime from `new.target`:
+    /// `new.target.prototype.__proto__.constructor`. That keeps the compiled
+    /// code free of any superclass dependency, and makes a later reassignment
+    /// of `Circle.prototype.__proto__` visible to `super`.
+    fn construct_super(&mut self, _parent: Value, arg_base: usize, argc: u32) -> VmResult<Value> {
+        let fi = self.frames.len() - 1;
+        let target = self.frames[fi].new_target;
+        let own_func = self.frames[fi].func;
+        let nt = if target.is_function() {
+            target
+        } else {
+            Value::from_ptr(own_func)
+        };
+        let k = arena::active().intern_sym("prototype");
+        let own_proto = self.get_prop(nt, PropKey::Sym(k))?;
+        if !own_proto.is_object() {
+            return Err(type_error("super called outside a derived constructor"));
+        }
+        let parent_proto = unsafe { own_proto.as_object() }.proto;
+        let parent_proto = if parent_proto.is_object() {
+            parent_proto
+        } else {
+            Value::from_ptr(self.proto_object)
+        };
+        let ck = arena::active().intern_sym("constructor");
+        let ctor = self.get_prop(parent_proto, PropKey::Sym(ck))?;
+        crate::trace(&format!("super nt={:?} own={:x} parent={:x} ctor={:x}", nt.is_function(), own_proto.bits() & 0xFFFFFFFFFFF, parent_proto.bits() & 0xFFFFFFFFFFF, ctor.bits() & 0xFFFFFFFFFFF));
+        crate::trace(&format!("super: own={:x} parent={:x} ctor_fn={}", own_proto.bits() & 0xFFFFFFFFFFF, parent_proto.bits() & 0xFFFFFFFFFFF, ctor.is_function()));
+        if !ctor.is_function() {
+            return Err(type_error("no super constructor"));
+        }
+        let proto = match &unsafe { ctor.as_function() }.kind {
+            FnKind::Bytecode(p) => p.clone(),
+            _ => return Err(type_error("super constructor is not a function")),
+        };
+        let this = Value::from_ptr(self.arena().alloc_object(0, own_proto));
+        let depth = self.frames.len();
+        self.enter_frame(ctor, &proto, this, arg_base, argc, nt, None)?;
+        self.run_until(depth)?;
+        Ok(this)
+    }
+
+    /// Run until the script frame returns.
+    pub fn run(&mut self) -> VmResult<Value> {
+        loop {
+            if self.frames.is_empty() {
+                return Ok(self.last_result);
+            }
+            match self.step() {
+                Ok(Step::Continue) => {}
+                Ok(Step::Done(v)) => return Ok(v),
+                Ok(Step::Yield(v)) => return Ok(v),
+                Err(e) => {
+                    if self.handle_exception(e) {
+                        continue;
+                    }
+                    return Err(self.take_error());
+                }
+            }
+        }
+    }
+
+    /// Drive the interpreter until fewer than `depth` frames remain. This is how
+    /// a builtin invokes a JS callback: it pushes the frame, runs to completion,
+    /// and the frame's return value is left in `last_result`.
+    pub fn run_until(&mut self, depth: usize) -> VmResult<Value> {
+        loop {
+            if self.frames.len() <= depth {
+                return Ok(self.last_result);
+            }
+            match self.step() {
+                Ok(Step::Continue) => {}
+                Ok(Step::Done(v)) => return Ok(v),
+                Ok(Step::Yield(v)) => return Ok(v),
+                Err(e) => {
+                    if self.handle_exception(e) {
+                        continue;
+                    }
+                    return Err(self.take_error());
+                }
+            }
+        }
+    }
+
+    fn handle_exception(&mut self, e: VmError) -> bool {
+        // Drop handlers that no longer have a live frame.
+        while let Some(h) = self.handlers.last() {
+            if h.frame_idx >= self.frames.len() {
+                self.handlers.pop();
+                continue;
+            }
+            let (fi, catch_ip, slot) = (h.frame_idx, h.catch_ip, h.slot);
+            self.handlers.pop();
+            let thrown = match e {
+                VmError::Exception(t) => t.value,
+                VmError::Syntax(m) => self.new_string(&format!("SyntaxError: {}", m)),
+                VmError::Internal(m) => self.new_string(&format!("InternalError: {}", m)),
+            };
+            self.frames.truncate(fi + 1);
+            // Unwind to the handler frame's own register window, not to its
+            // argument base: the registers (including the exception slot) have
+            // to stay live for the handler to run.
+            // Discard only what sits *above* the handler frame's register
+            // window. Truncating to the window start instead (and resizing
+            // back) would blank registers the body still needs.
+            let start = self.frames[fi].stack_base;
+            let end = start + self.frames[fi].proto_ref().nslots;
+            if self.stack.len() > end {
+                self.stack.truncate(end);
+            } else if self.stack.len() < end {
+                self.stack.resize(end, Value::UNDEFINED);
+            }
+            let window = start;
+            if slot < self.stack.len() {
+                self.stack[slot] = thrown;
+            } else {
+                self.stack.resize(slot + 1, Value::UNDEFINED);
+                self.stack[slot] = thrown;
+            }
+            self.frames[fi].ip = catch_ip;
+            self.invalidate_frame_cache();
+            return true;
+        }
+        self.pending = Some(e);
+        false
+    }
+
+    fn take_error(&mut self) -> VmError {
+        self.pending
+            .take()
+            .unwrap_or_else(|| VmError::Internal("uncaught exception".into()))
+    }
+}
+
+fn fallback_unused() {}
+
+fn unused(_v: Value) -> bool {
+    false
+}
+
+// ---------------------------------------------------------------------------
+// engine bootstrap
+// ---------------------------------------------------------------------------
+
+impl Vm {
+    fn bare() -> Self {
+        Vm {
+            stack: Vec::with_capacity(1024),
+            frames: Vec::with_capacity(64),
+            arena_ptr: arena::active_ptr(),
+            jit: std::collections::HashMap::new(),
+            accessor_epoch: 0,
+            setter_scan: None,
+            set_clear: [(0, 0, 0, 0); 8],
+            set_clear_used: 0,
+            fc: FrameCache {
+                len: usize::MAX,
+                fi: 0,
+                reg_base: 0,
+                code: std::ptr::null(),
+                consts: std::ptr::null(),
+                ics: std::ptr::null(),
+            },
+            handlers: Vec::new(),
+            globals: std::ptr::null_mut(),
+            protos: Vec::new(),
+            roots: Vec::new(),
+            last_result: Value::UNDEFINED,
+            pending: None,
+            native_result: Value::UNDEFINED,
+            gens: Vec::new(),
+            exit_code: 0,
+            timers: Vec::new(),
+            timer_seq: 0,
+            proto_strings: HashMap::new(),
+            proto_string: std::ptr::null_mut(),
+            proto_object: std::ptr::null_mut(),
+            proto_function: std::ptr::null_mut(),
+            proto_array: std::ptr::null_mut(),
+            proto_number: std::ptr::null_mut(),
+            empty_array_shape: 0,
+            empty_obj_shape: 0,
+            obj_named_fn_fn: None,
+            global_ic: HashMap::new(),
+            depth_guard: 0,
+        }
+    }
+}
+
+/// What one instruction produced.
+#[derive(Debug)]
+enum Step {
+    Continue,
+    Done(Value),
+    Yield(Value),
+}
+
+/// A suspended generator: its bytecode plus a snapshot of its register file.
+#[derive(Debug)]
+pub struct GenState {
+    proto: Arc<FnProto>,
+    regs: Vec<Value>,
+    ip: usize,
+    started: bool,
+    done: bool,
+    this_val: Value,
+}
+
+// ---------------------------------------------------------------------------
+// generators, module entry, public engine API
+// ---------------------------------------------------------------------------
+
+/// Marker an uncaught internal error carries when it came from `process.exit`.
+/// The bridge turns it into an exit code instead of a diagnostic.
+pub const EXIT_MARKER: &str = "__jhol_exit:";
+
+pub fn exit_marker(code: i32) -> String {
+    format!("{}{}", EXIT_MARKER, code)
+}
+
+/// Parse an exit code out of an exit marker, if that is what it is.
+pub fn exit_code_of(msg: &str) -> Option<i32> {
+    msg.strip_prefix(EXIT_MARKER).and_then(|rest| rest.parse::<i32>().ok())
+}
+
+impl Vm {
+    /// Call `callee` with `this` and no arguments, returning its value.
+    ///
+    /// A native callee leaves no frame behind, so its result arrives through
+    /// `native_result`; a bytecode callee's value comes from `last_result` once
+    /// its frame has returned.
+    pub fn call0(&mut self, callee: Value, this: Value) -> VmResult<Value> {
+        let base = self.stack.len();
+        let depth = self.frames.len();
+        self.native_result = Value::UNDEFINED;
+        self.call_value(callee, this, base, 0, None)?;
+        if !self.native_result.is_undefined() {
+            self.stack.truncate(base);
+            return Ok(self.native_result);
+        }
+        let r = self.run_until(depth)?;
+        self.stack.truncate(base);
+        Ok(r)
+    }
+
+    /// Calling a `function*` produces a suspended generator
+    /// can snapshot it.
+    pub fn call_generator(&mut self, callee: Value, this: Value, regs: Vec<Value>) -> Value {
+        let idx = self.gens.len();
+        let proto = match &unsafe { callee.as_function() }.kind {
+            FnKind::Bytecode(p) => p.clone(),
+            _ => unreachable!(),
+        };
+        self.gens.push(GenState {
+            proto,
+            regs,
+            ip: 0,
+            started: false,
+            done: false,
+            this_val: this,
+        });
+        let obj = self.new_object();
+        let k = arena::active().intern_sym("#gen");
+        self.define_prop(obj, PropKey::Sym(k), Value::from_i64(idx as i64));
+        let nk = arena::active().intern_sym("next");
+        let nf = self.new_function_native("next", crate::builtins::n_gen_next, 0);
+        self.define_prop(obj, PropKey::Sym(nk), nf);
+        let ik = arena::active().intern_sym(ITER_SYM);
+        let it = self.new_function_native(crate::builtins::ITER_SYM_KEY, crate::builtins::n_gen_self, 0);
+        self.define_prop(obj, PropKey::Sym(ik), it);
+        obj
+    }
+
+    /// Calling a `function*` produces a suspended generator: the body has not
+    /// run at all, and its first `next()` starts it.
+    #[allow(clippy::too_many_arguments)]
+    fn make_generator(
+        &mut self,
+        callee: Value,
+        proto: &FnProto,
+        this: Value,
+        arg_base: usize,
+        argc: u32,
+        ret: Option<(usize, u32)>,
+    ) -> VmResult<()> {
+        let nslots = proto.nslots;
+        let mut regs = vec![Value::UNDEFINED; nslots];
+        let is_arrow = proto.is_arrow;
+        if !is_arrow {
+            regs[THIS_SLOT as usize] = this;
+            regs[NEWTARGET_SLOT as usize] = Value::UNDEFINED;
+        }
+        let param_base = if is_arrow { 0 } else { 2 };
+        let copy = (argc as usize).min(proto.nparams);
+        for i in 0..copy {
+            regs[param_base + i] = self.stack[arg_base + i];
+        }
+        let obj = self.new_generator_object(callee, regs, this);
+        match ret {
+            Some((cb, d)) => self.st(cb, d, obj),
+            None => self.native_result = obj,
+        }
+        Ok(())
+    }
+
+    pub fn new_generator_object(&mut self, callee: Value, regs: Vec<Value>, this: Value) -> Value {
+        let idx = self.gens.len();
+        let proto = match &unsafe { callee.as_function() }.kind {
+            FnKind::Bytecode(p) => p.clone(),
+            _ => unreachable!(),
+        };
+        self.gens.push(GenState {
+            proto,
+            regs,
+            ip: 0,
+            started: false,
+            done: false,
+            this_val: this,
+        });
+        let obj = self.new_object();
+        let gk = arena::active().intern_sym("#gen");
+        self.define_prop(obj, PropKey::Sym(gk), Value::from_i64(idx as i64));
+        let nsym = arena::active().intern_sym("next");
+        let nf = self.new_function_native("next", crate::builtins::n_gen_next, 0);
+        self.define_prop(obj, PropKey::Sym(nsym), nf);
+        let isym = arena::active().intern_sym(ITER_SYM);
+        let it = self.new_function_native(crate::builtins::ITER_SYM_KEY, crate::builtins::n_gen_self, 0);
+        self.define_prop(obj, PropKey::Sym(isym), it);
+        obj
+    }
+
+    pub fn resume(&mut self, gen: Value, sent: Value) -> VmResult<Value> {
+        let gk = arena::active().intern_sym("#gen");
+        let raw = self.get_prop(gen, PropKey::Sym(gk))?;
+        let idx = raw.as_i64() as usize;
+        if idx >= self.gens.len() {
+            return Err(type_error("not a generator"));
+        }
+        if self.gens[idx].done {
+            return self.gen_result(gen, Value::UNDEFINED, true);
+        }
+        let proto = self.gens[idx].proto.clone();
+        let nslots = proto.nslots;
+        let reg_base = self.stack.len();
+        let ip = if self.gens[idx].started {
+            self.gens[idx].ip
+        } else {
+            self.gens[idx].started = true;
+            0
+        };
+        let snapshot = self.gens[idx].regs.clone();
+        let reg_depth = self.frames.len();
+        self.stack.resize(reg_base + nslots, Value::UNDEFINED);
+        self.stack[reg_base..reg_base + nslots].copy_from_slice(&snapshot);
+        if !proto.is_arrow {
+            self.stack[reg_base + THIS_SLOT as usize] = self.gens[idx].this_val;
+        }
+        self.frames.push(Frame {
+            func: unsafe { gen.as_function_mut() },
+            proto: std::sync::Arc::as_ptr(&proto),
+            reg_base,
+            arg_base: reg_base,
+            stack_base: reg_base,
+            argc: 0,
+            ip,
+            this_val: self.gens[idx].this_val,
+            new_target: Value::UNDEFINED,
+            super_ctor: Value::UNDEFINED,
+            ret: None,
+            gen: Some(idx),
+            // Empty, not `vec![None; nslots]`: the array only holds
+            // string-accumulator buffers, which most frames never use, and
+            // allocating it per call was one heap allocation per function
+            // invocation. The append/flush paths grow it on demand.
+            builders: Vec::new(),
+            _scratch: 0,
+        });
+        self.invalidate_frame_cache();
+        let _ = sent;
+        let v = self.run_until(reg_depth)?;
+        if self.gens[idx].done {
+            self.gen_result(gen, Value::UNDEFINED, true)
+        } else {
+            self.gen_result(gen, v, false)
+        }
+    }
+
+    fn gen_result(&mut self, gen: Value, value: Value, done: bool) -> VmResult<Value> {
+        let res = self.new_object();
+        let vk = arena::active().intern_sym("value");
+        let dk = arena::active().intern_sym("done");
+        self.define_prop(res, PropKey::Sym(vk), value);
+        self.define_prop(res, PropKey::Sym(dk), Value::from_bool(done));
+        let _ = gen;
+        Ok(res)
+    }
+
+    /// Run a compiled module as the top-level script frame.
+    pub fn run_module(&mut self, protos: Vec<Arc<FnProto>>, entry: u32) -> VmResult<Value> {
+        self.protos = protos;
+        let proto = self.protos[entry as usize].clone();
+        let nslots = proto.nslots.max(2);
+        let f = JFunction::bytecode(Value::UNDEFINED, proto.clone(), Value::UNDEFINED);
+        let fp = self.arena().alloc_function(f);
+        let func = Value::from_ptr(fp);
+        unsafe {
+            (*fp).proto = Value::from_ptr(self.proto_function_ptr() as *mut JFunction);
+            (*fp).hdr.flags |= FLAG_CTOR;
+            (*fp).upvalues = Vec::new();
+        }
+        self.stack.clear();
+        self.frames.clear();
+        self.handlers.clear();
+        self.stack.resize(nslots, Value::UNDEFINED);
+        self.stack[THIS_SLOT as usize] = Value::from_ptr(self.globals);
+        self.stack[NEWTARGET_SLOT as usize] = Value::UNDEFINED;
+        self.frames.push(Frame {
+            func: fp,
+            proto: std::sync::Arc::as_ptr(&proto),
+            reg_base: 0,
+            arg_base: 0,
+            stack_base: 0,
+            argc: 0,
+            ip: 0,
+            this_val: Value::from_ptr(self.globals),
+            new_target: Value::UNDEFINED,
+            super_ctor: Value::UNDEFINED,
+            ret: None,
+            gen: None,
+            // Empty, not `vec![None; nslots]`: the array only holds
+            // string-accumulator buffers, which most frames never use, and
+            // allocating it per call was one heap allocation per function
+            // invocation. The append/flush paths grow it on demand.
+            builders: Vec::new(),
+            _scratch: 0,
+        });
+        self.invalidate_frame_cache();
+        self.run()
+    }
+
+    pub fn proto_object_ptr(&self) -> *mut JObject {
+        self.proto_object
+    }
+    pub fn globals_ptr(&self) -> *mut JObject {
+        self.globals
+    }
+
+    // ---- accessors used by the builtin installer ----
+    pub fn set_protos(
+        &mut self,
+        globals: Value,
+        obj_proto: Value,
+        fn_proto: Value,
+        arr_proto: Value,
+        str_proto: Value,
+    ) {
+        self.globals = unsafe { globals.as_object_mut() };
+        self.proto_object = unsafe { obj_proto.as_object_mut() };
+        self.proto_function = unsafe { fn_proto.as_function_mut() };
+        self.proto_array = unsafe { arr_proto.as_object_mut() };
+        self.proto_string = unsafe { str_proto.as_object_mut() };
+    }
+
+    pub fn proto_function_ptr(&self) -> *mut JFunction {
+        self.proto_function
+    }
+
+    pub fn error_proto(&self) -> Value {
+        Value::from_ptr(self.proto_object as *mut JObject)
+    }
+
+    pub fn set_number_proto(&mut self, p: Value) {
+        self.proto_number = unsafe { p.as_object_mut() };
+    }
+    pub fn set_number_proto_last(&mut self) {}
+    pub fn next_timer_id(&mut self) -> u64 {
+        self.timer_seq += 1;
+        self.timer_seq
+    }
+    pub fn push_args(&mut self, args: &[Value]) -> usize {
+        let base = self.stack.len();
+        self.stack.extend_from_slice(args);
+        base
+    }
+    pub fn pop_to(&mut self, base: usize) {
+        self.stack.truncate(base);
+    }
+    pub fn construct_at(&mut self, callee: Value, base: usize, argc: u32) -> VmResult<Value> {
+        self.construct(callee, base, argc)
+    }
+}
+
+pub fn cancel_timer(id: u64) {
+    TIMERS.with(|m| m.borrow_mut().retain(|t| t.id != id));
+}
+
+// ---------------------------------------------------------------------------
+// the public engine
+impl Engine {
+    pub fn new() -> Self {
+        let arena = Arena::new();
+        arena.install();
+        Engine { vm: Vm::bare(), started: false }
+    }
+
+    pub fn ensure_started(&mut self) {
+        if !self.started {
+            self.started = true;
+            crate::builtins::install(&mut self.vm);
+        }
+    }
+
+    /// Compile and run `src`. Returns the completed value of the last expression.
+    pub fn eval_source(&mut self, src: &str, name: &str) -> VmResult<Value> {
+        self.ensure_started();
+        let prog = crate::parser::parse_program(src)
+            .map_err(|m| VmError::Syntax(format!("{} ({})", m, name)))?;
+        let module = crate::compiler::compile(&prog, name)
+            .map_err(|m| VmError::Syntax(format!("{} ({})", m, name)))?;
+        let out = self.vm.run_module(module.protos, module.entry);
+        self.vm.roots.clear();
+        out
+    }
+
+    pub fn run_file(&mut self, path: &std::path::Path) -> VmResult<i32> {
+        let src = std::fs::read_to_string(path)
+            .map_err(|e| VmError::Internal(format!("cannot read {}: {}", path.display(), e)))?;
+        let name = path.display().to_string();
+        self.eval_source(&src, &name)?;
+        self.run_event_loop()?;
+        Ok(self.vm.exit_code)
+    }
+
+    /// Drain pending timers, in deadline order, until none remain.
+    fn run_event_loop(&mut self) -> VmResult<()> {
+        let mut guard = 0usize;
+        loop {
+            let now = std::time::Instant::now();
+            let due = take_due_timers(now);
+            if due.is_empty() {
+                return Ok(());
+            }
+            for t in due {
+                if !t.cb.is_function() {
+                    continue;
+                }
+                let base = self.vm.push_args(&t.args);
+                let r = self
+                    .vm
+                    .call_value_at(t.cb, Value::UNDEFINED, base, t.args.len() as u32);
+                self.vm.pop_to(base);
+                r?;
+            }
+            guard += 1;
+            if guard > 10_000_000 {
+                return Ok(());
+            }
+        }
+    }
+}
+
+impl Vm {
+    pub fn call_value_at(
+        &mut self,
+        callee: Value,
+        this: Value,
+        base: usize,
+        argc: u32,
+    ) -> VmResult<()> {
+        self.call_value(callee, this, base, argc, None)
+    }
+}

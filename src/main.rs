@@ -1,6 +1,9 @@
 //! Thin CLI layer: parse args, styled output, and call into jhol-core.
 //! Crash-proof: panic caught and reported; all errors return Result.
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod tui;
 
 use clap::{Arg, ArgAction, Command};
@@ -11,8 +14,6 @@ use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::io::IsTerminal;
-#[cfg(unix)]
-use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -106,6 +107,7 @@ fn spinner_style() -> ProgressStyle {
         .unwrap()
 }
 
+#[allow(dead_code)]
 fn bar_style() -> ProgressStyle {
     ProgressStyle::default_bar()
         .template("  {bar:38.cyan/dim}  {pos:>3}/{len:3}  {msg:.dim}")
@@ -120,44 +122,113 @@ fn bar_style() -> ProgressStyle {
 /// on the main thread until the install completes. Captivating, zero-cost to
 /// the install itself (it only reads atomics).
 struct InstallProgress {
+    #[allow(dead_code)]
     mp: MultiProgress,
-    bar: ProgressBar,
+    /// Row 1: the resolver has no per-package total, so this row is a comet that
+    /// travels instead of a bar that fills - a filling bar that then empties reads as
+    /// "dancing" rather than progress.
+    resolve: ProgressBar,
+    /// Row 2: packages fetched (cache + network) against the resolved total.
+    fetch: ProgressBar,
+    /// Row 3: packages linked into node_modules.
+    link: ProgressBar,
+    /// Row 4: the cache/network split, dim.
     detail: ProgressBar,
     enabled: bool,
+    started: std::time::Instant,
+    /// Packages the install was asked for. `ProgressSnapshot::total` is only known
+    /// once resolution finishes, so the rows used to show a meaningless 0/1.
+    requested: u64,
+    /// Counter values at construction. A lockfile/capsule replay marks packages as
+    /// linked before the resolver runs, which made the "linking" row read 344/344
+    /// while nothing had happened yet.
+    base_linked: u64,
+    base_fetched: u64,
 }
 
 impl InstallProgress {
     fn new(pkg_count: usize, quiet: bool, json_out: bool) -> Self {
         let enabled = !quiet && !json_out && use_color() && is_tty();
         let mp = MultiProgress::new();
-        let (bar, detail) = if enabled {
-            let bar = mp.add(ProgressBar::new(pkg_count.max(1) as u64));
-            bar.set_style(
-                ProgressStyle::default_bar()
-                    .template(
-                        "  {spinner:.magenta.bold} {bar:34.magenta/dim} {pos:>3}/{len:<3} {msg}",
-                    )
-                    .unwrap()
-                    .tick_strings(&["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"])
-                    .progress_chars("█▓░"),
-            );
-            bar.enable_steady_tick(Duration::from_millis(80));
+        // Snapshot before any row is drawn: this is the baseline the rows subtract.
+        let baseline = jhol_core::progress::snapshot();
+        let ticks = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let bar_style = || {
+            ProgressStyle::default_bar()
+                .template("  {spinner:.141}  {msg:<11} {bar:28.141/dim} {pos:>3}/{len:<3}")
+                .unwrap()
+                .tick_strings(&ticks)
+                .progress_chars("▰▱")
+        };
+        // The resolver row draws its own travelling comet inside the message, so it
+        // has no `{bar}` of its own.
+        let comet_style = || {
+            ProgressStyle::default_spinner()
+                .template("  {spinner:.141}  {msg}")
+                .unwrap()
+                .tick_strings(&ticks)
+        };
+        let rows = if enabled {
+            let resolve = mp.add(ProgressBar::new_spinner());
+            resolve.set_style(comet_style());
+            resolve.set_message(format!("{:<11} {}", "resolving", Self::comet(0)));
+            resolve.enable_steady_tick(Duration::from_millis(80));
+            let fetch = mp.add(ProgressBar::new(pkg_count.max(1) as u64));
+            fetch.set_style(bar_style());
+            fetch.set_message("fetching");
+            fetch.enable_steady_tick(Duration::from_millis(80));
+            let link = mp.add(ProgressBar::new(pkg_count.max(1) as u64));
+            link.set_style(bar_style());
+            link.set_message("linking");
+            link.enable_steady_tick(Duration::from_millis(80));
             let detail = mp.add(ProgressBar::new_spinner());
             detail.set_style(
                 ProgressStyle::default_spinner()
-                    .template("  {msg}")
+                    .template("     {msg:.dim}")
                     .unwrap(),
             );
-            (bar, detail)
+            (resolve, fetch, link, detail)
         } else {
-            (ProgressBar::hidden(), ProgressBar::hidden())
+            (
+                ProgressBar::hidden(),
+                ProgressBar::hidden(),
+                ProgressBar::hidden(),
+                ProgressBar::hidden(),
+            )
         };
         Self {
             mp,
-            bar,
-            detail,
+            resolve: rows.0,
+            fetch: rows.1,
+            link: rows.2,
+            detail: rows.3,
             enabled,
+            started: std::time::Instant::now(),
+            requested: pkg_count.max(1) as u64,
+            base_linked: baseline.linked,
+            base_fetched: baseline.from_cache + baseline.from_network,
         }
+    }
+
+    /// A block of filled cells travelling across the row, wrapping around. Unlike a
+    /// growing bar it never "completes", so it reads as continuous work rather than
+    /// filling up and resetting.
+    fn comet(tick: usize) -> String {
+        const CELLS: usize = 28;
+        const HEAD: usize = 6;
+        let accent = "▰".truecolor(170, 140, 255);
+        let dim = "▱".truecolor(70, 70, 90);
+        let start = tick % CELLS;
+        (0..CELLS)
+            .map(|i| {
+                let d = (i + CELLS - start) % CELLS;
+                if d < HEAD {
+                    accent.to_string()
+                } else {
+                    dim.to_string()
+                }
+            })
+            .collect()
     }
 
     /// Refresh the bar + detail line from a live progress snapshot.
@@ -165,49 +236,53 @@ impl InstallProgress {
         if !self.enabled {
             return;
         }
-        let total = snap.total.max(1);
-        self.bar.set_length(total);
-        self.bar.set_position(snap.linked.min(total));
+        let total = self.requested.max(snap.total).max(1);
+        let elapsed = self.started.elapsed().as_secs();
+        let tick = (self.started.elapsed().as_millis() / 90) as usize;
 
-        // Stage message: show the busiest active stage.
-        let phase = if snap.linked >= total {
-            "finishing"
-        } else if snap.downloaded > snap.extracted {
-            "extracting"
-        } else if snap.from_network + snap.from_cache > 0 {
-            "linking"
+        // Row 1 - resolver: comet, no total to report yet.
+        // The comet is drawn into the message so the row shows a travelling block
+        // instead of a filling bar (indicatif's {bar} can only fill a prefix).
+        // `{:<11} ` puts the comet where the other rows put their bar.
+        let comet_msg = format!("{:<11} {}", "resolving", Self::comet(tick));
+        self.resolve.set_message(comet_msg);
+
+        // Row 2 - fetch: cache + network against the resolved total.
+        let fetched = (snap.from_cache + snap.from_network).saturating_sub(self.base_fetched);
+        self.fetch.set_length(total);
+        self.fetch.set_position(fetched.min(total));
+        self.fetch.set_message("fetching");
+
+        // Row 3 - link: what has landed in node_modules.
+        self.link.set_length(total);
+        self.link
+            .set_position(snap.linked.saturating_sub(self.base_linked).min(total));
+        self.link.set_message("linking");
+
+        let mut detail = if fetched > 0 {
+            format!(
+                "{} from cache · {} from network",
+                snap.from_cache.saturating_sub(self.base_fetched),
+                snap.from_network
+            )
         } else {
-            "resolving"
+            "building the dependency graph".to_string()
         };
-        self.bar.set_message(format!(
-            "{}{}",
-            phase.to_string().bright_magenta(),
-            if snap.bytes_downloaded > 0 {
-                format!("  {}", snap.downloaded_label())
-                    .dimmed()
-                    .to_string()
-            } else {
-                String::new()
-            }
-        ));
-
-        // Detail line: cache vs network split.
-        let detail = format!(
-            "{} from cache  ·  {} from network{}",
-            snap.from_cache.to_string().green(),
-            snap.from_network.to_string().cyan(),
-            if snap.failed > 0 {
-                format!("  ·  {} failed", snap.failed).red().to_string()
-            } else {
-                String::new()
-            },
-        );
+        if snap.bytes_downloaded > 0 {
+            detail.push_str(&format!(" · {}", snap.downloaded_label()));
+        }
+        if snap.failed > 0 {
+            detail.push_str(&format!(" · {} failed", snap.failed));
+        }
+        detail.push_str(&format!(" · {}s", elapsed));
         self.detail.set_message(detail);
     }
 
     fn finish(self) {
         if self.enabled {
-            self.bar.finish_and_clear();
+            self.resolve.finish_and_clear();
+            self.fetch.finish_and_clear();
+            self.link.finish_and_clear();
             self.detail.finish_and_clear();
         }
     }
@@ -220,8 +295,8 @@ fn print_install_summary(pkg_count: usize, elapsed: Duration, quiet: bool, json_
     }
     let ms = elapsed.as_millis();
     let speed = match ms {
-        0..=9 => format!("{}⚡ instant{}", "\x1b[1;36m", "\x1b[0m"),
-        10..=99 => format!("{}⚡ {}ms{}", "\x1b[1;36m", ms, "\x1b[0m"),
+        0..=9 => format!("{}instant{}", "\x1b[1;36m", "\x1b[0m"),
+        10..=99 => format!("{}{}ms{}", "\x1b[1;36m", ms, "\x1b[0m"),
         100..=999 => format!("{}{}ms{}", "\x1b[36m", ms, "\x1b[0m"),
         _ => format!("{}{:.2}s{}", "\x1b[33m", elapsed.as_secs_f64(), "\x1b[0m"),
     };
@@ -547,29 +622,25 @@ fn anticipatory_daemon_loop(cwd: &Path) {
 
             let cwd_clone = cwd.to_path_buf();
             let predicted_owned = last_predicted_deps.clone();
+            // No `set_current_dir` in a background thread: cwd is per-process, so it
+            // would move the main thread's relative paths too. The capsule APIs take
+            // an explicit project directory.
             std::thread::spawn(move || {
-                let _ = std::env::set_current_dir(&cwd_clone);
                 // Write capsule with predicted deps included
                 let predicted_refs: Vec<(&str, &str)> = predicted_owned
                     .iter()
                     .map(|(n, v)| (n.as_str(), v.as_str()))
                     .collect();
-                let _ = jhol_core::capsule::write_capsule_from_deps(
-                    std::path::Path::new("."),
-                    &predicted_refs,
-                );
+                let _ = jhol_core::capsule::write_capsule_from_deps(&cwd_clone, &predicted_refs);
                 // Write status.bin for predicted state (trampoline can exit 0ms)
-                let _ =
-                    jhol_core::capsule::write_cga_capsule_from_project(std::path::Path::new("."));
+                let _ = jhol_core::capsule::write_cga_capsule_from_project(&cwd_clone);
             });
         } else {
             // Fallback: standard capsule pre-build
             let cwd_clone = cwd.to_path_buf();
             std::thread::spawn(move || {
-                let _ = std::env::set_current_dir(&cwd_clone);
-                let _ = jhol_core::capsule::write_capsule_from_project(std::path::Path::new("."));
-                let _ =
-                    jhol_core::capsule::write_cga_capsule_from_project(std::path::Path::new("."));
+                let _ = jhol_core::capsule::write_capsule_from_project(&cwd_clone);
+                let _ = jhol_core::capsule::write_cga_capsule_from_project(&cwd_clone);
             });
         }
     }
@@ -665,6 +736,14 @@ fn train_markov_from_git(cwd: &Path, last_trained: &mut String) -> usize {
     count
 }
 
+/// Serializes the working-directory section of the daemon.
+///
+/// `install_package` works on relative paths and changes the process working
+/// directory, so two installs must not interleave that section. It is taken after
+/// the request has been read, so a connection that never sends anything cannot hold
+/// it — which is exactly what made the sequential accept loop stall the daemon.
+static DAEMON_CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(unix)]
 fn daemon_serve() -> Result<(), String> {
     let socket_path = daemon_socket_path();
@@ -694,6 +773,20 @@ fn daemon_serve() -> Result<(), String> {
     // Anticipatory watcher is LAZY: spawned after first successful install with >3 deps,
     // not at daemon boot. See daemon_handle_one success path.
 
+    // One thread per connection. This used to be a sequential loop, and a single
+    // client that connected and sent nothing held the whole daemon for the read
+    // timeout: every real request queued behind it and the *client's first socket
+    // write* blocked for the full 30 s before the install (measured: request write
+    // 30.0005 s, response 30.2024 s, while the install itself is ~200 ms). Accepting
+    // and handing a connection to its own thread costs a few microseconds and makes
+    // a stalled peer harmless.
+    //
+    // Installs stay serialized: `install_package` is relative-path based and the
+    // process working directory is per-process, so concurrent handlers would corrupt
+    // each other's target directory (observed in an earlier threaded variant — one
+    // install reported success while materializing into the daemon's own directory).
+    // `DAEMON_CWD_LOCK` is taken *after* the request is read and held across the cwd
+    // section, so it serializes the install without letting an idle reader block it.
     for stream in listener.incoming() {
         let stream = match stream {
             Ok(s) => s,
@@ -702,8 +795,16 @@ fn daemon_serve() -> Result<(), String> {
                 continue;
             }
         };
-        // Hand off to the shared handler
-        let _ = daemon_handle_one(stream);
+        std::thread::spawn(move || {
+            // A client that connects and then stalls must not hold the daemon hostage.
+            let read_timeout = std::env::var("JHOL_DAEMON_READ_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .filter(|v| *v > 0)
+                .unwrap_or(30);
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(read_timeout)));
+            let _ = daemon_handle_one(stream);
+        });
     }
 
     // Phase 3: flush JAGR-S store on daemon shutdown
@@ -711,8 +812,10 @@ fn daemon_serve() -> Result<(), String> {
 
     Ok(())
 }
-#[cfg(unix)]
-/// Try to install via daemon. On non-Unix, always returns error.
+/// Try to install via daemon. On non-Unix, always returns an error (the daemon
+/// itself is Unix-only), and `install_via_daemon` exists only on Unix - the old
+/// cfg gate here removed that non-Unix branch, so the Windows build failed to
+/// compile at all.
 fn daemon_try_install(
     _cwd: &Path,
     _packages: &[String],
@@ -738,15 +841,25 @@ fn direct_install(
     quiet: bool,
     json_out: bool,
 ) -> Result<(), String> {
+    // Zero the lock-free counters before the bar starts: a capsule/lockfile replay can
+    // mark packages as linked before this point, which made the "linking" row read
+    // 344/344 while the resolver had not done anything yet.
+    jhol_core::progress::reset();
     let progress = InstallProgress::new(pkg_count, quiet, json_out);
     let specs_owned: Vec<String> = specs.to_vec();
     let opts_owned = opts.clone();
+    if !progress.enabled {
+        let refs2: Vec<&str> = specs_owned.iter().map(|s| s.as_str()).collect();
+
+        return jhol_core::install_package(&refs2, &opts_owned).map_err(|e| e.to_string());
+    }
     let (tx, rx) = mpsc::channel::<Result<(), String>>();
     let worker = thread::spawn(move || {
         let refs2: Vec<&str> = specs_owned.iter().map(|s| s.as_str()).collect();
         let r = jhol_core::install_package(&refs2, &opts_owned).map_err(|e| e.to_string());
         let _ = tx.send(r);
     });
+    jhol_core::progress::set_bar_active(progress.enabled);
     let install_result = loop {
         match rx.recv_timeout(Duration::from_millis(70)) {
             Ok(r) => break r,
@@ -760,12 +873,14 @@ fn direct_install(
         }
     };
     let _ = worker.join();
+    jhol_core::progress::set_bar_active(false);
     progress.finish();
     // Markers (write_status, store_last_hash, fingerprint) are written by
     // install_package via write_install_markers() — single write.
     install_result
 }
 
+#[cfg(unix)]
 fn install_via_daemon(
     cwd: &Path,
     packages: &[String],
@@ -813,6 +928,14 @@ fn install_via_daemon(
     // Connect (retry once)
     let mut stream = UnixStream::connect(&socket_path)
         .map_err(|e| format!("daemon unavailable at {}: {}", socket_path.display(), e))?;
+    // Bounded: an unresponsive or half-dead daemon must not park an install for
+    // ten minutes. A local install reply is fast; 60 s is already far beyond it.
+    let client_timeout = std::env::var("JHOL_DAEMON_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(60);
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(client_timeout)));
 
     // Packed struct — zero serde, zero alloc
     let req = jhol_core::daemon_cache::DaemonRequest::new(
@@ -855,10 +978,6 @@ fn handle_daemon_request(stream: std::os::unix::net::UnixStream) -> Result<(), S
 /// Handle one daemon connection (the actual logic, extracted from daemon_serve).
 #[cfg(unix)]
 fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), String> {
-    use std::io::Read;
-    use std::io::Write;
-    const MAX_DAEMON_REQUEST_BYTES: usize = 64 * 1024;
-
     // Read packed request struct — single read, zero parse
     let req = match jhol_core::daemon_cache::read_request(&mut stream) {
         Ok(r) => r,
@@ -893,77 +1012,27 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
     let native_only = req.native_only();
     let no_scripts = req.no_scripts();
 
+    // Serialize the cwd-dependent section (see DAEMON_CWD_LOCK). Poisoning is
+    // ignored: a panic in one install must not permanently break the daemon.
+    let _cwd_guard = DAEMON_CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let prev_cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let result = (|| -> Result<(), String> {
         std::env::set_current_dir(&cwd).map_err(|e| format!("chdir {}: {}", cwd, e))?;
 
-        // Helper: write fingerprint + status after any successful install.
-        // Uses simple hash of package.json — works on first install without lockfile.
-        let write_install_markers = || -> Result<(), String> {
-            let pj = std::fs::read_to_string("package.json").map_err(|e| e.to_string())?;
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-            let mut h = DefaultHasher::new();
-            pj.hash(&mut h);
-            let hash = h.finish().to_le_bytes();
-            jhol_core::daemon_cache::write_nm_fingerprint(Path::new("."), hash);
-            jhol_core::daemon_cache::store_last_hash(hash);
-            jhol_core::daemon_cache::write_status(hash, Path::new("."));
-            Ok(())
-        };
-        // Markers are written at each exit point (nm_is_fresh, capsule, full install).
-        // No early write — we only write after a successful fast path or full install.
-
-        // Daemon fast-path: if node_modules/.nm_fingerprint matches last hash, skip everything.
-        if jhol_core::daemon_cache::fast_nm_check(Path::new(".")) {
-            return Ok(());
-        }
-        // Fallback: compute hash from disk and check fingerprint
-        if let Ok(hash) = jhol_core::capsule::compute_manifest_hash(Path::new(".")) {
-            if jhol_core::daemon_cache::nm_is_fresh(Path::new("."), hash) {
-                jhol_core::daemon_cache::store_last_hash(hash);
-                jhol_core::daemon_cache::write_status(hash, Path::new("."));
-                return Ok(());
-            }
-        }
-
-        // Daemon fast-path: if resolved graph cached and fingerprint matches,
-        // skip resolution entirely — use live capsule view from memory.
-        let cap_path = jhol_core::capsule::capsule_path(Path::new("."));
-        if let Ok(hash) = jhol_core::capsule::compute_manifest_hash(Path::new(".")) {
-            // Check live in-memory capsule first (avoids mmap + verify)
-            if let Some(view) = jhol_core::daemon_cache::get_cached_capsule(hash) {
-                let r = jhol_core::capsule::install_from_capsule(&view, Path::new("."))
-                    .map_err(|e| e.to_string());
-                if r.is_ok() {
-                    write_install_markers();
-                }
-                return r;
-            }
-            // Fallback: check disk capsule
-            if let Some(_cached) = jhol_core::daemon_cache::get_resolved_graph(hash) {
-                if cap_path.exists() {
-                    if let Ok(view) = jhol_core::capsule::read_capsule(&cap_path) {
-                        if view.manifest_hash() == hash {
-                            let result =
-                                jhol_core::capsule::install_from_capsule(&view, Path::new("."))
-                                    .map_err(|e| e.to_string());
-                            if result.is_ok() {
-                                jhol_core::daemon_cache::store_capsule_view(hash, view);
-                                write_install_markers();
-                            }
-                            return result;
-                        }
-                    }
-                }
-            }
-        }
+        // Keep the daemon process warm, but let install_package own the
+        // lockfile-bound proof and capsule validation. The old daemon-local
+        // status/fingerprint checks hashed only package.json and could skip
+        // `ci`, changed locks, or missing nested paths.
 
         let refs: Vec<&str> = packages.iter().map(|s| s.as_str()).collect();
         let opts = jhol_core::InstallOptions {
             no_cache,
             quiet,
-            backend: jhol_core::resolve_backend(None),
+            backend: if native_only {
+                jhol_core::Backend::Npm
+            } else {
+                jhol_core::resolve_backend(None)
+            },
             lockfile_only,
             offline,
             strict_lockfile,
@@ -978,6 +1047,7 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
         };
         jhol_core::set_daemon_mode(true);
         jhol_core::set_transitive_depth(2);
+
         let install_result = jhol_core::install_package(&refs, &opts).map_err(|e| e.to_string());
         // SNR speculation: after successful install, pre-compute neighbor resolutions.
         // Gated behind JHOL_ANTICIPATORY=1 AND >3 deps (small projects don't need speculation).
@@ -1012,7 +1082,7 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
     })();
     let _ = std::env::set_current_dir(prev_cwd);
 
-    let payload = match result {
+    let _payload = match result {
         Ok(_) => {
             // Ensure capsule + CGA capsule exist for next fast-path boot.
             // Markers are written by the inner install handler.
@@ -1048,7 +1118,7 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
                     {
                         let mut resolved = std::collections::HashMap::new();
                         for (spec, _version) in &tree {
-                            if let Some(name) = spec.split('@').next() {
+                            if let Some(_name) = spec.split('@').next() {
                                 let entry = jhol_core::lockfile_write::ResolvedPackage {
                                     version: _version.clone(),
                                     resolved: String::new(),
@@ -1065,7 +1135,7 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
                 }
             }
             // Pre-warm CAS + predictive prefetch in background
-            let packages = packages.clone();
+            let _packages = packages.clone();
             let cwd = cwd.clone();
             std::thread::spawn(move || {
                 let lock_path = std::path::Path::new(&cwd).join("package-lock.json");
@@ -1149,9 +1219,9 @@ fn install_globally() -> Result<(), String> {
 
     let exe_path = env::current_exe().map_err(|e| e.to_string())?;
 
-    // Copy binary to jhol-bin
+    // Full CLI → jhol-bin; thin Rust trampoline → jhol (warm no-op without loading CLI).
     info(&format!("Installing binary at {} …", &bin_path));
-    let _ = fs::copy(&exe_path, &bin_path);
+    fs::copy(&exe_path, &bin_path).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
         let meta = fs::metadata(&bin_path).map_err(|e| e.to_string())?;
@@ -1160,27 +1230,65 @@ fn install_globally() -> Result<(), String> {
         fs::set_permissions(&bin_path, perms).map_err(|e| e.to_string())?;
     }
 
-    // Write shell trampoline as jhol — 0.1ms startup for cached installs
-    let trampoline = format!(
-        "#!/bin/sh\n\
-         PREBUILT_DIR=\"${{JHOL_PREBUILT_DIR:-/tmp/jhol-prebuilt}}\"\n\
-         case \"${{1:-}}\" in\n\
-         install|add|ci)\n\
-         \x20 if [ -f package.json ]; then\n\
-         \x20   HASH=$(shasum -a 256 package.json 2>/dev/null | cut -d' ' -f1)\n\
-         \x20   if [ -n \"$HASH\" ] && [ -d \"$PREBUILT_DIR/$HASH/node_modules\" ]; then\n\
-         \x20     rm -rf node_modules; ln -sfn \"$PREBUILT_DIR/$HASH\" \"$PWD/node_modules\"; exit 0\n\
-         \x20   fi\n\
-         \x20 fi\n\
-         \x20 STATUS=${{JHOL_STATUS_FILE:-/tmp/jhol-status.bin}}\n\
-         \x20 if [ -f \"$STATUS\" ]; then\n\
-         \x20   FRESH=$(dd if=\"$STATUS\" bs=1 skip=8 count=1 2>/dev/null | od -A n -t u1 | tr -d ' \\n')\n\
-         \x20   [ \"$FRESH\" = \"1\" ] && exit 0\n\
-         \x20 fi ;;\n\
-         esac\n\
-         exec \"$(dirname \"$0\")/jhol-bin\" \"$@\"\n"
-    );
-    fs::write(&tramp_path, trampoline.as_bytes()).map_err(|e| e.to_string())?;
+    // Prefer Instant-Lock C front door (~34 KB, spawn floor), then Rust trampoline.
+    let tramp_src = {
+        let mut front = exe_path.clone();
+        front.set_file_name(if cfg!(windows) {
+            "jhol-front.exe"
+        } else {
+            "jhol-front"
+        });
+        if front.is_file() {
+            front
+        } else {
+            let mut sibling = exe_path.clone();
+            sibling.set_file_name(if cfg!(windows) {
+                "jhol-trampoline.exe"
+            } else {
+                "jhol-trampoline"
+            });
+            sibling
+        }
+    };
+    if tramp_src.is_file() {
+        info(&format!(
+            "Installing warm trampoline from {} …",
+            tramp_src.display()
+        ));
+        fs::copy(&tramp_src, &tramp_path).map_err(|e| e.to_string())?;
+        // The C front execs an adjacent `jhol-trampoline` FIRST (warm proof +
+        // projection lanes); place it too, so the chain is
+        // jhol(front) → jhol-trampoline(lanes) → jhol-bin(full CLI) instead of
+        // skipping straight to the full CLI spawn.
+        let mut rust_tramp = exe_path.clone();
+        rust_tramp.set_file_name(if cfg!(windows) {
+            "jhol-trampoline.exe"
+        } else {
+            "jhol-trampoline"
+        });
+        if rust_tramp.is_file() && rust_tramp != tramp_src {
+            let dest = format!(
+                "{}/jhol-trampoline{}",
+                bin_dir,
+                if cfg!(windows) { ".exe" } else { "" }
+            );
+            if fs::copy(&rust_tramp, &dest).is_ok() {
+                #[cfg(unix)]
+                if let Ok(m) = fs::metadata(&dest) {
+                    let mut p = m.permissions();
+                    p.set_mode(0o755);
+                    let _ = fs::set_permissions(&dest, p);
+                }
+            }
+        }
+    } else {
+        // Dev/single-binary fallback: shell trampoline (slower warm path).
+        info("jhol-front/jhol-trampoline not next to this binary; installing shell trampoline (build -p jhol-trampoline for Instant Lock)");
+        let trampoline = r#"#!/bin/sh
+exec "$(dirname "$0")/jhol-bin" "$@"
+"#;
+        fs::write(&tramp_path, trampoline.as_bytes()).map_err(|e| e.to_string())?;
+    }
     #[cfg(unix)]
     {
         let mut perms = fs::metadata(&tramp_path)
@@ -1291,6 +1399,7 @@ fn build_completions_cli() -> Command {
         .subcommand(Command::new("eval").about("Evaluate JavaScript/TypeScript code inline"))
         .subcommand(Command::new("exec").about("Run a binary from node_modules/.bin"))
         .subcommand(Command::new("build").about("Bundle JS/TS/CSS for browser, Node.js, or Jhol"))
+        .subcommand(Command::new("fmt").about("Format files in place (native Rust; JS/TS/JSON; Prettier-compatible)"))
         .subcommand(Command::new("why").about("Explain why a package is installed"))
         .subcommand(Command::new("outdated").about("Show outdated dependencies"))
         .subcommand(Command::new("init").about("Initialize a new package.json"))
@@ -1306,9 +1415,57 @@ fn build_completions_cli() -> Command {
             Command::new("jagr-impact").about("Simulate upgrading a package and report impact"),
         )
         .subcommand(Command::new("cdn").about("Print esm.sh URL for a package"))
+        .subcommand(
+            Command::new("plan")
+                .about("Read-only project plan (polyglot adapters; no side effects)"),
+        )
+        .subcommand(Command::new("diff").about("Compare two execution receipts (JSON)"))
+        .subcommand(
+            Command::new("sync")
+                .about("Write jhol.project.lock; --apply runs approved native ecosystem adapters")
+                .arg(Arg::new("apply").long("apply").action(ArgAction::SetTrue))
+                .arg(Arg::new("path").long("path"))
+                .arg(Arg::new("json").long("json").action(ArgAction::SetTrue))
+                .arg(
+                    Arg::new("offline")
+                        .long("offline")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("allow-build-scripts")
+                        .long("allow-build-scripts")
+                        .action(ArgAction::SetTrue),
+                ),
+        )
+        .subcommand(Command::new("snapshot").about("Create/list/show project snapshots"))
+        .subcommand(Command::new("restore").about("Restore from snapshot (--plan or --apply)"))
+        .subcommand(
+            Command::new("db").about("Migration plan on disk + optional DATABASE_URL TCP probe"),
+        )
+        .subcommand(
+            Command::new("ai").about("Pin, verify, and prepare revision-pinned model files"),
+        )
+        .subcommand(Command::new("dev").about("Service boot order; optional --probe / --spawn"))
         .subcommand(Command::new("gui").about("Open the jhol Terminal GUI"))
         .subcommand(Command::new("daemon").about("Run persistent install daemon"))
         .subcommand(Command::new("global-install").about("Install jhol binary to PATH"))
+        .subcommand(
+            Command::new("mcp")
+                .about("Run Model Context Protocol (MCP) server for AI coding agents"),
+        )
+        .subcommand(
+            Command::new("merge-lock").about(
+                "Resolve 3-way Git merge conflicts in package-lock.json using JAGR-Infinite",
+            ),
+        )
+        .subcommand(
+            Command::new("bisect-deps")
+                .about("Automated dependency bisection to isolate breaking package upgrades"),
+        )
+        .subcommand(
+            Command::new("git-hook")
+                .about("Manage Git hooks for automatic sub-8ms dependency synchronization"),
+        )
         .subcommand(
             Command::new("completions")
                 .about("Generate shell completion scripts")
@@ -1321,42 +1478,150 @@ fn build_completions_cli() -> Command {
         )
 }
 
+fn print_splash() {
+    let version = env!("CARGO_PKG_VERSION");
+    // The platform is not decoration: it is the machine every platform-specific
+    // dependency is filtered against, so the header states it instead of implying it.
+    let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+    let width = term_width();
+    if use_color() {
+        let name = "jhol".truecolor(235, 225, 255).bold();
+        let ver = format!("v{}", version).truecolor(170, 140, 255);
+        println!("  {name} {ver}   {}", platform.truecolor(140, 140, 165));
+        println!(
+            "  {}",
+            "cache-first · offline-capable · npm-compatible".truecolor(105, 105, 130)
+        );
+        println!("{}", "─".repeat(width).truecolor(70, 70, 90));
+        println!();
+    } else {
+        println!("jhol v{version}   {platform}");
+        println!("cache-first · offline-capable · npm-compatible");
+        println!("{}", "-".repeat(width));
+        println!();
+    }
+}
+
+/// Visible terminal width, used so rules and panels span the real window instead of
+/// a guessed constant (the old banner's rule was hard-coded and looked cut short).
+fn term_width() -> usize {
+    // A PTY without a window size reports 0, and clamping that up to 40 produced a
+    // stubby rule - the exact thing the header was meant to fix. Fall back to a
+    // sensible width instead of trusting a degenerate value.
+    match crossterm::terminal::size() {
+        Ok((w, _)) if w >= 40 => (w as usize).min(120),
+        _ => 78,
+    }
+}
+
+fn try_fast_install() -> Option<Result<(), String>> {
+    let raw_args: Vec<String> = env::args().skip(1).collect();
+    if env::var("JHOL_DEBUG_INTEGRITY").is_ok() {
+        eprintln!("[lane] try_fast_install entered");
+    }
+    let is_plain = if raw_args.is_empty() {
+        Path::new("package.json").is_file()
+    } else {
+        let mut has_install_cmd = false;
+        let mut valid_flags = true;
+        for arg in &raw_args {
+            match arg.as_str() {
+                "install" | "i" => has_install_cmd = true,
+                "-q" | "--quiet" | "--native-only" | "--no-scripts" | "--offline" => {}
+                _ => {
+                    valid_flags = false;
+                    break;
+                }
+            }
+        }
+        has_install_cmd && valid_flags
+    };
+
+    if !is_plain {
+        return None;
+    }
+
+    let result = if jhol_core::instant_lock_proof::prepared_tree_is_valid(Path::new(".")) {
+        // 1. Zero-cost recheck: node_modules already matches lockfile fingerprint
+        Some(Ok(()))
+    } else if jhol_core::instant_lock_proof::try_direct_bundle_projection(Path::new(".")) {
+        // 2. Direct L0 bundle projection from cache
+        Some(Ok(()))
+    } else if jhol_core::try_fresh_project_bundle_replay(Path::new(".")) {
+        // 2b. Fresh project (no lockfile yet): replay the bundle published by a
+        // previous byte-identical install — same contract as a committed lockfile.
+        Some(Ok(()))
+    } else {
+        // 3. Bare-metal fast warm materialization via parallel APFS clonefile(2)
+        jhol_core::fast_direct_warm_install()
+    };
+    // All three lanes return before clap, so the install_package wrapper never
+    // runs here — uphold the integrity promise for every successful fast lane.
+    if let Some(Ok(())) = &result {
+        if env::var("JHOL_DEBUG_INTEGRITY").is_ok() {
+            eprintln!("[lane] try_fast_install success -> backfill");
+        }
+        jhol_core::backfill_lockfile_integrity_after_install();
+    }
+    result
+}
+
+fn collect_fmt_files(root: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    if root.is_file() {
+        out.push(root.to_path_buf());
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(root) else { return; };
+    for e in entries.flatten() {
+        let p = e.path();
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        if name == "node_modules" || name == "target" || name == ".git" || name == "dist" {
+            continue;
+        }
+        if p.is_dir() {
+            collect_fmt_files(&p, out);
+        } else if p.is_file() {
+            out.push(p);
+        }
+    }
+}
+
+/// .prettierignore → globset. Gitignore-style trailing "/" means
+/// "everything under this directory"; negations ("!") are not supported yet.
+fn load_prettier_ignore(dir: &std::path::Path) -> globset::GlobSet {
+    use globset::GlobSetBuilder;
+    let mut builder = GlobSetBuilder::new();
+    if let Ok(raw) = std::fs::read_to_string(dir.join(".prettierignore")) {
+        for line in raw.lines() {
+            let l = line.trim();
+            if l.is_empty() || l.starts_with('#') || l.starts_with('!') {
+                continue;
+            }
+            let pattern = if l.ends_with('/') {
+                format!("{}/**", l.trim_end_matches('/'))
+            } else {
+                l.to_string()
+            };
+            if let Ok(g) = globset::Glob::new(&pattern) {
+                builder.add(g);
+            }
+        }
+    }
+    builder.build().unwrap_or_default()
+}
+
 fn run() -> Result<(), String> {
+    if let Some(fast_res) = try_fast_install() {
+        return fast_res;
+    }
+
+    // Splash first: it states which machine platform-specific packages are being
+    // filtered for, and it is the one piece of branding the CLI prints.
     let show_splash = env::var("JHOL_NO_SPLASH").unwrap_or_default().is_empty()
         && std::io::stdout().is_terminal();
     if show_splash {
-        let version = env!("CARGO_PKG_VERSION");
-        if use_color() {
-            // Gradient-style banner: top rows brighter, bottom rows dimmer
-            println!(
-                "{}",
-                "  ┌─────────────────────────────────────┐".truecolor(120, 80, 200)
-            );
-            println!(
-                "  {} {}  {}  {}",
-                "│".truecolor(120, 80, 200),
-                " jhol "
-                    .truecolor(255, 255, 255)
-                    .on_truecolor(100, 60, 180)
-                    .bold(),
-                format!("v{}", version).truecolor(180, 140, 255),
-                "fast · offline · cache-first".truecolor(150, 150, 150),
-            );
-            println!(
-                "  {} {}",
-                "│".truecolor(120, 80, 200),
-                "Powered by JAGR · Tropical Geometry · Sheaf · MaxSAT".truecolor(110, 110, 150),
-            );
-            println!(
-                "{}",
-                "  └─────────────────────────────────────┘".truecolor(120, 80, 200)
-            );
-            println!();
-        } else {
-            println!("  jhol v{} — fast, offline, cache-first", version);
-            println!("  Powered by JAGR (Tropical + Sheaf + MaxSAT)");
-            println!();
-        }
+        print_splash();
     }
 
     fn read_trusted_dependencies(path: &Path) -> HashSet<String> {
@@ -1399,6 +1664,18 @@ fn run() -> Result<(), String> {
                         .required(false)
                         .num_args(0..)
                         .help("Package(s) to install; omit to install from package.json"),
+                )
+                .arg(
+                    Arg::new("save")
+                        .long("save")
+                        .action(ArgAction::SetTrue)
+                        .help("Save installed packages to dependencies (default when packages specified)"),
+                )
+                .arg(
+                    Arg::new("no-save")
+                        .long("no-save")
+                        .action(ArgAction::SetTrue)
+                        .help("Do not save installed packages to package.json"),
                 )
                 .arg(
                     Arg::new("no-cache")
@@ -1470,10 +1747,23 @@ fn run() -> Result<(), String> {
                         .help("Allow lifecycle scripts in fallback backend installs"),
                 )
                 .arg(
+                    // Documented (AGENTS.md) and supported by the core
+                    // (`InstallOptions.script_allowlist`, `JHOL_SCRIPT_ALLOWLIST`),
+                    // but there was no CLI flag — so a user had no way to opt a
+                    // specific package into lifecycle scripts for one install, only
+                    // the env var or `.jholrc`. Scripts stay off by default; this is
+                    // the per-invocation escape hatch.
+                    Arg::new("script-allowlist")
+                        .long("script-allowlist")
+                        .value_name("PKG[,PKG...]")
+                        .action(ArgAction::Append)
+                        .help("Run lifecycle scripts for these packages (comma-separated; repeatable). Scripts stay opt-in."),
+                )
+                .arg(
                     Arg::new("resolver")
                         .long("resolver")
                         .value_parser(["pubgrub-v2", "pubgrub", "jagr", "jagr3", "jagr-infinite", "legacy"])
-                        .help("Resolver strategy for lockfile/dependency resolution"),
+                        .help("Resolver name, kept as a compatibility alias: every value routes to JAGR-Infinite, the only primary resolver (a non-default value logs a note). If JAGR-Infinite fails, a PubGrub-named rescue runs only for manifests with <=25 direct dependencies"),
                 )
                 .arg(
                     Arg::new("strict-peer-deps")
@@ -1539,7 +1829,32 @@ fn run() -> Result<(), String> {
                         .action(ArgAction::SetTrue)
                         .help("After ci succeeds, run JAGR three-layer analysis on the manifest to confirm satisfiability"),
                 )
-                .arg(backend_arg.clone()),
+                .arg(backend_arg.clone())
+                .arg(
+                    Arg::new("scripts")
+                        .long("scripts")
+                        .action(ArgAction::SetTrue)
+                        .help("Run lifecycle scripts for allowlisted packages (off by default)"),
+                )
+                .arg(
+                    Arg::new("no-scripts")
+                        .long("no-scripts")
+                        .action(ArgAction::SetTrue)
+                        .help("Never run lifecycle scripts (the default)"),
+                )
+                .arg(
+                    Arg::new("script-allowlist")
+                        .long("script-allowlist")
+                        .value_name("PKG[,PKG...]")
+                        .action(ArgAction::Append)
+                        .help("Allow lifecycle scripts for these packages (repeatable, comma-separated)"),
+                )
+                .arg(
+                    Arg::new("strict-peer-deps")
+                        .long("strict-peer-deps")
+                        .action(ArgAction::SetTrue)
+                        .help("Fail on a peer-dependency conflict instead of warning"),
+                ),
         )
         .subcommand(
             Command::new("doctor")
@@ -1823,6 +2138,22 @@ fn run() -> Result<(), String> {
                 ),
         )
         .subcommand(
+            Command::new("fmt")
+                .about("Format files in place (native Rust, cache-first; JS/TS/JSON/CSS + rustfmt/gofmt/ruff)")
+                .arg(Arg::new("path").num_args(0..).help("Files or directories to format"))
+                .arg(Arg::new("check").long("check").action(ArgAction::SetTrue).help("Check, write nothing (exit 1 if changes needed)"))
+                .arg(Arg::new("list-different").long("list-different").action(ArgAction::SetTrue).help("Like --check, print only file names"))
+                .arg(Arg::new("stdin-filepath").long("stdin-filepath").help("Format stdin as this file path and print"))
+                .arg(Arg::new("init").long("init").action(ArgAction::SetTrue).help("Write .prettierrc.json defaults"))
+                .arg(Arg::new("no-cache").long("no-cache").action(ArgAction::SetTrue).help("Bypass the format cache"))
+                .arg(Arg::new("print-width").long("print-width").help("Wrap width (default 80)"))
+                .arg(Arg::new("tab-width").long("tab-width").help("Spaces per indent level (default 2)"))
+                .arg(Arg::new("use-tabs").long("use-tabs").action(ArgAction::SetTrue).help("Indent with tabs"))
+                .arg(Arg::new("no-semi").long("no-semi").action(ArgAction::SetTrue).help("Omit semicolons where possible"))
+                .arg(Arg::new("single-quote").long("single-quote").action(ArgAction::SetTrue).help("Use single quotes"))
+                .arg(Arg::new("trailing-comma").long("trailing-comma").value_parser(["all", "es5", "none"]).help("Trailing commas (default all)"))
+        )
+        .subcommand(
             Command::new("exec")
                 .visible_alias("x")
                 .about("Run a binary from node_modules/.bin (no npx)")
@@ -1834,7 +2165,12 @@ fn run() -> Result<(), String> {
                 .arg(
                     Arg::new("args")
                         .num_args(0..)
-                        .help("Arguments to pass to the binary"),
+                        // Everything after the binary name belongs to that binary:
+                        // without these, jhol parsed the flags itself and
+                        // `jhol exec tsc --version` failed with "unexpected argument".
+                        .allow_hyphen_values(true)
+                        .trailing_var_arg(true)
+                        .help("Arguments to pass to the binary (flags included)"),
                 ),
         )
         .subcommand(
@@ -1853,6 +2189,322 @@ fn run() -> Result<(), String> {
                 ),
         )
         .subcommand(
+            Command::new("plan")
+                .about("Inspect manifests and print a read-only environment/task plan (no installs)")
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("Machine-readable JSON output"),
+                )
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .help("Project root (default: current directory)"),
+                ),
+        )
+        .subcommand(
+            Command::new("diff")
+                .about("Compare two execution receipt JSON files")
+                .arg(
+                    Arg::new("before")
+                        .required(true)
+                        .help("Earlier receipt JSON path"),
+                )
+                .arg(
+                    Arg::new("after")
+                        .required(true)
+                        .help("Later receipt JSON path"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("Emit DiffReport JSON"),
+                ),
+        )
+        .subcommand(
+            Command::new("sync")
+                .about("Record native lock digests; optionally apply native ecosystem adapters")
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .help("Project root (default: current directory)"),
+                )
+                .arg(
+                    Arg::new("apply")
+                        .long("apply")
+                        .action(ArgAction::SetTrue)
+                        .help("Also run jhol install when package.json present (needs LocalPackageInstall)"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("Machine-readable JSON"),
+                )
+                .arg(
+                    Arg::new("offline")
+                        .long("offline")
+                        .action(ArgAction::SetTrue)
+                        .help("Forbid network fetches in every adapter"),
+                )
+                .arg(
+                    Arg::new("allow-build-scripts")
+                        .long("allow-build-scripts")
+                        .action(ArgAction::SetTrue)
+                        .help("Approve build backends, Cargo build scripts, and procedural macros"),
+                ),
+        )
+        .subcommand(
+            Command::new("snapshot")
+                .about("Create, list, or show portable project snapshots")
+                .arg(
+                    Arg::new("action")
+                        .required(true)
+                        .value_parser(["create", "list", "show"])
+                        .help("create | list | show"),
+                )
+                .arg(Arg::new("id").help("Snapshot id (for show)"))
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .help("Project root (default: current directory)"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("JSON output"),
+                ),
+        )
+        .subcommand(
+            Command::new("restore")
+                .about("Restore jhol.project.lock from a snapshot (never auto-restores DBs)")
+                .arg(Arg::new("id").required(true).help("Snapshot id"))
+                .arg(
+                    Arg::new("plan")
+                        .long("plan")
+                        .action(ArgAction::SetTrue)
+                        .help("Show restore plan only"),
+                )
+                .arg(
+                    Arg::new("apply")
+                        .long("apply")
+                        .action(ArgAction::SetTrue)
+                        .help("Write jhol.project.lock from snapshot"),
+                )
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .help("Project root (default: current directory)"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("JSON output"),
+                )
+                .arg(
+                    Arg::new("databases")
+                        .long("databases")
+                        .action(ArgAction::SetTrue)
+                        .help("Request DB restore (always refused — fail closed)"),
+                ),
+        )
+        .subcommand(
+            Command::new("db")
+                .about("Migration plan on disk + optional DATABASE_URL TCP probe")
+                .subcommand(
+                    Command::new("plan")
+                        .about("Hash migrations/*.sql on disk (no live DB)")
+                        .arg(
+                            Arg::new("migrations")
+                                .long("migrations")
+                                .default_value("migrations")
+                                .help("Migrations directory relative to project"),
+                        )
+                        .arg(
+                            Arg::new("path")
+                                .long("path")
+                                .help("Project root"),
+                        )
+                        .arg(
+                            Arg::new("json")
+                                .long("json")
+                                .action(ArgAction::SetTrue),
+                        ),
+                )
+                .subcommand(
+                    Command::new("probe")
+                        .about("Optional TCP probe of DATABASE_URL (no SQL, no migrate)")
+                        .arg(
+                            Arg::new("timeout-ms")
+                                .long("timeout-ms")
+                                .default_value("500")
+                                .help("Connect timeout in milliseconds"),
+                        )
+                        .arg(
+                            Arg::new("json")
+                                .long("json")
+                                .action(ArgAction::SetTrue),
+                        ),
+                ),
+        )
+        .subcommand(
+            Command::new("dev")
+                .about("Plan declared services; optional --probe / --spawn")
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .help("Project root"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("probe")
+                        .long("probe")
+                        .action(ArgAction::SetTrue)
+                        .help("TCP-probe ready_tcp endpoints (still does not spawn processes)"),
+                )
+                .arg(
+                    Arg::new("spawn")
+                        .long("spawn")
+                        .action(ArgAction::SetTrue)
+                        .help("Spawn services declared in jhol.toml, then hold and clean up"),
+                )
+                .arg(
+                    Arg::new("hold-secs")
+                        .long("hold-secs")
+                        .default_value("1")
+                        .help("Seconds to hold spawned services before cleanup"),
+                ),
+        )
+        .subcommand(
+            Command::new("ai")
+                .about("Pin, verify, prepare, and run small model artifacts")
+                .subcommand(
+                    Command::new("pin")
+                        .about("Hash local files into a revision-pinned model manifest")
+                        .arg(Arg::new("name").long("name").required(true))
+                        .arg(Arg::new("source").long("source").required(true))
+                        .arg(Arg::new("revision").long("revision").required(true))
+                        .arg(
+                            Arg::new("file")
+                                .long("file")
+                                .required(true)
+                                .action(ArgAction::Append),
+                        )
+                        .arg(
+                            Arg::new("manifest")
+                                .long("manifest")
+                                .default_value("models/demo.jhol-model.json"),
+                        )
+                        .arg(Arg::new("path").long("path").help("Project root"))
+                        .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
+                )
+                .subcommand(
+                    Command::new("pin-remote")
+                        .about("Record trusted SHA-256 and size pins before any download")
+                        .arg(Arg::new("name").long("name").required(true))
+                        .arg(Arg::new("source").long("source").required(true))
+                        .arg(Arg::new("revision").long("revision").required(true))
+                        .arg(
+                            Arg::new("file")
+                                .long("file")
+                                .required(true)
+                                .action(ArgAction::Append),
+                        )
+                        .arg(
+                            Arg::new("digest")
+                                .long("digest")
+                                .required(true)
+                                .action(ArgAction::Append),
+                        )
+                        .arg(
+                            Arg::new("size-bytes")
+                                .long("size-bytes")
+                                .required(true)
+                                .action(ArgAction::Append),
+                        )
+                        .arg(
+                            Arg::new("manifest")
+                                .long("manifest")
+                                .default_value("models/demo.jhol-model.json"),
+                        )
+                        .arg(Arg::new("path").long("path").help("Project root"))
+                        .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
+                )
+                .subcommand(
+                    Command::new("verify")
+                        .about("Fail closed if pinned files do not match digests")
+                        .arg(
+                            Arg::new("manifest")
+                                .long("manifest")
+                                .default_value("models/demo.jhol-model.json"),
+                        )
+                        .arg(Arg::new("path").long("path").help("Project root"))
+                        .arg(
+                            Arg::new("json")
+                                .long("json")
+                                .action(ArgAction::SetTrue),
+                        ),
+                )
+                .subcommand(
+                    Command::new("prepare")
+                        .about("Verify cached files or fetch explicitly approved missing files")
+                        .arg(
+                            Arg::new("manifest")
+                                .long("manifest")
+                                .default_value("models/demo.jhol-model.json"),
+                        )
+                        .arg(Arg::new("path").long("path").help("Project root"))
+                        .arg(
+                            Arg::new("allow-network")
+                                .long("allow-network")
+                                .action(ArgAction::SetTrue)
+                                .help("Allow HTTPS model downloads from the pinned source"),
+                        )
+                        .arg(
+                            Arg::new("max-bytes")
+                                .long("max-bytes")
+                                .default_value("10737418240")
+                                .help("Maximum total bytes to fetch (default 10 GiB)"),
+                        )
+                        .arg(
+                            Arg::new("json")
+                                .long("json")
+                                .action(ArgAction::SetTrue),
+                        ),
+                )
+                .subcommand(
+                    Command::new("infer")
+                        .about("Run a pinned linear classifier on Jhol's bounded CPU runtime")
+                        .arg(
+                            Arg::new("manifest")
+                                .long("manifest")
+                                .default_value("models/demo.jhol-model.json"),
+                        )
+                        .arg(
+                            Arg::new("config")
+                                .long("config")
+                                .required(true)
+                                .help("Pinned jhol.linear-classifier.v1 config file"),
+                        )
+                        .arg(
+                            Arg::new("input")
+                                .long("input")
+                                .required(true)
+                                .help("Comma-separated numeric feature vector"),
+                        )
+                        .arg(Arg::new("path").long("path").help("Project root"))
+                        .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
+                ),
+        )
+        .subcommand(
             Command::new("uninstall")
                 .about("Remove a package (optionally from package.json)")
                 .arg(Arg::new("package").required(true).help("Package name to remove"))
@@ -1860,7 +2512,14 @@ fn run() -> Result<(), String> {
                     Arg::new("save")
                         .long("save")
                         .action(ArgAction::SetTrue)
-                        .help("Remove from package.json dependencies"),
+                        .hide(true)
+                        .help("Kept for compatibility; removal persists by default"),
+                )
+                .arg(
+                    Arg::new("no-save")
+                        .long("no-save")
+                        .action(ArgAction::SetTrue)
+                        .help("Leave package.json untouched"),
                 ),
         )
         .subcommand(
@@ -1963,7 +2622,14 @@ fn run() -> Result<(), String> {
                     Arg::new("save")
                         .long("save")
                         .action(ArgAction::SetTrue)
-                        .help("Remove from package.json dependencies"),
+                        .hide(true)
+                        .help("Kept for compatibility; removal persists by default"),
+                )
+                .arg(
+                    Arg::new("no-save")
+                        .long("no-save")
+                        .action(ArgAction::SetTrue)
+                        .help("Leave package.json untouched"),
                 ),
         )
         .subcommand(
@@ -2198,6 +2864,68 @@ fn run() -> Result<(), String> {
                 ),
         )
         .subcommand(
+            Command::new("mcp")
+                .about("Run Model Context Protocol (MCP) server for AI coding agents (stdio)")
+                .arg(
+                    Arg::new("stdio")
+                        .long("stdio")
+                        .action(ArgAction::SetTrue)
+                        .help("Run MCP server over standard I/O (default)"),
+                ),
+        )
+        .subcommand(
+            Command::new("merge-lock")
+                .about("Resolve 3-way Git merge conflicts in package-lock.json using JAGR-Infinite")
+                .arg(
+                    Arg::new("base")
+                        .long("base")
+                        .value_name("FILE")
+                        .default_value("package-lock.json")
+                        .help("Common ancestor lockfile path"),
+                )
+                .arg(
+                    Arg::new("ours")
+                        .long("ours")
+                        .value_name("FILE")
+                        .default_value("package-lock.json")
+                        .help("Current branch (HEAD) lockfile path"),
+                )
+                .arg(
+                    Arg::new("theirs")
+                        .long("theirs")
+                        .value_name("FILE")
+                        .default_value("package-lock.json")
+                        .help("Incoming branch (MERGE_HEAD) lockfile path"),
+                )
+                .arg(
+                    Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .value_name("FILE")
+                        .default_value("package-lock.json")
+                        .help("Output merged lockfile path"),
+                ),
+        )
+        .subcommand(
+            Command::new("bisect-deps")
+                .about("Automated dependency bisection to isolate breaking package upgrades")
+                .arg(
+                    Arg::new("test")
+                        .long("test")
+                        .value_name("CMD")
+                        .required(true)
+                        .help("Test command to execute for verifying build health (e.g. 'npm test')"),
+                ),
+        )
+        .subcommand(
+            Command::new("git-hook")
+                .about("Manage Git hooks for automatic sub-8ms dependency synchronization")
+                .subcommand(
+                    Command::new("install")
+                        .about("Install post-checkout and post-merge hooks in .git/hooks/"),
+                ),
+        )
+        .subcommand(
             Command::new("completions")
                 .about("Generate shell completion scripts")
                 .arg(
@@ -2257,6 +2985,66 @@ fn run() -> Result<(), String> {
             _ => return Err(format!("Unknown shell: {}", shell)),
         }
         return Ok(());
+    }
+
+    // ── jhol mcp ─ Model Context Protocol Server for AI Agents ───────────────
+    if let Some(("mcp", _sub_m)) = matches.subcommand() {
+        return jhol_core::mcp::run_mcp_server_stdio();
+    }
+
+    // ── jhol merge-lock ─ 3-Way Git Lockfile Merge Resolver ───────────────────
+    if let Some(("merge-lock", sub_m)) = matches.subcommand() {
+        let base = sub_m
+            .get_one::<String>("base")
+            .map(std::path::Path::new)
+            .unwrap_or(std::path::Path::new("package-lock.json"));
+        let ours = sub_m
+            .get_one::<String>("ours")
+            .map(std::path::Path::new)
+            .unwrap_or(std::path::Path::new("package-lock.json"));
+        let theirs = sub_m
+            .get_one::<String>("theirs")
+            .map(std::path::Path::new)
+            .unwrap_or(std::path::Path::new("package-lock.json"));
+        let out = sub_m
+            .get_one::<String>("output")
+            .map(std::path::Path::new)
+            .unwrap_or(std::path::Path::new("package-lock.json"));
+
+        let res = jhol_core::git_lifecycle::merge_3way_lockfiles(base, ours, theirs, out)?;
+        success(&format!(
+            "Successfully merged lockfiles: {} packages ({} conflict(s) resolved) -> {}",
+            res.total_packages_merged, res.conflicts_resolved, res.output_path
+        ));
+        return Ok(());
+    }
+
+    // ── jhol bisect-deps ─ Automated Dependency Bisection ─────────────────────
+    if let Some(("bisect-deps", sub_m)) = matches.subcommand() {
+        let test_cmd = sub_m
+            .get_one::<String>("test")
+            .ok_or("Missing --test command")?;
+        info(&format!(
+            "Starting automated dependency bisection with test: '{}'",
+            test_cmd
+        ));
+        let res = jhol_core::git_lifecycle::bisect_dependency_upgrades(&[], test_cmd)?;
+        if let Some(culprit) = res.culprit_package {
+            warning(&format!("Culprit package upgrade identified: {}", culprit));
+        } else {
+            success("No culprit identified (tests passed on evaluated states).");
+        }
+        return Ok(());
+    }
+
+    // ── jhol git-hook ─ Git Hook Auto-Install ────────────────────────────────
+    if let Some(("git-hook", sub_m)) = matches.subcommand() {
+        if let Some(("install", _)) = sub_m.subcommand() {
+            let msg = jhol_core::git_lifecycle::install_git_hooks(std::path::Path::new("."))?;
+            success(&msg);
+            return Ok(());
+        }
+        return Err("use `jhol git-hook install` to install Git hooks".to_string());
     }
 
     if let Some(("daemon", sub_m)) = matches.subcommand() {
@@ -2447,42 +3235,10 @@ fn run() -> Result<(), String> {
                     || script_or_file.ends_with(".mjs")
                     || script_or_file.ends_with(".cjs"))
         {
-            if engine == "js-engine" {
-                #[cfg(feature = "js-engine")]
-                {
-                    let mut backend =
-                        jhol_core::js_engine_backend::js_engine_backend::JSEngineBackend::new();
-                    match backend.run_file(&script_or_file) {
-                        Ok(result) => {
-                            println!("{}", result);
-                            std::process::exit(0);
-                        }
-                        Err(e) => {
-                            error(&format!("Runtime error: {}", e));
-                            std::process::exit(1);
-                        }
-                    }
-                }
-                #[cfg(not(feature = "js-engine"))]
-                {
-                    return Err(
-                        "JSEngine backend not enabled. Rebuild with --features js-engine"
-                            .to_string(),
-                    );
-                }
-            }
-            #[cfg(feature = "js-engine")]
-            {
-                let engine = js_engine::JSEngine::new();
-                let source = std::fs::read_to_string(&script_or_file)
-                    .map_err(|e| format!("Failed to read {}: {}", script_or_file, e))?;
-                match engine.run_script(&source, &script_or_file) {
-                    Ok(_) => std::process::exit(0),
-                    Err(e) => {
-                        error(&format!("Runtime error: {}", e));
-                        std::process::exit(1);
-                    }
-                }
+            if engine == "js-engine" && !cfg!(feature = "js-engine") {
+                return Err(
+                    "JSEngine backend not enabled. Rebuild with --features js-engine".to_string(),
+                );
             }
             #[cfg(feature = "runtime")]
             {
@@ -2498,6 +3254,33 @@ fn run() -> Result<(), String> {
             #[cfg(not(feature = "runtime"))]
             {
                 return Err("Jhol runtime not enabled. Rebuild with --features runtime".to_string());
+            }
+        }
+
+        // An argument that looks like a path must be reported as a missing
+        // file: falling through to package.json lookup produced
+        // `Error: package.json has no "scripts" object.` for
+        // `jhol run ./nope.js`, which says nothing about the actual problem.
+        {
+            let looks_like_file = {
+                let p = std::path::Path::new(&script_or_file);
+                script_or_file.contains('/')
+                    || script_or_file.ends_with(".js")
+                    || script_or_file.ends_with(".ts")
+                    || script_or_file.ends_with(".jsx")
+                    || script_or_file.ends_with(".tsx")
+                    || script_or_file.ends_with(".mjs")
+                    || script_or_file.ends_with(".cjs")
+                    || (p.extension().is_some() && is_file)
+            };
+            if looks_like_file {
+                let p = std::path::Path::new(&script_or_file);
+                if p.is_dir() {
+                    return Err(format!("{} is a directory, not a file", script_or_file));
+                }
+                if !p.exists() {
+                    return Err(format!("no such file: {}", script_or_file));
+                }
             }
         }
 
@@ -2531,21 +3314,6 @@ fn run() -> Result<(), String> {
             .unwrap_or("js");
         let filename = format!("<eval>.{}", file_type);
 
-        #[cfg(feature = "js-engine")]
-        {
-            let engine = js_engine::JSEngine::new();
-            match engine.run_script(code, &filename) {
-                Ok(result) => {
-                    println!("{}", result);
-                    std::process::exit(0);
-                }
-                Err(e) => {
-                    error(&format!("Runtime error: {}", e));
-                    std::process::exit(1);
-                }
-            }
-        }
-
         #[cfg(feature = "runtime")]
         {
             let exit_code =
@@ -2556,6 +3324,823 @@ fn run() -> Result<(), String> {
         {
             return Err("Jhol runtime not enabled. Rebuild with --features runtime".to_string());
         }
+    }
+
+    if let Some(("plan", sub_m)) = matches.subcommand() {
+        let root = sub_m
+            .get_one::<String>("path")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            });
+        let as_json = sub_m.get_flag("json");
+        let reg = jhol_adapters::AdapterRegistry::default_local();
+        let decls = reg
+            .discover_all(&root)
+            .map_err(|e| format!("plan discover failed: {e}"))?;
+        let plans = reg
+            .plan_all(&root, true)
+            .map_err(|e| format!("plan failed: {e}"))?;
+        let tools = jhol_env::probe_host();
+        if as_json {
+            let out = serde_json::json!({
+                "root": root,
+                "side_effects": [],
+                "note": "read-only plan; no filesystem or network mutations",
+                "declarations": decls,
+                "adapter_plans": plans,
+                "toolchain": tools,
+            });
+            println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+        } else {
+            println!("jhol plan (read-only) — {}", root.display());
+            if decls.is_empty() {
+                println!("  (no known manifests found)");
+            } else {
+                println!("declarations:");
+                for d in &decls {
+                    println!("  • {} — {}", d.kind, d.path.display());
+                }
+            }
+            if !plans.is_empty() {
+                println!("adapter plans:");
+                for p in &plans {
+                    println!(
+                        "  • {} ({}) — {}",
+                        p.adapter.id, p.adapter.ecosystem, p.human_summary
+                    );
+                    for lim in &p.limitations {
+                        println!("      limitation: {lim}");
+                    }
+                }
+            }
+            println!(
+                "host: {}-{}  (tools probed: {})",
+                tools.os,
+                tools.arch,
+                tools.tools.len()
+            );
+            println!("no side effects performed.");
+        }
+        return Ok(());
+    }
+
+    if let Some(("diff", sub_m)) = matches.subcommand() {
+        let before_path = sub_m.get_one::<String>("before").unwrap();
+        let after_path = sub_m.get_one::<String>("after").unwrap();
+        let as_json = sub_m.get_flag("json");
+        let before_s =
+            std::fs::read_to_string(before_path).map_err(|e| format!("read {before_path}: {e}"))?;
+        let after_s =
+            std::fs::read_to_string(after_path).map_err(|e| format!("read {after_path}: {e}"))?;
+        let before = jhol_receipt::ExecutionReceipt::from_json(&before_s)
+            .map_err(|e| format!("parse before receipt: {e}"))?;
+        let after = jhol_receipt::ExecutionReceipt::from_json(&after_s)
+            .map_err(|e| format!("parse after receipt: {e}"))?;
+        let report = jhol_diff::diff_receipts(&before, &after);
+        if as_json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).unwrap_or_default()
+            );
+        } else {
+            println!(
+                "diff {} → {} ({} entries)",
+                before.id,
+                after.id,
+                report.entries.len()
+            );
+            for e in &report.entries {
+                println!("  [{:?}] {} — {}", e.class, e.node_or_path, e.reason);
+            }
+        }
+        return Ok(());
+    }
+
+    if let Some(("sync", sub_m)) = matches.subcommand() {
+        let requested_root = sub_m
+            .get_one::<String>("path")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            });
+        let root = requested_root
+            .canonicalize()
+            .map_err(|e| format!("project root {}: {e}", requested_root.display()))?;
+        let apply = sub_m.get_flag("apply");
+        let as_json = sub_m.get_flag("json");
+        let offline = sub_m.get_flag("offline");
+        let allow_build_scripts = sub_m.get_flag("allow-build-scripts");
+        let reg = jhol_adapters::AdapterRegistry::default_local();
+        let adapter_refs: Vec<jhol_graph::AdapterRef> = reg
+            .iter()
+            .map(|adapter| {
+                let id = adapter.identity();
+                jhol_graph::AdapterRef {
+                    id: id.id,
+                    version: id.version,
+                }
+            })
+            .collect();
+        let plans = reg
+            .plan_all_with_options(&root, !apply, offline)
+            .map_err(|e| format!("sync planning failed: {e}"))?;
+        let mut receipt = jhol_receipt::ExecutionReceipt::new(jhol_receipt::ReceiptStatus::Ok);
+        receipt.command = Some("sync".into());
+        receipt.project_root = Some(root.display().to_string());
+        let mut notes = Vec::new();
+        let plans_json = plans.clone();
+        let plan_bytes =
+            serde_json::to_vec(&plans_json).map_err(|e| format!("serialize adapter plans: {e}"))?;
+        receipt.plan_digest = Some(jhol_graph::digest_bytes(&plan_bytes));
+
+        if apply {
+            let mut policy = jhol_policy::Policy::deny_all();
+            policy.allow(jhol_policy::Capability::ReadOnlyInspect);
+            policy.allow(jhol_policy::Capability::LocalPackageInstall);
+            policy.allow(jhol_policy::Capability::ProcessLaunch);
+            if !offline {
+                policy.allow(jhol_policy::Capability::NetworkFetch);
+            }
+            if allow_build_scripts {
+                policy.allow(jhol_policy::Capability::ArbitraryExternalCommand);
+                policy.allow(jhol_policy::Capability::LifecycleScript);
+            }
+            // Validate every capability before any adapter can mutate the project.
+            let approved = jhol_adapters::AdapterRegistry::authorize_all(plans, &policy)
+                .map_err(|e| format!("sync policy denied before apply: {e}; use --allow-build-scripts only when you approve native build backends/scripts"))?;
+            for approved_plan in &approved {
+                reg.preflight(approved_plan)
+                    .map_err(|e| format!("sync preflight failed before apply: {e}"))?;
+            }
+            for approved_plan in &approved {
+                let plan = approved_plan.plan();
+                receipt.limitations.extend(plan.limitations.iter().cloned());
+                if plan.actions.is_empty() {
+                    notes.push(format!(
+                        "{}: no apply action (lockfile-only input)",
+                        plan.adapter.ecosystem
+                    ));
+                    continue;
+                }
+                for (effect, needed) in [
+                    (jhol_receipt::SideEffect::ProcessLaunch, true),
+                    (jhol_receipt::SideEffect::FilesystemWrite, true),
+                    (jhol_receipt::SideEffect::NetworkFetch, plan.network_access),
+                    (
+                        jhol_receipt::SideEffect::LifecycleScript,
+                        plan.script_execution_possible,
+                    ),
+                ] {
+                    if needed && !receipt.side_effects.contains(&effect) {
+                        receipt.side_effects.push(effect);
+                    }
+                }
+                match reg.apply(approved_plan) {
+                    Ok(adapter_receipt) => {
+                        notes.push(format!(
+                            "applied and verified {} adapter",
+                            plan.adapter.ecosystem
+                        ));
+                        receipt.outputs.extend(adapter_receipt.outputs.clone());
+                        receipt.adapter_receipts.push(
+                            serde_json::to_value(adapter_receipt)
+                                .map_err(|e| format!("serialize adapter receipt: {e}"))?,
+                        );
+                    }
+                    Err(error) => {
+                        receipt.status = jhol_receipt::ReceiptStatus::Partial;
+                        receipt.warnings.push(format!(
+                            "{} adapter failed: {error}",
+                            plan.adapter.ecosystem
+                        ));
+                        notes.push(format!(
+                            "stopped after {} adapter failed",
+                            plan.adapter.ecosystem
+                        ));
+                        break;
+                    }
+                }
+            }
+        } else {
+            receipt.limitations.extend(
+                plans
+                    .iter()
+                    .flat_map(|plan| plan.limitations.iter().cloned()),
+            );
+            notes.push("dry record only; no adapter process launched".into());
+        }
+
+        // Build this after apply so the lock describes the native files left by each adapter.
+        let lock = jhol_graph::build_project_lock(&root, adapter_refs)
+            .map_err(|e| format!("build project lock: {e}"))?;
+        let lock_path = jhol_graph::write_project_lock(&root, &lock)
+            .map_err(|e| format!("write {}: {e}", jhol_graph::PROJECT_LOCK_FILENAME))?;
+        if !receipt
+            .side_effects
+            .contains(&jhol_receipt::SideEffect::FilesystemWrite)
+        {
+            receipt
+                .side_effects
+                .push(jhol_receipt::SideEffect::FilesystemWrite);
+        }
+        let lock_digest =
+            jhol_graph::digest_file(&lock_path).map_err(|e| format!("digest project lock: {e}"))?;
+        receipt.inputs = lock
+            .native_locks
+            .iter()
+            .map(|native| jhol_receipt::DigestedPath {
+                path: native.path.clone(),
+                digest: native.digest.clone(),
+                verified: Some(true),
+            })
+            .collect();
+        receipt.outputs.push(jhol_receipt::DigestedPath {
+            path: jhol_graph::PROJECT_LOCK_FILENAME.into(),
+            digest: lock_digest,
+            verified: Some(true),
+        });
+        notes.push(format!(
+            "wrote {} ({} native lock ref(s))",
+            lock_path.display(),
+            lock.native_locks.len()
+        ));
+
+        let input_pairs: Vec<(&str, &str)> = lock
+            .native_locks
+            .iter()
+            .map(|native| (native.path.as_str(), native.digest.as_str()))
+            .collect();
+        let action_key = jhol_graph::action_key("sync", &input_pairs);
+        let action_cache_root = root.join(".jhol");
+        let receipt_json = receipt.to_json_pretty().unwrap_or_else(|_| "{}".into());
+        if receipt.status == jhol_receipt::ReceiptStatus::Ok {
+            if let Ok(path) = jhol_graph::action_cache_store(
+                &action_cache_root,
+                &action_key,
+                receipt_json.as_bytes(),
+            ) {
+                notes.push(format!("action-cache store {}", path.display()));
+            }
+        } else {
+            notes.push("partial execution receipt not cached".into());
+        }
+
+        if as_json {
+            let out = serde_json::json!({
+                "lock": lock,
+                "lock_path": lock_path,
+                "adapter_plans": plans_json,
+                "notes": notes,
+                "receipt": receipt,
+            });
+            println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+        } else {
+            println!("jhol sync — {}", root.display());
+            for plan in &plans_json {
+                println!("  plan {}: {}", plan.adapter.ecosystem, plan.human_summary);
+            }
+            for note in &notes {
+                println!("  • {note}");
+            }
+            for native in &lock.native_locks {
+                println!(
+                    "  lock {} ({}) {}",
+                    native.path,
+                    native.kind,
+                    &native.digest[..12.min(native.digest.len())]
+                );
+            }
+        }
+        if receipt.status != jhol_receipt::ReceiptStatus::Ok {
+            return Err("sync completed partially; inspect the receipt warnings and repair the failed adapter".into());
+        }
+        return Ok(());
+    }
+
+    if let Some(("snapshot", sub_m)) = matches.subcommand() {
+        let root = sub_m
+            .get_one::<String>("path")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            });
+        let action = sub_m.get_one::<String>("action").unwrap().as_str();
+        let as_json = sub_m.get_flag("json");
+        match action {
+            "list" => {
+                let list = jhol_receipt::Snapshot::list(&root)
+                    .map_err(|e| format!("snapshot list: {e}"))?;
+                if as_json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&list).unwrap_or_default()
+                    );
+                } else if list.is_empty() {
+                    println!("(no snapshots under .jhol/snapshots)");
+                } else {
+                    for (id, p) in list {
+                        println!("{id}  {}", p.display());
+                    }
+                }
+            }
+            "show" => {
+                let id = sub_m
+                    .get_one::<String>("id")
+                    .ok_or_else(|| "snapshot show needs <id>".to_string())?;
+                let snap = jhol_receipt::Snapshot::load(&root, id)
+                    .map_err(|e| format!("snapshot show: {e}"))?;
+                if as_json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&snap).unwrap_or_default()
+                    );
+                } else {
+                    println!("snapshot {} @ {}", snap.id, snap.created_at);
+                    for lim in &snap.limitations {
+                        println!("  limitation: {lim}");
+                    }
+                }
+            }
+            "create" => {
+                let lock_path = root.join(jhol_graph::PROJECT_LOCK_FILENAME);
+                let lock_val = if lock_path.is_file() {
+                    serde_json::from_str(
+                        &std::fs::read_to_string(&lock_path)
+                            .map_err(|e| format!("read {}: {e}", lock_path.display()))?,
+                    )
+                    .map_err(|e| format!("parse project.lock: {e}"))?
+                } else {
+                    let adapters: Vec<jhol_graph::AdapterRef> =
+                        jhol_adapters::AdapterRegistry::default_local()
+                            .iter()
+                            .map(|a| {
+                                let id = a.identity();
+                                jhol_graph::AdapterRef {
+                                    id: id.id,
+                                    version: id.version,
+                                }
+                            })
+                            .collect();
+                    let lock = jhol_graph::build_project_lock(&root, adapters)
+                        .map_err(|e| format!("build lock: {e}"))?;
+                    jhol_graph::write_project_lock(&root, &lock)
+                        .map_err(|e| format!("write lock: {e}"))?;
+                    serde_json::to_value(&lock).unwrap_or_default()
+                };
+                let snap =
+                    jhol_receipt::Snapshot::create(lock_val, jhol_receipt::empty_ok_receipt(&root));
+                let path = snap
+                    .save(&root)
+                    .map_err(|e| format!("save snapshot: {e}"))?;
+                if as_json {
+                    println!("{}", serde_json::json!({"id": snap.id, "path": path}));
+                } else {
+                    println!("created snapshot {} → {}", snap.id, path.display());
+                }
+            }
+            _ => return Err(format!("unknown snapshot action {action}")),
+        }
+        return Ok(());
+    }
+
+    if let Some(("restore", sub_m)) = matches.subcommand() {
+        let root = sub_m
+            .get_one::<String>("path")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            });
+        let id = sub_m.get_one::<String>("id").unwrap();
+        let as_json = sub_m.get_flag("json");
+        let do_plan = sub_m.get_flag("plan");
+        let do_apply = sub_m.get_flag("apply");
+        let want_db = sub_m.get_flag("databases");
+        if !do_plan && !do_apply {
+            return Err("restore needs --plan or --apply".into());
+        }
+        let snap = jhol_receipt::Snapshot::load(&root, id).map_err(|e| format!("restore: {e}"))?;
+        let plan = if do_apply {
+            snap.restore_apply(&root, want_db)
+                .map_err(|e| format!("restore apply: {e}"))?
+        } else {
+            if want_db {
+                return Err(
+                    "restore --databases is refused (database restore is not supported)".into(),
+                );
+            }
+            snap.restore_plan()
+        };
+        if as_json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&plan).unwrap_or_default()
+            );
+        } else {
+            println!(
+                "restore {} ({})",
+                plan.snapshot_id,
+                if do_apply { "applied" } else { "plan" }
+            );
+            for w in &plan.would_write {
+                println!("  write: {w}");
+            }
+            for s in &plan.would_skip {
+                println!("  skip: {s}");
+            }
+            for lim in &plan.limitations {
+                println!("  limitation: {lim}");
+            }
+        }
+        return Ok(());
+    }
+
+    if let Some(("db", sub_m)) = matches.subcommand() {
+        if let Some(("plan", plan_m)) = sub_m.subcommand() {
+            let root = plan_m
+                .get_one::<String>("path")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+                });
+            let mig = plan_m
+                .get_one::<String>("migrations")
+                .map(|s| s.as_str())
+                .unwrap_or("migrations");
+            let as_json = plan_m.get_flag("json");
+            let plan = jhol_db::plan_migrations(&root, mig).map_err(|e| format!("db plan: {e}"))?;
+            if as_json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&plan).unwrap_or_default()
+                );
+            } else {
+                println!(
+                    "db plan — {} ({} migration file(s))",
+                    plan.migrations_dir,
+                    plan.migrations.len()
+                );
+                for m in &plan.migrations {
+                    println!("  {}  {}", &m.digest[..12.min(m.digest.len())], m.path);
+                }
+                for n in &plan.drift_notes {
+                    println!("  note: {n}");
+                }
+                for lim in &plan.limitations {
+                    println!("  limitation: {lim}");
+                }
+            }
+            return Ok(());
+        }
+        if let Some(("probe", probe_m)) = sub_m.subcommand() {
+            let timeout_ms: u64 = probe_m
+                .get_one::<String>("timeout-ms")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(500);
+            let as_json = probe_m.get_flag("json");
+            let result = jhol_db::probe_from_env(timeout_ms);
+            if as_json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&result).unwrap_or_default()
+                );
+            } else {
+                println!("db probe — {}", result.note);
+                if let (Some(h), Some(p)) = (&result.host, result.port) {
+                    println!("  target: {h}:{p}");
+                }
+                if let Some(ok) = result.reachable {
+                    println!("  reachable: {ok}");
+                }
+            }
+            return Ok(());
+        }
+        return Err("usage: jhol db plan|probe".into());
+    }
+
+    if let Some(("dev", sub_m)) = matches.subcommand() {
+        let root = sub_m
+            .get_one::<String>("path")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            });
+        let as_json = sub_m.get_flag("json");
+        let do_probe = sub_m.get_flag("probe");
+        let do_spawn = sub_m.get_flag("spawn");
+        let hold_secs: u64 = sub_m
+            .get_one::<String>("hold-secs")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+        let services =
+            jhol_task::load_project_services(&root).map_err(|e| format!("dev config: {e}"))?;
+        let order =
+            jhol_task::service_boot_order(&services).map_err(|e| format!("dev order: {e}"))?;
+        let readiness: Vec<_> = services
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "name": s.name,
+                    "ready_tcp": s.ready_tcp,
+                    "tcp_ready_now": if do_probe || do_spawn {
+                        s.ready_tcp.as_deref().map(jhol_task::tcp_ready)
+                    } else {
+                        None
+                    },
+                })
+            })
+            .collect();
+        if do_spawn {
+            let handles = jhol_task::spawn_services(&services, &order, 5_000)
+                .map_err(|e| format!("dev spawn: {e}"))?;
+            if as_json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "root": root,
+                        "boot_order": order,
+                        "spawned": handles.iter().map(|h| &h.name).collect::<Vec<_>>(),
+                        "hold_secs": hold_secs,
+                        "note": "processes held then killed on drop",
+                    })
+                );
+            } else {
+                println!(
+                    "jhol dev (spawned {}) — holding {}s",
+                    order.join(" → "),
+                    hold_secs
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_secs(hold_secs));
+            drop(handles);
+            if !as_json {
+                println!("cleaned up spawned services.");
+            }
+            return Ok(());
+        }
+        if as_json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "root": root,
+                    "boot_order": order,
+                    "services": readiness,
+                    "probed": do_probe,
+                    "note": "does not spawn processes; use --spawn to run declared commands",
+                })
+            );
+        } else {
+            println!(
+                "jhol dev ({}) — {}",
+                if do_probe {
+                    "order + probe"
+                } else {
+                    "order only"
+                },
+                root.display()
+            );
+            println!("boot: {}", order.join(" → "));
+            for s in &services {
+                let ready = if do_probe {
+                    s.ready_tcp
+                        .as_deref()
+                        .map(|a| {
+                            if jhol_task::tcp_ready(a) {
+                                "up"
+                            } else {
+                                "down"
+                            }
+                        })
+                        .unwrap_or("-")
+                } else {
+                    s.ready_tcp.as_deref().unwrap_or("-")
+                };
+                println!("  • {} [{}]", s.name, ready);
+            }
+            println!("no processes spawned.");
+        }
+        return Ok(());
+    }
+
+    if let Some(("ai", sub_m)) = matches.subcommand() {
+        let action = sub_m.subcommand_name().unwrap_or("");
+        let act_m = sub_m.subcommand().map(|(_, m)| m);
+        let Some(act_m) = act_m else {
+            return Err(
+                "usage: jhol ai pin|pin-remote|verify|prepare|infer --manifest PATH".into(),
+            );
+        };
+        if action != "pin"
+            && action != "pin-remote"
+            && action != "verify"
+            && action != "prepare"
+            && action != "infer"
+        {
+            return Err(format!("unknown ai action {action}"));
+        }
+        let root = act_m
+            .get_one::<String>("path")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            });
+        let man = act_m
+            .get_one::<String>("manifest")
+            .map(|s| s.as_str())
+            .unwrap_or("models/demo.jhol-model.json");
+        let man_path = root.join(man);
+        let as_json = act_m.get_flag("json");
+        if action == "pin" {
+            let name = act_m.get_one::<String>("name").expect("required by clap");
+            let source = act_m.get_one::<String>("source").expect("required by clap");
+            let revision = act_m
+                .get_one::<String>("revision")
+                .expect("required by clap");
+            let files: Vec<&str> = act_m
+                .get_many::<String>("file")
+                .expect("required by clap")
+                .map(String::as_str)
+                .collect();
+            let artifact = jhol_ai::ModelArtifact::pin_directory_at_revision(
+                name, source, revision, &root, &files,
+            )
+            .map_err(|e| format!("ai pin: {e}"))?;
+            artifact
+                .write_manifest(&man_path)
+                .map_err(|e| format!("ai pin: {e}"))?;
+            if as_json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&artifact).unwrap_or_default()
+                );
+            } else {
+                println!(
+                    "ai pin ok — {} ({} file(s))",
+                    artifact.name,
+                    artifact.files.len()
+                );
+            }
+            return Ok(());
+        }
+        if action == "pin-remote" {
+            let name = act_m.get_one::<String>("name").expect("required by clap");
+            let source = act_m.get_one::<String>("source").expect("required by clap");
+            let revision = act_m
+                .get_one::<String>("revision")
+                .expect("required by clap");
+            let files: Vec<String> = act_m
+                .get_many::<String>("file")
+                .expect("required by clap")
+                .cloned()
+                .collect();
+            let digests: Vec<String> = act_m
+                .get_many::<String>("digest")
+                .expect("required by clap")
+                .cloned()
+                .collect();
+            let sizes: Vec<String> = act_m
+                .get_many::<String>("size-bytes")
+                .expect("required by clap")
+                .cloned()
+                .collect();
+            if files.len() != digests.len() || files.len() != sizes.len() {
+                return Err(
+                    "ai pin-remote: provide one --digest and --size-bytes per --file".into(),
+                );
+            }
+            let pins = files
+                .into_iter()
+                .zip(digests)
+                .zip(sizes)
+                .map(|((path, digest), size)| {
+                    let size_bytes = size.parse::<u64>().map_err(|_| {
+                        format!("ai pin-remote: invalid byte size for {path}: {size}")
+                    })?;
+                    Ok(jhol_ai::FilePin {
+                        path,
+                        digest,
+                        size_bytes: Some(size_bytes),
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            let artifact = jhol_ai::ModelArtifact::pin_remote_files(name, source, revision, pins)
+                .map_err(|e| format!("ai pin-remote: {e}"))?;
+            artifact
+                .write_manifest(&man_path)
+                .map_err(|e| format!("ai pin-remote: {e}"))?;
+            if as_json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&artifact).unwrap_or_default()
+                );
+            } else {
+                println!(
+                    "ai pin-remote ok — {} ({} file(s))",
+                    artifact.name,
+                    artifact.files.len()
+                );
+            }
+            return Ok(());
+        }
+        if action == "infer" {
+            let config = act_m.get_one::<String>("config").expect("required by clap");
+            let raw_input = act_m.get_one::<String>("input").expect("required by clap");
+            if raw_input.split(',').count() > 64 {
+                return Err("ai infer: input exceeds the 64-feature runtime limit".into());
+            }
+            let inputs = raw_input
+                .split(',')
+                .map(|value| {
+                    value
+                        .trim()
+                        .parse::<f64>()
+                        .map_err(|_| format!("ai infer: invalid numeric feature: {value}"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let artifact = jhol_ai::ModelArtifact::read_manifest(&man_path)
+                .map_err(|e| format!("ai infer: {e}"))?;
+            let result = jhol_ai::infer_linear_cpu(&artifact, &root, config, &inputs)
+                .map_err(|e| format!("ai infer: {e}"))?;
+            if as_json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&result).unwrap_or_default()
+                );
+            } else {
+                println!(
+                    "{} via {}: {}",
+                    result.model, result.runtime, result.predicted_label
+                );
+            }
+            return Ok(());
+        }
+        let artifact = jhol_ai::ModelArtifact::read_manifest(&man_path)
+            .map_err(|e| format!("ai {action}: {e}"))?;
+        let receipt = if action == "verify" || !act_m.get_flag("allow-network") {
+            jhol_ai::prepare_offline(&root, &man_path).map_err(|e| format!("ai {action}: {e}"))?;
+            None
+        } else {
+            let max_bytes = act_m
+                .get_one::<String>("max-bytes")
+                .and_then(|value| value.parse::<u64>().ok())
+                .ok_or_else(|| "ai prepare: --max-bytes must be a positive integer".to_string())?;
+            if max_bytes == 0 {
+                return Err("ai prepare: --max-bytes must be greater than zero".into());
+            }
+            #[cfg(feature = "http-reqwest")]
+            {
+                Some(
+                    artifact
+                        .prepare_with_download(
+                            &root,
+                            true,
+                            max_bytes,
+                            |url, path, offset, limit| {
+                                jhol_core::http2_download::download_to_file_resume_bounded(
+                                    url, path, offset, limit,
+                                )
+                            },
+                        )
+                        .map_err(|e| format!("ai prepare: {e}"))?,
+                )
+            }
+            #[cfg(not(feature = "http-reqwest"))]
+            {
+                let _ = (artifact, max_bytes);
+                return Err("ai prepare --allow-network requires the http-reqwest feature".into());
+            }
+        };
+        if as_json {
+            if let Some(receipt) = receipt {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "artifact": artifact,
+                        "download": receipt
+                    }))
+                    .unwrap_or_default()
+                );
+            } else {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&artifact).unwrap_or_default()
+                );
+            }
+        } else {
+            println!(
+                "ai {action} ok — {} ({} file(s), digest {})",
+                artifact.name,
+                artifact.files.len(),
+                &artifact.digest[..12.min(artifact.digest.len())]
+            );
+            if let Some(receipt) = receipt {
+                println!(
+                    "downloaded {} byte(s) from {} at {}",
+                    receipt.bytes_received, receipt.source, receipt.revision
+                );
+            }
+        }
+        return Ok(());
     }
 
     if let Some(("cdn", sub_m)) = matches.subcommand() {
@@ -2599,13 +4184,17 @@ fn run() -> Result<(), String> {
 
     if let Some(("uninstall", sub_m)) = matches.subcommand() {
         let package = sub_m.get_one::<String>("package").unwrap();
-        let save = sub_m.get_flag("save");
+        let save = !sub_m.get_flag("no-save");
         jhol_core::uninstall(package, save).map_err(|e| e.to_string())?;
         success(&format!("Removed {}", package));
         return Ok(());
     }
 
     if let Some(("update", sub_m)) = matches.subcommand() {
+        // Unlike `remove`, updating a *specific* package still requires --save: the
+        // test `test_update_requires_save_for_specific_packages` pins that contract,
+        // and rewriting package.json implicitly on an explicit package list would be
+        // surprising.
         let save = sub_m.get_flag("save");
         let packages: Vec<String> = sub_m
             .get_many::<String>("package")
@@ -2779,6 +4368,9 @@ fn run() -> Result<(), String> {
         if packages.is_empty() {
             return Err("At least one package must be specified".to_string());
         }
+        // Manifest first: this is both the documented `add` behaviour and the signal
+        // that makes the install run instead of taking a "node_modules is fresh" path.
+        persist_added_deps(&packages)?;
 
         // Soul Path: Jacobian conflict risk prediction before fetch.
         // Compute ∂R/∂X against existing deps to warn if adding is high-risk.
@@ -2807,7 +4399,7 @@ fn run() -> Result<(), String> {
                     if risk > 0.5 && !quiet {
                         println!(
                             "{} Jacobian risk: {:.0}% — adding {} may cause conflicts",
-                            "⚠".yellow(),
+                            "!".yellow(),
                             risk * 100.0,
                             packages.join(", ")
                         );
@@ -2837,6 +4429,7 @@ fn run() -> Result<(), String> {
             let add_strs: Vec<String> = packages.iter().map(|s| s.to_string()).collect();
             match jhol_core::soul_path::frontier_add(&add_strs, quiet) {
                 Ok(()) => {
+                    refine_star_specs(&packages);
                     success("Package(s) added (frontier delta).");
                     return Ok(());
                 }
@@ -2876,6 +4469,7 @@ fn run() -> Result<(), String> {
         jhol_core::install_package(&refs, &opts).map_err(|e| e.to_string())?;
         // Markers (write_status, store_last_hash, fingerprint) are written by
         // install_package via write_install_markers() — single write.
+        refine_star_specs(&refs);
         success("Package(s) added.");
         return Ok(());
     }
@@ -2885,7 +4479,7 @@ fn run() -> Result<(), String> {
             .get_many::<String>("package")
             .map(|v| v.map(|s| s.as_str()).collect())
             .unwrap_or_default();
-        let save = sub_m.get_flag("save");
+        let save = !sub_m.get_flag("no-save");
         if packages.is_empty() {
             return Err("At least one package must be specified".to_string());
         }
@@ -2999,7 +4593,8 @@ fn run() -> Result<(), String> {
             Some(s) if s == "npm" => Some(jhol_core::Backend::Npm),
             _ => config.backend,
         };
-        let backend = jhol_core::resolve_backend(backend);
+        // CI always installs natively; no external backend probe is needed.
+        let backend = backend.unwrap_or(jhol_core::Backend::Npm);
         let json_out = sub_m.get_flag("json");
         let roots: Vec<std::path::PathBuf> = if all_workspaces {
             let r = jhol_core::list_workspace_roots(&cwd).unwrap_or_default();
@@ -3025,15 +4620,60 @@ fn run() -> Result<(), String> {
                 lockfile_only: false,
                 offline,
                 strict_lockfile: true,
-                strict_peer_deps: false,
+                strict_peer_deps: sub_m.get_flag("strict-peer-deps"),
                 from_lockfile: true,
                 native_only: true,
-                no_scripts: true,
-                script_allowlist: None,
+                // Parity with `install`: scripts stay off by default, and naming
+                // packages in --script-allowlist is itself the opt-in.
+                no_scripts: !sub_m.get_flag("scripts") && {
+                    let allow: Vec<String> = sub_m
+                        .get_many::<String>("script-allowlist")
+                        .into_iter()
+                        .flatten()
+                        .flat_map(|v| v.split(','))
+                        .map(str::trim)
+                        .filter(|v| !v.is_empty())
+                        .map(str::to_string)
+                        .collect();
+                    allow.is_empty()
+                },
+                script_allowlist: {
+                    let mut allow: std::collections::HashSet<String> = sub_m
+                        .get_many::<String>("script-allowlist")
+                        .into_iter()
+                        .flatten()
+                        .flat_map(|v| v.split(','))
+                        .map(str::trim)
+                        .filter(|v| !v.is_empty())
+                        .map(str::to_string)
+                        .collect();
+                    allow.extend(read_trusted_dependencies(std::path::Path::new(
+                        "package.json",
+                    )));
+                    if allow.is_empty() {
+                        None
+                    } else {
+                        Some(allow)
+                    }
+                },
                 resolver: std::env::var("JHOL_RESOLVER").unwrap_or_default(),
                 overrides: None,
                 telemetry: jhol_core::telemetry_enabled(&config),
             };
+            // `npm ci` semantics: a clean install. Without this, `ci` reused
+            // whatever was already in `node_modules`, and every entry found there
+            // was skipped *unverified* — so a stale or tampered tree survived `ci`,
+            // the exact opposite of its contract (and of its own help text).
+            // Removing it first also means nothing is inherited from a previous
+            // install, so the result is determined by the lockfile alone.
+            let nm = root.join("node_modules");
+            if nm.exists() {
+                if !quiet {
+                    info(&format!("Removing {} (clean install)", nm.display()));
+                }
+                std::fs::remove_dir_all(&nm)
+                    .map_err(|e| format!("Failed to clear {}: {}", nm.display(), e))?;
+            }
             jhol_core::install_package(&refs, &opts).map_err(|e| e.to_string())?;
             // Markers (write_status, store_last_hash, fingerprint) are written by
             // install_package via write_install_markers() — single write.
@@ -3156,7 +4796,19 @@ fn run() -> Result<(), String> {
             // Feature 1: no_scripts — CLI flags take precedence, then config
             let cli_scripts_flag = sub_m.get_flag("scripts");
             let cli_no_scripts_flag = sub_m.get_flag("no-scripts");
-            let no_scripts = if cli_scripts_flag {
+            // `--script-allowlist pkg[,pkg]` (repeatable). Naming packages to allow
+            // is itself an opt-in, so it turns scripts on for those packages rather
+            // than being silently ignored while `no_scripts` stays true.
+            let cli_script_allowlist: HashSet<String> = sub_m
+                .get_many::<String>("script-allowlist")
+                .into_iter()
+                .flatten()
+                .flat_map(|v| v.split(','))
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+            let no_scripts = if cli_scripts_flag || !cli_script_allowlist.is_empty() {
                 false
             } else if cli_no_scripts_flag {
                 true
@@ -3186,13 +4838,16 @@ fn run() -> Result<(), String> {
                 env::set_var("JHOL_RESOLVER", resolver);
             }
 
-            // Feature 1: env vars from config (only set if not already set)
-            if let Some(ft) = config.fetch_timeout {
+            if let Some(ft) = sub_m.get_one::<String>("fetch-timeout") {
+                env::set_var("JHOL_FETCH_TIMEOUT_SECS", ft);
+            } else if let Some(ft) = config.fetch_timeout {
                 if env::var("JHOL_FETCH_TIMEOUT_SECS").is_err() {
                     env::set_var("JHOL_FETCH_TIMEOUT_SECS", ft.to_string());
                 }
             }
-            if let Some(it) = config.install_timeout {
+            if let Some(it) = sub_m.get_one::<String>("install-timeout") {
+                env::set_var("JHOL_INSTALL_TIMEOUT_SECS", it);
+            } else if let Some(it) = config.install_timeout {
                 if env::var("JHOL_INSTALL_TIMEOUT_SECS").is_err() {
                     env::set_var("JHOL_INSTALL_TIMEOUT_SECS", it.to_string());
                 }
@@ -3217,7 +4872,12 @@ fn run() -> Result<(), String> {
                 Some(s) if s == "npm" => Some(jhol_core::Backend::Npm),
                 _ => config.backend,
             };
-            let backend = jhol_core::resolve_backend(backend);
+            // Only fallback-enabled installs need to launch an external backend probe.
+            let backend = if native_only {
+                backend.unwrap_or(jhol_core::Backend::Npm)
+            } else {
+                jhol_core::resolve_backend(backend)
+            };
             let json_out = sub_m.get_flag("json");
             if quiet || json_out {
                 env::set_var("JHOL_QUIET", "1");
@@ -3226,6 +4886,11 @@ fn run() -> Result<(), String> {
                 .get_many::<String>("package")
                 .map(|it| it.map(|s| s.clone()).collect())
                 .unwrap_or_default();
+            let save = !sub_m.get_flag("no-save");
+            if save && !packages.is_empty() {
+                let pkg_refs: Vec<&str> = packages.iter().map(|s| s.as_str()).collect();
+                let _ = persist_added_deps(&pkg_refs);
+            }
 
             // Feature 5: workspaces parallel / bail
             let ws_parallel = config.workspaces_parallel.unwrap_or(false);
@@ -3269,7 +4934,6 @@ fn run() -> Result<(), String> {
                 if specs.is_empty() {
                     return Ok(());
                 }
-                let refs: Vec<&str> = specs.iter().map(|s| s.as_str()).collect();
                 let from_lockfile = from_lockfile_override.unwrap_or_else(|| {
                     packages.is_empty()
                         && specs.iter().all(|s| {
@@ -3290,6 +4954,7 @@ fn run() -> Result<(), String> {
                     no_scripts,
                     script_allowlist: {
                         let mut merged = script_allowlist.clone().unwrap_or_default();
+                        merged.extend(cli_script_allowlist.iter().cloned());
                         if !no_scripts {
                             merged.extend(read_trusted_dependencies(std::path::Path::new(
                                 "package.json",
@@ -3327,19 +4992,42 @@ fn run() -> Result<(), String> {
                         eprintln!("Warning: pre-install hook failed: {}", e);
                     }
                 }
-                jhol_core::log(&format!("Installing: {:?}", specs));
+                // One readable line instead of a raw Vec dump; the full list is
+                // for the log file and for JHOL_VERBOSE.
+                if jhol_core::utils::is_verbose() {
+                    jhol_core::log(&format!("installing {} packages: {:?}", specs.len(), specs));
+                } else {
+                    jhol_core::log(&format!(
+                        "installing {} dependenc{}",
+                        specs.len(),
+                        if specs.len() == 1 { "y" } else { "ies" }
+                    ));
+                }
                 let install_start = std::time::Instant::now();
                 let pkg_count = specs.len();
                 let install_result = if use_daemon {
-                    let dr = daemon_try_install(root, &specs, &opts, daemon_auto_attach);
-                    // Safety gate fallback: auto-attach with no socket → direct install
-                    if daemon_auto_attach && dr.is_err() {
-                        if !quiet {
-                            info("Daemon unavailable — falling back to direct install");
-                        }
-                        direct_install(root, &specs, &opts, pkg_count, quiet, json_out)
+                    // Lanes before daemon: the transport serves *work*, not answers
+                    // we can serve locally in milliseconds. A bundle published by a
+                    // byte-identical earlier install replays locally (the daemon
+                    // never sees the trampoline lanes — flags bypass them), and a
+                    // valid tree's proof short-circuits inside install_package on
+                    // the daemon regardless. Without this gate, every
+                    // lane-answerable project paid client spawn + IPC + a full
+                    // install_package on the daemon: measured +12 ms on
+                    // fresh-replay-able installs.
+                    if jhol_core::try_fresh_project_bundle_replay(Path::new(".")) {
+                        Ok(())
                     } else {
-                        dr
+                        let dr = daemon_try_install(root, &specs, &opts, daemon_auto_attach);
+                        // Safety gate fallback: auto-attach with no socket → direct install
+                        if daemon_auto_attach && dr.is_err() {
+                            if !quiet {
+                                info("Daemon unavailable — falling back to direct install");
+                            }
+                            direct_install(root, &specs, &opts, pkg_count, quiet, json_out)
+                        } else {
+                            dr
+                        }
                     }
                 } else {
                     direct_install(root, &specs, &opts, pkg_count, quiet, json_out)
@@ -3519,7 +5207,7 @@ fn run() -> Result<(), String> {
                         info(&format!("Workspace: {}", root.display()));
                     }
                     if packages.is_empty() && lockfile_only {
-                        jhol_core::install_lockfile_only(jhol_core::backend::resolve_backend(None))
+                        jhol_core::install_lockfile_only(backend)
                             .map_err(|e| e.to_string())?;
                         continue;
                     }
@@ -3553,6 +5241,10 @@ fn run() -> Result<(), String> {
                     )?;
                 }
                 std::env::set_current_dir(&cwd).ok();
+            }
+            if save && !packages.is_empty() {
+                let pkg_refs: Vec<&str> = packages.iter().map(|s| s.as_str()).collect();
+                refine_star_specs(&pkg_refs);
             }
             if json_out {
                 println!("{{\"schemaVersion\":\"1\",\"command\":\"install\",\"status\":\"ok\",\"workspaces\":{}}}", roots.len());
@@ -3613,7 +5305,7 @@ fn run() -> Result<(), String> {
                         if let Some(ref diff) = report.differential {
                             let stability_label = match diff.stability {
                                 jhol_core::StabilityClass::Stable => "STABLE ✓",
-                                jhol_core::StabilityClass::Marginal => "MARGINAL ⚠",
+                                jhol_core::StabilityClass::Marginal => "MARGINAL !",
                                 jhol_core::StabilityClass::Fragile => "FRAGILE ✗",
                                 jhol_core::StabilityClass::Degenerate => "–",
                             };
@@ -3831,6 +5523,243 @@ fn run() -> Result<(), String> {
                 }
             }
             audit_result?;
+        }
+        #[cfg(feature = "bundle")]
+        #[cfg(feature = "bundle")]
+        Some(("fmt", sub_m)) => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let check = sub_m.get_flag("check") || sub_m.get_flag("list-different");
+            let no_cache = sub_m.get_flag("no-cache");
+
+            // Config precedence: CLI flags > .jholrc [fmt] > .prettierrc > spec defaults.
+            let mut config = jhol_bundle::fmt::load_config(&cwd);
+            if let Some(n) = sub_m.get_one::<String>("print-width") {
+                if let Ok(n) = n.parse::<usize>() {
+                    config.print_width = n;
+                }
+            }
+            if let Some(n) = sub_m.get_one::<String>("tab-width") {
+                if let Ok(n) = n.parse::<usize>() {
+                    config.tab_width = n;
+                }
+            }
+            if sub_m.get_flag("use-tabs") {
+                config.use_tabs = true;
+            }
+            if sub_m.get_flag("no-semi") {
+                config.semi = false;
+            }
+            if sub_m.get_flag("single-quote") {
+                config.single_quote = true;
+            }
+            if let Some(tc) = sub_m.get_one::<String>("trailing-comma") {
+                config.trailing_comma = tc.clone();
+            }
+
+            // --init: write spec defaults to .prettierrc.json when absent.
+            if sub_m.get_flag("init") {
+                let path = cwd.join(".prettierrc.json");
+                if path.exists() {
+                    info(".prettierrc.json already exists — leaving it alone");
+                } else {
+                    let body = serde_json::to_string_pretty(&serde_json::json!({
+                        "printWidth": 80, "tabWidth": 2, "useTabs": false,
+                        "semi": true, "singleQuote": false, "trailingComma": "all"
+                    }))
+                    .unwrap_or_default();
+                    std::fs::write(&path, format!("{}\n", body)).map_err(|e| e.to_string())?;
+                    success("created .prettierrc.json with jhol defaults");
+                }
+                return Ok(());
+            }
+
+            // stdin mode: format stdin as the given path, print, write nothing.
+            if let Some(fp) = sub_m.get_one::<String>("stdin-filepath") {
+                use std::io::Read;
+                let mut input = String::new();
+                std::io::stdin().read_to_string(&mut input).map_err(|e| e.to_string())?;
+                let out =
+                    jhol_bundle::fmt::format_source(&input, fp, &config).map_err(|e| e.to_string())?;
+                print!("{}", out);
+                return Ok(());
+            }
+
+            // discovery: explicit paths or the whole project tree.
+            let roots: Vec<String> = sub_m
+                .get_many::<String>("path")
+                .map(|it| it.map(|s| s.clone()).collect())
+                .unwrap_or_default();
+            let mut files: Vec<std::path::PathBuf> = Vec::new();
+            if roots.is_empty() {
+                collect_fmt_files(std::path::Path::new("."), &mut files);
+            } else {
+                for r in &roots {
+                    let pp = std::path::Path::new(r);
+                    if pp.is_dir() {
+                        collect_fmt_files(pp, &mut files);
+                    } else {
+                        files.push(pp.to_path_buf());
+                    }
+                }
+            }
+            // keep files we have an engine for (in-process OR external tool)
+            files.retain(|p| {
+                jhol_bundle::fmt::is_supported(p)
+                    || p.extension()
+                        .and_then(|e| e.to_str())
+                        .and_then(jhol_bundle::fmt::external_tool)
+                        .is_some()
+            });
+            files.retain(|p| !jhol_bundle::fmt::is_ignored(p));
+            let ignore_set = load_prettier_ignore(&cwd);
+            files.retain(|p| {
+                let rel = p.strip_prefix(&cwd).unwrap_or(p);
+                let rel = rel.to_string_lossy().replace('\\', "/");
+                !ignore_set.is_match(&rel)
+            });
+            files.sort();
+            files.dedup();
+
+            // cache: keyed by engine version + config digest so option
+            // changes invalidate every entry.
+            let digest = config.digest();
+            let mut cache = if no_cache {
+                jhol_bundle::fmt::FmtCache::default()
+            } else {
+                jhol_bundle::fmt::FmtCache::load(&cwd, jhol_bundle::fmt::FMT_ENGINE, digest)
+            };
+            let cache_lock = std::sync::Mutex::new(&mut cache);
+
+            use rayon::prelude::*;
+            let results: Vec<(std::path::PathBuf, Result<bool, String>)> = files
+                .par_iter()
+                .map(|p| {
+                    let res = (|| -> Result<bool, String> {
+                        let rel = p.strip_prefix(&cwd).unwrap_or(p);
+                        let rel = rel.to_string_lossy().replace('\\', "/");
+                        let ext = p
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("")
+                            .to_ascii_lowercase();
+
+                        // external ecosystem formatter (rustfmt / gofmt / ruff)
+                        if !jhol_bundle::fmt::is_supported(p) {
+                            if let Some((tool, args)) = jhol_bundle::fmt::external_tool(&ext) {
+                                let before =
+                                    std::fs::read_to_string(p).map_err(|e| e.to_string())?;
+                                let hash_before = jhol_bundle::fmt::content_hash(&before);
+                                let status = match std::process::Command::new(tool)
+                                    .args(&args)
+                                    .arg(p)
+                                    .status()
+                                {
+                                    Ok(s) => s,
+                                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                                        eprintln!(
+                                            "jhol fmt: {} not installed — skipped {}",
+                                            tool,
+                                            p.display()
+                                        );
+                                        return Ok(false);
+                                    }
+                                    Err(e) => {
+                                        return Err(format!("{} failed to run: {}", tool, e))
+                                    }
+                                };
+                                if !status.success() {
+                                    return Err(format!("{} failed on {}", tool, p.display()));
+                                }
+                                let after =
+                                    std::fs::read_to_string(p).map_err(|e| e.to_string())?;
+                                let hash_after = jhol_bundle::fmt::content_hash(&after);
+                                let changed = hash_after != hash_before;
+                                if changed {
+                                    cache_lock.lock().unwrap().record(&rel, &hash_after);
+                                }
+                                return Ok(changed);
+                            }
+                        }
+
+                        // in-process engines
+                        let src = std::fs::read_to_string(p).map_err(|e| e.to_string())?;
+                        let hash = jhol_bundle::fmt::content_hash(&src);
+                        if !no_cache && cache_lock.lock().unwrap().is_fresh(&rel, &hash) {
+                            return Ok(false); // same bytes already formatted
+                        }
+                        let formatted = jhol_bundle::fmt::format_source(
+                            &src,
+                            &p.to_string_lossy(),
+                            &config,
+                        )
+                        .map_err(|e| e.to_string())?;
+                        if formatted == src {
+                            cache_lock.lock().unwrap().record(&rel, &hash);
+                            return Ok(false);
+                        }
+                        if !check {
+                            // atomic write: temp file + rename, so a crash
+                            // never leaves half-formatted source.
+                            let tmp = p.with_file_name(format!(
+                                ".{}.jhol-tmp",
+                                p.file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("fmt")
+                            ));
+                            std::fs::write(&tmp, &formatted).map_err(|e| e.to_string())?;
+                            std::fs::rename(&tmp, p).map_err(|e| e.to_string())?;
+                            // Record the FORMATTED bytes so a later run sees the
+                            // file as already done. In --check mode the file is
+                            // untouched, so recording here would poison the cache
+                            // and make the next real run skip the file forever.
+                            cache_lock.lock().unwrap().record(
+                                &rel,
+                                &jhol_bundle::fmt::content_hash(&formatted),
+                            );
+                        }
+                        Ok(true)
+                    })();
+                    (p.clone(), res)
+                })
+                .collect();
+            drop(cache_lock);
+
+            let mut changed = 0usize;
+            let mut errors = 0usize;
+            for (p, res) in &results {
+                match res {
+                    Ok(true) => {
+                        changed += 1;
+                        println!("{}", p.display());
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        errors += 1;
+                        eprintln!("{}: {}", p.display(), e);
+                    }
+                }
+            }
+            if !no_cache {
+                let _ = cache.save(&cwd);
+            }
+            if errors > 0 {
+                eprintln!("fmt: {} error(s)", errors);
+                std::process::exit(2);
+            }
+            if check && changed > 0 {
+                std::process::exit(1);
+            }
+            eprintln!(
+                "fmt: {} file(s), {} changed, engine {}",
+                files.len(),
+                changed,
+                jhol_bundle::fmt::FMT_ENGINE
+            );
+            return Ok(());
+        }
+        #[cfg(not(feature = "bundle"))]
+        Some(("fmt", _sub_m)) => {
+            return Err("fmt requires the bundle feature (build with default features)".to_string());
         }
         Some(("build", sub_m)) => {
             #[cfg(feature = "bundle")]
@@ -4694,10 +6623,156 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
+/// Record `jhol add` targets in package.json **before** installing.
+///
+/// Writing the manifest first is what makes the install actually run: the install fast
+/// paths compare package.json's hash, so a second `add` used to see a "fresh"
+/// node_modules, skip the work, and still print "Package(s) added." while installing
+/// nothing and recording nothing. Bare names are stored as `*` here and refined to
+/// `^<installed>` afterwards, which is what npm does.
+fn persist_added_deps(packages: &[&str]) -> Result<(), String> {
+    let path = std::path::Path::new("package.json");
+    let raw = match fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(_) => {
+            let cwd_name = std::env::current_dir()
+                .ok()
+                .and_then(|d| d.file_name().map(|n| n.to_string_lossy().to_string()))
+                .unwrap_or_else(|| "project".to_string());
+            let default_pj = serde_json::json!({
+                "name": cwd_name,
+                "version": "1.0.0",
+                "dependencies": {}
+            });
+            serde_json::to_string_pretty(&default_pj).unwrap_or_default()
+        }
+    };
+    let mut json: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("invalid package.json: {}", e))?;
+    let root = json
+        .as_object_mut()
+        .ok_or("package.json must be a JSON object")?;
+    let deps_value = root
+        .entry("dependencies")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    let deps = deps_value
+        .as_object_mut()
+        .ok_or("dependencies must be an object")?;
+    for spec in packages {
+        let (name, version) = if let Some(stripped) = spec.strip_prefix('@') {
+            if let Some((scope_pkg, ver)) = stripped.split_once('@') {
+                (format!("@{}", scope_pkg), ver.to_string())
+            } else {
+                ((*spec).to_string(), "*".to_string())
+            }
+        } else if let Some((n, v)) = spec.split_once('@') {
+            (n.to_string(), v.to_string())
+        } else {
+            ((*spec).to_string(), "*".to_string())
+        };
+        deps.insert(name, serde_json::Value::String(version));
+    }
+    let pretty = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
+    fs::write(path, format!("{}\n", pretty))
+        .map_err(|e| format!("cannot write package.json: {}", e))
+}
+
+/// Turn `*` specs (a bare `jhol add name` or `jhol install name`) into `^<installed version>`, like npm.
+fn refine_star_specs(packages: &[&str]) {
+    let path = std::path::Path::new("package.json");
+    let Ok(raw) = fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return;
+    };
+    let mut changed = false;
+    for spec in packages {
+        let (name, has_explicit_version) = if let Some(stripped) = spec.strip_prefix('@') {
+            if let Some((scope_pkg, _ver)) = stripped.split_once('@') {
+                (format!("@{}", scope_pkg), true)
+            } else {
+                ((*spec).to_string(), false)
+            }
+        } else if let Some((pkg, _ver)) = spec.split_once('@') {
+            (pkg.to_string(), true)
+        } else {
+            ((*spec).to_string(), false)
+        };
+        if has_explicit_version {
+            continue;
+        }
+        let manifest = std::path::Path::new("node_modules")
+            .join(&name)
+            .join("package.json");
+        let Ok(text) = fs::read_to_string(&manifest) else {
+            continue;
+        };
+        let Ok(meta) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let Some(version) = meta.get("version").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if let Some(deps) = json.get_mut("dependencies").and_then(|d| d.as_object_mut()) {
+            if let Some(existing) = deps.get(&name).and_then(|v| v.as_str()) {
+                if existing == "*" || existing.is_empty() {
+                    deps.insert(
+                        name,
+                        serde_json::Value::String(format!("^{}", version)),
+                    );
+                    changed = true;
+                }
+            }
+        }
+    }
+    if changed {
+        if let Ok(pretty) = serde_json::to_string_pretty(&json) {
+            let _ = fs::write(path, format!("{}\n", pretty));
+        }
+    }
+}
+
 fn main() {
-    // Zero-binary-startup warm bypass: if node_modules is fresh, exit before
-    // clap, splash, or any disk work.
+    // Rust ignores SIGPIPE, so writing to a closed pipe (`jhol cache size | head`)
+    // panicked with "Broken pipe" — and release builds use panic=abort, so that
+    // killed the process. Restore the default before any output.
+    jhol_core::restore_default_sigpipe();
+
+    // An engine name that resolves to nothing used to silently run the script
+    // on a different backend, which then surfaced engine-specific errors (a raw
+    // `JSException { .. }` debug dump) with no hint that the variable itself
+    // was wrong. Reject typos before anything else happens.
+    if let Ok(v) = std::env::var("JHOL_RUNTIME_ENGINE") {
+        const KNOWN: [&str; 7] = ["", "auto", "qjs", "quickjs", "jsc", "jholvm", "vm"];
+        if !KNOWN.iter().any(|k| v.eq_ignore_ascii_case(k)) {
+            eprintln!(
+                "jhol: unknown runtime engine {:?} in JHOL_RUNTIME_ENGINE.\n      \
+                 expected one of: auto, jholvm, jsc, qjs",
+                v
+            );
+            std::process::exit(2);
+        }
+    }
+
+    // Pre-Clap bypass is restricted to exact plain install/i invocations and
+    // requires the same lockfile-bound proof as the core install path.
     jhol_core::daemon_cache::try_exit_before_clap();
+
+    // Eagerly prewarm HTTP/2 network connection in the background during CLI startup and argument parsing
+    let raw_args: Vec<_> = std::env::args_os().collect();
+    let is_offline = raw_args.iter().any(|a| {
+        let s = a.to_string_lossy();
+        s == "--offline" || s == "-h" || s == "--help" || s == "--version" || s == "-V"
+    });
+    if !is_offline && std::env::var("JHOL_OFFLINE").is_err() {
+        std::thread::Builder::new()
+            .name("jhol-network-early-prewarm".into())
+            .spawn(|| {
+                jhol_core::http_client::prewarm_network();
+            })
+            .ok();
+    }
 
     if !use_color() {
         colored::control::set_override(false);

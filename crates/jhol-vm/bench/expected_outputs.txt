@@ -1,0 +1,11 @@
+array_ops.js	66733200
+closure_calls.js	1000000
+fib_recursive.js	832040
+gc_stress.js	8000008000000
+iter_sum.js	1250000025000000
+json_roundtrip.js	5000 3049451836
+method_calls.js	750001000000
+object_props.js	906599939
+polymorphic_props.js	39999933334
+sort_bench.js	19947 32137 39026 71494 73878 107511831058573
+string_build.js	200000 -1 811817810

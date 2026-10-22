@@ -1,0 +1,13 @@
+{"name":"Sam","age":30,"active":true,"tags":["a","b"]}
+{"a":1,"b":2}
+[1,"two",false,null]
+"he said \"hi\""
+{"x":{"y":{"z":5}}}
+{
+  "a": 1,
+  "b": 2,
+  "c": 3
+}
+10
+1,2,3
+X/7

@@ -1,0 +1,9 @@
+min=25
+max=35
+avg=31.25
+    Name|  Age
+    Dave|   25
+   Alice|   30
+     Bob|   35
+ Charlie|   35
+total=125

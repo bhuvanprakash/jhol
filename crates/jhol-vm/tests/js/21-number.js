@@ -1,0 +1,15 @@
+console.log(Number.parseInt("42px"));
+console.log(parseInt("100", 10));
+console.log(parseFloat("3.14abc"));
+console.log(Number.isInteger(5));
+console.log(Number.isInteger(5.5));
+console.log(Number.isFinite(Infinity));
+console.log(Number.isNaN(NaN));
+console.log(Number.MAX_SAFE_INTEGER);
+console.log((3.14159).toFixed(2));
+console.log(Number("12"));
+console.log(Number(""));
+console.log(globalThis.isNaN(NaN));
+console.log(isFinite(100));
+console.log(Number.isInteger(-0));
+console.log(parseInt("  7  "));

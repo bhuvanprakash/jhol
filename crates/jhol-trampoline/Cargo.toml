@@ -1,0 +1,19 @@
+[package]
+name = "jhol-trampoline"
+version = "1.0.2"
+edition = "2021"
+description = "Ultra-thin jhol install front-door (warm sentinel + prebuilt L0)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "jhol-trampoline"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
+sha2 = "0.10"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+[dev-dependencies]
+tempfile = "3"

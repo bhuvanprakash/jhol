@@ -1,0 +1,11 @@
+let chars = [];
+for (const ch of "abc") chars.push(ch);
+console.log(chars.join("-"));
+const arr = [..."hello"];
+console.log(arr.join(","));
+let count = 0;
+for (const ch of "abcde") count++;
+console.log(count);
+const nums = [..."12345"].map(Number);
+console.log(nums.join("+"));
+console.log([..."JS"].length);

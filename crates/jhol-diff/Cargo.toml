@@ -1,0 +1,13 @@
+[package]
+name = "jhol-diff"
+version = "0.1.0"
+edition = "2021"
+description = "Compare graph / receipt state (Jhol Diff)"
+license-file = "../../LICENSE"
+publish = false
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+jhol-graph = { path = "../jhol-graph" }
+jhol-receipt = { path = "../jhol-receipt" }

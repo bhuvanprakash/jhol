@@ -1,0 +1,12 @@
+const obj = { name: "Sam", age: 30, active: true, tags: ["a", "b"] };
+console.log(JSON.stringify(obj));
+console.log(JSON.stringify({ a: 1, b: 2 }));
+console.log(JSON.stringify([1, "two", false, null]));
+console.log(JSON.stringify("he said \"hi\""));
+console.log(JSON.stringify({ x: { y: { z: 5 } } }));
+console.log(JSON.stringify({ a: 1, b: 2, c: 3 }, null, 2));
+const parsed = JSON.parse('{"k": 10, "list": [1, 2, 3]}');
+console.log(parsed.k);
+console.log(parsed.list.join(","));
+const rt = JSON.parse(JSON.stringify({ n: "X", v: 7 }));
+console.log(rt.n + "/" + rt.v);
