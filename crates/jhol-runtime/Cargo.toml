@@ -10,6 +10,8 @@ repository = "https://github.com/bhuvanprakash/jhol"
 default = ["native-engine", "mimalloc"]
 native-engine = ["dep:quickjs-rusty"]
 jsc-engine = ["dep:javascriptcore"]
+# JholVM: Jhol's own from-scratch JS engine (lexer/parser/compiler/VM/GC).
+jholvm = ["dep:jhol-vm"]
 mimalloc = ["dep:mimalloc"]
 swc-transpile = ["dep:swc_core"]
 native-watcher = ["dep:notify"]
@@ -23,6 +25,9 @@ quickjs-rusty = { version = "0.12", optional = true }
 
 # JavaScriptCore backend (Apple / WebKitGTK Linux; includes JIT)
 javascriptcore = { version = "0.0.6", optional = true }
+
+# JholVM: our own engine, no third-party interpreter involved
+jhol-vm = { path = "../jhol-vm", optional = true }
 
 # Faster allocator for JS-heavy workloads
 mimalloc = { version = "0.1", optional = true }
@@ -51,8 +56,11 @@ bincode = "1.3"
 dashmap = "5.5"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
-# File watching (poll-based — custom, no native deps)
-# notify removed — replaced with mtime polling in watch.rs
+# File watching is split: `watch.rs` has a built-in mtime-polling fallback
+# (no deps) and an optional OS-event backend via `notify`, enabled by the
+# `native-watcher` feature. `notify` is declared under "Native file watching"
+# below; the two backends are selected at runtime (`JHOL_WATCH_POLL` forces
+# polling).
 
 # Error handling
 thiserror = "2.0"

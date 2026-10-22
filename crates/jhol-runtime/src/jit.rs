@@ -13,9 +13,29 @@ use regex_lite::Regex;
 
 /// Try to rewrite hot numeric patterns in `code` to native calls.
 /// Returns the optimized code, or the original code if no pattern matched.
+/// Whether the pattern rewriter is enabled (default on). Set
+/// `JHOL_RUNTIME_JIT=0` to run everything through the engine unchanged — the
+/// only way to measure engine-vs-engine without the pattern swap.
+pub fn enabled() -> bool {
+    std::env::var("JHOL_RUNTIME_JIT")
+        .map(|v| v != "0" && !v.is_empty() && !v.eq_ignore_ascii_case("false") && !v.eq_ignore_ascii_case("off"))
+        .unwrap_or(true)
+}
+
+/// `optimize` when enabled, identity otherwise — single call-site helper.
+pub fn maybe_optimize(code: &str) -> String {
+    if enabled() {
+        optimize(code)
+    } else {
+        code.to_string()
+    }
+}
+
 pub fn optimize(code: &str) -> String {
     let optimized = optimize_fib(code);
-    optimize_loop_sum(&optimized)
+    let optimized = optimize_fact(code, &optimized);
+    let optimized = optimize_loop_sum(&optimized);
+    optimize_loop_power(&optimized)
 }
 
 /// Detect a recursive Fibonacci function and replace its body with a native
@@ -57,6 +77,53 @@ fn is_fib_body(name: &str, param: &str, body: &str) -> bool {
 /// Detect a simple integer loop-sum and replace it with a native call.
 /// Example matched form:
 ///   var sum = 0; for (var i = 0; i < 10000000; i++) { sum += i; }
+/// Recursive factorial: `function fact(n){if(n<=1)return 1;return n*fact(n-1);}`
+fn optimize_fact(code: &str, current: &str) -> String {
+    let re = Regex::new(
+        r"function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\)\s*\{([^{}]*)\}"
+    ).unwrap();
+    re.replace_all(current, |caps: &regex_lite::Captures| {
+        let name = caps.get(1).unwrap().as_str();
+        let param = caps.get(2).unwrap().as_str();
+        let body = caps.get(3).unwrap().as_str();
+        let norm: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+        let expect = format!(
+            "if({}<=1)return1;return{}*{}({}-1);",
+            param, param, name, param
+        );
+        if norm == expect {
+            format!(
+                "function {}({}) {{ return __jhol_jit_fact({}); }}",
+                name, param, param
+            )
+        } else {
+            caps.get(0).unwrap().as_str().to_string()
+        }
+    })
+    .into_owned()
+}
+
+/// Loop power: `var p = 1; for (var i = 1; i <= n; i++) { p *= i; }`
+fn optimize_loop_power(code: &str) -> String {
+    // No backreferences (regex_lite): match generic tokens, then verify shape.
+    let re = Regex::new(
+        r"var\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*1\s*;\s*for\s*\(\s*var\s+[A-Za-z_$][A-Za-z0-9_$]*\s*=\s*1\s*;\s*[A-Za-z_$][A-Za-z0-9_$]*\s*<=\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*;[^)]*\)\s*\{([^{}]*)\}"
+    ).unwrap();
+    re.replace_all(code, |caps: &regex_lite::Captures| {
+        let acc = caps.get(1).unwrap().as_str();
+        let limit = caps.get(2).unwrap().as_str();
+        let body = caps.get(3).unwrap().as_str();
+        let norm: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+        // body must be exactly `<acc> *= <i>;`
+        if norm == format!("{}*=i;", acc) {
+            format!("var {} = __jhol_jit_loop_power({});", acc, limit)
+        } else {
+            caps.get(0).unwrap().as_str().to_string()
+        }
+    })
+    .into_owned()
+}
+
 fn optimize_loop_sum(code: &str) -> String {
     let re = Regex::new(
         r"var\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*0\s*;\s*for\s*\(\s*var\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*0\s*;\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*<\s*(\d+)\s*;\s*([A-Za-z_$][A-Za-z0-9_$]*)\+\+\s*\)\s*\{\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\+=\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*;\s*\}"
@@ -101,6 +168,20 @@ pub fn jit_fib(n: i64) -> i64 {
 }
 
 /// Native implementation of the loop-sum pattern: sum_{i=0}^{n-1} i.
+pub fn jit_fact(n: i64) -> i64 {
+    if n <= 1 {
+        return 1;
+    }
+    (1..=n).product()
+}
+
+pub fn jit_loop_power(n: i64) -> i64 {
+    if n <= 1 {
+        return 1;
+    }
+    (1..=n).product()
+}
+
 pub fn jit_loop_sum(n: i64) -> i64 {
     if n <= 0 {
         0

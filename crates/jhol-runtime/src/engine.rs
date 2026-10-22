@@ -60,6 +60,103 @@ pub struct Runtime {
     timers: TimerState,
 }
 
+/// Shared fetch implementation used by both engine backends' `fetch()`.
+pub fn fetch_url(url: &str) -> String {
+    let resp = ureq_agent().get(url).call();
+    match resp {
+        Ok(r) => {
+            let status = r.status();
+            let body = r.into_string().unwrap_or_default();
+            format!(
+                "{{\"ok\":true,\"status\":{},\"body\":{}}}",
+                status,
+                serde_json::to_string(&body).unwrap_or_else(|_| "null".to_string())
+            )
+        }
+        Err(e) => format!("{{\"ok\":false,\"error\":\"{}\"}}", e),
+    }
+}
+
+/// Shared optional-feature + env impls used by BOTH engine backends, so the
+/// QuickJS and JavaScriptCore backends cannot drift.
+pub fn env_get_impl(key: &str) -> Option<String> {
+    std::env::var(key).ok()
+}
+
+pub fn http_listen_impl() -> String {
+    #[cfg(feature = "http-server")]
+    {
+        let port = 8080u16;
+        let addr = format!("0.0.0.0:{}", port);
+        match tiny_http::Server::http(&addr) {
+            Ok(server) => {
+                std::thread::spawn(move || {
+                    for request in server.incoming_requests() {
+                        let method = request.method().to_string();
+                        let url = request.url().to_string();
+                        let response = tiny_http::Response::from_string(format!(
+                            "{{\"method\":\"{}\",\"url\":\"{}\"}}",
+                            method, url
+                        ));
+                        let _ = request.respond(response);
+                    }
+                });
+                format!("{{\"ok\":true,\"port\":{}}}", port)
+            }
+            Err(e) => format!("{{\"ok\":false,\"error\":\"{}\"}}", e),
+        }
+    }
+    #[cfg(not(feature = "http-server"))]
+    {
+        "{\"ok\":false,\"error\":\"http-server feature not enabled\"}".to_string()
+    }
+}
+
+pub fn ws_connect_impl(url: &str) -> String {
+    #[cfg(feature = "websocket")]
+    {
+        match tungstenite::connect(url) {
+            Ok((mut socket, _)) => {
+                let _ = socket.send(tungstenite::Message::Text("jhol ws connected".into()));
+                "{\"ok\":true}".to_string()
+            }
+            Err(e) => format!("{{\"ok\":false,\"error\":\"{}\"}}", e),
+        }
+    }
+    #[cfg(not(feature = "websocket"))]
+    {
+        "{\"ok\":false,\"error\":\"websocket feature not enabled\"}".to_string()
+    }
+}
+
+/// SQLite parity: the query surface is a stub on BOTH engines by design
+/// (documented gap, identical behavior — not silently different).
+pub fn db_open_impl(_path: &str) -> String {
+    #[cfg(feature = "sqlite")]
+    {
+        "{\"ok\":false}".to_string()
+    }
+    #[cfg(not(feature = "sqlite"))]
+    {
+        "{\"ok\":false,\"error\":\"sqlite feature not enabled\"}".to_string()
+    }
+}
+
+pub fn db_exec_impl(_id: i32, _sql: &str) -> String {
+    #[cfg(feature = "sqlite")]
+    {
+        "{\"ok\":false}".to_string()
+    }
+    #[cfg(not(feature = "sqlite"))]
+    {
+        "{\"ok\":false,\"error\":\"sqlite feature not enabled\"}".to_string()
+    }
+}
+
+pub fn db_close_impl(_id: i32) -> String {
+    "{\"ok\":true}".to_string()
+}
+
 impl Runtime {
     pub fn new() -> RuntimeResult<Self> {
         let context = Context::builder()
@@ -109,6 +206,11 @@ impl Runtime {
             .context
             .add_callback("__jhol_fs_exists", |path: String| -> bool {
                 std::path::Path::new(&path).exists()
+            });
+        let _ = self
+            .context
+            .add_callback("__jhol_env_get", |key: String| -> String {
+                env_get_impl(&key).unwrap_or_default()
             });
         let _ = self
             .context
@@ -217,26 +319,25 @@ impl Runtime {
             });
         let _ = self
             .context
+            .add_callback("__jhol_jit_fact", |n: f64| -> f64 {
+                crate::jit::jit_fact(n as i64) as f64
+            });
+        let _ = self
+            .context
+            .add_callback("__jhol_jit_loop_power", |n: f64| -> f64 {
+                crate::jit::jit_loop_power(n as i64) as f64
+            });
+        let _ = self
+            .context
             .add_callback("__jhol_jit_loop_sum", |n: f64| -> f64 {
                 crate::jit::jit_loop_sum(n as i64) as f64
             });
-        // fetch() via shared ureq agent (connection reuse)
+        // fetch() via the shared ureq agent (connection reuse) — shared with the
+        // JSC backend so both engines make identical requests.
         let _ = self
             .context
             .add_callback("__jhol_fetch", |url: String, _opts: String| -> String {
-                let resp = ureq_agent().get(&url).call();
-                match resp {
-                    Ok(r) => {
-                        let status = r.status();
-                        let body = r.into_string().unwrap_or_default();
-                        format!(
-                            "{{\"ok\":true,\"status\":{},\"body\":{}}}",
-                            status,
-                            serde_json::to_string(&body).unwrap_or_else(|_| "null".to_string())
-                        )
-                    }
-                    Err(e) => format!("{{\"ok\":false,\"error\":\"{}\"}}", e),
-                }
+                fetch_url(&url)
             });
         // os module
         let _ = self.context.add_callback("__jhol_os_info", |_arg: String| -> String {
@@ -543,9 +644,32 @@ if(!globalThis.crypto)globalThis.crypto={};
 globalThis.crypto.randomUUID=function(){return __jhol_random_uuid('')};
 globalThis.crypto.randomBytes=function(n){return __jhol_random_bytes(n||16)};
 globalThis.crypto.getRandomValues=function(a){var b=__jhol_random_bytes(a.length);for(var i=0;i<a.length;i++)a[i]=b[i];return a};
+// rt-parity: sha256 digester + builtin module mapping (parity with the JSC backend).
+globalThis.crypto.createHash=function(alg){return{update:function(d){this._d=(this._d||'')+(d||'');return this;},digest:function(enc){return __jhol_hash(this._d||'');}};};
+if(!globalThis.process.arch){(function(){var oi=JSON.parse(__jhol_os_info(''));globalThis.process.platform=oi.platform;globalThis.process.arch=oi.arch;})();}
+globalThis.child_process={spawnSync:function(cmd,args){return JSON.parse(__jhol_spawn(cmd||'',JSON.stringify(args||[]))||'{}');}};
+(function(){var __orig=globalThis.require;globalThis.require=function(n){
+if(n==='child_process')return globalThis.child_process;
+if(n==='crypto')return globalThis.crypto;
+if(n==='os')return globalThis.os;
+return __orig.apply(null,arguments);};})();
 // rt-5: .env loader
 if(!globalThis.process)globalThis.process={};
 if(!globalThis.process.env)globalThis.process.env={};
+// rt-parity: env values via the native getter (lazy per key; writes still work)
+(function(){
+    var ks = JSON.parse(__jhol_env_keys('') || '[]');
+    for (var i = 0; i < ks.length; i++) {
+        var k = ks[i];
+        try {
+            Object.defineProperty(globalThis.process.env, k, {
+                configurable: true,
+                enumerable: true,
+                get: function() { return __jhol_env_get(k); }
+            });
+        } catch (e) {}
+    }
+})();
 (function(){try{var e=__jhol_fs_read('.env');if(e){e.split(String.fromCharCode(10)).forEach(function(l){l=l.trim();if(!l||l[0]==='#')return;var eq=l.indexOf('=');if(eq<0)return;var k=l.substring(0,eq).trim();var v=l.substring(eq+1).trim();if((v[0]===String.fromCharCode(34)||v[0]===String.fromCharCode(39))&&v[v.length-1]===v[0])v=v.slice(1,-1);globalThis.process.env[k]=v})}}catch(_){}})()
 "##;
         let hash = crate::bytecode_cache::key(bootstrap);
@@ -650,9 +774,9 @@ if(!globalThis.process.env)globalThis.process.env={};
 
         let js_source = if transpile::needs_transpile(&canonical) {
             let js = transpile::transpile(&source, &filename)?;
-            crate::jit::optimize(&js)
+            crate::jit::maybe_optimize(&js)
         } else {
-            crate::jit::optimize(&source)
+            crate::jit::maybe_optimize(&source)
         };
 
         self.working_dir = canonical
@@ -669,9 +793,9 @@ if(!globalThis.process.env)globalThis.process.env={};
             || filename.ends_with(".jsx")
         {
             let js = transpile::transpile(code, filename)?;
-            crate::jit::optimize(&js)
+            crate::jit::maybe_optimize(&js)
         } else {
-            crate::jit::optimize(code)
+            crate::jit::maybe_optimize(code)
         };
         self.evaluate(&js_source, filename)
     }
