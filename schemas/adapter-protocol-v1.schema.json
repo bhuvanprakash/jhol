@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jhol.dev/schemas/adapter-protocol-v1.schema.json",
+  "title": "Ecosystem adapter protocol (v1)",
+  "description": "Wire/JSON shape for AdapterPlan and AdapterReceipt exchanged between the graph planner and ecosystem adapters.",
+  "type": "object",
+  "$defs": {
+    "adapter_identity": {
+      "type": "object",
+      "required": ["id", "version"],
+      "properties": {
+        "id": { "type": "string" },
+        "version": { "type": "string" },
+        "ecosystem": {
+          "type": "string",
+          "enum": ["javascript", "python", "rust", "database", "ai", "other"]
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "discover": { "type": "boolean" },
+        "plan": { "type": "boolean" },
+        "apply": { "type": "boolean" },
+        "verify": { "type": "boolean" },
+        "mutate_database": { "type": "boolean" },
+        "run_scripts": { "type": "boolean" },
+        "network": { "type": "boolean" }
+      }
+    },
+    "adapter_plan": {
+      "type": "object",
+      "required": ["adapter", "declared_inputs", "expected_writes", "permissions"],
+      "properties": {
+        "adapter": { "$ref": "#/$defs/adapter_identity" },
+        "declared_inputs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "expected_writes": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "network_access": { "type": "boolean" },
+        "script_execution_possible": { "type": "boolean" },
+        "permissions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "cacheable": { "type": "boolean" },
+        "limitations": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "adapter_receipt": {
+      "type": "object",
+      "required": ["adapter", "exit_status"],
+      "properties": {
+        "adapter": { "$ref": "#/$defs/adapter_identity" },
+        "tool_versions": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": { "type": "string" },
+              "digest": { "type": "string" },
+              "verified": { "type": "boolean" }
+            }
+          }
+        },
+        "exit_status": { "type": "integer" },
+        "warnings": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "unverified_assumptions": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

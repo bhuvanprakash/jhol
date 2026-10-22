@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability privately
+    url: https://github.com/bhuvanprakash/jhol/blob/main/SECURITY.md
+    about: Do not publish vulnerabilities in a public issue.
+  - name: Read Jhol documentation
+    url: https://github.com/bhuvanprakash/jhol/tree/main/docs/user
+    about: Check current command and compatibility documentation.

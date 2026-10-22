@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jhol.dev/schemas/graph-lock-v1.schema.json",
+  "title": "jhol.project.lock (v1)",
+  "description": "Optional cross-language project lock. Native locks remain authoritative; this record references their digests. No credentials.",
+  "type": "object",
+  "required": ["format_version", "project_config_digest", "adapters", "native_locks"],
+  "additionalProperties": false,
+  "properties": {
+    "format_version": { "type": "integer", "const": 1 },
+    "project_config_digest": {
+      "type": "string",
+      "description": "Digest of the normalized jhol.toml / project config."
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "os": { "type": "string" },
+        "arch": { "type": "string" },
+        "libc": { "type": ["string", "null"] }
+      }
+    },
+    "adapters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "version"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "version": { "type": "string" }
+        }
+      }
+    },
+    "native_locks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "kind", "digest"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string" },
+          "kind": {
+            "type": "string",
+            "enum": ["npm", "bun", "yarn", "pnpm", "cargo", "uv", "pip", "other"]
+          },
+          "digest": { "type": "string" }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "digest"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "source": { "type": "string" },
+          "revision": { "type": "string" },
+          "digest": { "type": "string" },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["path", "digest"],
+              "properties": {
+                "path": { "type": "string" },
+                "digest": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "permitted_outputs": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jhol.dev/schemas/jhol-project-v1.schema.json",
+  "title": "Jhol project coordination file (jhol.toml → JSON)",
+  "description": "Optional root coordination config. Native manifests (package.json, Cargo.toml, pyproject.toml) remain authoritative per ecosystem. Schema version 1.",
+  "type": "object",
+  "required": ["schema"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "const": 1,
+      "description": "Project schema version."
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 }
+      },
+      "required": ["name"]
+    },
+    "environment": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/environment" }
+    },
+    "service": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/service" }
+    },
+    "artifact": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "task": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/task" }
+    }
+  },
+  "$defs": {
+    "environment": {
+      "type": "object",
+      "required": ["name", "kind", "root"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "kind": {
+          "type": "string",
+          "enum": ["javascript", "python", "rust", "other"]
+        },
+        "root": { "type": "string", "minLength": 1 },
+        "manager": {
+          "type": "string",
+          "enum": ["jhol", "npm", "pnpm", "yarn", "bun", "uv", "pip", "cargo"]
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "required": ["name", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "kind": {
+          "type": "string",
+          "enum": ["postgresql", "sqlite", "redis", "other"]
+        },
+        "profile": { "type": "string" },
+        "url_from_env": { "type": "string" },
+        "migrations": { "type": "string" },
+        "run": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "description": "Optional executable argument array; `jhol dev --spawn` runs only services that declare this field, without a shell."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Optional existing working directory relative to the project root."
+        },
+        "needs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "description": "Service names that must be ready first."
+        },
+        "ready_tcp": {
+          "type": "string",
+          "pattern": "^(\\[[0-9A-Fa-f:]+\\]|[0-9.]+):[0-9]{1,5}$",
+          "description": "Optional IP-literal host:port readiness endpoint."
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["name", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "kind": {
+          "type": "string",
+          "enum": ["model", "dataset", "binary", "other"]
+        },
+        "source": { "type": "string" },
+        "revision": { "type": "string" }
+      }
+    },
+    "task": {
+      "type": "object",
+      "required": ["name", "run"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "run": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "cwd": { "type": "string" },
+        "needs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "inputs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "outputs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "cache": { "type": "boolean" }
+      }
+    }
+  }
+}

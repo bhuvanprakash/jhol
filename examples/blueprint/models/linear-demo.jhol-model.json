@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "name": "jhol-demo-linear-v1",
+  "digest": "81bcec5c72af6db9734cbc8fd23ba10beafca96e78ea2afbf7eb399ff9568192",
+  "files": [
+    {
+      "path": "models/linear-demo/config.json",
+      "digest": "f40181151b464ee1fa576f369d8e8720f671c46458a58c23504037c0f46d110c",
+      "size_bytes": 241
+    },
+    {
+      "path": "models/linear-demo/weights.bin",
+      "digest": "a55373d74aa8919fbd4252ea57386e5223a572d99cd8fd0b3760ed56a4b5df9b",
+      "size_bytes": 32
+    }
+  ]
+}

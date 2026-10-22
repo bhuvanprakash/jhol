@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "name": "demo",
+  "digest": "286fea6f3a3b34987474ed16a87281aa7cfeb59c3b7ea40bc227087decbd9aa0",
+  "files": [
+    {
+      "path": "models/demo/config.json",
+      "digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "size_bytes": 2
+    },
+    {
+      "path": "models/demo/weights.bin",
+      "digest": "bf6875a563be64dafa0c8e16f4b6093f55e15ba38f5c7a8844eaa61141dc805e",
+      "size_bytes": 12
+    }
+  ]
+}

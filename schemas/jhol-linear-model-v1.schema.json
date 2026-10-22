@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jhol.dev/schemas/jhol-linear-model-v1.schema.json",
+  "title": "Jhol linear classifier model config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "format",
+    "name",
+    "runtime",
+    "weights",
+    "input_features",
+    "labels"
+  ],
+  "properties": {
+    "schema": { "const": 1 },
+    "format": { "const": "jhol.linear-classifier.v1" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "runtime": { "const": "jhol-linear-cpu-v1" },
+    "weights": {
+      "type": "string",
+      "pattern": "^(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$"
+    },
+    "input_features": { "type": "integer", "minimum": 1, "maximum": 64 },
+    "labels": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+    }
+  }
+}

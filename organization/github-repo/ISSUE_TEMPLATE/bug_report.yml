@@ -1,0 +1,44 @@
+name: Bug report
+description: Report a reproducible problem in a Jhol project.
+title: "bug: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Share only information safe to make public. Remove registry tokens,
+        private package names, local usernames, and other secrets from logs.
+  - type: input
+    id: project
+    attributes:
+      label: Project or command
+      description: Which Jhol repository, command, or documented workflow is affected?
+      placeholder: jhol / `jhol install`
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened?
+      description: Include the shortest useful sanitized error or output.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Give minimal steps or a small safe fixture that reproduces the issue.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and version, architecture, Jhol version, and relevant feature or backend.
+    validations:
+      required: true

@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "format": "jhol.linear-classifier.v1",
+  "name": "jhol-demo-linear-v1",
+  "runtime": "jhol-linear-cpu-v1",
+  "weights": "models/linear-demo/weights.bin",
+  "input_features": 2,
+  "labels": [
+    "small",
+    "large"
+  ]
+}

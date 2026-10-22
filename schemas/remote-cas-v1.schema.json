@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jhol.dev/schemas/remote-cas-v1.schema.json",
+  "title": "Optional remote CAS / action-cache wire (v1)",
+  "description": "Optional Phase D remote CAS envelope. Local-only installs work without it. No credentials in objects.",
+  "type": "object",
+  "required": ["format_version", "content_digest", "kind"],
+  "additionalProperties": false,
+  "properties": {
+    "format_version": { "type": "integer", "const": 1 },
+    "kind": { "type": "string", "enum": ["blob", "action_result", "receipt"] },
+    "content_digest": { "type": "string" },
+    "action_key": { "type": "string" },
+    "tenant": { "type": "string" },
+    "size_bytes": { "type": "integer", "minimum": 0 }
+  }
+}

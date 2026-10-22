@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jhol.dev/schemas/execution-receipt-v1.schema.json",
+  "title": "Jhol execution receipt (v1)",
+  "description": "Portable evidence of what was planned and what actually ran. No secrets.",
+  "type": "object",
+  "required": ["format_version", "id", "created_at", "status"],
+  "additionalProperties": false,
+  "properties": {
+    "format_version": { "type": "integer", "const": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "status": {
+      "type": "string",
+      "enum": ["ok", "failed", "partial", "cancelled", "policy_denied"]
+    },
+    "command": { "type": "string" },
+    "project_root": { "type": "string" },
+    "plan_digest": { "type": "string" },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "digest"],
+        "properties": {
+          "path": { "type": "string" },
+          "digest": { "type": "string" }
+        }
+      }
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "digest"],
+        "properties": {
+          "path": { "type": "string" },
+          "digest": { "type": "string" },
+          "verified": { "type": "boolean" }
+        }
+      }
+    },
+    "side_effects": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "filesystem_write",
+          "network_fetch",
+          "process_launch",
+          "lifecycle_script",
+          "database_mutation",
+          "remote_upload"
+        ]
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "limitations": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Honest unknowns (non-deterministic inference, undeclared inputs, etc.)."
+    },
+    "adapter_receipts": {
+      "type": "array",
+      "items": { "type": "object" }
+    }
+  }
+}

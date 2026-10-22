@@ -1,0 +1,61 @@
+# Example jhol project declaration (schema: schemas/jhol-project-v1.schema.json)
+# Native manifests remain authoritative; `jhol dev --spawn` only runs the
+# explicit service command arrays below.
+
+schema = 1
+
+[project]
+name = "blueprint-polyglot-demo"
+
+[[environment]]
+name = "web"
+kind = "javascript"
+root = "apps/web"
+manager = "jhol"
+
+[[environment]]
+name = "api"
+kind = "python"
+root = "services/api"
+manager = "uv"
+
+[[environment]]
+name = "native"
+kind = "rust"
+root = "native/demo-crate"
+manager = "cargo"
+
+[[service]]
+name = "db"
+kind = "postgresql"
+profile = "development-fixture"
+url_from_env = "DATABASE_URL"
+migrations = "migrations"
+run = ["python3", "bin/ready-serve.py", "15432"]
+ready_tcp = "127.0.0.1:15432"
+
+[[service]]
+name = "api"
+kind = "other"
+profile = "readiness-fixture"
+run = ["python3", "bin/ready-serve.py", "18000"]
+needs = ["db"]
+ready_tcp = "127.0.0.1:18000"
+
+[[service]]
+name = "web"
+kind = "other"
+profile = "readiness-fixture"
+run = ["python3", "bin/ready-serve.py", "18080"]
+needs = ["api"]
+ready_tcp = "127.0.0.1:18080"
+
+[[task]]
+name = "build"
+run = ["echo", "build-placeholder"]
+needs = []
+
+[[task]]
+name = "test"
+run = ["echo", "test-placeholder"]
+needs = ["build"]

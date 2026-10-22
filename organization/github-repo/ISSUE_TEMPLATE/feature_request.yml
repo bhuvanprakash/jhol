@@ -1,0 +1,30 @@
+name: Feature proposal
+description: Propose a capability with a concrete user need.
+title: "idea: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem in your own workflow. Compatibility requests are
+        welcome; proposals should fit Jhol's local-first, correctness-led design.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem should Jhol solve?
+      placeholder: What are you trying to do, and what blocks you today?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Explain what a successful workflow would let you do.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints or tradeoffs
+      description: Mention offline use, native lockfiles, security boundaries, or compatibility needs when relevant.
+    validations:
+      required: false
