@@ -518,7 +518,7 @@ pub fn classify_stability(
 pub fn format_report(diff: &ResolutionDifferential, n_packages: usize) -> String {
     let stability_str = match diff.stability {
         StabilityClass::Stable => "✓ STABLE (spectral gap large, greedy optimal)",
-        StabilityClass::Marginal => "⚠ MARGINAL (gap moderate, verify resolution)",
+        StabilityClass::Marginal => "! MARGINAL (gap moderate, verify resolution)",
         StabilityClass::Fragile => "✗ FRAGILE (gap small, full pipeline needed)",
         StabilityClass::Degenerate => "– DEGENERATE (too few packages to analyze)",
     };

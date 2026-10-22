@@ -47,6 +47,19 @@ fn format_download_size(bytes: u64) -> String {
     }
 }
 
+/// Set by the CLI while a live progress bar owns the terminal. Log lines are then
+/// written with a clear-to-end-of-line prefix, so a warning while the bar is ticking
+/// does not leave a mangled half-line on screen.
+static BAR_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_bar_active(active: bool) {
+    BAR_ACTIVE.store(active, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn bar_active() -> bool {
+    BAR_ACTIVE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn snapshot() -> ProgressSnapshot {
     ProgressSnapshot {
         downloaded: DOWNLOADED.load(Ordering::Relaxed),
@@ -80,6 +93,18 @@ pub fn mark_failed() {
 }
 pub fn set_total(n: u64) {
     TOTAL.store(n, Ordering::Relaxed);
+}
+
+/// Reset all counters at the start of a new install.
+pub fn reset() {
+    DOWNLOADED.store(0, Ordering::Relaxed);
+    FROM_CACHE.store(0, Ordering::Relaxed);
+    FROM_NETWORK.store(0, Ordering::Relaxed);
+    LINKED.store(0, Ordering::Relaxed);
+    EXTRACTED.store(0, Ordering::Relaxed);
+    FAILED.store(0, Ordering::Relaxed);
+    TOTAL.store(0, Ordering::Relaxed);
+    BYTES_DOWNLOADED.store(0, Ordering::Relaxed);
 }
 pub fn add_bytes(n: u64) {
     BYTES_DOWNLOADED.fetch_add(n, Ordering::Relaxed);

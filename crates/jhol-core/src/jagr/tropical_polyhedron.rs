@@ -18,6 +18,12 @@ pub struct TropicalHalfspace {
     pub right_vars: Vec<usize>,      // indices of variables on right
 }
 
+impl Default for TropicalHalfspace {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TropicalHalfspace {
     pub fn new() -> Self {
         Self {
@@ -128,10 +134,8 @@ impl TropicalPolyhedron {
 
         if let Some(bounds) = &self.bounds {
             for (i, &(min, max)) in bounds.iter().enumerate() {
-                if i < point.len() {
-                    if !(point[i] >= min && point[i] <= max) {
-                        return false;
-                    }
+                if i < point.len() && !(point[i] >= min && point[i] <= max) {
+                    return false;
                 }
             }
         }
@@ -170,7 +174,7 @@ impl TropicalPolyhedron {
                         running_max,
                         hs.left_coeffs[1].0,
                     ));
-                    let rhs_coeff = hs.right_coeffs.get(0).copied().unwrap_or(Tropical::ONE);
+                    let rhs_coeff = hs.right_coeffs.first().copied().unwrap_or(Tropical::ONE);
                     system.add_atom(MaxAtom::new(
                         running_max,
                         running_max,
@@ -207,7 +211,7 @@ impl TropicalPolyhedron {
                 let rhs_coeff = if hs.right_vars.is_empty() {
                     Tropical::ZERO
                 } else {
-                    hs.right_coeffs.get(0).copied().unwrap_or(Tropical::ONE)
+                    hs.right_coeffs.first().copied().unwrap_or(Tropical::ONE)
                 };
                 system.add_atom(MaxAtom::new(
                     running_max,
@@ -305,7 +309,7 @@ impl TropicalPolyhedron {
                         running_max,
                         hs.left_coeffs[1].0,
                     ));
-                    let rhs_coeff = hs.right_coeffs.get(0).copied().unwrap_or(Tropical::ONE);
+                    let rhs_coeff = hs.right_coeffs.first().copied().unwrap_or(Tropical::ONE);
                     system.add_atom(MaxAtom::new(
                         running_max,
                         running_max,
@@ -333,7 +337,7 @@ impl TropicalPolyhedron {
                 let rhs_coeff = if hs.right_vars.is_empty() {
                     Tropical::ZERO
                 } else {
-                    hs.right_coeffs.get(0).copied().unwrap_or(Tropical::ONE)
+                    hs.right_coeffs.first().copied().unwrap_or(Tropical::ONE)
                 };
                 system.add_atom(MaxAtom::new(
                     running_max,

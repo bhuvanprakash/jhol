@@ -61,6 +61,12 @@ pub struct RestrictionMap {
     pub is_inclusion: bool,
 }
 
+impl Default for RestrictionMap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RestrictionMap {
     pub fn new() -> Self {
         Self {
@@ -115,6 +121,12 @@ pub struct SheafCohomology {
     pub dimensions: Vec<usize>,
     /// Whether the sheaf is acyclic (all βᵢ = 0 for i > 0)
     pub is_acyclic: bool,
+}
+
+impl Default for SheafCohomology {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SheafCohomology {
@@ -186,7 +198,7 @@ fn build_simplicial_complex(polyhedron: &TropicalPolyhedron) -> TropicalSimplici
     let mut simplices = Vec::new();
 
     // Get extreme points of each halfspace
-    for (_hs_idx, hs) in polyhedron.halfspaces.iter().enumerate() {
+    for hs in polyhedron.halfspaces.iter() {
         for &var in &hs.left_vars {
             if let Some(bounds) = &polyhedron.bounds {
                 if var < bounds.len() {
@@ -220,7 +232,7 @@ fn build_simplicial_complex(polyhedron: &TropicalPolyhedron) -> TropicalSimplici
             .entry((v.var_idx, v.version.to_bits()))
             .or_insert(v);
     }
-    let mut unique_vertices: Vec<TropicalVertex> = vertex_set.into_values().collect();
+    let unique_vertices: Vec<TropicalVertex> = vertex_set.into_values().collect();
 
     // Build vertex index lookup
     let vertex_index: HashMap<(usize, u64), usize> = unique_vertices
@@ -554,7 +566,7 @@ pub fn compute_sheaf_cohomology(sheaf: &TropicalSheaf) -> SheafCohomology {
     }
 
     let max_dim = by_dim.len().saturating_sub(1);
-    if max_dim == 0 && by_dim.get(0).map_or(true, |v| v.is_empty()) {
+    if max_dim == 0 && by_dim.first().is_none_or(|v| v.is_empty()) {
         return SheafCohomology {
             betti_numbers: vec![],
             dimensions: vec![],
@@ -568,8 +580,7 @@ pub fn compute_sheaf_cohomology(sheaf: &TropicalSheaf) -> SheafCohomology {
     let simplex_stalk_dim: Vec<usize> = complex
         .simplices
         .iter()
-        .enumerate()
-        .map(|(_idx, simplex)| {
+        .map(|simplex| {
             let mut total = 1usize;
             for &v in simplex {
                 let stalk_d = stalks.get(&v).map(|s| s.len()).unwrap_or(1);
@@ -626,7 +637,7 @@ pub fn compute_sheaf_cohomology(sheaf: &TropicalSheaf) -> SheafCohomology {
         }
 
         let rows = dp1_canonical.len();
-        let cols = d_canonical.len();
+        let _cols = d_canonical.len();
         let mut matrix: Vec<Vec<(usize, f64)>> = vec![Vec::new(); rows];
 
         for (row, (sigma, sigma_stalk_d)) in dp1_canonical.iter().enumerate() {
@@ -650,7 +661,7 @@ pub fn compute_sheaf_cohomology(sheaf: &TropicalSheaf) -> SheafCohomology {
                     // and the containing simplex. We use the min of stalk dimensions
                     // as a proxy for the restriction map's effective dimension.
                     let v_i = sigma[i.min(sigma.len() - 1)];
-                    let other_v = if face.len() > 0 { face[0] } else { v_i };
+                    let other_v = if !face.is_empty() { face[0] } else { v_i };
                     let key = (v_i.min(other_v), v_i.max(other_v));
 
                     let restriction_rank = if v_i == other_v {
@@ -1166,7 +1177,7 @@ fn analyze_tropical_sheaf_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jagr::tropical_math::{MaxAtom, MaxAtomSystem, Tropical};
+    use crate::jagr::tropical_math::{MaxAtom, MaxAtomSystem};
     use crate::jagr::tropical_polyhedron::TropicalPolyhedron;
 
     #[test]
@@ -1207,7 +1218,7 @@ mod tests {
         let cohomology = compute_sheaf_cohomology(&sheaf);
 
         // For a simple tree-like structure, β₁ should be 0
-        assert!(cohomology.betti_numbers.len() > 0);
+        assert!(!cohomology.betti_numbers.is_empty());
     }
 
     #[test]

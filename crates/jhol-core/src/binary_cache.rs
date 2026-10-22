@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Binary package metadata
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -101,6 +101,7 @@ pub fn get_current_platform() -> &'static str {
     #[cfg(target_arch = "aarch64")]
     return "linux-arm64";
 
+    #[allow(unreachable_code)]
     "unknown"
 }
 
@@ -109,7 +110,7 @@ pub async fn try_fetch_binary(package: &str, version: &str) -> Option<BinaryPack
     let platform = get_current_platform();
 
     // Check if binary is available from CDN
-    let url = format!(
+    let _url = format!(
         "https://cdn.jhol.dev/binaries/{}/{}/{}.bin",
         package, version, platform
     );

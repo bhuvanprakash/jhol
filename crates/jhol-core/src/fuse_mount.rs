@@ -31,7 +31,7 @@ impl JholFS {
     }
 
     pub fn mount<P: AsRef<Path>>(&self, mountpoint: P) -> Result<(), String> {
-        println!("🚀 Jhol FUSE mounted at {}", mountpoint.as_ref().display());
+        println!(" Jhol FUSE mounted at {}", mountpoint.as_ref().display());
         Ok(())
     }
 

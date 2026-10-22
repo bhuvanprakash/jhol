@@ -100,6 +100,31 @@ pub fn uninstall(package: &str, update_package_json: bool) -> Result<(), String>
             write_package_json(pj, &v)?;
         }
     }
+    // Regenerate the lockfile from the current node_modules state. The
+    // lockfile is a derived view of what's installed; after removing a
+    // package from disk, the lockfile must drop it too or `jhol ci` will
+    // try to re-download the removed package. The lockfile writer is an
+    // incremental updater that merges with the existing file — to get a
+    // faithful view of the current node_modules, we delete the old lockfile
+    // first so the updater builds it from scratch from the tree.
+    let lock_path = Path::new("package-lock.json");
+    let pj_path = Path::new("package.json");
+    if lock_path.exists() && pj_path.exists() {
+        if let Ok(packages) = crate::install::read_all_installed_packages(Path::new("node_modules"))
+        {
+            // Remove the old lockfile so the incremental updater builds a
+            // fresh one from the tree (otherwise it merges and keeps the
+            // removed package's entry).
+            let _ = std::fs::remove_file(lock_path);
+            let _ = crate::lockfile_write::write_package_lock(lock_path, pj_path, &packages);
+            // Restore the lockfile path for any subsequent operations.
+        }
+    }
+    // Rebuild `.bin` so the removed package's shims are pruned with it. Skipping
+    // this left `node_modules/.bin/<tool>` pointing at a deleted file, and running
+    // it failed with `cannot execute: No such file or directory`; npm removes the
+    // entry on uninstall. `rebuild_bin_links` now also drops dangling shims.
+    let _ = crate::bin_links::rebuild_bin_links(node_modules);
     Ok(())
 }
 
@@ -229,14 +254,24 @@ pub fn import_lockfile(from: &str) -> Result<String, String> {
     let source = match from {
         "bun" => "bun",
         "npm" => "npm",
+        // Be explicit rather than searching for a different lockfile and reporting
+        // that none was found: the user named a format we do not read yet.
+        "yarn" => "yarn",
+        "pnpm" => "pnpm",
         _ => {
             if cwd.join("bun.lock").exists() {
                 "bun"
             } else if cwd.join("package-lock.json").exists() {
                 "npm"
+            } else if cwd.join("yarn.lock").exists() {
+                "yarn"
+            } else if cwd.join("pnpm-lock.yaml").exists() {
+                "pnpm"
             } else {
                 return Err(
-                    "No supported lockfile found (bun.lock or package-lock.json)".to_string(),
+                    "No supported lockfile found (package-lock.json, bun.lock, yarn.lock, \
+                     pnpm-lock.yaml)"
+                        .to_string(),
                 );
             }
         }
@@ -249,14 +284,30 @@ pub fn import_lockfile(from: &str) -> Result<String, String> {
         return Err("--from npm is currently a no-op unless package-lock.json exists".to_string());
     }
 
-    let bun = cwd.join("bun.lock");
-    if !bun.exists() {
-        return Err("bun.lock not found".to_string());
+    // Both bun.lock (JSONC) and yarn.lock (v1 / Berry) reduce to `name -> version`.
+    let (lock_path, source_label) = match source {
+        "bun" => (cwd.join("bun.lock"), "bun.lock"),
+        "yarn" => (cwd.join("yarn.lock"), "yarn.lock"),
+        _ => (cwd.join("pnpm-lock.yaml"), "pnpm-lock.yaml"),
+    };
+    if !lock_path.exists() {
+        return Err(format!("{} not found", source_label));
     }
-    let resolved = lockfile::read_bun_lock_resolved(&bun)
-        .ok_or("Failed to parse bun.lock as JSON lockfile")?;
+    let resolved = match source {
+        "bun" => lockfile::read_bun_lock_resolved(&lock_path)
+            .ok_or("Failed to parse bun.lock as JSON lockfile")?,
+        "yarn" => {
+            lockfile::read_yarn_lock_resolved(&lock_path).ok_or("Failed to parse yarn.lock")?
+        }
+        _ => {
+            lockfile::read_pnpm_lock_resolved(&lock_path).ok_or("Failed to parse pnpm-lock.yaml")?
+        }
+    };
     if resolved.is_empty() {
-        return Err("bun.lock has no resolved packages to import".to_string());
+        return Err(format!(
+            "{} has no resolved packages to import",
+            source_label
+        ));
     }
 
     let deps = lockfile::read_package_json_deps(Path::new("package.json")).unwrap_or_default();
@@ -264,7 +315,7 @@ pub fn import_lockfile(from: &str) -> Result<String, String> {
 
     let mut packages = serde_json::Map::new();
     let mut root_deps = serde_json::Map::new();
-    for (name, _spec) in &deps {
+    for name in deps.keys() {
         if let Some(ver) = resolved.get(name) {
             root_deps.insert(name.clone(), serde_json::Value::String(ver.clone()));
         }
@@ -301,7 +352,8 @@ pub fn import_lockfile(from: &str) -> Result<String, String> {
     let pretty = serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?;
     fs::write(cwd.join("package-lock.json"), pretty).map_err(|e| e.to_string())?;
     Ok(format!(
-        "Imported {} resolved entries from bun.lock into package-lock.json",
-        resolved.len()
+        "Imported {} resolved entries from {} into package-lock.json",
+        resolved.len(),
+        source_label
     ))
 }

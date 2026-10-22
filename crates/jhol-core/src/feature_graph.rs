@@ -95,7 +95,7 @@ impl FeatureInstaller {
         // Update installed features
         self.installed_features
             .entry(pkg_key.clone())
-            .or_insert_with(HashSet::new)
+            .or_default()
             .extend(required_features.iter().cloned());
 
         Ok(InstallReport {

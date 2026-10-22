@@ -14,6 +14,8 @@ pub struct FileLock {
 impl FileLock {
     pub fn lock(path: &Path) -> io::Result<Self> {
         let lock_path = Self::lock_path(path);
+        let started = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(30);
         loop {
             match OpenOptions::new()
                 .create_new(true)
@@ -31,6 +33,12 @@ impl FileLock {
                     });
                 }
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                    if started.elapsed() >= timeout {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!("timed out waiting for cache lock {}", lock_path.display()),
+                        ));
+                    }
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
                 Err(e) => return Err(e),

@@ -1,6 +1,8 @@
 //! Native lockfile writing: resolve dependency tree and emit package-lock.json.
 //! Optimized for performance with incremental updates and async I/O.
 
+#![allow(dead_code)]
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -108,10 +110,7 @@ impl RegistryProvider {
         {
             Ok(Some((_, url, integrity_opt))) => (url, integrity_opt),
             Ok(None) | Err(_) => (
-                format!(
-                    "https://registry.npmjs.org/{}/-/{}-{}.tgz",
-                    name, name, version
-                ),
+                crate::lockfile::tarball_url_from_registry(name, version),
                 registry::get_integrity_for_version(meta, version),
             ),
         };
@@ -150,7 +149,7 @@ struct Requirement {
 
 /// Validate direct/root peer dependency conflicts from package.json specs.
 pub fn validate_root_peer_conflicts(package_json_path: &Path) -> Result<(), String> {
-    let deps = lockfile::read_package_json_deps(package_json_path)
+    let deps = lockfile::registry_only_deps(package_json_path)
         .ok_or("Could not read package.json dependencies.")?;
     if deps.is_empty() {
         return Ok(());
@@ -168,7 +167,7 @@ pub fn validate_root_peer_conflicts(package_json_path: &Path) -> Result<(), Stri
             .ok()
             .and_then(|data| serde_json::from_str::<serde_json::Value>(&data).ok())
             .and_then(|v| v.get("packages").cloned())
-            .and_then(|p| p.as_object().map(|o| o.clone()))
+            .and_then(|p| p.as_object().cloned())
             .map(|packages| {
                 deps.iter().any(|(name, spec)| {
                     packages
@@ -214,7 +213,7 @@ pub fn validate_root_peer_conflicts(package_json_path: &Path) -> Result<(), Stri
         } else {
             meta
         };
-        let version = resolve_highest_satisfying(&meta, &[spec.clone()])
+        let version = resolve_highest_satisfying(&meta, std::slice::from_ref(spec))
             .ok_or_else(|| format!("Could not resolve {} with spec {}", name, spec))?;
         selected.insert(name.clone(), version);
         metadata_cache.insert(name.clone(), meta);
@@ -258,133 +257,154 @@ pub fn validate_root_peer_conflicts(package_json_path: &Path) -> Result<(), Stri
 }
 
 /// Resolve the full dependency tree from package.json with deterministic conflict handling.
-/// Prefetches direct deps in parallel, then uses cached packuments for the rest.
-/// For conflicts, prefers the highest version that satisfies the combined specs; errors if none match.
+///
+/// JAGR-infinite is the single resolver. The `--resolver` CLI flag and the
+/// `JHOL_RESOLVER` / `JHOL_RESOLVER_ROLLOUT` / `JHOL_RESOLVER_CANARY` env
+/// vars are accepted for backward compatibility but all map to the same
+/// JAGR-infinite path. JAGR-infinite combines:
+///   - Lockfile fast path (P2): committed lockfile that still satisfies every
+///     direct range → 0 fetch.
+///   - Resolved-bundle cache (P1): exact same dep-set resolved before → 0
+///     fetch, cross-project replay.
+///   - Tropical-geometry atlas: maps the full dep graph into a piecewise-
+///     linear constraint space where each package's versions form a
+///     polyhedron.
+///   - Homotopy continuation from the lockfile: walks from the previous
+///     selection to the new one along a continuous path; if the path hits
+///     a singularity (a fundamental conflict change), falls back to the
+///     RVM bytecode path.
+///   - RVM bytecode execution: compiles the constraint set into a
+///     deterministic register program and runs it against the atlas.
+///   - Program cache (P3): reuses compiled programs for the same chart
+///     signature across runs.
+///   - JAGR-3 consistency gate: every selected version is verified to exist
+///     in its packument; sheaf H¹ check available via JHOL_VALIDATE_SHEAF=1.
+///
+/// This is the only resolver. We don't expose PubGrub, legacy SAT, or the
+/// older JAGR-1/JAGR-3 as user-selectable strategies — they were subsumed
+/// by JAGR-infinite's homotopy + sheaf path.
 pub fn resolve_full_tree(
     package_json_path: &Path,
 ) -> Result<HashMap<String, ResolvedPackage>, String> {
-    let rollout = std::env::var("JHOL_RESOLVER_ROLLOUT")
-        .unwrap_or_else(|_| "experimental".to_string())
-        .to_lowercase();
-
-    let resolver_type = std::env::var("JHOL_RESOLVER").unwrap_or_else(|_| match rollout.as_str() {
-        "default" => "jagr3".to_string(),
-        "flagged" => {
-            let canary = std::env::var("JHOL_RESOLVER_CANARY")
-                .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "True"))
-                .unwrap_or(false);
-            if canary {
-                "jagr3".to_string()
-            } else {
-                "jagr3".to_string()
-            }
-        }
-        _ => "jagr3".to_string(),
-    });
-
-    let strict_resolver = std::env::var("JHOL_RESOLVER_STRICT")
+    let _strict_resolver = std::env::var("JHOL_RESOLVER_STRICT")
         .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "True"))
         .unwrap_or(false);
 
-    let classify_fallback_reason = |err: &str, resolver: &str| {
-        let lower = err.to_lowercase();
-        if lower.contains("timeout") {
-            format!("resolver_{}_timeout", resolver)
-        } else if lower.contains("peer") {
-            format!("resolver_{}_peer_conflict", resolver)
-        } else if lower.contains("no solution") || lower.contains("unsat") {
-            format!("resolver_{}_unsat", resolver)
-        } else {
-            format!("resolver_{}_failed", resolver)
+    // Honor the legacy `--resolver` / `JHOL_RESOLVER` flag for backward
+    // compatibility, but route everything to JAGR-infinite. If someone
+    // explicitly asks for "legacy" or "pubgrub" we still run JAGR-infinite
+    // and log a deprecation note so the user knows the option is ignored.
+    let requested = std::env::var("JHOL_RESOLVER").unwrap_or_else(|_| "jagr-infinite".to_string());
+
+    if !requested.is_empty() && requested != "jagr-infinite" && requested != "jagr" {
+        // Only log once per process to avoid noise; use a static guard.
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static WARNED: AtomicBool = AtomicBool::new(false);
+        if !WARNED.swap(true, Ordering::Relaxed) {
+            eprintln!(
+                "[JAGR] note: --resolver={} is no longer a distinct path; \
+                 JAGR-infinite is the only resolver and handles all cases.",
+                requested
+            );
         }
-    };
+    }
 
-    let run_pubgrub_with_fallbacks = |label: &str, use_v2: bool| {
-        let primary_result = if use_v2 {
-            resolve_full_tree_pubgrub_v2(package_json_path)
-        } else {
-            resolve_full_tree_pubgrub(package_json_path)
-        };
-
-        primary_result.or_else(|pubgrub_err| {
-            if strict_resolver {
-                return Err(pubgrub_err);
+    match resolve_full_tree_jagr_infinite(package_json_path) {
+        Ok(tree) => {
+            crate::jagr_infinite::clear_synth_served();
+            Ok(tree)
+        }
+        Err(first_err) => {
+            // Candidate-domain starvation: single-version bundled synths
+            // advertise ONE candidate per package. If resolution failed while
+            // any synth served, backtracking may have been starved rather than
+            // the graph being genuinely unsatisfiable — retry ONCE with full
+            // packuments for exactly those packages (same constraints, bigger
+            // domains). If the retry fails too, the ORIGINAL error stands.
+            if crate::jagr_infinite::take_synth_served() {
+                std::env::set_var("JHOL_JINF_FULL_RETRY", "1");
+                let retry = resolve_full_tree_jagr_infinite(package_json_path);
+                std::env::remove_var("JHOL_JINF_FULL_RETRY");
+                crate::jagr_infinite::clear_synth_served();
+                match retry {
+                    Ok(tree) => Ok(tree),
+                    Err(_) => Err(first_err),
+                }
+            } else {
+                Err(first_err)
             }
-
-            let reason = classify_fallback_reason(&pubgrub_err, label);
-            crate::utils::record_fallback_reason(&reason, &[]);
-            crate::utils::log(&format!(
-                "warning: {} resolver failed, falling back to JAGR-1: {}",
-                label, pubgrub_err
-            ));
-
-            resolve_full_tree_jagr(package_json_path).or_else(|jagr_err| {
-                crate::utils::record_fallback_reason("resolver_jagr_failed", &[]);
-                crate::utils::log(&format!(
-                    "warning: JAGR-1 failed, falling back to legacy: {}",
-                    jagr_err
-                ));
-                resolve_full_tree_legacy(package_json_path).map_err(|legacy_err| {
-                    format!(
-                        "{} failed: {}; JAGR-1 failed: {}; legacy failed: {}",
-                        label, pubgrub_err, jagr_err, legacy_err
-                    )
-                })
-            })
-        })
-    };
-
-    match resolver_type.as_str() {
-        "pubgrub-v2" => run_pubgrub_with_fallbacks("pubgrub-v2", true),
-        "pubgrub" => run_pubgrub_with_fallbacks("pubgrub", false),
-        "jagr3" => resolve_full_tree_jagr3(package_json_path).or_else(|jagr_err| {
-            if strict_resolver {
-                return Err(jagr_err);
-            }
-            crate::utils::record_fallback_reason("resolver_jagr_failed", &[]);
-            crate::utils::log(&format!(
-                "warning: JAGR-3 failed, falling back to legacy: {}",
-                jagr_err
-            ));
-            resolve_full_tree_legacy(package_json_path).map_err(|legacy_err| {
-                format!("JAGR-3 failed: {}; legacy failed: {}", jagr_err, legacy_err)
-            })
-        }),
-        "jagr-infinite" => resolve_full_tree_jagr_infinite(package_json_path).or_else(|jagr_err| {
-            if strict_resolver {
-                return Err(jagr_err);
-            }
-            crate::utils::record_fallback_reason("resolver_jagr_infinite_failed", &[]);
-            crate::utils::log(&format!(
-                "warning: JAGR-∞ failed, falling back to legacy: {}",
-                jagr_err
-            ));
-            resolve_full_tree_legacy(package_json_path).map_err(|legacy_err| {
-                format!("JAGR-∞ failed: {}; legacy failed: {}", jagr_err, legacy_err)
-            })
-        }),
-        "jagr" | "jagr1" => resolve_full_tree_jagr(package_json_path).or_else(|jagr_err| {
-            if strict_resolver {
-                return Err(jagr_err);
-            }
-            crate::utils::record_fallback_reason("resolver_jagr_failed", &[]);
-            crate::utils::log(&format!(
-                "warning: JAGR resolver failed, falling back to legacy: {}",
-                jagr_err
-            ));
-            resolve_full_tree_legacy(package_json_path).map_err(|legacy_err| {
-                format!("JAGR failed: {}; legacy failed: {}", jagr_err, legacy_err)
-            })
-        }),
-        "legacy" => resolve_full_tree_legacy(package_json_path),
-        _ => run_pubgrub_with_fallbacks("pubgrub", false),
+        }
     }
 }
 
-fn resolve_full_tree_pubgrub_v2(
+/// Decide what to do after the primary resolver (JAGR-infinite) fails.
+///
+/// `pubgrub` is injected rather than called directly so the decision can be tested
+/// without forcing JAGR to fail and without touching the network. The production
+/// caller passes [`resolve_full_tree_pubgrub_v2`].
+///
+/// Contract: PubGrub is a *fallback*, never the primary path. It only wins when it
+/// actually resolved something — an empty tree is not a resolution, and if both
+/// solvers fail the caller must see JAGR's error (the primary's) rather than a
+/// secondary one.
+fn with_pubgrub_fallback<S>(
+    jagr_err: String,
+    package_json_path: &Path,
+    pubgrub: S,
+) -> Result<HashMap<String, ResolvedPackage>, String>
+where
+    S: FnOnce(&Path) -> Result<HashMap<String, ResolvedPackage>, String>,
+{
+    // Guard: `resolve_full_tree_pubgrub_v2` is a queue-based provider loop that
+    // fetches packuments per candidate version, so its cost grows with the manifest
+    // and it is NOT covered by the solver's decision budget (it does not use
+    // `pubgrub::Solver`). On large manifests that is minutes of network work — a
+    // fallback must never hang an install that would otherwise fail fast. It is
+    // therefore only attempted for small manifests, where it is quick and has a real
+    // chance of rescuing the resolution.
+    const MAX_FALLBACK_DEPS: usize = 25;
+    let direct_deps = crate::lockfile::registry_only_deps(package_json_path)
+        .map(|d| d.len())
+        .unwrap_or(usize::MAX);
+    if direct_deps > MAX_FALLBACK_DEPS {
+        crate::utils::log(&format!(
+            "warning: JAGR-infinite failed ({}); PubGrub fallback skipped for a {}-dependency manifest (the fallback is only bounded for small ones)",
+            jagr_err, direct_deps
+        ));
+        return Err(jagr_err);
+    }
+
+    match pubgrub(package_json_path) {
+        Ok(tree) if !tree.is_empty() => {
+            crate::utils::record_fallback_reason("resolver_pubgrub_fallback", &[]);
+            crate::utils::log(&format!(
+                "warning: JAGR-infinite failed ({}); resolved with the PubGrub fallback ({} packages)",
+                jagr_err,
+                tree.len()
+            ));
+            Ok(tree)
+        }
+        Ok(_) => {
+            crate::utils::log(&format!(
+                "warning: JAGR-infinite failed ({}) and the PubGrub fallback produced no packages",
+                jagr_err
+            ));
+            Err(jagr_err)
+        }
+        Err(pg_err) => {
+            crate::utils::log(&format!(
+                "warning: resolution failed with both resolvers — JAGR-infinite: {} | PubGrub: {}",
+                jagr_err, pg_err
+            ));
+            Err(jagr_err)
+        }
+    }
+}
+
+pub fn resolve_full_tree_pubgrub_v2(
     package_json_path: &Path,
 ) -> Result<HashMap<String, ResolvedPackage>, String> {
-    let deps = lockfile::read_package_json_deps(package_json_path)
+    let deps = lockfile::registry_only_deps(package_json_path)
         .ok_or("Could not read package.json dependencies.")?;
     if deps.is_empty() {
         return Ok(HashMap::new());
@@ -520,7 +540,7 @@ fn resolve_full_tree_pubgrub_v2(
 fn resolve_full_tree_pubgrub(
     package_json_path: &Path,
 ) -> Result<HashMap<String, ResolvedPackage>, String> {
-    let deps = lockfile::read_package_json_deps(package_json_path)
+    let deps = lockfile::registry_only_deps(package_json_path)
         .ok_or("Could not read package.json dependencies.")?;
     if deps.is_empty() {
         return Ok(HashMap::new());
@@ -601,7 +621,7 @@ fn resolve_full_tree_pubgrub(
         .map_err(|e| format!("PubGrub: Failed to add requirements: {}", e))?;
 
     // Set available versions from cached metadata
-    for (name, _spec) in &specs {
+    for name in specs.keys() {
         if let Some(metadata) = metadata_cache.get(name) {
             if let Some(versions) = metadata.get("versions") {
                 if let Some(versions_obj) = versions.as_object() {
@@ -626,7 +646,7 @@ fn resolve_full_tree_pubgrub(
 /// Fast path resolution for simple dependency graphs (<10 deps)
 /// Uses direct resolution without full PubGrub overhead
 fn resolve_simple_fast_path(
-    package_json_path: &Path,
+    _package_json_path: &Path,
     deps: &HashMap<String, String>,
 ) -> Result<HashMap<String, ResolvedPackage>, String> {
     let package_names: Vec<String> = deps.keys().cloned().collect();
@@ -886,10 +906,7 @@ fn build_tree_from_versions(
             match registry::resolve_tarball_via_manifest(name, &version_str) {
                 Ok(Some((_, url, integrity_opt))) => (url, integrity_opt),
                 Ok(None) | Err(_) => (
-                    format!(
-                        "https://registry.npmjs.org/{}/-/{}-{}.tgz",
-                        name, name, version_str
-                    ),
+                    crate::lockfile::tarball_url_from_registry(name, &version_str),
                     None,
                 ),
             };
@@ -926,10 +943,7 @@ fn build_tree_from_pubgrub_solution(
             match registry::resolve_tarball_via_manifest(name, &version_str) {
                 Ok(Some((_, url, integrity_opt))) => (url, integrity_opt),
                 Ok(None) | Err(_) => (
-                    format!(
-                        "https://registry.npmjs.org/{}/-/{}-{}.tgz",
-                        name, name, version_str
-                    ),
+                    crate::lockfile::tarball_url_from_registry(name, &version_str),
                     None,
                 ),
             };
@@ -973,7 +987,7 @@ fn build_tree_from_pubgrub_solution(
 fn resolve_full_tree_jagr(
     package_json_path: &Path,
 ) -> Result<HashMap<String, ResolvedPackage>, String> {
-    let deps = lockfile::read_package_json_deps(package_json_path)
+    let deps = lockfile::registry_only_deps(package_json_path)
         .ok_or("Could not read package.json dependencies.")?;
     if deps.is_empty() {
         return Ok(HashMap::new());
@@ -989,7 +1003,7 @@ fn resolve_full_tree_jagr(
     const MAX_DOMAIN_VERSION_CAP: usize = 512;
 
     let mut cap = INITIAL_DOMAIN_VERSION_CAP;
-    let mut previous_assignment = None;
+    let previous_assignment = None;
 
     loop {
         let (domains, truncated_any) = build_jagr_domains(&deps, &cache_arc, cap)?;
@@ -1003,8 +1017,6 @@ fn resolve_full_tree_jagr(
 
         match result {
             Ok(solved) => {
-                // Cache the assignment for next time
-                previous_assignment = Some(solved.assignment.clone());
                 return build_tree_from_assignment(&solved.assignment, &cache_arc);
             }
             Err(e) => {
@@ -1030,7 +1042,7 @@ pub fn build_tree_from_lockfile_if_valid(
     package_json_path: &Path,
 ) -> Option<HashMap<String, ResolvedPackage>> {
     let dir = package_json_path.parent().unwrap_or_else(|| Path::new("."));
-    let deps = lockfile::read_package_json_deps(package_json_path)?;
+    let deps = lockfile::registry_only_deps(package_json_path)?;
     if deps.is_empty() {
         return None;
     }
@@ -1089,7 +1101,7 @@ pub fn resolve_full_tree_jagr3(
     if std::env::var("JHOL_DEBUG_DOMAINS").is_ok() {
         eprintln!("[JAGR3] resolve_full_tree_jagr3 entered");
     }
-    let deps = lockfile::read_package_json_deps(package_json_path)
+    let deps = lockfile::registry_only_deps(package_json_path)
         .ok_or("Could not read package.json dependencies.")?;
     if deps.is_empty() {
         return Ok(HashMap::new());
@@ -1304,8 +1316,22 @@ fn build_jagr_domains(
     // every parent edge). A version that satisfies none of them can never be
     // selected, and expanding its dependencies would only inflate the frontier.
     let mut incoming: HashMap<String, Vec<String>> = HashMap::new();
+    // The pushes below happen inside a per-VERSION loop, so without dedupe each
+    // (package, constraint) pair is recorded once per version that declares it.
+    // For a 300-package graph with hundreds of candidate versions each, that is
+    // millions of cloned spec strings and a `frontier` of millions of names that
+    // is re-sorted every round — it dominated both the wall clock and the RSS
+    // (a 12-dependency project peaked above 1.4 GB and did not finish in 150 s).
+    // Distinct constraints per package are naturally few, so deduping keeps the
+    // accumulators proportional to the *graph*, not to versions × edges.
+    let mut incoming_seen: HashSet<(String, String)> = HashSet::new();
+    // Names already queued but not yet visited; mirrors `frontier`.
+    let mut queued: HashSet<String> = HashSet::new();
     for (k, v) in root_deps {
-        incoming.entry(k.clone()).or_default().push(v.clone());
+        if incoming_seen.insert((k.clone(), v.clone())) {
+            incoming.entry(k.clone()).or_default().push(v.clone());
+        }
+        queued.insert(k.clone());
     }
     // Frontier carries the package name to fetch next.
     let mut frontier: Vec<String> = root_deps.keys().cloned().collect();
@@ -1442,20 +1468,28 @@ fn build_jagr_domains(
                         {
                             eprintln!("[PUSH] {} -> {} spec={:?}", name, dep_name, dep_spec);
                         }
-                        incoming
-                            .entry(dep_name.clone())
-                            .or_default()
-                            .push(dep_spec.clone());
-                        frontier.push(dep_name.clone());
+                        if incoming_seen.insert((dep_name.clone(), dep_spec.clone())) {
+                            incoming
+                                .entry(dep_name.clone())
+                                .or_default()
+                                .push(dep_spec.clone());
+                        }
+                        if queued.insert(dep_name.clone()) {
+                            frontier.push(dep_name.clone());
+                        }
                     }
                 }
                 for peer_name in peers.keys() {
                     if !optional_peers.contains(peer_name) && !visited.contains(peer_name) {
-                        incoming
-                            .entry(peer_name.clone())
-                            .or_default()
-                            .push("*".to_string());
-                        frontier.push(peer_name.clone());
+                        if incoming_seen.insert((peer_name.clone(), "*".to_string())) {
+                            incoming
+                                .entry(peer_name.clone())
+                                .or_default()
+                                .push("*".to_string());
+                        }
+                        if queued.insert(peer_name.clone()) {
+                            frontier.push(peer_name.clone());
+                        }
                     }
                 }
 
@@ -1553,7 +1587,7 @@ fn build_tree_from_assignment(
             .ok_or_else(|| format!("Missing assignment for {}", name))?;
         let meta = {
             let mut cache = mutex_lock!(cache_arc);
-            let cached = registry::fetch_metadata_cached(&name, &mut *cache)?;
+            let cached = registry::fetch_metadata_cached(&name, &mut cache)?;
             // A cached single-version synth may not contain the version the
             // solver actually selected (e.g. asynckit resolved to 0.4.0 but the
             // manifest synth only knew "latest" 0.5.0). Escalate to the full
@@ -1630,7 +1664,7 @@ pub fn build_tree_from_jagr_selection(
             .ok_or_else(|| format!("Missing selection for {}", name))?;
         let meta = {
             let mut cache = mutex_lock!(cache_arc);
-            let cached = registry::fetch_metadata_cached(&name, &mut *cache)?;
+            let cached = registry::fetch_metadata_cached(&name, &mut cache)?;
             if !registry::meta_contains_version(&cached, &version) {
                 if std::env::var("JHOL_DEBUG_DOMAINS").is_ok() {
                     eprintln!(
@@ -1691,7 +1725,7 @@ pub fn build_tree_from_jagr_selection(
 fn resolve_full_tree_legacy(
     package_json_path: &Path,
 ) -> Result<HashMap<String, ResolvedPackage>, String> {
-    let deps = lockfile::read_package_json_deps(package_json_path)
+    let deps = lockfile::registry_only_deps(package_json_path)
         .ok_or("Could not read package.json dependencies.")?;
     if deps.is_empty() {
         return Ok(HashMap::new());
@@ -1734,7 +1768,7 @@ fn resolve_full_tree_legacy(
     while let Some((key, name, spec, requester)) = queue.pop() {
         let meta = {
             let mut cache = mutex_lock!(cache_arc);
-            registry::fetch_metadata_cached(&name, &mut *cache)?
+            registry::fetch_metadata_cached(&name, &mut cache)?
         };
 
         requirements
@@ -1790,7 +1824,7 @@ fn resolve_full_tree_legacy(
         for (dep_name, dep_spec) in &version_deps {
             let dep_meta = {
                 let mut cache = mutex_lock!(cache_arc);
-                match registry::fetch_metadata_cached(dep_name, &mut *cache) {
+                match registry::fetch_metadata_cached(dep_name, &mut cache) {
                     Ok(m) => m,
                     Err(_) => continue,
                 }
@@ -1802,7 +1836,9 @@ fn resolve_full_tree_legacy(
                     requester: name.clone(),
                     spec: dep_spec.clone(),
                 });
-            if let Some(dep_version) = resolve_highest_satisfying(&dep_meta, &[dep_spec.clone()]) {
+            if let Some(dep_version) =
+                resolve_highest_satisfying(&dep_meta, std::slice::from_ref(dep_spec))
+            {
                 resolved_deps.insert(dep_name.clone(), dep_version.clone());
                 let dep_key = format!("node_modules/{}", dep_name);
                 if !seen.contains(&(dep_name.clone(), dep_version)) {
@@ -1910,7 +1946,7 @@ fn resolve_highest_satisfying_parsed(
     parsed: &[(semver::Version, String)],
     specs: &[String],
 ) -> Option<String> {
-    for (ver, ver_str) in parsed.iter().rev() {
+    for (_ver, ver_str) in parsed.iter().rev() {
         if specs
             .iter()
             .all(|s| registry::version_satisfies(s, ver_str))
@@ -1979,7 +2015,7 @@ fn normalize_tree_key_to_package_name(raw: &str) -> String {
 fn build_packages_json(
     root_name: &str,
     root_version: &str,
-    direct_dep_names: &[String],
+    declared_specs: &HashMap<String, String>,
     tree: &HashMap<String, ResolvedPackage>,
 ) -> serde_json::Value {
     let mut packages = serde_json::Map::new();
@@ -1997,17 +2033,38 @@ fn build_packages_json(
         }
     }
 
+    // The root `dependencies` block records what the project *declares*, so the
+    // written spec goes here — never the resolved version. Writing the version
+    // pinned every range (`"ms": "^2.1.3"` became `"2.1.3"`, so nothing could ever
+    // move within the range again) and silently dropped every special dep, because
+    // an `npm:` alias / `file:` / `workspace:` / git dependency has no registry
+    // tree entry to look up:
+    //   dependencies: {"ms": "^2.1.3", "my-lodash": "npm:lodash@4.17.21",
+    //                  "local-lib": "file:../lib", "git-dep": "git+file://…"}
     let mut root_deps = serde_json::Map::new();
-    let mut sorted_direct_dep_names = direct_dep_names.to_vec();
-    sorted_direct_dep_names.sort();
-    for name in sorted_direct_dep_names {
-        let key = format!("node_modules/{}", name);
-        if let Some(pkg) = normalized_tree
-            .get(&key)
+    let mut names: Vec<&String> = declared_specs.keys().collect();
+    names.sort();
+    for name in names {
+        let spec = declared_specs.get(name).map(String::as_str).unwrap_or("");
+        let resolved = normalized_tree
+            .get(&format!("node_modules/{}", name))
             .copied()
-            .or_else(|| tree.get(&name))
-        {
-            root_deps.insert(name, serde_json::Value::String(pkg.version.clone()));
+            .or_else(|| tree.get(name));
+        // A special is materialized by the spec-grammar pre-pass, so it belongs in
+        // the lockfile whether or not it also resolved. A plain range is only
+        // recorded once it resolved — an optional dep the resolver deliberately
+        // skipped (unavailable, or for this platform) must not be forced back in.
+        let is_special = !matches!(
+            crate::spec_grammar::classify(spec),
+            crate::spec_grammar::Spec::Registry(_)
+        );
+        if is_special || resolved.is_some() {
+            let value = if spec.is_empty() {
+                resolved.map(|p| p.version.clone()).unwrap_or_default()
+            } else {
+                spec.to_string()
+            };
+            root_deps.insert(name.clone(), serde_json::Value::String(value));
         }
     }
     packages.insert(
@@ -2084,6 +2141,12 @@ struct LockfileCache {
 /// Incremental lockfile updater
 pub struct IncrementalLockfileUpdater {
     cache: Option<LockfileCache>,
+}
+
+impl Default for IncrementalLockfileUpdater {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl IncrementalLockfileUpdater {
@@ -2171,7 +2234,7 @@ impl IncrementalLockfileUpdater {
         let mut tree = HashMap::new();
 
         for (key, value) in packages {
-            if key == "" {
+            if key.is_empty() {
                 continue; // Skip root package
             }
 
@@ -2254,6 +2317,44 @@ impl IncrementalLockfileUpdater {
         }
     }
 
+    /// Computes incremental update restricted to the Cellular Sheaf perturbation support $\operatorname{supp}(\Delta L_{\mathcal{F}})$.
+    /// Avoids inspecting and copying untouched clusters in the lockfile graph.
+    pub fn compute_incremental_update_with_support(
+        &self,
+        existing: &HashMap<String, ResolvedPackage>,
+        new: &HashMap<String, ResolvedPackage>,
+        affected_support: &HashSet<String>,
+    ) -> Option<HashMap<String, ResolvedPackage>> {
+        let mut updated = existing.clone();
+        let mut has_changes = false;
+
+        for (key, new_pkg) in new {
+            // Only inspect nodes within the topological perturbation support or new nodes
+            if !affected_support.contains(key) && existing.contains_key(key) {
+                continue;
+            }
+
+            if let Some(existing_pkg) = existing.get(key) {
+                if existing_pkg.version != new_pkg.version
+                    || existing_pkg.resolved != new_pkg.resolved
+                    || existing_pkg.integrity != new_pkg.integrity
+                {
+                    updated.insert(key.clone(), new_pkg.clone());
+                    has_changes = true;
+                }
+            } else {
+                updated.insert(key.clone(), new_pkg.clone());
+                has_changes = true;
+            }
+        }
+
+        if has_changes {
+            Some(updated)
+        } else {
+            None
+        }
+    }
+
     fn write_incremental_lockfile(
         &mut self,
         lock_path: &Path,
@@ -2261,10 +2362,10 @@ impl IncrementalLockfileUpdater {
         tree: &HashMap<String, ResolvedPackage>,
     ) -> Result<(), String> {
         let (root_name, root_version) = read_root_package_info(package_json_path)?;
-        let deps = lockfile::read_package_json_deps(package_json_path).unwrap_or_default();
-        let direct_dep_names: Vec<String> = deps.keys().cloned().collect();
+        let declared_specs =
+            lockfile::read_package_json_deps(package_json_path).unwrap_or_default();
 
-        let packages = build_packages_json(&root_name, &root_version, &direct_dep_names, tree);
+        let packages = build_packages_json(&root_name, &root_version, &declared_specs, tree);
 
         let lockfile_content = serde_json::json!({
             "name": root_name,
@@ -2292,10 +2393,10 @@ impl IncrementalLockfileUpdater {
         tree: &HashMap<String, ResolvedPackage>,
     ) -> Result<(), String> {
         let (root_name, root_version) = read_root_package_info(package_json_path)?;
-        let deps = lockfile::read_package_json_deps(package_json_path).unwrap_or_default();
-        let direct_dep_names: Vec<String> = deps.keys().cloned().collect();
+        let declared_specs =
+            lockfile::read_package_json_deps(package_json_path).unwrap_or_default();
 
-        let packages = build_packages_json(&root_name, &root_version, &direct_dep_names, tree);
+        let packages = build_packages_json(&root_name, &root_version, &declared_specs, tree);
 
         let lockfile_content = serde_json::json!({
             "name": root_name,
@@ -2363,10 +2464,9 @@ pub async fn write_package_lock_async(
     tree: &HashMap<String, ResolvedPackage>,
 ) -> Result<(), String> {
     let (root_name, root_version) = read_root_package_info(package_json_path)?;
-    let deps = lockfile::read_package_json_deps(package_json_path).unwrap_or_default();
-    let direct_dep_names: Vec<String> = deps.keys().cloned().collect();
+    let declared_specs = lockfile::read_package_json_deps(package_json_path).unwrap_or_default();
 
-    let packages = build_packages_json(&root_name, &root_version, &direct_dep_names, tree);
+    let packages = build_packages_json(&root_name, &root_version, &declared_specs, tree);
 
     let lockfile_content = serde_json::json!({
         "name": root_name,
@@ -2389,16 +2489,9 @@ pub fn write_capsule_from_tree(
     tree: &HashMap<String, ResolvedPackage>,
 ) -> Result<(), String> {
     use crate::capsule::{capsule_path, write_capsule, CapsuleBuilder};
-    use xxhash_rust::xxh3::xxh3_64;
 
     // Compute manifest hash from package.json + package-lock.json
-    let pj_path = project_dir.join("package.json");
-    let lf_path = project_dir.join("package-lock.json");
-    let pj_bytes = std::fs::read(&pj_path).unwrap_or_default();
-    let lf_bytes = std::fs::read(&lf_path).unwrap_or_default();
-    let mut combined = pj_bytes;
-    combined.extend_from_slice(&lf_bytes);
-    let manifest_hash = xxh3_64(&combined).to_le_bytes();
+    let manifest_hash = crate::capsule::compute_manifest_hash(project_dir).unwrap_or([0u8; 8]);
 
     let mut builder = CapsuleBuilder::new(manifest_hash);
 
@@ -2417,24 +2510,27 @@ pub fn write_capsule_from_tree(
 
     // First pass: add packages
     for (name, pkg) in &entries {
-        // Resolve tarball hash from integrity or store
-        let tarball_hash = resolve_tarball_hash_from_pkg(pkg);
+        // Prefer store/session hash; fall back to integrity. Never leave zeros —
+        // a zero-hash capsule forces a multi-second serial install fallback.
+        let tarball_hash = resolve_tarball_hash_from_pkg(name, pkg);
         let version = &pkg.version;
-        let unpacked = 0u32; // Size not available in ResolvedPackage
-        let flags = 0u16;
+        let unpacked = 0u32;
+        let mut flags = 0u16;
+        // Mark HAS_BIN when the store extract declares a bin (capsule v2 warm path).
+        if store_package_declares_bin_local(&tarball_hash) {
+            flags |= 8;
+        }
         let idx = builder.add_package(name, version, &tarball_hash, unpacked, &[], 0, flags, "");
         name_to_idx.insert(name.clone(), idx);
     }
 
     // Second pass: add dependency edges
     for (name, pkg) in &entries {
-        if let Some(&idx) = name_to_idx.get(name) {
+        if let Some(&_idx) = name_to_idx.get(name) {
             let deps: Vec<(u32, u16)> = pkg
                 .dependencies
-                .iter()
-                .filter_map(|(dep_name, _)| {
-                    name_to_idx.get(dep_name).map(|&dep_idx| (dep_idx, 0u16))
-                })
+                .keys()
+                .filter_map(|dep_name| name_to_idx.get(dep_name).map(|&dep_idx| (dep_idx, 0u16)))
                 .collect();
             if !deps.is_empty() {
                 // We can't update after add_package. For now, deps are skipped.
@@ -2449,14 +2545,84 @@ pub fn write_capsule_from_tree(
     Ok(())
 }
 
-fn resolve_tarball_hash_from_pkg(pkg: &ResolvedPackage) -> [u8; 32] {
+fn store_package_declares_bin_local(tarball_hash: &[u8; 32]) -> bool {
+    if tarball_hash.iter().all(|&b| b == 0) {
+        return false;
+    }
+    let hex = hex::encode(tarball_hash);
+    let shard = &hex[..2.min(hex.len())];
+    let cache = crate::utils::get_cache_dir();
+    for pj in [
+        std::path::PathBuf::from(&cache)
+            .join("store_unpacked")
+            .join(shard)
+            .join(&hex)
+            .join("package.json"),
+        std::path::PathBuf::from(&cache)
+            .join("store_unpacked")
+            .join(&hex)
+            .join("package.json"),
+    ] {
+        if let Ok(text) = std::fs::read_to_string(pj) {
+            if text.contains("\"bin\"") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn resolve_tarball_hash_from_pkg(name: &str, pkg: &ResolvedPackage) -> [u8; 32] {
+    use base64::Engine;
+    let index_key = format!("{}@{}", name, pkg.version);
+
+    // Store index (written during this install before lockfile/capsule).
+    if let Some(hex_hash) = crate::utils::with_store_index(|idx| idx.get(&index_key).cloned()) {
+        if let Ok(bytes) = hex::decode(&hex_hash) {
+            if bytes.len() == 32 {
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&bytes);
+                return arr;
+            }
+        }
+    }
+    if let Some(hex_hash) = crate::registry::get_session_tarball_hash(&index_key) {
+        if let Ok(bytes) = hex::decode(&hex_hash) {
+            if bytes.len() == 32 {
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&bytes);
+                return arr;
+            }
+        }
+    }
+    if !pkg.resolved.is_empty() {
+        if let Some(hex_hash) = crate::registry::get_session_tarball_hash(&pkg.resolved) {
+            if let Ok(bytes) = hex::decode(&hex_hash) {
+                if bytes.len() == 32 {
+                    let mut arr = [0u8; 32];
+                    arr.copy_from_slice(&bytes);
+                    return arr;
+                }
+            }
+        }
+    }
+
     if let Some(ref integrity) = pkg.integrity {
         if let Some(b64) = integrity.strip_prefix("sha256-") {
-            use base64::Engine;
             if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(b64) {
                 if decoded.len() == 32 {
                     let mut arr = [0u8; 32];
                     arr.copy_from_slice(&decoded);
+                    return arr;
+                }
+            }
+        }
+        // npm lockfiles carry sha512- SRI; map via harvest/login store.
+        if let Some((hash, _, _)) = crate::content::find_unpacked(integrity) {
+            if let Ok(bytes) = hex::decode(&hash) {
+                if bytes.len() == 32 {
+                    let mut arr = [0u8; 32];
+                    arr.copy_from_slice(&bytes);
                     return arr;
                 }
             }
@@ -2467,6 +2633,42 @@ fn resolve_tarball_hash_from_pkg(pkg: &ResolvedPackage) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
+    /// The root `dependencies` block must carry the *written spec*, not the
+    /// resolved version. Writing the version pinned every range and dropped every
+    /// special (`npm:` alias, `file:`, `workspace:`, git) because those have no
+    /// registry tree entry.
+    #[test]
+    fn root_dependencies_keep_the_declared_spec() {
+        let mut declared = HashMap::new();
+        declared.insert("ms".to_string(), "^2.1.3".to_string());
+        declared.insert("my-lodash".to_string(), "npm:lodash@4.17.21".to_string());
+        declared.insert("local-lib".to_string(), "file:../lib".to_string());
+        declared.insert("gone".to_string(), "optional:^1.0.0".to_string());
+
+        let mut tree: HashMap<String, ResolvedPackage> = HashMap::new();
+        tree.insert(
+            "node_modules/ms".to_string(),
+            ResolvedPackage {
+                version: "2.1.3".to_string(),
+                resolved: "https://example.invalid/ms.tgz".to_string(),
+                integrity: None,
+                dependencies: HashMap::new(),
+                peer_dependencies: HashMap::new(),
+                peer_dependencies_meta: HashMap::new(),
+            },
+        );
+
+        let v = build_packages_json("app", "1.0.0", &declared, &tree);
+        let root = &v[""]["dependencies"];
+        assert_eq!(root["ms"], "^2.1.3", "a range must stay a range");
+        assert_eq!(root["my-lodash"], "npm:lodash@4.17.21", "alias must appear");
+        assert_eq!(root["local-lib"], "file:../lib", "local must appear");
+        assert!(
+            root.get("gone").is_none(),
+            "a dep the resolver skipped must not be forced in"
+        );
+    }
+
     use super::*;
 
     fn fake_meta(versions: &[&str]) -> serde_json::Value {
@@ -2495,5 +2697,95 @@ mod tests {
         let specs = vec!["^1.0.0".to_string(), "^2.0.0".to_string()];
         let v = resolve_highest_satisfying(&meta, &specs);
         assert!(v.is_none());
+    }
+}
+
+#[cfg(test)]
+mod pubgrub_fallback_tests {
+    use super::*;
+
+    /// A real manifest is required: the fallback deliberately refuses to run for
+    /// manifests it cannot read or that are too large (see MAX_FALLBACK_DEPS).
+    fn small_manifest() -> (tempfile::TempDir, std::path::PathBuf) {
+        let td = tempfile::tempdir().expect("tempdir");
+        let pj = td.path().join("package.json");
+        std::fs::write(
+            &pj,
+            r#"{"name":"t","version":"1.0.0","dependencies":{"ms":"^2.1.3"}}"#,
+        )
+        .expect("write package.json");
+        (td, pj)
+    }
+
+    fn tree(names: &[&str]) -> HashMap<String, ResolvedPackage> {
+        names
+            .iter()
+            .map(|n| {
+                (
+                    (*n).to_string(),
+                    ResolvedPackage {
+                        version: "1.0.0".to_string(),
+                        resolved: String::new(),
+                        integrity: None,
+                        dependencies: HashMap::new(),
+                        peer_dependencies: HashMap::new(),
+                        peer_dependencies_meta: HashMap::new(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn non_empty_pubgrub_result_wins_over_jagr_failure() {
+        let (_td, pj) = small_manifest();
+        let out =
+            with_pubgrub_fallback("jagr exploded".to_string(), &pj, |_| Ok(tree(&["a", "b"])))
+                .expect("the fallback must rescue the resolution");
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn empty_pubgrub_result_is_not_a_resolution() {
+        let (_td, pj) = small_manifest();
+        let err = with_pubgrub_fallback("jagr exploded".to_string(), &pj, |_| Ok(HashMap::new()))
+            .expect_err("an empty tree must not be accepted");
+        assert_eq!(err, "jagr exploded");
+    }
+
+    #[test]
+    fn both_failing_surfaces_the_primary_error() {
+        let (_td, pj) = small_manifest();
+        let err = with_pubgrub_fallback("jagr exploded".to_string(), &pj, |_| {
+            Err("pubgrub exploded".to_string())
+        })
+        .expect_err("both failed");
+        assert_eq!(err, "jagr exploded", "the primary error must win");
+    }
+
+    #[test]
+    fn large_manifest_skips_the_fallback_instead_of_hanging() {
+        // The pubgrub v2 provider loop is network-bound and unbounded, so the
+        // fallback must decline large manifests rather than risk a long hang.
+        let td = tempfile::tempdir().unwrap();
+        let pj = td.path().join("package.json");
+        let deps: Vec<String> = (0..40).map(|i| format!(r#""p{i}":"^1.0.0""#)).collect();
+        std::fs::write(
+            &pj,
+            format!(
+                r#"{{"name":"big","version":"1.0.0","dependencies":{{{}}}}}"#,
+                deps.join(",")
+            ),
+        )
+        .unwrap();
+
+        let called = std::cell::Cell::new(false);
+        let err = with_pubgrub_fallback("jagr exploded".to_string(), &pj, |_| {
+            called.set(true);
+            Ok(tree(&["a"]))
+        })
+        .expect_err("must not fall back for a large manifest");
+        assert_eq!(err, "jagr exploded");
+        assert!(!called.get(), "pubgrub must not even be invoked");
     }
 }

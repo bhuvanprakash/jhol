@@ -68,8 +68,20 @@ impl PartialSolution {
         self.current_assignment.insert(package, version);
     }
 
-    /// Derive an assignment from propagation (not a decision)
+    /// Derive an assignment from propagation (not a decision).
+    ///
+    /// No-op if `package` is already assigned to `version` — pushing a duplicate
+    /// assignment would make the propagation loop spin forever (each iteration
+    /// finds the same derivation, sets `derived_any = true`, never terminates).
     pub fn derive(&mut self, package: String, version: PackedVersion, cause: Rc<Incompatibility>) {
+        if self
+            .current_assignment
+            .get(&package)
+            .map(|v| *v == version)
+            .unwrap_or(false)
+        {
+            return;
+        }
         self.assignments.push(Assignment {
             package: package.clone(),
             version,
@@ -105,8 +117,20 @@ impl PartialSolution {
         if let Some(assigned_version) = self.current_assignment.get(&term.package) {
             term.satisfies(assigned_version)
         } else {
-            // Unassigned packages don't satisfy positive terms
-            !term.is_positive
+            // Unassigned packages satisfy NOTHING: only a concrete assignment can
+            // satisfy a term (standard PubGrub `satisfier`).
+            //
+            // This previously returned `!term.is_positive`, so an unassigned
+            // package "satisfied" every negative term. Every root requirement is
+            // registered as `[Term::disallowed(pkg, set)]`, so while `pkg` was
+            // merely undecided it already looked violated. `detect_conflict`
+            // reported that phantom conflict, `resolve_conflict` backtracked and
+            // "learned" a copy of the same incompatibility (its learning is a
+            // stub that returns identical terms), the copy still conflicted, and
+            // the loop pushed incompatibilities forever until the process was
+            // OOM-killed. A single-package instance solved before reaching that
+            // path; two packages did not.
+            false
         }
     }
 

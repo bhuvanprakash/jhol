@@ -30,8 +30,7 @@ impl PackedVersion {
 
     /// Create from semver Version
     pub fn from_version(version: &Version) -> Self {
-        let packed =
-            (version.major << 40) | ((version.minor as u64) << 20) | (version.patch as u64);
+        let packed = (version.major << 40) | (version.minor << 20) | version.patch;
         Self { packed }
     }
 
@@ -39,8 +38,8 @@ impl PackedVersion {
     pub fn to_version(&self) -> Version {
         Version {
             major: self.packed >> 40,
-            minor: ((self.packed >> 20) & 0xFFFFF) as u64,
-            patch: (self.packed & 0xFFFFF) as u64,
+            minor: ((self.packed >> 20) & 0xFFFFF),
+            patch: (self.packed & 0xFFFFF),
             pre: semver::Prerelease::EMPTY,
             build: semver::BuildMetadata::EMPTY,
         }
@@ -372,7 +371,7 @@ impl VersionSet {
         ranges.extend(other.ranges.iter().cloned());
 
         // Merge overlapping ranges
-        ranges.sort_by(|a, b| a.min.packed.cmp(&b.min.packed));
+        ranges.sort_by_key(|a| a.min.packed);
 
         let mut merged: Vec<VersionRange> = Vec::new();
         for range in ranges {

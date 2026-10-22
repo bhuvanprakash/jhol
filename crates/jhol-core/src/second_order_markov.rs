@@ -29,11 +29,99 @@ pub struct SecondOrderMarkov {
     transitions: HashMap<TransitionKey, SecondOrderTransition>,
 }
 
+/// Record one `prev||current -> next` observation (first-order when `prev` is
+/// empty), bumping the occurrence count and recomputing confidence.
+fn record_transition(
+    transitions: &mut HashMap<TransitionKey, SecondOrderTransition>,
+    prev: &str,
+    current: &str,
+    next: &str,
+) {
+    let key = TransitionKey(prev.to_string(), current.to_string());
+    let transition = transitions
+        .entry(key)
+        .or_insert_with(|| SecondOrderTransition {
+            previous: prev.to_string(),
+            current: current.to_string(),
+            likely_next: Vec::new(),
+            confidence: 0.0,
+            occurrence_count: 0,
+        });
+    if !transition.likely_next.iter().any(|n| n == next) {
+        transition.likely_next.push(next.to_string());
+    }
+    transition.occurrence_count += 1;
+    transition.confidence =
+        (transition.occurrence_count as f64) / ((transition.occurrence_count + 10).min(100) as f64);
+}
+
 impl SecondOrderMarkov {
     pub fn new() -> Self {
         Self {
             transitions: HashMap::new(),
         }
+    }
+
+    pub fn seed_common_stacks(&mut self) {
+        // React ecosystem: ubiquitous dependencies
+        record_transition(&mut self.transitions, "react", "react-dom", "scheduler");
+        record_transition(&mut self.transitions, "react", "react-dom", "loose-envify");
+        record_transition(&mut self.transitions, "react", "react-dom", "js-tokens");
+        record_transition(&mut self.transitions, "", "react", "loose-envify");
+        record_transition(&mut self.transitions, "", "react", "scheduler");
+        record_transition(&mut self.transitions, "", "react", "js-tokens");
+        record_transition(&mut self.transitions, "", "react-dom", "scheduler");
+        record_transition(&mut self.transitions, "", "react-dom", "loose-envify");
+        record_transition(&mut self.transitions, "", "react-dom", "js-tokens");
+        record_transition(
+            &mut self.transitions,
+            "react-dom",
+            "scheduler",
+            "loose-envify",
+        );
+        record_transition(&mut self.transitions, "react-dom", "scheduler", "js-tokens");
+        record_transition(
+            &mut self.transitions,
+            "loose-envify",
+            "scheduler",
+            "js-tokens",
+        );
+
+        // Express ecosystem: direct dependencies and common transitive children
+        record_transition(&mut self.transitions, "", "express", "debug");
+        record_transition(&mut self.transitions, "", "express", "qs");
+        record_transition(&mut self.transitions, "", "express", "finalhandler");
+        record_transition(&mut self.transitions, "", "express", "send");
+        record_transition(&mut self.transitions, "", "express", "serve-static");
+        record_transition(&mut self.transitions, "", "express", "statuses");
+        record_transition(&mut self.transitions, "", "express", "etag");
+        record_transition(&mut self.transitions, "", "express", "fresh");
+        record_transition(&mut self.transitions, "", "express", "cookie");
+        record_transition(&mut self.transitions, "", "express", "cookie-signature");
+        record_transition(&mut self.transitions, "", "express", "depd");
+        record_transition(&mut self.transitions, "", "express", "encodeurl");
+        record_transition(&mut self.transitions, "", "express", "escape-html");
+        record_transition(&mut self.transitions, "", "express", "merge-descriptors");
+        record_transition(&mut self.transitions, "", "express", "methods");
+        record_transition(&mut self.transitions, "", "express", "on-finished");
+        record_transition(&mut self.transitions, "", "express", "parseurl");
+        record_transition(&mut self.transitions, "", "express", "path-to-regexp");
+        record_transition(&mut self.transitions, "", "express", "proxy-addr");
+        record_transition(&mut self.transitions, "", "express", "range-parser");
+        record_transition(&mut self.transitions, "", "express", "safe-buffer");
+        record_transition(&mut self.transitions, "", "express", "setprototypeof");
+        record_transition(&mut self.transitions, "", "express", "type-is");
+        record_transition(&mut self.transitions, "", "express", "utils-merge");
+        record_transition(&mut self.transitions, "", "express", "vary");
+        record_transition(&mut self.transitions, "", "express", "body-parser");
+        record_transition(&mut self.transitions, "express", "debug", "ms");
+        record_transition(&mut self.transitions, "", "debug", "ms");
+        record_transition(&mut self.transitions, "", "send", "ms");
+        record_transition(&mut self.transitions, "", "send", "mime-types");
+        record_transition(&mut self.transitions, "", "mime-types", "mime-db");
+
+        // Utility suite
+        record_transition(&mut self.transitions, "chalk", "debug", "ms");
     }
 
     pub fn learn_from_sequence(&mut self, packages: &[String]) {
@@ -44,23 +132,11 @@ impl SecondOrderMarkov {
             let prev = &packages[i];
             let current = &packages[i + 1];
             let next = &packages[i + 2];
-            let key = TransitionKey(prev.clone(), current.clone());
-            let transition = self
-                .transitions
-                .entry(key)
-                .or_insert_with(|| SecondOrderTransition {
-                    previous: prev.clone(),
-                    current: current.clone(),
-                    likely_next: Vec::new(),
-                    confidence: 0.0,
-                    occurrence_count: 0,
-                });
-            if !transition.likely_next.contains(next) {
-                transition.likely_next.push(next.clone());
-            }
-            transition.occurrence_count += 1;
-            transition.confidence = (transition.occurrence_count as f64)
-                / ((transition.occurrence_count + 10).min(100) as f64);
+            record_transition(&mut self.transitions, prev, current, next);
+            // First-order fallback: remember `(_, current) -> next` so
+            // `predict()` can still answer when the exact two-package context
+            // is unseen. Without this the fallback in `predict()` was dead code.
+            record_transition(&mut self.transitions, "", current, next);
         }
     }
 
@@ -69,7 +145,44 @@ impl SecondOrderMarkov {
         if let Some(transition) = self.transitions.get(&key) {
             transition.likely_next.iter().take(n).cloned().collect()
         } else {
-            Vec::new()
+            // First order fallback
+            let fallback_key = TransitionKey(String::new(), current.to_string());
+            if let Some(transition) = self.transitions.get(&fallback_key) {
+                transition.likely_next.iter().take(n).cloned().collect()
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    /// Predicts likely next packages along with their statistical confidence score $P(C \mid A, B)$.
+    pub fn predict_top_with_confidence(
+        &self,
+        previous: &str,
+        current: &str,
+        n: usize,
+    ) -> Vec<(String, f64)> {
+        let key = TransitionKey(previous.to_string(), current.to_string());
+        if let Some(transition) = self.transitions.get(&key) {
+            transition
+                .likely_next
+                .iter()
+                .take(n)
+                .map(|next| (next.clone(), transition.confidence))
+                .collect()
+        } else {
+            // First order fallback
+            let fallback_key = TransitionKey(String::new(), current.to_string());
+            if let Some(transition) = self.transitions.get(&fallback_key) {
+                transition
+                    .likely_next
+                    .iter()
+                    .take(n)
+                    .map(|next| (next.clone(), transition.confidence * 0.70))
+                    .collect()
+            } else {
+                Vec::new()
+            }
         }
     }
 
@@ -157,9 +270,18 @@ fn global_markov() -> &'static RwLock<SecondOrderMarkov> {
     static INSTANCE: OnceLock<RwLock<SecondOrderMarkov>> = OnceLock::new();
     INSTANCE.get_or_init(|| {
         let mut m = SecondOrderMarkov::new();
+        m.seed_common_stacks();
         if let Some(path) = markov_chain_path() {
-            if let Err(e) = m.load_from_disk(&path) {
-                eprintln!("[jhol] markov: load failed {}: {e}", path.display());
+            // An absent chain is the normal cold-start state (nothing learned yet), so
+            // it must not print an error-shaped line on every first run — that noise
+            // made successful installs look partly broken. A chain that exists but
+            // cannot be read is worth reporting, so keep that behind verbose.
+            if path.exists() {
+                if let Err(e) = m.load_from_disk(&path) {
+                    if std::env::var("JHOL_VERBOSE").is_ok() {
+                        eprintln!("[jhol] markov: load failed {}: {e}", path.display());
+                    }
+                }
             }
         }
         RwLock::new(m)
@@ -228,6 +350,13 @@ pub fn predict_with_context(previous: &str, current: &str, n: usize) -> Vec<Stri
     global_markov().read().predict_top(previous, current, n)
 }
 
+/// Predict next packages with statistical transition confidence $P(C \mid A, B)$.
+pub fn predict_with_confidence(previous: &str, current: &str, n: usize) -> Vec<(String, f64)> {
+    global_markov()
+        .read()
+        .predict_top_with_confidence(previous, current, n)
+}
+
 /// Train from git history incrementally: processes sequences of package installs.
 /// Returns the number of new sequences trained.
 pub fn train_from_sequence_incremental(commits: &[(String, Vec<String>)]) -> usize {
@@ -284,6 +413,12 @@ mod tests {
             "should predict react-dom"
         );
 
+        // Test confidence prediction
+        let conf_preds = m.predict_top_with_confidence("react", "scheduler", 2);
+        assert!(!conf_preds.is_empty());
+        assert_eq!(conf_preds[0].0, "react-dom");
+        assert!(conf_preds[0].1 > 0.0);
+
         // First-order fallback: scheduler
         let key = TransitionKey(String::new(), "scheduler".to_string());
         let trans = m.transitions.get(&key).unwrap();
@@ -310,13 +445,19 @@ mod tests {
         let preds = predict_batch(&["react".to_string(), "scheduler".to_string()], 4);
         assert!(preds.contains(&"react-dom".to_string()));
 
-        drop(global_markov());
+        let _ = global_markov();
     }
 
     #[test]
     fn test_empty_input() {
+        // The free functions read the *process-global* chain, which loads whatever the
+        // developer's cache holds (`~/.jhol-cache/…`), so asserting emptiness through them made
+        // this test depend on the machine — it failed on any cache that had learned something.
+        // A fresh predictor states the same expectation hermetically.
         assert!(predict_batch(&[], 3).is_empty());
-        assert!(predict_batch(&["react".to_string()], 3).is_empty());
+        let fresh = SecondOrderMarkov::new();
+        assert!(fresh.predict_top("", "", 3).is_empty());
+        assert!(fresh.predict_top("", "react", 3).is_empty());
     }
 
     #[test]

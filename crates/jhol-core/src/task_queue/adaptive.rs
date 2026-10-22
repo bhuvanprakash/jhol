@@ -4,7 +4,6 @@
 //! Uses running EWMA estimate — no per-sample storage, no sort.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 
 /// Configuration for adaptive concurrency

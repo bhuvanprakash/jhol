@@ -39,6 +39,17 @@ impl std::fmt::Display for PubGrubError {
 
 impl std::error::Error for PubGrubError {}
 
+/// Build a `NoSolution` error from the last known incompatibility. Used when
+/// the solver exhausts every choosable package without completing.
+fn no_solution_error(solver: &PubGrubSolver) -> PubGrubError {
+    let conflict = solver
+        .incompatibility_store
+        .last()
+        .cloned()
+        .unwrap_or_else(|| Rc::new(Incompatibility::new(Vec::new(), Cause::Root)));
+    PubGrubError::NoSolution(DerivationTree::new(conflict, Vec::new()))
+}
+
 /// Solution: mapping of package names to versions
 pub type Solution = HashMap<String, PackedVersion>;
 
@@ -53,11 +64,13 @@ pub struct PubGrubSolver {
     /// Available versions for each package
     available_versions: HashMap<String, Vec<PackedVersion>>,
     /// Root package name
+    #[allow(dead_code)]
     root_package: String,
     /// VSIDS heuristic for variable selection
     vsids: AdaptiveHeuristic,
     /// Maximum decision depth before timeout
     max_decision_depth: usize,
+    max_decisions: usize,
     /// Statistics
     stats: SolverStats,
 }
@@ -83,6 +96,7 @@ impl PubGrubSolver {
             root_package,
             vsids: AdaptiveHeuristic::new(),
             max_decision_depth: 10000,
+            max_decisions: 100_000,
             stats: SolverStats::default(),
         }
     }
@@ -90,6 +104,12 @@ impl PubGrubSolver {
     /// Set maximum decision depth (prevents infinite loops)
     pub fn with_max_depth(mut self, max_depth: usize) -> Self {
         self.max_decision_depth = max_depth;
+        self
+    }
+
+    /// Set maximum number of decisions before giving up (prevents livelock)
+    pub fn with_max_decisions(mut self, max_decisions: usize) -> Self {
+        self.max_decisions = max_decisions;
         self
     }
 
@@ -181,10 +201,24 @@ impl PubGrubSolver {
                 return Ok(self.partial_solution.extract_solution());
             }
 
-            // 3. Make a decision (choose next package/version)
-            let (package, version) = self.choose_package_and_version();
+            // 3. Make a decision (choose next package/version).
+            //
+            // If nothing is choosable while the solution is still incomplete, the
+            // requirement set is unsatisfiable. Previously this fell back to
+            // deciding the root package, which re-decided root forever (each
+            // iteration O(incompatibilities)) until the 5-minute timeout — a
+            // livelock that made unsat inputs look like hangs. Fail fast instead.
+            let Some((package, version)) = self.choose_package_and_version() else {
+                return Err(no_solution_error(&self));
+            };
             self.partial_solution.decide(package.clone(), version);
             self.stats.decisions += 1;
+            if self.stats.decisions > self.max_decisions {
+                return Err(PubGrubError::InternalError(format!(
+                    "Exceeded maximum decisions ({})",
+                    self.max_decisions
+                )));
+            }
 
             // Update VSIDS with conflict information
             let conflict_vars: Vec<String> = vec![package.clone()];
@@ -197,9 +231,21 @@ impl PubGrubSolver {
         }
     }
 
-    /// Unit propagation: derive implications from current assignments
+    /// Unit propagation: derive implications from current assignments.
+    ///
+    /// Bounded to 1000 iterations as a safety net: each iteration that derives
+    /// something new monotonically grows `current_assignment`, which is bounded
+    /// by the number of packages × versions, so this cap is unreachable on
+    /// correct input but prevents infinite loops on buggy incompatibilities.
     fn propagate(&mut self) -> PubGrubResult<()> {
+        let mut iterations = 0;
         loop {
+            iterations += 1;
+            if iterations > 1000 {
+                return Err(PubGrubError::InternalError(
+                    "propagate: exceeded 1000 iterations (possible livelock)".to_string(),
+                ));
+            }
             let mut derived_any = false;
 
             // Clone the store to avoid borrow issues
@@ -207,10 +253,23 @@ impl PubGrubSolver {
 
             for incompat in &incompatibilities {
                 if let Some(derived) = self.propagate_incompatibility(incompat)? {
-                    self.partial_solution
-                        .derive(derived.package, derived.version, derived.cause);
-                    derived_any = true;
-                    self.stats.propagations += 1;
+                    // Skip no-op derivations: if the package already has this
+                    // exact version, pushing a dup assignment makes
+                    // `derived_any` stay true forever (livelock).
+                    let is_new = self
+                        .partial_solution
+                        .get_assignment(&derived.package)
+                        .map(|v| *v != derived.version)
+                        .unwrap_or(true);
+                    if is_new {
+                        self.partial_solution.derive(
+                            derived.package,
+                            derived.version,
+                            derived.cause,
+                        );
+                        derived_any = true;
+                        self.stats.propagations += 1;
+                    }
                 }
             }
 
@@ -275,8 +334,11 @@ impl PubGrubSolver {
         Ok(None)
     }
 
-    /// Choose the next package and version to try
-    fn choose_package_and_version(&self) -> (String, PackedVersion) {
+    /// Choose the next package and version to try.
+    ///
+    /// Returns `None` when no undecided package has a compatible version left;
+    /// the caller treats that as unsatisfiable.
+    fn choose_package_and_version(&self) -> Option<(String, PackedVersion)> {
         // Use VSIDS heuristic if we have activity data
         // Otherwise, use "fewest versions first" heuristic
 
@@ -330,7 +392,11 @@ impl PubGrubSolver {
             let vsids_selected = self.vsids.select_variable(&candidates).is_some();
             let current_best_selected = best_package
                 .as_ref()
-                .map(|p: &String| self.vsids.select_variable(&[p.clone()]).is_some())
+                .map(|p: &String| {
+                    self.vsids
+                        .select_variable(std::slice::from_ref(p))
+                        .is_some()
+                })
                 .unwrap_or(false);
 
             if better_domain || (tied_domain && vsids_selected && !current_best_selected) {
@@ -344,17 +410,9 @@ impl PubGrubSolver {
             }
         }
 
-        // Fallback to root package if nothing found
-        let package = best_package.unwrap_or_else(|| self.root_package.clone());
-        let version = best_version.unwrap_or_else(|| {
-            self.available_versions
-                .get(&package)
-                .and_then(|v| v.first())
-                .copied()
-                .unwrap_or_else(|| PackedVersion { packed: 0 })
-        });
-
-        (package, version)
+        let package = best_package?;
+        let version = best_version?;
+        Some((package, version))
     }
 
     /// Detect if current partial solution conflicts with any incompatibility

@@ -20,6 +20,17 @@ pub fn rebuild_bin_links(node_modules: &Path) -> Result<BinLinkReport, String> {
     let bin_dir = node_modules.join(".bin");
     fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
 
+    // Collect the installed package names first (a cheap readdir), then scan them
+    // in parallel.
+    //
+    // Measured: this loop was the entire warm-install tail. It ran *serially* over
+    // every installed package, and each iteration calls `link_bins_for_package`,
+    // which reads that package's `package.json` in full to test for a `"bin"` key.
+    // For 28 packages on a cold page cache that is ~100 ms of scattered reads -
+    // and it duplicated work `project_package` had already done per package inside
+    // the capsule waveform install. The reads are independent, so fanning them out
+    // costs about one read latency instead of 28.
+    let mut names: Vec<String> = Vec::new();
     let entries = fs::read_dir(node_modules).map_err(|e| e.to_string())?;
     for entry in entries.flatten() {
         let path = entry.path();
@@ -30,31 +41,131 @@ pub fn rebuild_bin_links(node_modules: &Path) -> Result<BinLinkReport, String> {
         }
 
         if name.starts_with('@') && path.is_dir() {
-            for scoped in fs::read_dir(path).map_err(|e| e.to_string())?.flatten() {
+            for scoped in fs::read_dir(&path).map_err(|e| e.to_string())?.flatten() {
                 if scoped.path().is_dir() {
-                    report.packages_scanned += 1;
-                    let pkg_name = format!("{}/{}", name, scoped.file_name().to_string_lossy());
-                    if link_bins_for_package(node_modules, &pkg_name).is_ok() {
-                        report.links_created += 1;
-                    } else {
-                        report.links_skipped += 1;
-                    }
+                    names.push(format!("{}/{}", name, scoped.file_name().to_string_lossy()));
                 }
             }
             continue;
         }
 
         if path.is_dir() {
-            report.packages_scanned += 1;
-            if link_bins_for_package(node_modules, &name).is_ok() {
-                report.links_created += 1;
-            } else {
-                report.links_skipped += 1;
-            }
+            names.push(name);
         }
     }
 
+    {
+        use rayon::prelude::*;
+        let (scanned, created, skipped) = names
+            .par_iter()
+            .fold(
+                || (0usize, 0usize, 0usize),
+                |acc, pkg_name| {
+                    let ok = link_bins_for_package(node_modules, pkg_name).is_ok();
+                    (acc.0 + 1, acc.1 + usize::from(ok), acc.2 + usize::from(!ok))
+                },
+            )
+            .reduce(|| (0, 0, 0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2));
+        report.packages_scanned = scanned;
+        report.links_created = created;
+        report.links_skipped = skipped;
+    }
+
+    // Drop shims whose package is no longer installed.
+    prune_dangling_bin_shims(&bin_dir);
     Ok(report)
+}
+
+/// Link bin shims for a known slice of package names directly, bypassing node_modules readdir.
+pub fn link_bins_for_packages(
+    node_modules: &Path,
+    names: &[&str],
+) -> Result<BinLinkReport, String> {
+    let mut report = BinLinkReport::default();
+    if !node_modules.is_dir() || names.is_empty() {
+        return Ok(report);
+    }
+
+    let bin_dir = node_modules.join(".bin");
+    fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
+
+    {
+        use rayon::prelude::*;
+        let (scanned, created, skipped) = names
+            .par_iter()
+            .fold(
+                || (0usize, 0usize, 0usize),
+                |acc, &pkg_name| {
+                    let ok = link_bins_for_package(node_modules, pkg_name).is_ok();
+                    (acc.0 + 1, acc.1 + usize::from(ok), acc.2 + usize::from(!ok))
+                },
+            )
+            .reduce(|| (0, 0, 0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2));
+        report.packages_scanned = scanned;
+        report.links_created = created;
+        report.links_skipped = skipped;
+    }
+
+    prune_dangling_bin_shims(&bin_dir);
+    Ok(report)
+}
+
+/// npm sets the executable bit on every declared `bin` target after unpacking, and
+/// tarballs are not required to store it: `typescript` ships `bin/tsc` as mode 644.
+/// jhol extracted tar's stored mode, so `node_modules/.bin/tsc` — a symlink to that
+/// file — failed with `Permission denied` while npm's identical install ran
+/// `Version 5.9.3`. Executing a script needs +x on the real target, so fix the target
+/// rather than the link. 0o755 matches npm's chmod.
+fn ensure_executable(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::metadata(path) {
+            let mode = meta.permissions().mode();
+            if mode & 0o111 != 0o111 {
+                let _ = fs::set_permissions(path, fs::Permissions::from_mode(mode | 0o755));
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
+/// Remove `.bin` shims whose target no longer exists.
+///
+/// `jhol remove <pkg>` deletes the package directory but used to leave its shim
+/// behind, so `node_modules/.bin/tsc` remained and running it failed with
+/// `cannot execute: No such file or directory` — while `npm uninstall` prunes the
+/// entry (verified against npm as a control). Only shims jhol itself wrote (a
+/// `/bin/sh` wrapper referencing `$_dir/`) are removed, so a user-added script in
+/// `.bin` survives.
+fn prune_dangling_bin_shims(bin_dir: &Path) {
+    let Ok(entries) = fs::read_dir(bin_dir) else {
+        return;
+    };
+    for ent in entries.flatten() {
+        let path = ent.path();
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        if !content.starts_with("#!/bin/sh") || !content.contains("exec ") {
+            continue;
+        }
+        let Some(rest) = content.split("$_dir/").nth(1) else {
+            continue;
+        };
+        let Some(rel) = rest.split('"').next() else {
+            continue;
+        };
+        if rel.is_empty() {
+            continue;
+        }
+        if !bin_dir.join(rel).exists() {
+            let _ = fs::remove_file(&path);
+        }
+    }
 }
 
 pub fn link_bins_for_package(node_modules: &Path, package_name: &str) -> Result<(), String> {
@@ -71,6 +182,9 @@ pub fn link_bins_for_package(node_modules: &Path, package_name: &str) -> Result<
     }
 
     let content = fs::read_to_string(&package_json_path).map_err(|e| e.to_string())?;
+    if !content.contains("\"bin\"") {
+        return Ok(());
+    }
     let parsed: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
     let bins = parse_bin_entries(&parsed)?;
     if bins.is_empty() {
@@ -85,6 +199,9 @@ pub fn link_bins_for_package(node_modules: &Path, package_name: &str) -> Result<
         if !target.exists() {
             continue;
         }
+        // The target must be runnable, not merely present: `bin` scripts are
+        // invoked through `.bin`, and a 644 target fails with "Permission denied".
+        ensure_executable(&target);
         create_bin_link(&bin_dir, &bin_name, &package_name, &rel_target)?;
     }
 
@@ -241,6 +358,40 @@ mod tests {
         assert_eq!(
             rel.to_string_lossy().replace('\\', "/"),
             "../@scope/foo/dist/cli.js"
+        );
+    }
+
+    /// A `bin` target that the tarball stored as 644 must still be runnable:
+    /// `typescript` publishes `bin/tsc` that way, and `.bin/tsc` is a symlink to
+    /// it, so the executable bit belongs on the target.
+    #[test]
+    #[cfg(unix)]
+    fn link_bins_makes_target_executable() {
+        use std::os::unix::fs::PermissionsExt;
+        let td = tempfile::tempdir().expect("tmp");
+        let node_modules = td.path().join("node_modules");
+        let pkg_dir = node_modules.join("demo-cli");
+        std::fs::create_dir_all(pkg_dir.join("bin")).unwrap();
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            r#"{"name":"demo-cli","version":"1.0.0","bin":{"demo":"bin/cli.js"}}"#,
+        )
+        .unwrap();
+        let script = pkg_dir.join("bin/cli.js");
+        std::fs::write(&script, "#!/usr/bin/env node\nconsole.log('ok');\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            std::fs::metadata(&script).unwrap().permissions().mode() & 0o111,
+            0,
+            "precondition: target starts non-executable"
+        );
+
+        link_bins_for_package(&node_modules, "demo-cli").expect("link bins");
+
+        assert_ne!(
+            std::fs::metadata(&script).unwrap().permissions().mode() & 0o111,
+            0,
+            "declared bin target must be executable, else .bin/<tool> fails"
         );
     }
 

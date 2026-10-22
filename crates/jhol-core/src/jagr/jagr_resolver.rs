@@ -176,7 +176,7 @@ impl CachedResolution {
 fn persist_cache_to_disk() {
     static PERSIST_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let c = PERSIST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if c > 0 && c % 32 != 0 {
+    if c > 0 && !c.is_multiple_of(32) {
         return;
     }
     let path = persistent_cache_path();
@@ -188,10 +188,7 @@ fn persist_cache_to_disk() {
         .iter()
         .map(|entry| {
             let (key, value) = entry.pair();
-            (
-                key.clone(),
-                CachedResolution::from_resolution(value.as_ref()),
-            )
+            (*key, CachedResolution::from_resolution(value.as_ref()))
         })
         .collect();
     if let Ok(bytes) = bincode::serialize(&entries) {
@@ -258,7 +255,7 @@ fn request_fingerprint(request: &ResolveRequest) -> u128 {
     }
 
     let mut conflicts: Vec<_> = request.conflicts.iter().collect();
-    conflicts.sort_by(|a, b| a.cmp(b));
+    conflicts.sort();
     for (p1, v1, p2, v2) in conflicts {
         hash_str(&mut hasher, p1);
         hash_str(&mut hasher, v1);
@@ -495,6 +492,12 @@ pub struct JagrResolver {
     run_all_layers: bool,
 }
 
+impl Default for JagrResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl JagrResolver {
     pub fn new() -> Self {
         Self {
@@ -554,12 +557,11 @@ impl JagrResolver {
         // Phase 1: Check that every locked version exists in available_versions
         // and satisfies root-level constraints.
         for (pkg, locked_ver) in lockfile {
-            if let Some(available) = request.available_versions.get(pkg) {
+            {
+                let available = request.available_versions.get(pkg)?;
                 if !available.contains(locked_ver) {
                     return None;
                 }
-            } else {
-                return None;
             }
         }
 
@@ -573,12 +575,11 @@ impl JagrResolver {
                 continue;
             }
             for (to_pkg, allowed_vers) in deps {
-                if let Some(to_locked_ver) = lockfile.get(to_pkg) {
+                {
+                    let to_locked_ver = lockfile.get(to_pkg)?;
                     if !allowed_vers.contains(to_locked_ver) {
                         return None;
                     }
-                } else {
-                    return None;
                 }
             }
         }
@@ -751,7 +752,7 @@ impl JagrResolver {
         // For DAGs (no cycles) greedy is provably optimal — we can skip the
         // spectral analysis AND heavy layers entirely.
         let (_scc_map, scc_obstruction_pkgs) = compute_version_graph_scc(request);
-        let has_scc_cycles = !scc_obstruction_pkgs.is_empty();
+        let _has_scc_cycles = !scc_obstruction_pkgs.is_empty();
 
         // ====================================================================
         // GREEDY FIRST (Phase 2): try greedy BEFORE Layer 0 spectral analysis
@@ -781,8 +782,7 @@ impl JagrResolver {
         };
         let greedy_deps_ok = self.verify_deps(request, &greedy_selection);
         let greedy_no_conflicts = request.conflicts.iter().all(|(p1, v1, p2, v2)| {
-            !(greedy_selection.get(p1).map_or(false, |sv| sv == v1)
-                && greedy_selection.get(p2).map_or(false, |sv| sv == v2))
+            !((greedy_selection.get(p1) == Some(v1)) && (greedy_selection.get(p2) == Some(v2)))
         });
 
         if greedy_has_root
@@ -1023,7 +1023,13 @@ impl JagrResolver {
         // Knot Layer-1 (package-domain exact solver) when enabled.
         // JHOL_JAGR_L1=knot|auto|ol3p — default auto (Knot then OL3P fallback).
         if knot_enabled() {
-            let knot_req = request.to_knot_request(Some(&scc_obstruction_pkgs));
+            let mut combined_focus = scc_obstruction_pkgs.clone();
+            // Exploit Layer 0 Resolution Differential:
+            // Feed packages with high marginal conflict risk (∂R/∂x > 0.50) into Knot's focus set
+            for (pkg, _risk) in differential.high_risk_packages(0.50) {
+                combined_focus.insert(pkg.clone());
+            }
+            let knot_req = request.to_knot_request(Some(&combined_focus));
             let betti_f64: Vec<f64> = layer2_analysis
                 .betti_numbers
                 .iter()

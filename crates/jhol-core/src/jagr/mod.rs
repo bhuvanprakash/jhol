@@ -2,6 +2,9 @@
 //! Full three-layer resolver available via feature flag.
 
 pub mod betti_numbers;
+pub mod idea_benchmark;
+pub mod io_benchmark;
+pub mod priority_benchmark;
 pub mod conflict_explainer;
 pub mod core_guided_lp;
 pub mod core_guided_solver;

@@ -4,7 +4,6 @@
 //! or negative (disallowed).
 
 use super::version_set::VersionSet;
-use std::rc::Rc;
 
 /// A term in the satisfiability problem
 /// Represents either "package MUST be in version_set" (positive)
@@ -122,11 +121,13 @@ impl Term {
 }
 
 /// A set of terms that can be efficiently queried
+#[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub struct TermSet {
     terms: Vec<Term>,
 }
 
+#[allow(dead_code)]
 impl TermSet {
     pub fn new() -> Self {
         Self { terms: Vec::new() }
@@ -155,7 +156,7 @@ impl TermSet {
     }
 
     /// Check if all terms are satisfied by the given assignments
-    pub fn is_satisfied_by<F>(&self, mut is_satisfied: F) -> bool
+    pub fn is_satisfied_by<F>(&self, _is_satisfied: F) -> bool
     where
         F: FnMut(&str, &super::version_set::PackedVersion) -> bool,
     {

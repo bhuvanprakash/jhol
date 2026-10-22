@@ -2,10 +2,9 @@
 //! Supports .npmrc parsing, environment variables, and enterprise SSO integration points.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Enterprise configuration loaded from .npmrc, .jholrc, or environment
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -337,7 +336,7 @@ impl SsoTokenManager {
 
     /// Check if token is expired
     pub fn is_token_expired(&self) -> bool {
-        self.expires_at.map_or(false, |expires| {
+        self.expires_at.is_some_and(|expires| {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -364,6 +363,7 @@ impl Default for SsoTokenManager {
 
 /// License checker for enterprise compliance
 pub struct LicenseChecker {
+    #[allow(dead_code)]
     policy: String,
     allowed_licenses: Vec<String>,
 }

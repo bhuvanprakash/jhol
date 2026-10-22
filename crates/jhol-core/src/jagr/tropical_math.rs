@@ -142,6 +142,49 @@ impl TropicalMatrix {
         self.data[row * self.cols + col] = val;
     }
 
+    /// Tropical identity matrix: diagonal = 0 (tropical one), off-diagonal = -∞ (tropical zero)
+    pub fn identity(size: usize) -> Self {
+        let mut mat = Self::new(size, size);
+        for i in 0..size {
+            mat.set(i, i, Tropical::ONE);
+        }
+        mat
+    }
+
+    /// Binary exponentiation by squaring in tropical semiring: (A)^exp in O(log exp)
+    pub fn pow_tropical(&self, mut exp: usize) -> Self {
+        assert_eq!(self.rows, self.cols, "Matrix power requires square matrix");
+        let n = self.rows;
+        if exp == 0 {
+            return Self::identity(n);
+        }
+        let mut base = self.clone();
+        let mut result = Self::identity(n);
+
+        while exp > 0 {
+            if exp % 2 == 1 {
+                result = result.mul(&base);
+            }
+            if exp > 1 {
+                base = base.mul(&base);
+            }
+            exp /= 2;
+        }
+        result
+    }
+
+    /// Fast transitive closure / all-pairs longest constraint path in O(log D) matrix multiplications
+    /// Computes (I ⊕ A)^depth via binary exponentiation.
+    pub fn transitive_closure_fast(&self, depth: usize) -> Self {
+        assert_eq!(
+            self.rows, self.cols,
+            "Transitive closure requires square matrix"
+        );
+        let ident = Self::identity(self.rows);
+        let augmented = ident.add(self);
+        augmented.pow_tropical(depth)
+    }
+
     /// Tropical matrix multiplication: (A ⊗ B)_{ij} = ⊕_k (A_{ik} ⊗ B_{kj})
     /// = max_k (A_{ik} + B_{kj})
     pub fn mul(&self, other: &Self) -> Self {
@@ -667,5 +710,30 @@ mod tests {
 
         let x = vec![5.0, 2.0, 6.0];
         assert!(sys.satisfies(&x));
+    }
+
+    #[test]
+    fn test_tropical_matrix_pow() {
+        let a = TropicalMatrix::from_slice(&[&[0.0, 2.0], &[f64::NEG_INFINITY, 0.0]]);
+        let a2 = a.pow_tropical(2);
+        // (A^2)_01 = max(0+2, 2+0) = 2.0
+        assert_eq!(a2.get(0, 1).0, 2.0);
+
+        let ident = a.pow_tropical(0);
+        assert_eq!(ident.get(0, 0).0, 0.0);
+        assert_eq!(ident.get(1, 1).0, 0.0);
+        assert!(ident.get(0, 1).is_zero());
+    }
+
+    #[test]
+    fn test_tropical_matrix_transitive_closure() {
+        let a = TropicalMatrix::from_slice(&[
+            &[f64::NEG_INFINITY, 3.0, f64::NEG_INFINITY],
+            &[f64::NEG_INFINITY, f64::NEG_INFINITY, 4.0],
+            &[f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY],
+        ]);
+        let closure = a.transitive_closure_fast(4);
+        // Path from 0 to 2 has length 3 + 4 = 7.0
+        assert_eq!(closure.get(0, 2).0, 7.0);
     }
 }

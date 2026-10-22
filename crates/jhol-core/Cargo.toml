@@ -7,23 +7,31 @@ license-file = "../../LICENSE"
 repository = "https://github.com/bhuvanprakash/jhol"
 
 [features]
-default = ["http-reqwest", "simd", "pipeline"]  # Enable SIMD by default
-http-reqwest = ["dep:reqwest", "dep:tokio"]
-simd = []  # SIMD optimizations enabled by default
-pipeline = ["dep:jhol-pipeline"]
+# NOTE: `http-reqwest` is intentionally NOT default. It pulls reqwest + the
+# HTTP/2 stack for `http2_download`, which is resume-only (slower than ureq
+# on packuments, parity on tarballs). Opt in with `--features http-reqwest`.
+# `tokio` stays mandatory: `cas/cas.rs` uses it unconditionally.
+default = ["pipeline"]  # pipeline (JGrid) is the only default extra
+http-reqwest = ["dep:reqwest"]
+# Accelerated hashing experiment; runtime CPU detection preserves soft fallback.
+hardware-sha = ["sha2/asm"]
+pipeline = []  # JGrid instant-materialization layer (in-tree module)
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = "0.4"
-ureq = "2.10"
+# `gzip` is NOT a default ureq feature, and without it no `Accept-Encoding` is
+# sent — the registry then returns packuments uncompressed (`next` is 31.3 MB
+# instead of 2.4 MB, 13.2x more). See INNOVATION_LOG E83.
+ureq = { version = "2.10", features = ["gzip"] }
 tar = "0.4"
 flate2 = "1.0"
 sha2 = "0.10"
 semver = "1.0"
 base64 = "0.21"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking", "json"], optional = true }
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "fs", "io-util"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking", "json", "http2", "gzip", "brotli"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "fs", "io-util"] }
 rand = "0.8"
 lazy_static = "1.4"
 
@@ -31,8 +39,6 @@ lazy_static = "1.4"
 dashmap = "5.5"
 rayon = "1.8"  # Work-stealing parallelism (replaces crossbeam)
 
-# JAGR-2: SIMD JSON parsing (optional, enable with --features simd)
-simd-json = "0.13"
 
 # JAGR-2: Memory-efficient data structures
 bumpalo = "3.14"
@@ -67,8 +73,6 @@ hex = "0.4"
 ahash = "0.8"
 smallvec = "1.13"
 
-# JGrid Pipeline (optional, enabled via 'pipeline' feature)
-jhol-pipeline = { path = "../jhol-pipeline", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = "0.6"

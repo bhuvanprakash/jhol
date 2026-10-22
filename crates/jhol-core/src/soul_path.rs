@@ -10,8 +10,9 @@
 use crate::capsule::{self, CapsuleView};
 use crate::grm::ResolutionRecord;
 use crate::lock_free_grm;
+use crate::materialize;
 use crate::registry;
-use crate::selective_extract::{self, FeatureSheaf};
+use crate::selective_extract::FeatureSheaf;
 use crate::utils;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -113,6 +114,20 @@ pub fn spectral_gate_from_deps(deps: &HashMap<String, String>) -> SpectralGate {
 
 /// Ensure JAGR-S migrated from v1 store once per process.
 pub fn ensure_jagrs_migrated() {
+    // The JAGR-S store is an opt-in mirror (`JHOL_JAGRS_MIRROR=1`); with the mirror
+    // off nothing reads it (see `jagrs::mirror_enabled`). Initializing it and
+    // migrating v1 tarballs into it is therefore pure cost.
+    //
+    // Measured on a warm install (26 packages, macOS arm64): this function was
+    // **140 ms of a 144 ms install - 97% of the warm path**, spent preparing a
+    // store that nothing consults. The capsule install itself is ~5 ms
+    // (`wave_project` 1 ms + `rebuild_bin_links` 0 ms + preamble 0 ms).
+    //
+    // Check the gate *before* latching MIGRATED, so enabling the mirror later in
+    // the same process still performs the migration.
+    if !crate::jagrs::mirror_enabled() {
+        return;
+    }
     if MIGRATED.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -355,7 +370,7 @@ pub fn frontier_add(packages: &[String], quiet: bool) -> Result<(), String> {
     for pkg in packages {
         let name = pkg.split('@').next().unwrap_or(pkg);
         let spec = if pkg.contains('@') && !pkg.starts_with('@') {
-            pkg.splitn(2, '@').nth(1).unwrap_or("latest")
+            pkg.split_once('@').map(|x| x.1).unwrap_or("latest")
         } else if pkg.starts_with('@') {
             let idx = pkg.rfind('@').unwrap_or(0);
             if idx > 0 {
@@ -402,7 +417,7 @@ pub fn frontier_add(packages: &[String], quiet: bool) -> Result<(), String> {
         .map_err(|e| format!("download failed for {}: {}", pkg, e))?;
 
         // Full extract from memory via JAGR-S (no selective-untar)
-        let store_path = cache_dir.join("store").join(format!("{}.tgz", hash));
+        let store_path = crate::content::tarball_path(&cache_dir, &hash);
         let unpacked = crate::registry::ensure_unpacked_in_store(&store_path, &cache_dir)?;
 
         // Feature-sheaf project
@@ -415,7 +430,7 @@ pub fn frontier_add(packages: &[String], quiet: bool) -> Result<(), String> {
         };
         std::fs::create_dir_all(pkg_dir.parent().unwrap_or(node_modules))
             .map_err(|e| e.to_string())?;
-        crate::selective_extract::project_from_store(&unpacked, &pkg_dir, sheaf)?;
+        crate::materialize::project(&unpacked, &pkg_dir, sheaf)?;
 
         // Record in GRM + lattice + JMR
         let _ = crate::lock_free_grm::store_global(ResolutionRecord {
@@ -431,10 +446,10 @@ pub fn frontier_add(packages: &[String], quiet: bool) -> Result<(), String> {
             hit_count: 1,
             ..Default::default()
         });
-        let _ = crate::lattice_cache::remember(name, spec, &version);
+        crate::lattice_cache::remember(name, spec, &version);
 
         if !quiet {
-            utils::log(&format!("Added {}@{} (frontier delta)", name, version));
+            utils::log_file_only(&format!("Added {}@{} (frontier delta)", name, version));
         }
     }
 
@@ -460,10 +475,7 @@ pub fn frontier_add(packages: &[String], quiet: bool) -> Result<(), String> {
 }
 
 fn lockfile_tarball_url(name: &str, version: &str) -> String {
-    format!(
-        "https://registry.npmjs.org/{}/-/{}-{}.tgz",
-        name, name, version
-    )
+    crate::lockfile::tarball_url_from_registry(name, version)
 }
 
 /// Query GRM for a root package.
@@ -487,12 +499,19 @@ pub fn project_package(
         return Ok(());
     }
 
-    let shard = if hash_hex.len() >= 2 {
-        &hash_hex[..2]
+    let sharded_unpacked = crate::content::unpacked_dir(cache_dir, hash_hex);
+
+    // Fast path: try link/clone directly from sharded unpacked store (0 stat syscalls on warm cache)
+    if utils::link_package_from_store(&sharded_unpacked, node_modules, name).is_ok() {
+        return Ok(());
+    }
+
+    let direct_unpacked = crate::content::unpacked_root(cache_dir).join(hash_hex);
+    let unpacked = if direct_unpacked.exists() {
+        direct_unpacked
     } else {
-        "xx"
+        sharded_unpacked
     };
-    let unpacked = cache_dir.join("store_unpacked").join(shard).join(hash_hex);
 
     if !crate::registry::store_extract_complete(&unpacked) {
         crate::registry::remove_store_dir_pub(&unpacked);
@@ -502,7 +521,7 @@ pub fn project_package(
             registry::extract_tarball_bytes_public(&bytes, &unpacked)?;
             crate::registry::mark_store_extract_complete_pub(&unpacked);
         } else {
-            let tgz = cache_dir.join("store").join(format!("{}.tgz", hash_hex));
+            let tgz = crate::content::tarball_path(cache_dir, hash_hex);
             if tgz.exists() {
                 let _ = registry::ensure_unpacked_in_store(&tgz, cache_dir)?;
             } else {
@@ -516,18 +535,25 @@ pub fn project_package(
 
     // KPSL: project topology — one dir link/clone, not O(files) copy.
     if utils::link_package_from_store(&unpacked, node_modules, name).is_ok() {
-        let _ = crate::bin_links::link_bins_for_package(node_modules, name);
+        // NOTE: bin shims are NOT linked here. Both capsule install paths call
+        // `bin_links::rebuild_bin_links` once after the install loop, which covers
+        // every package. Linking here as well made each package's package.json get
+        // read twice per warm install (measured: this was the warm-install tail).
         return Ok(());
     }
     // clonefile whole-dir when symlink blocked (macOS APFS)
     if project_package_clonefile(&unpacked, &pkg_dir).is_ok() {
-        let _ = crate::bin_links::link_bins_for_package(node_modules, name);
+        // NOTE: bin shims are NOT linked here. Both capsule install paths call
+        // `bin_links::rebuild_bin_links` once after the install loop, which covers
+        // every package. Linking here as well made each package's package.json get
+        // read twice per warm install (measured: this was the warm-install tail).
         return Ok(());
     }
 
     let sheaf = FeatureSheaf::from_env();
-    selective_extract::project_from_store(&unpacked, &pkg_dir, sheaf)?;
-    let _ = crate::bin_links::link_bins_for_package(node_modules, name);
+    materialize::project(&unpacked, &pkg_dir, sheaf)?;
+    // Bin shims are linked once by `rebuild_bin_links` after the install loop
+    // (see the note above) - not per package.
     Ok(())
 }
 
@@ -540,18 +566,7 @@ fn project_package_clonefile(src: &Path, dest: &Path) -> Result<(), String> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    match crate::cas::link_package(src, dest) {
-        Ok(_) if dest.exists() => Ok(()),
-        _ => {
-            // File-level link_package may not handle directories; try reflink crate on file tree root.
-            #[cfg(unix)]
-            {
-                // Best-effort: recursive hardlink tree via cas helpers is slow; skip.
-                let _ = src;
-            }
-            Err("clonefile unavailable for directory".into())
-        }
-    }
+    crate::jgrid::materialize::Cloner::clone_directory(src, dest)
 }
 
 fn package_dir(node_modules: &Path, name: &str) -> PathBuf {
@@ -667,7 +682,7 @@ pub fn grm_lattice_assemble(
         // GRM first
         if let Some(rec) = grm_lookup(name) {
             if crate::registry::version_satisfies(spec, &rec.resolved_version) {
-                let _ = crate::lattice_cache::remember(name, spec, &rec.resolved_version);
+                crate::lattice_cache::remember(name, spec, &rec.resolved_version);
                 resolved.insert(
                     name.clone(),
                     crate::lockfile_write::ResolvedPackage {
@@ -766,9 +781,28 @@ pub fn auto_daemon_enabled() -> bool {
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
     }
+    // Never delegate when the user pinned a cache directory: the daemon runs in
+    // its own process with its own environment, and the request carries no cache
+    // path — so it would resolve from *its* cache and silently ignore
+    // `JHOL_CACHE_DIR`. Honouring the override locally is the correct behaviour.
+    // (Benchmarks rely on this too: a warm daemon can otherwise serve a "cold"
+    // run in milliseconds.)
+    if std::env::var("JHOL_CACHE_DIR").is_ok() {
+        return false;
+    }
+
+    // Default ON: attach to a running daemon when there is one.
+    //
+    // This was off "until the races are resolved". They are: the daemon now
+    // serves each connection on its own thread (a blocked request can no longer
+    // wedge the accept loop) and the client bounds only the read (a macOS
+    // AF_UNIX socket with SO_SNDTIMEO fails writes immediately). Attaching is
+    // also side-effect free — with no socket present the call fails and the
+    // install falls back to the direct path; a daemon is never spawned
+    // implicitly. Opt out with `JHOL_AUTO_DAEMON=0` or `JHOL_NO_DAEMON=1`.
     std::env::var("JHOL_AUTO_DAEMON")
         .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
-        .unwrap_or(false) // default off until races resolved
+        .unwrap_or(true)
 }
 
 /// Waveform install from capsule view (parallel by install_order waves).
@@ -779,42 +813,57 @@ pub fn waveform_install_capsule(view: &CapsuleView, project_dir: &Path) -> Resul
     std::fs::create_dir_all(node_modules.join(".bin")).map_err(|e| e.to_string())?;
     let cache_dir = PathBuf::from(utils::get_cache_dir());
 
-    // Group by install_order
-    let mut waves: std::collections::BTreeMap<u16, Vec<usize>> = std::collections::BTreeMap::new();
-    for i in 0..view.package_count() {
-        let e = view.entry(i);
-        waves.entry(e.install_order).or_default().push(i);
-    }
-
     let nm = node_modules.clone();
     let cd = cache_dir.clone();
-    for (_order, idxs) in waves {
-        let results: Vec<Result<(), String>> = if idxs.len() <= 1 {
-            idxs.iter()
-                .map(|&i| {
-                    let e = view.entry(i);
-                    let name = view.entry_name(e);
-                    let version = view.entry_version(e);
-                    let hash = hex::encode(e.tarball_hash);
-                    project_package(name, version, &hash, &nm, &cd)
-                })
-                .collect()
-        } else {
-            use rayon::prelude::*;
-            idxs.par_iter()
-                .map(|&i| {
-                    let e = view.entry(i);
-                    let name = view.entry_name(e);
-                    let version = view.entry_version(e);
-                    let hash = hex::encode(e.tarball_hash);
-                    project_package(name, version, &hash, &nm, &cd)
-                })
-                .collect()
-        };
-        for r in results {
-            r?;
+    let n = view.package_count();
+
+    // Parallelize all package projections across Rayon in a single pass (or sequential for small trees)
+    use rayon::prelude::*;
+    let project_one = |i: usize| {
+        let e = view.entry(i);
+        let name = view.entry_name(e);
+        let version = view.entry_version(e);
+        let mut hex_buf = [0u8; 64];
+        const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
+        for (idx, &b) in e.tarball_hash.iter().enumerate() {
+            hex_buf[idx * 2] = HEX_CHARS[(b >> 4) as usize];
+            hex_buf[idx * 2 + 1] = HEX_CHARS[(b & 0x0f) as usize];
         }
+        let hash = unsafe { std::str::from_utf8_unchecked(&hex_buf) };
+        project_package(name, version, hash, &nm, &cd)
+    };
+
+    let results: Vec<Result<(), String>> = if n <= 4 {
+        (0..n).map(project_one).collect()
+    } else {
+        (0..n).into_par_iter().map(project_one).collect()
+    };
+
+    for r in results {
+        r?;
     }
-    let _ = crate::bin_links::rebuild_bin_links(&node_modules);
+
+    // Link bins only for packages the capsule marked with HAS_BIN (bit 8).
+    // Capsule v2+ writers probe the store extract for `bin`, so an empty HAS_BIN
+    // set means "no binaries" — skip the directory sweep (was ~30+ package.json
+    // reads on a warm install with zero CLIs).
+    let any_has_bin_flag = (0..n).any(|i| (view.entry(i).flags & 8) != 0);
+    if any_has_bin_flag {
+        let bin_candidates: Vec<&str> = (0..n)
+            .filter_map(|i| {
+                let e = view.entry(i);
+                if (e.flags & 8) != 0 {
+                    Some(view.entry_name(e))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if !bin_candidates.is_empty() {
+            let _ = crate::bin_links::link_bins_for_packages(&node_modules, &bin_candidates);
+        }
+    } else if view.version() < 2 {
+        let _ = crate::bin_links::rebuild_bin_links(&node_modules);
+    }
     Ok(())
 }

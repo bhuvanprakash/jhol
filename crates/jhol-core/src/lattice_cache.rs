@@ -39,6 +39,10 @@ impl LatticeStore {
 fn global() -> &'static RwLock<LatticeStore> {
     static G: OnceLock<RwLock<LatticeStore>> = OnceLock::new();
     G.get_or_init(|| {
+        // `mut` is required by the non-test configuration below (`load_disk` /
+        // `load_seed_entries` take `&mut`); clippy --fix, run without those cfgs
+        // active, strips it and breaks the release build.
+        #[allow(unused_mut)]
         let mut store = LatticeStore::new();
         #[cfg(not(test))]
         {
@@ -55,6 +59,7 @@ fn disk_path() -> PathBuf {
     PathBuf::from(crate::utils::get_cache_dir()).join("lattice_cache.json")
 }
 
+#[allow(dead_code)]
 fn load_disk(store: &mut LatticeStore) {
     let path = disk_path();
     let Ok(raw) = fs::read_to_string(path) else {

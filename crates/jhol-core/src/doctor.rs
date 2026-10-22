@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::error_handling::{JholError, RecoveryStrategy};
+use crate::error_handling::JholError;
 use crate::lockfile;
 use crate::registry;
 use crate::utils;
@@ -160,6 +160,7 @@ pub fn native_outdated() -> Result<Vec<OutdatedEntry>, JholError> {
     }
     let resolved = lockfile::read_resolved_from_dir(Path::new("."));
     let mut list = Vec::new();
+    let _maybe_newer_majors: Vec<(String, String)> = Vec::new();
     for (name, spec) in &deps {
         let current = resolved
             .as_ref()
@@ -172,10 +173,15 @@ pub fn native_outdated() -> Result<Vec<OutdatedEntry>, JholError> {
                 continue;
             }
         };
-        let latest = registry::resolve_version(&meta, "latest").unwrap_or_else(|| current.clone());
+        // Two different numbers, and conflating them was a bug that could rewrite a
+        // project onto a major it never asked for: `wanted` is the highest version the
+        // declared range allows (`eslint: ^9` -> 9.x), `latest` is the dist-tag and is
+        // only ever shown. Measured on a real project: `doctor` reported
+        // `eslint 9.39.5 -> 10.0.2` and `@types/node 20.19.43 -> 25.3.2` for manifests
+        // pinned to `^9` / `^20`, and `--fix` would have installed both majors.
         let wanted = registry::resolve_version(&meta, spec).unwrap_or_else(|| current.clone());
-        if wanted != latest || current != latest {
-            list.push((name.clone(), current, latest));
+        if current != wanted {
+            list.push((name.clone(), current, wanted));
         }
     }
     Ok(list)
@@ -306,12 +312,13 @@ pub fn fix_dependencies(quiet: bool, _backend: crate::backend::Backend) -> Resul
         crate::error_handling::utils::io_error(
             "write_package_lock",
             Some("package-lock.json"),
-            std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
+            std::io::Error::other(e.to_string()),
         )
     })?;
 
     let opts = install::InstallOptions {
         from_lockfile: true,
+        quiet,
         ..Default::default()
     };
     let specs = install::resolve_install_from_package_json(false)?;
@@ -333,6 +340,8 @@ pub fn explain_project_health() -> Result<String, String> {
         lockfile::LockfileKind::NpmShrinkwrap => "npm-shrinkwrap.json",
         lockfile::LockfileKind::Npm => "package-lock.json",
         lockfile::LockfileKind::Bun => "bun.lock",
+        lockfile::LockfileKind::Yarn => "yarn.lock",
+        lockfile::LockfileKind::Pnpm => "pnpm-lock.yaml",
         lockfile::LockfileKind::None => "none",
     };
     let deps = lockfile::read_package_json_deps(Path::new("package.json")).unwrap_or_default();

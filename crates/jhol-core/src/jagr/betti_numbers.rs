@@ -369,7 +369,7 @@ fn compute_betti_numbers_from_complex(complex: &TropicalSimplicialComplex) -> Ve
 /// β₁ = number of independent cycles (obstructions to tree-like resolution)
 /// β₂ = number of voids (higher-order obstructions)
 pub fn interpret_betti_for_resolution(betti: &[usize]) -> ResolutionInterpretation {
-    let beta_0 = betti.get(0).copied().unwrap_or(0);
+    let beta_0 = betti.first().copied().unwrap_or(0);
     let beta_1 = betti.get(1).copied().unwrap_or(0);
     let beta_2 = betti.get(2).copied().unwrap_or(0);
     let beta_3 = betti.get(3).copied().unwrap_or(0);
@@ -414,6 +414,12 @@ pub struct ResolutionInterpretation {
     pub is_snf: bool,
     pub greedy_works: bool,
     pub difficulty: ResolutionDifficulty,
+}
+
+impl Default for ResolutionInterpretation {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ResolutionInterpretation {
@@ -540,43 +546,43 @@ pub fn extract_cycles(sheaf: &TropicalSheaf) -> Vec<Vec<usize>> {
                         cycles,
                         seen,
                     );
-                } else if u != arrived_from.unwrap_or(usize::MAX) {
-                    if depth.get(&u).copied().unwrap_or(0) < cur_depth {
-                        let mut cycle = vec![v];
-                        let mut cur = v;
-                        while cur != u {
-                            if let Some(&par) = parent.get(&cur) {
-                                cycle.push(par);
-                                cur = par;
-                            } else {
-                                break;
-                            }
+                } else if u != arrived_from.unwrap_or(usize::MAX)
+                    && depth.get(&u).copied().unwrap_or(0) < cur_depth
+                {
+                    let mut cycle = vec![v];
+                    let mut cur = v;
+                    while cur != u {
+                        if let Some(&par) = parent.get(&cur) {
+                            cycle.push(par);
+                            cur = par;
+                        } else {
+                            break;
                         }
-                        cycle.reverse();
-                        if cycle.len() >= 3 {
-                            let mut canonical = cycle.clone();
-                            let min_pos = canonical
-                                .iter()
-                                .enumerate()
-                                .min_by_key(|&(_, &v)| v)
-                                .map(|(i, _)| i)
-                                .unwrap_or(0);
-                            canonical.rotate_left(min_pos);
-                            let mut reversed = canonical.clone();
-                            reversed.reverse();
-                            let min_pos_rev = reversed
-                                .iter()
-                                .enumerate()
-                                .min_by_key(|&(_, &v)| v)
-                                .map(|(i, _)| i)
-                                .unwrap_or(0);
-                            reversed.rotate_left(min_pos_rev);
-                            if canonical > reversed {
-                                canonical = reversed;
-                            }
-                            if seen.insert(canonical) {
-                                cycles.push(cycle);
-                            }
+                    }
+                    cycle.reverse();
+                    if cycle.len() >= 3 {
+                        let mut canonical = cycle.clone();
+                        let min_pos = canonical
+                            .iter()
+                            .enumerate()
+                            .min_by_key(|&(_, &v)| v)
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                        canonical.rotate_left(min_pos);
+                        let mut reversed = canonical.clone();
+                        reversed.reverse();
+                        let min_pos_rev = reversed
+                            .iter()
+                            .enumerate()
+                            .min_by_key(|&(_, &v)| v)
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                        reversed.rotate_left(min_pos_rev);
+                        if canonical > reversed {
+                            canonical = reversed;
+                        }
+                        if seen.insert(canonical) {
+                            cycles.push(cycle);
                         }
                     }
                 }
@@ -606,7 +612,7 @@ pub fn extract_cycles(sheaf: &TropicalSheaf) -> Vec<Vec<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jagr::tropical_math::{MaxAtom, MaxAtomSystem, Tropical};
+    use crate::jagr::tropical_math::{MaxAtom, MaxAtomSystem};
     use crate::jagr::tropical_polyhedron::TropicalPolyhedron;
     use crate::jagr::tropical_sheaf::build_tropical_sheaf;
 
@@ -618,8 +624,7 @@ mod tests {
         let sheaf = build_tropical_sheaf(&poly);
 
         let boundary = BoundaryMatrix::new(1, &sheaf.complex);
-        assert!(boundary.rows >= 0);
-        assert!(boundary.cols >= 0);
+        assert!(boundary.data.len() <= boundary.rows.saturating_mul(boundary.cols));
     }
 
     #[test]
@@ -659,7 +664,7 @@ mod tests {
         let poly = TropicalPolyhedron::from_max_atom_system(&system);
         let sheaf = build_tropical_sheaf(&poly);
 
-        let cycles = extract_cycles(&sheaf);
+        let _cycles = extract_cycles(&sheaf);
         // May or may not find cycles depending on complex construction
     }
 }

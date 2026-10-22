@@ -1,9 +1,75 @@
 //! Audit (vulnerabilities) and SBOM generation.
 
+/// OSV (Open Source Vulnerabilities) API client (was `osv.rs`).
+pub mod osv {
+    //! OSV (Open Source Vulnerabilities) API client for native audit.
+
+    const OSV_API_URL: &str = "https://api.osv.dev/v1/query";
+
+    /// One vulnerability record from OSV.
+    #[derive(Clone, Debug)]
+    pub struct VulnRecord {
+        pub id: String,
+        pub summary: String,
+        pub severity: Option<String>,
+        pub package_name: String,
+        pub package_version: String,
+    }
+
+    /// Query OSV for vulnerabilities affecting the given npm package at version.
+    pub fn query_vulnerabilities(
+        package_name: &str,
+        version: &str,
+    ) -> Result<Vec<VulnRecord>, String> {
+        let body = serde_json::json!({
+            "package": {
+                "ecosystem": "npm",
+                "name": package_name,
+            },
+            "version": version,
+        });
+        let body_bytes = body.to_string();
+        let resp = crate::http_client::post_json(OSV_API_URL, body_bytes.as_bytes())?;
+        let v: serde_json::Value = serde_json::from_slice(&resp).map_err(|e| e.to_string())?;
+        let empty: Vec<serde_json::Value> = Vec::new();
+        let vulns = v.get("vulns").and_then(|x| x.as_array()).unwrap_or(&empty);
+        let mut out = Vec::new();
+        for vuln in vulns {
+            let id = vuln
+                .get("id")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            let summary = vuln
+                .get("summary")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            let severity = vuln
+                .get("database_specific")
+                .and_then(|d| d.get("severity"))
+                .and_then(|s| s.as_str())
+                .map(String::from)
+                .or_else(|| {
+                    vuln.get("details")
+                        .and_then(|d| d.as_str())
+                        .map(|_| "unknown".to_string())
+                });
+            out.push(VulnRecord {
+                id,
+                summary,
+                severity,
+                package_name: package_name.to_string(),
+                package_version: version.to_string(),
+            });
+        }
+        Ok(out)
+    }
+}
+
 use std::path::Path;
 
 use crate::lockfile;
-use crate::osv;
 use crate::utils;
 
 /// Run native audit via OSV and return vulnerability list.
@@ -11,13 +77,63 @@ pub fn native_audit() -> Result<Vec<osv::VulnRecord>, String> {
     let resolved = lockfile::read_resolved_from_dir(Path::new("."))
         .ok_or("No package-lock.json or bun.lock found. Run install first.")?;
     let mut all = Vec::new();
+    let mut ok_queries = 0usize;
+    let mut failures = 0usize;
     for (name, version) in &resolved {
         match osv::query_vulnerabilities(name, version) {
-            Ok(vulns) => all.extend(vulns),
-            Err(_) => continue,
+            Ok(vulns) => {
+                ok_queries += 1;
+                all.extend(vulns);
+            }
+            Err(_) => {
+                failures += 1;
+            }
         }
     }
-    Ok(all)
+    finish_audit_from_query_totals(ok_queries, failures, !resolved.is_empty(), all)
+}
+
+/// Pure gate used by [`native_audit`]: empty advisory answers with a non-empty
+/// lockfile must fail closed (blueprint Phase A).
+pub(crate) fn finish_audit_from_query_totals(
+    ok_queries: usize,
+    failures: usize,
+    had_packages: bool,
+    vulns: Vec<osv::VulnRecord>,
+) -> Result<Vec<osv::VulnRecord>, String> {
+    if ok_queries == 0 && had_packages {
+        return Err(
+            "advisory_source_unavailable: OSV unreachable or all package queries failed"
+                .to_string(),
+        );
+    }
+    if failures > 0 {
+        utils::log(&format!(
+            "audit: {failures} package(s) skipped (OSV error); results may be incomplete"
+        ));
+    }
+    Ok(vulns)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn advisory_unavailable_when_no_ok_queries() {
+        let err = finish_audit_from_query_totals(0, 3, true, Vec::new()).unwrap_err();
+        assert!(err.contains("advisory_source_unavailable"));
+    }
+
+    #[test]
+    fn empty_project_ok_with_zero_queries() {
+        assert!(finish_audit_from_query_totals(0, 0, false, Vec::new()).is_ok());
+    }
+
+    #[test]
+    fn partial_ok_queries_pass_even_with_failures() {
+        assert!(finish_audit_from_query_totals(1, 2, true, Vec::new()).is_ok());
+    }
 }
 
 /// Run audit and return raw JSON bytes (for --json output). Uses native OSV.
@@ -46,25 +162,28 @@ pub fn run_audit(_backend: crate::backend::Backend, quiet: bool) -> Result<(), S
     }
     utils::log("Running audit...");
     let vulns = native_audit()?;
-    if quiet {
-        if !vulns.is_empty() {
-            return Err(format!("{} vulnerability(ies) found.", vulns.len()));
+    if vulns.is_empty() {
+        if !quiet {
+            println!("No vulnerabilities found.");
         }
         return Ok(());
     }
-    if vulns.is_empty() {
-        println!("No vulnerabilities found.");
-        return Ok(());
+    // Always print the list (so the developer sees what failed) AND return
+    // Err so the process exits non-zero. The `quiet` flag only suppresses the
+    // "Running audit..." log line and the "No vulnerabilities found." message
+    // — it must NOT swallow the failure exit code. Previously the non-quiet
+    // path printed vulns but returned Ok(()), which broke CI gating.
+    if !quiet {
+        println!("Found {} vulnerability(ies):", vulns.len());
+        for v in &vulns {
+            let sev = v.severity.as_deref().unwrap_or("unknown");
+            println!(
+                "  {}@{} ({}): {} - {}",
+                v.package_name, v.package_version, sev, v.id, v.summary
+            );
+        }
     }
-    println!("Found {} vulnerability(ies):", vulns.len());
-    for v in &vulns {
-        let sev = v.severity.as_deref().unwrap_or("unknown");
-        println!(
-            "  {}@{} ({}): {} - {}",
-            v.package_name, v.package_version, sev, v.id, v.summary
-        );
-    }
-    Ok(())
+    Err(format!("{} vulnerability(ies) found.", vulns.len()))
 }
 
 /// Run audit fix: print upgrade suggestions (no backend). No automatic fix.

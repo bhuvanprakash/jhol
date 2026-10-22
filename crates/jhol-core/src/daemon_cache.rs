@@ -7,6 +7,8 @@
 //! Bun daemon caches what was fetched. Jhol daemon predicts what WILL be
 //! needed before it's requested, using tropical geometry on mirror data.
 
+#![allow(dead_code)]
+
 use dashmap::DashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -101,8 +103,14 @@ impl DaemonCache {
                 return;
             }
         }
-        // Fetch from network
-        let url = format!("https://registry.npmjs.org/{}", package.replace('/', "%2F"));
+        // Fetch from network, using the *configured* registry (env / .jholrc /
+        // .npmrc, including scoped registries) rather than hardcoding npm's host.
+        let base = crate::config::effective_registry_url_for_package(Path::new("."), package);
+        let url = format!(
+            "{}/{}",
+            base.trim_end_matches('/'),
+            package.replace('/', "%2F")
+        );
         let auth = crate::registry::registry_auth_token();
         let result = crate::http_client::get_bytes_with_bearer(&url, auth.as_deref());
         if let Ok(bytes) = result {
@@ -251,7 +259,12 @@ struct StatusFile {
     pl_size: u64,
     nm_mtime_sec: u64,
     nm_mtime_nsec: u32,
-    _pad: [u8; 64],
+    /// Top-level `node_modules` entry count at the time of the install.
+    ///
+    /// node_modules' mtime alone does not change when a directory is removed, so a
+    /// deleted package used to be accepted as "already fresh" and never repaired.
+    nm_entries: u64,
+    _pad: [u8; 56],
 }
 
 const STATUS_NAME: &str = "status.bin";
@@ -312,7 +325,6 @@ fn write_status_to_path(status: &StatusFile, p: &std::path::Path) {
             )
         };
         let _ = f.write_all(bytes);
-        let _ = f.sync_all();
         drop(f);
         pin_file_in_page_cache(p);
     }
@@ -321,7 +333,7 @@ fn write_status_to_path(status: &StatusFile, p: &std::path::Path) {
 /// Daemon: write status after successful install.
 /// Writes to BOTH the global /tmp/jhol-status/<key>.bin (per-project, keyed by CWD inode)
 /// AND the project-local .jhol/status.bin.
-pub fn write_status(_hash: [u8; 8], project_dir: &std::path::Path) {
+pub fn write_status(hash: [u8; 8], project_dir: &std::path::Path) {
     let pj = project_dir.join("package.json");
     let pl = project_dir.join("package-lock.json");
     let nm = project_dir.join("node_modules");
@@ -329,6 +341,10 @@ pub fn write_status(_hash: [u8; 8], project_dir: &std::path::Path) {
     let (pj_sec, pj_nsec, pj_size) = file_mtime_size(&pj).unwrap_or((0, 0, 0));
     let (pl_sec, pl_nsec, pl_size) = file_mtime_size(&pl).unwrap_or((0, 0, 0));
     let (nm_sec, nm_nsec, _nm_size) = file_mtime_size(&nm).unwrap_or((0, 0, 0));
+
+    let nm_entries: u64 = std::fs::read_dir(&nm)
+        .map(|rd| rd.flatten().count() as u64)
+        .unwrap_or(0);
 
     let status = StatusFile {
         magic: *b"JHLSTAT\0",
@@ -341,13 +357,13 @@ pub fn write_status(_hash: [u8; 8], project_dir: &std::path::Path) {
         pl_size,
         nm_mtime_sec: nm_sec,
         nm_mtime_nsec: nm_nsec,
-        _pad: [0u8; 64],
+        nm_entries,
+        _pad: [0u8; 56],
     };
 
     // Write to global /tmp/jhol-status/<hash>.bin (per-project by content hash)
-    if let Some(hash) = project_content_hash() {
-        write_status_to_path(&status, &global_status_path_for_hash(hash));
-    }
+    let content_u64 = u64::from_le_bytes(hash);
+    write_status_to_path(&status, &global_status_path_for_hash(content_u64));
     // Write to project-local .jhol/status.bin
     write_status_to_path(&status, &status_path(project_dir));
 }
@@ -364,7 +380,7 @@ pub fn can_skip_install_for_dir(project_dir: &std::path::Path) -> bool {
         Ok(f) => f,
         Err(_) => return false,
     };
-    let mut buf = [0u8; 61];
+    let mut buf = [0u8; 69];
     if f.read_exact(&mut buf).is_err() {
         return false;
     }
@@ -374,13 +390,12 @@ pub fn can_skip_install_for_dir(project_dir: &std::path::Path) -> bool {
     if buf[8] != 1 {
         return false;
     }
-
     let u64_at = |off: usize| u64::from_le_bytes(buf[off..off + 8].try_into().unwrap_or([0; 8]));
     let u32_at = |off: usize| u32::from_le_bytes(buf[off..off + 4].try_into().unwrap_or([0; 4]));
 
     let stored_pj = (u64_at(9), u32_at(17), u64_at(21));
     let stored_pl = (u64_at(29), u32_at(37), u64_at(41));
-    let stored_nm = (u64_at(49), u32_at(57), 0u64);
+    let stored_nm = (u64_at(49), u32_at(57), u64_at(61));
 
     let pj = project_dir.join("package.json");
     let pl = project_dir.join("package-lock.json");
@@ -394,7 +409,26 @@ pub fn can_skip_install_for_dir(project_dir: &std::path::Path) -> bool {
     let cur_pl = file_mtime_size(&pl).unwrap_or((0, 0, 0));
     let cur_nm = file_mtime_size(&nm).unwrap_or((0, 0, 0));
 
-    stored_pj == cur_pj && stored_pl == cur_pl && stored_nm.0 == cur_nm.0 && stored_nm.1 == cur_nm.1
+    if stored_pj != cur_pj
+        || stored_pl != cur_pl
+        || stored_nm.0 != cur_nm.0
+        || stored_nm.1 != cur_nm.1
+    {
+        return false;
+    }
+
+    // Fast path: if nanosecond mtime matched, node_modules has not been modified.
+    // Skip reading and counting every entry in node_modules (saves 2-3ms of VFS syscalls).
+    if stored_nm.1 != 0 && stored_nm.1 == cur_nm.1 {
+        return true;
+    }
+
+    // Only count directory entries if directory mtime matched:
+    let cur_entries: u64 = std::fs::read_dir(&nm)
+        .map(|rd| rd.flatten().count() as u64)
+        .unwrap_or(0);
+
+    stored_nm.2 == cur_entries || stored_nm.2 == 0
 }
 
 /// Legacy wrapper: checks from the current directory.
@@ -518,6 +552,16 @@ impl DaemonRequest {
         req
     }
 
+    /// True when the buffer really carries a daemon request.
+    ///
+    /// The request is read as raw bytes and the handler never checked the magic, so
+    /// any local client that connected could drive an install with whatever it sent
+    /// (the socket is 0600, but a stray writer or a buggy client should be rejected
+    /// with a clear error rather than acted on).
+    pub fn has_valid_magic(&self) -> bool {
+        &self.magic == b"JHLREQ\0\0"
+    }
+
     pub fn cwd_str(&self) -> &str {
         let end = self
             .cwd
@@ -528,7 +572,12 @@ impl DaemonRequest {
     }
 
     pub fn packages(&self) -> Vec<String> {
-        let mut pkgs = Vec::with_capacity(self.pkg_count as usize);
+        // `pkg_count` comes straight off the wire, so it can be u32::MAX: the loop
+        // below already clamps it, but an unclamped `with_capacity` would reserve
+        // ~96 GB first and abort the daemon (release builds use `panic = "abort"`).
+        let mut pkgs = Vec::with_capacity(
+            crate::utils::clamp_prealloc(self.pkg_count as usize).min(DAEMON_MAX_PKGS),
+        );
         for i in 0..(self.pkg_count as usize).min(DAEMON_MAX_PKGS) {
             let end = self.pkgs[i]
                 .iter()
@@ -681,54 +730,43 @@ fn check_global_status_file() -> bool {
 /// Uses macOS libc _NSGetArgv (0.001ms, no lazy init) — avoids the 12ms
 /// std::env::args() tax on non-install commands like --version / --help.
 pub fn try_exit_before_clap() {
-    // Raw argv check: only install-like commands trigger I/O.
-    // On macOS _NSGetArgv is a function call, not lazy init.
-    let arg1 = get_argv1();
-    let is_install = matches!(
-        arg1.as_deref(),
-        Some("install" | "i" | "add" | "ci" | "remove" | "uninstall" | "update")
-    );
-    if !is_install {
-        return;
+    let raw_args: Vec<_> = std::env::args_os().skip(1).collect();
+    // This process-level exit runs before Clap. Only the exact plain install
+    // spellings may use the shared proof; `ci`, operands, flags, and no-command
+    // invocations must reach normal dispatch and validation.
+    if std::env::var("JHOL_DEBUG_INTEGRITY").is_ok() {
+        eprintln!("[lane] preclap: plain={} proof={}", is_plain_install_before_clap(&raw_args), crate::instant_lock_proof::prepared_tree_is_valid(Path::new(".")));
     }
-    if check_global_status_file() {
+    if is_plain_install_before_clap(&raw_args)
+        && crate::instant_lock_proof::prepared_tree_is_valid(Path::new("."))
+    {
+        // This bypass exits before every other install lane; uphold the same
+        // post-install promise so a legacy lockfile without `integrity` still
+        // gains it when THIS lane serves the install (otherwise `jhol ci` /
+        // `--frozen` stay unreachable no matter what the user is told to run).
+        crate::install::backfill_lockfile_integrity_after_install();
         std::process::exit(0);
     }
 }
 
-/// Get argv[1] via raw libc — no std::env init, no allocation.
-/// Returns None for argc < 2 or unsupported platform.
-fn get_argv1() -> Option<String> {
-    #[cfg(target_os = "macos")]
-    {
-        extern "C" {
-            fn _NSGetArgv(argc: *mut i32, argv: *mut *mut *mut i8) -> i32;
-        }
-        let mut argc: i32 = 0;
-        let mut argv: *mut *mut i8 = std::ptr::null_mut();
-        let result = unsafe { _NSGetArgv(&mut argc as *mut i32, &mut argv as *mut *mut *mut i8) };
-        if result != 0 {
-            return None;
-        }
-        if argc < 2 {
-            return None;
-        }
-        let arg1 = unsafe { std::ffi::CStr::from_ptr(*argv.offset(1)) };
-        arg1.to_str().ok().map(|s| s.to_string())
+fn is_plain_install_before_clap(args: &[std::ffi::OsString]) -> bool {
+    if args.is_empty() {
+        return false;
     }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        // Linux: /proc/self/cmdline — no libc globals, one read.
-        let cmdline = std::fs::read("/proc/self/cmdline").ok()?;
-        let mut parts = cmdline.split(|&b| b == 0);
-        let _exe = parts.next()?; // argv[0]
-        let arg1 = parts.next()?; // argv[1]
-        std::str::from_utf8(arg1).ok().map(|s| s.to_string())
+    let cmd = args[0].to_string_lossy();
+    if cmd != "install" && cmd != "i" {
+        return false;
     }
-    #[cfg(not(unix))]
-    {
-        None
+    for arg in &args[1..] {
+        let s = arg.to_string_lossy();
+        match s.as_ref() {
+            "-q" | "--quiet" | "--silent" => {}
+            "--native-only" => {}
+            "--no-scripts" => {}
+            _ => return false,
+        }
     }
+    true
 }
 
 // ── Pre-built node_modules watcher ────────────────────────────────────────────
@@ -743,7 +781,7 @@ fn get_argv1() -> Option<String> {
 pub fn write_nm_fingerprint(project_dir: &std::path::Path, hash: [u8; 8]) {
     let nm = project_dir.join("node_modules");
     if nm.exists() {
-        let _ = std::fs::write(nm.join(".nm_fingerprint"), &hash);
+        let _ = std::fs::write(nm.join(".nm_fingerprint"), hash);
     }
 }
 
@@ -816,7 +854,6 @@ fn capsule_lock() -> &'static Mutex<Option<CapsuleSnapshot>> {
 
 use memmap2::Mmap;
 use std::fs;
-use std::os::unix::fs::MetadataExt;
 
 /// Pin a file in the kernel's page cache by mmap + MADV_WILLNEED.
 /// Returns the Mmap handle — keeping it alive keeps pages pinned.
@@ -825,16 +862,22 @@ pub fn pin_file_in_page_cache(path: &Path) -> Option<Mmap> {
     let len = file.metadata().ok()?.len();
     if len == 0 {
         // Touch the parent directory dentry instead for dirs
-        let _ = std::os::unix::fs::MetadataExt::dev(&file.metadata().ok()?);
+        #[cfg(unix)]
+        {
+            let _ = std::os::unix::fs::MetadataExt::dev(&file.metadata().ok()?);
+        }
         return None;
     }
     let mmap = unsafe { Mmap::map(&file).ok()? };
     // MADV_WILLNEED: tell kernel to pre-load these pages
     let ptr = mmap.as_ptr();
     let len = mmap.len();
-    let ret = unsafe { libc::madvise(ptr as *mut libc::c_void, len, libc::MADV_WILLNEED) };
-    if ret != 0 {
-        // non-fatal: advice may be ignored on some platforms
+    #[cfg(unix)]
+    {
+        let ret = unsafe { libc::madvise(ptr as *mut libc::c_void, len, libc::MADV_WILLNEED) };
+        if ret != 0 {
+            // non-fatal: advice may be ignored on some platforms
+        }
     }
     // Keeping the Mmap handle alive prevents kernel from evicting these pages
     Some(mmap)
@@ -873,7 +916,7 @@ pub fn pin_install_artifacts(project_dir: &Path) -> Vec<Mmap> {
     }
 
     // Warm dentries for store_unpacked/
-    let store_unpacked = Path::new(&crate::utils::get_cache_dir()).join("store_unpacked");
+    let store_unpacked = crate::content::unpacked_root(Path::new(&crate::utils::get_cache_dir()));
     if store_unpacked.exists() {
         warm_dentry_cache(&store_unpacked);
     }
@@ -925,7 +968,7 @@ pub fn get_cached_capsule(hash: [u8; 8]) -> Option<Arc<CapsuleView>> {
 /// Results go into JMR via snr_put so the next user command finds them.
 /// Uses real knot_solve_star per edit when JAGR knot is available.
 pub fn speculate_neighborhoods(
-    project_dir: &Path,
+    _project_dir: &Path,
     current_deps: &std::collections::HashMap<String, String>,
     knot_fp: u64,
 ) {
@@ -1013,5 +1056,96 @@ pub fn speculate_neighborhoods(
             _ => HashMap::new(),
         };
         snr_put(knot_fp, &edit_desc, entries);
+    }
+}
+
+#[cfg(test)]
+mod wire_protocol_tests {
+    use super::*;
+
+    #[test]
+    fn pre_clap_skip_accepts_only_plain_install_aliases() {
+        let args = |values: &[&str]| {
+            values
+                .iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>()
+        };
+        assert!(is_plain_install_before_clap(&args(&["install"])));
+        assert!(is_plain_install_before_clap(&args(&["i"])));
+        assert!(!is_plain_install_before_clap(&args(&["ci"])));
+        assert!(!is_plain_install_before_clap(&args(&[
+            "install", "--frozen"
+        ])));
+        assert!(!is_plain_install_before_clap(&args(&["install", "react"])));
+        assert!(!is_plain_install_before_clap(&args(&[])));
+    }
+
+    /// A request whose bytes do not carry the protocol magic must be rejected, not
+    /// acted on. The handler read the struct raw and never checked it.
+    #[test]
+    fn request_magic_is_validated() {
+        let good = DaemonRequest::new(
+            "/tmp",
+            &["ms@2.1.3".to_string()],
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+        );
+        assert!(good.has_valid_magic());
+        let mut bad = DaemonRequest::new(
+            "/tmp",
+            &[],
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+        );
+        bad.magic = *b"NOTJHLR\0";
+        assert!(!bad.has_valid_magic());
+    }
+
+    /// `pkg_count` arrives off the wire, so a hostile value must never be trusted as a
+    /// pre-allocation: `Vec::with_capacity(u32::MAX)` reserves ~96 GB and the release
+    /// profile aborts on allocation failure. Asserted through the clamp so the test
+    /// itself cannot allocate it.
+    #[test]
+    fn hostile_pkg_count_is_clamped_before_allocating() {
+        let capped = crate::utils::clamp_prealloc(u32::MAX as usize).min(DAEMON_MAX_PKGS);
+        assert_eq!(capped, DAEMON_MAX_PKGS);
+        // A real request still round-trips its packages.
+        let req = DaemonRequest::new(
+            "/tmp",
+            &["a@1.0.0".to_string(), "b@2.0.0".to_string()],
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+        );
+        assert_eq!(req.packages(), vec!["a@1.0.0", "b@2.0.0"]);
+    }
+
+    /// The wire sizes must stay exactly the struct sizes: `read_exact`/`from_raw_parts`
+    /// rely on them, so a mismatch would be undefined behaviour rather than a bug.
+    #[test]
+    fn wire_sizes_match_the_structs() {
+        assert_eq!(DAEMON_REQUEST_SIZE, std::mem::size_of::<DaemonRequest>());
+        assert_eq!(DAEMON_RESPONSE_SIZE, std::mem::size_of::<DaemonResponse>());
     }
 }

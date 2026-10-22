@@ -64,13 +64,13 @@ impl Incompatibility {
     }
 
     /// Check if this incompatibility is satisfied by given assignments
-    pub fn is_satisfied_by<F>(&self, mut is_assigned: F) -> bool
+    pub fn is_satisfied_by<F>(&self, _is_assigned: F) -> bool
     where
         F: FnMut(&str, &super::version_set::PackedVersion) -> bool,
     {
         // An incompatibility is satisfied if at least one term is false
         // (i.e., not all terms can be true simultaneously)
-        self.terms.iter().all(|term| {
+        self.terms.iter().all(|_term| {
             // Simplified check - full implementation needs version assignments
             false
         })
@@ -131,7 +131,7 @@ impl DerivationTree {
 
     /// Format as a human-readable error message
     pub fn format_message(&self) -> String {
-        let mut message = String::from("❌ Resolution failed:\n\n");
+        let mut message = String::from("x Resolution failed:\n\n");
 
         message.push_str("The following packages have incompatible version requirements:\n\n");
 
@@ -148,7 +148,7 @@ impl DerivationTree {
 
         // Format each package's constraints
         for (package, terms) in &package_terms {
-            message.push_str(&format!("  📦 {}:\n", package));
+            message.push_str(&format!("  - {}:\n", package));
             for term in terms {
                 let polarity = if term.is_positive {
                     "requires"
@@ -166,7 +166,7 @@ impl DerivationTree {
 
         // Add suggestions if possible
         if let Some(suggestion) = self.generate_suggestion(&package_terms) {
-            message.push_str(&format!("💡 Suggestion: {}\n", suggestion));
+            message.push_str(&format!("- Suggestion: {}\n", suggestion));
         }
 
         message

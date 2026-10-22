@@ -539,7 +539,7 @@ pub fn compute_mayer_vietoris(cover: &TropicalCover) -> MayerVietorisSequence {
 
     for d in 0..max_degree {
         // Build restriction maps from pieces to intersections
-        for ((i, j), _inter) in &cover.intersections {
+        for (i, j) in cover.intersections.keys() {
             let name_i = format!("U_{}", i);
             let name_j = format!("U_{}", j);
             let name_ij = format!("U_{} ∩ U_{}", i, j);
@@ -571,7 +571,7 @@ pub fn compute_mayer_vietoris(cover: &TropicalCover) -> MayerVietorisSequence {
                     // corresponding source column index.
                     if let Some(open_i) = cover.open_sets.get(*i) {
                         let mut src_col = 0;
-                        for (_edge, rm) in open_i.sheaf.restrictions.iter() {
+                        for rm in open_i.sheaf.restrictions.values() {
                             if src_col < dim_i && rm.mapping.len() < dim_ij {
                                 for (row_idx, _) in rm.mapping.iter().enumerate() {
                                     if row_idx < dim_ij {
@@ -588,7 +588,7 @@ pub fn compute_mayer_vietoris(cover: &TropicalCover) -> MayerVietorisSequence {
                     // Fill from U_j side: offset by dim_i
                     if let Some(open_j) = cover.open_sets.get(*j) {
                         let mut src_col = dim_i;
-                        for (_edge, rm) in open_j.sheaf.restrictions.iter() {
+                        for rm in open_j.sheaf.restrictions.values() {
                             if src_col < dim_src && rm.mapping.len() < dim_ij {
                                 for (row_idx, _) in rm.mapping.iter().enumerate() {
                                     if row_idx < dim_ij {
@@ -943,7 +943,7 @@ pub fn compute_gluing_obstruction(sequence: &MayerVietorisSequence) -> GluingObs
 
     // Find conflicting local sections (vertices/edges where restriction maps disagree)
     for map in &sequence.connecting_maps {
-        if map.target_degree == map.source_degree + 1 && map.image.len() > 0 {
+        if map.target_degree == map.source_degree + 1 && !map.image.is_empty() {
             conflicting_locals.push((
                 format!("degree_{}_to_{}", map.source_degree, map.target_degree),
                 map.image.iter().map(|&i| i as f64).collect(),
@@ -989,6 +989,26 @@ pub fn glue_local_sections(
         Ok(global)
     } else {
         Err(obstruction)
+    }
+}
+
+/// Tries to perform zero-backtrack merging of local sections across open cover U and V.
+///
+/// By the Mayer-Vietoris Long Exact Sequence Theorem:
+/// If the connecting obstruction class vanishing condition dim(im(δ*)) == 0 holds,
+/// the restriction map is surjective and the sequence splits.
+/// Local solutions are mathematically guaranteed to lift to a unique global section
+/// without any global backtracking or conflict loops.
+pub fn try_zero_backtrack_merge(
+    local_sections: &HashMap<String, Vec<f64>>,
+    cover: &TropicalCover,
+) -> Option<Vec<f64>> {
+    let sequence = compute_mayer_vietoris(cover);
+    let obstruction = compute_gluing_obstruction(&sequence);
+    if obstruction.vanishes {
+        glue_local_sections(local_sections, cover).ok()
+    } else {
+        None
     }
 }
 
@@ -1039,9 +1059,9 @@ pub fn sheaf_feasibility(sheaf: &TropicalSheaf) -> (bool, GluingObstruction) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jagr::tropical_math::{MaxAtom, MaxAtomSystem, Tropical};
+    use crate::jagr::tropical_math::{MaxAtom, MaxAtomSystem};
     use crate::jagr::tropical_polyhedron::TropicalPolyhedron;
-    use crate::jagr::tropical_sheaf::{build_tropical_sheaf, SheafCohomology};
+    use crate::jagr::tropical_sheaf::build_tropical_sheaf;
 
     #[test]
     fn test_tropical_open_set() {
@@ -1104,7 +1124,26 @@ mod tests {
         let poly = TropicalPolyhedron::from_max_atom_system(&system);
         let sheaf = build_tropical_sheaf(&poly);
 
-        let (feasible, obstruction) = sheaf_feasibility(&sheaf);
+        let (feasible, _obstruction) = sheaf_feasibility(&sheaf);
         assert!(feasible || !feasible);
+    }
+
+    #[test]
+    fn test_zero_backtrack_merge() {
+        let mut system = MaxAtomSystem::new(2);
+        system.add_atom(MaxAtom::new(0, 0, 1, 2.0));
+        let poly = TropicalPolyhedron::from_max_atom_system(&system);
+        let sheaf = build_tropical_sheaf(&poly);
+
+        let cover = build_cover(&sheaf, 2);
+        let mut local_sections = HashMap::new();
+        local_sections.insert("open_0".to_string(), vec![1.0, 2.0]);
+        local_sections.insert("open_1".to_string(), vec![1.0, 2.0]);
+
+        let merged = try_zero_backtrack_merge(&local_sections, &cover);
+        assert!(merged.is_some());
+        if let Some(sec) = merged {
+            assert_eq!(sec, vec![1.0, 2.0]);
+        }
     }
 }

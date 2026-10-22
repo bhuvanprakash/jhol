@@ -431,10 +431,8 @@ impl CDCLSolver {
             return false;
         }
         for &a in assumptions {
-            if !self.assume(a) {
-                if self.propagate().is_some() {
-                    return false;
-                }
+            if !self.assume(a) && self.propagate().is_some() {
+                return false;
             }
         }
 
@@ -904,7 +902,7 @@ pub fn at_most_one_commander(vars: &[usize]) -> Vec<Clause> {
     }
 
     let m = (n as f64).sqrt().ceil() as usize;
-    let num_groups = (n + m - 1) / m;
+    let num_groups = n.div_ceil(m);
     let mut clauses = Vec::new();
     let mut next_aux = vars.iter().max().copied().unwrap_or(0) + 1;
     let mut commanders: Vec<usize> = Vec::new();
@@ -1203,7 +1201,7 @@ mod tests {
         formula.add_hard(Clause::new(vec![Literal::positive(0)]));
         formula.add_hard(Clause::new(vec![Literal::positive(1)]));
 
-        let mut solver = OLLSolver::new(formula);
+        let solver = OLLSolver::new(formula);
         let (sat, model) = solver.cdcl_solve(&solver.formula.clauses);
         assert!(sat);
         assert!(model.is_some());
@@ -1215,7 +1213,7 @@ mod tests {
         formula.add_hard(Clause::new(vec![Literal::positive(0)]));
         formula.add_hard(Clause::new(vec![Literal::negative(0)]));
 
-        let mut solver = OLLSolver::new(formula);
+        let solver = OLLSolver::new(formula);
         let (sat, _) = solver.cdcl_solve(&solver.formula.clauses);
         assert!(!sat);
     }
@@ -1230,7 +1228,7 @@ mod tests {
             ]));
         }
 
-        let mut solver = OLLSolver::new(formula);
+        let solver = OLLSolver::new(formula);
         let (sat, model) = solver.cdcl_solve(&solver.formula.clauses);
         assert!(sat);
         if let Some(m) = model {
@@ -1305,7 +1303,7 @@ mod tests {
             Literal::positive(3),
         ]));
 
-        let mut solver = OLLSolver::new(formula);
+        let solver = OLLSolver::new(formula);
         let (sat, _) = solver.cdcl_solve(&solver.formula.clauses);
         assert!(sat);
     }

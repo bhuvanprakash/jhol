@@ -20,7 +20,28 @@ fn base_name(package: &str) -> &str {
 /// Prefetch all lockfile dependencies into the store. Requires package.json and lockfile.
 /// Does not create node_modules or run backend. Use before `jhol install --offline`.
 pub fn prefetch_from_lockfile(quiet: bool) -> Result<(), JholError> {
-    let specs = crate::install::resolve_install_from_package_json(true)?;
+    // Only registry specs can be prefetched: local/git/workspace dependencies are materialized by the
+    // installer, and trying to download them produced `HTTP 404 (url: local-lib@1.0.0)`.
+    let specs: Vec<String> = crate::install::resolve_install_from_package_json(true)?
+        .into_iter()
+        .filter(|s| {
+            let name = s.rsplit_once('@').map(|(n, _)| n).unwrap_or(s.as_str());
+            let spec =
+                crate::lockfile::read_package_json_deps(std::path::Path::new("package.json"))
+                    .unwrap_or_default()
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        s.rsplit_once('@')
+                            .map(|(_, v)| v.to_string())
+                            .unwrap_or_default()
+                    });
+            matches!(
+                crate::spec_grammar::classify(&spec),
+                crate::spec_grammar::Spec::Registry(_)
+            )
+        })
+        .collect();
     if specs.is_empty() {
         if !quiet {
             println!("No dependencies to prefetch.");
@@ -100,7 +121,7 @@ pub fn prefetch_from_lockfile(quiet: bool) -> Result<(), JholError> {
             crate::error_handling::utils::io_error(
                 "write_store_index",
                 Some("cache/index.json"),
-                std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
+                std::io::Error::other(e.to_string()),
             )
         })?;
     }

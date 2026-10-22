@@ -90,6 +90,12 @@ pub struct MaxSMTInstance {
     pub root: Option<PackageVersionVar>,
 }
 
+impl Default for MaxSMTInstance {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MaxSMTInstance {
     pub fn new() -> Self {
         Self {
@@ -222,7 +228,7 @@ impl MaxSMTInstance {
         }
 
         let mut max_var = self.variables.len().saturating_sub(1);
-        for (_, indices) in &by_package {
+        for indices in by_package.values() {
             let local_max = indices.iter().max().copied().unwrap_or(0);
             max_var = max_var.max(local_max);
         }

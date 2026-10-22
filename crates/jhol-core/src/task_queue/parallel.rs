@@ -96,6 +96,7 @@ where
 }
 
 /// Batch items for parallel processing
+#[allow(dead_code)]
 pub fn batch_items<T: Clone>(items: Vec<T>, batch_size: usize) -> Vec<Vec<T>> {
     items
         .chunks(batch_size)
@@ -104,6 +105,7 @@ pub fn batch_items<T: Clone>(items: Vec<T>, batch_size: usize) -> Vec<Vec<T>> {
 }
 
 /// Parallel for each
+#[allow(dead_code)]
 pub fn parallel_for_each<T, F>(items: Vec<T>, f: F)
 where
     T: Send + 'static,
@@ -113,6 +115,7 @@ where
 }
 
 /// Parallel reduce
+#[allow(dead_code)]
 pub fn parallel_reduce<T, O, F, R>(items: Vec<T>, map_fn: F, reduce_fn: R, identity: O) -> O
 where
     T: Send + 'static,

@@ -53,6 +53,12 @@ pub struct DerivationGraph {
     pub conflicts: Vec<usize>,
 }
 
+impl Default for DerivationGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DerivationGraph {
     pub fn new() -> Self {
         Self {
@@ -256,7 +262,7 @@ impl ConflictExplainer {
         explanation.push_str(&format!("Betti numbers: {:?}\n", analysis.betti_numbers));
         explanation.push_str(&format!(
             "  β₀ = {} (connected components)\n",
-            analysis.betti_numbers.get(0).copied().unwrap_or(0)
+            analysis.betti_numbers.first().copied().unwrap_or(0)
         ));
         explanation.push_str(&format!(
             "  β₁ = {} (1-cycles, obstruction to acyclicity)\n",
@@ -325,7 +331,7 @@ impl ConflictExplainer {
         explanation.push_str("───────────────────────────────────\n");
         explanation.push_str(&format!(
             "  β₀ = {}\n",
-            sheaf_analysis.betti_numbers.get(0).copied().unwrap_or(0)
+            sheaf_analysis.betti_numbers.first().copied().unwrap_or(0)
         ));
         explanation.push_str(&format!(
             "  β₁ = {}\n",
@@ -417,7 +423,7 @@ pub fn explain_package_conflict(
 
     // For packages with multiple contradictory requirements, show the derivation chain
     let mut seen_root_causes: HashSet<String> = HashSet::new();
-    for (_source, reqs) in &pkg_to_requirements {
+    for reqs in pkg_to_requirements.values() {
         if reqs.len() < 2 {
             continue;
         }

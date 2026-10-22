@@ -123,6 +123,7 @@ pub fn compute_integrity(content: &[u8]) -> String {
 }
 
 /// Compute SHA512 integrity hash (npm default)
+#[allow(dead_code)]
 pub fn compute_integrity_sha512(content: &[u8]) -> String {
     IntegrityHash::sha512(content).as_sri().to_string()
 }
@@ -142,6 +143,7 @@ pub fn verify_integrity(content: &[u8], expected_integrity: &str) -> bool {
 }
 
 /// Verify content against expected integrity hash with specific algorithm
+#[allow(dead_code)]
 pub fn verify_integrity_strict(content: &[u8], expected_integrity: &str) -> Result<bool, String> {
     let integrity = IntegrityHash::parse(expected_integrity)
         .ok_or_else(|| format!("Invalid integrity hash: {}", expected_integrity))?;
@@ -150,6 +152,7 @@ pub fn verify_integrity_strict(content: &[u8], expected_integrity: &str) -> Resu
 }
 
 /// Compare two integrity hashes (handles different algorithms)
+#[allow(dead_code)]
 pub fn compare_integrity(integrity1: &str, integrity2: &str) -> bool {
     if integrity1 == integrity2 {
         return true;

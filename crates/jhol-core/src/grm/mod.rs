@@ -1,77 +1,22 @@
-//! Global Resolution Memory — stub for compatibility.
+//! Global Resolution Memory — compatibility shim over [`crate::origin`].
+//!
+//! The resolution-record types and the memory facade now live in
+//! `origin.rs`, which owns the metadata origin: packuments, resolution
+//! records, and the append-only install log are one thing, and the
+//! origin is the one place that should own the shape of that fact.
+//!
+//! This module keeps the `crate::grm::*` paths working for existing
+//! callers (soul_path, lock_free_grm, resolution_mirror, lattice_cache)
+//! and continues to host the GRM submodules.
+//!
+//! Nothing here does work any more. New code should call `crate::origin`.
 
+pub mod distributed;
 pub mod query;
 pub mod store;
 pub mod sync;
 
-use crate::mpt_store::ContentHash;
-use serde::{Deserialize, Serialize};
-use std::time::SystemTime;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum ResolutionSource {
-    #[default]
-    GRM,
-    SoulPath,
-    Cache,
-    Registry,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ResolutionRecord {
-    pub package_spec: String,
-    pub resolved_version: String,
-    pub id: u64,
-    pub timestamp: u64,
-    pub ttl_secs: u64,
-    pub dependencies: std::collections::HashMap<String, String>,
-    pub platform: Option<String>,
-    pub node_version: Option<String>,
-    pub cached_at: u64,
-    pub hit_count: u64,
-    pub content_hash: ContentHash,
-    pub dependency_hashes: Vec<ContentHash>,
-    pub resolution_hash: ContentHash,
-    pub provenance_sequence: Option<u64>,
-    pub source: ResolutionSource,
-    pub cache_priority: u32,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct GRMStats {
-    pub total_records: u64,
-    pub total_hits: u64,
-    pub hits: u64,
-    pub misses: u64,
-    pub invalidations: u64,
-    pub unique_packages: u64,
-    pub next_id: u64,
-    pub low_priority_records: u64,
-}
-
-pub fn current_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-pub struct GrmHandle;
-impl GrmHandle {
-    pub fn new() -> Self {
-        Self
-    }
-    pub fn current_timestamp() -> u64 {
-        current_timestamp()
-    }
-}
-
-pub fn lookup(spec: &str) -> Option<ResolutionRecord> {
-    crate::lock_free_grm::query_global(spec, None, None)
-}
-
-pub fn insert(record: ResolutionRecord) {
-    let _ = crate::lock_free_grm::store_global(record);
-}
-
-pub fn garbage_collect() {}
+pub use crate::origin::{
+    current_timestamp, garbage_collect, insert, lookup, GRMStats, GrmHandle, ResolutionRecord,
+    ResolutionSource,
+};

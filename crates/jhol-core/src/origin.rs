@@ -1,0 +1,675 @@
+//! # jhol's metadata origin
+//!
+//! One metadata origin: the packument store, the resolution
+//! records, and the append-only install log.
+//!
+//! Before this file the metadata was scattered: the packument disk
+//! cache (layout, gzip, etag header, TTL, durable mirror) lived
+//! inline in `registry.rs`, the resolution records lived in `grm`,
+//! and the install log had no single owner.  Every reader had to
+//! know the on-disk format and every writer could disagree about
+//! where the origin is — the exact "read from here, write to
+//! there" split that made the durable cache read-but-never-written.
+//!
+//! `origin` owns the metadata side of the same origin
+//! [`crate::content`] owns the content side.  Both resolve their
+//! durable roots through `content::durable_roots`, so metadata and
+//! content can never disagree about which machine caches are the
+//! origin.  The packument cache logic moved here verbatim; `registry`
+//! keeps one-line delegators so its fetch code is unchanged.
+//!
+//! The append-only log is jhol's IPL provenance: every install
+//! appends one hash-chained entry, so the history of a project's
+//! dependency tree is tamper-evident — change any past entry and
+//! every later entry's `prev` no longer matches.  That is the
+//! "Certificate Transparency for packages" property, and it lives
+//! here rather than in the resolver because it records what was
+//! *installed*, not what was *decided*.
+
+use std::path::{Path, PathBuf};
+
+// ── layout ──────────────────────────────────────────────────────────
+
+/// Directory holding cached packuments inside a cache root.
+pub(crate) fn packument_dir() -> PathBuf {
+    PathBuf::from(crate::utils::get_cache_dir()).join("packuments")
+}
+
+/// Stable, collision-resistant cache key for a package's packument.
+///
+/// The key hashes the package name (so a scoped and an unscoped name
+/// never collide) plus a flag distinguishing the abbreviated packument
+/// from the full one — they are different documents with different
+/// freshness, so they get different files.
+pub(crate) fn packument_key(package: &str, abbreviated: bool) -> String {
+    let h = xxhash_rust::xxh3::xxh3_64(package.as_bytes()).wrapping_add(if abbreviated {
+        1u64
+    } else {
+        0u64
+    });
+    format!("{:016x}", h)
+}
+
+/// Path of a package's cached packument file.
+pub(crate) fn packument_path(package: &str, abbreviated: bool) -> PathBuf {
+    packument_dir().join(format!("{}.json", packument_key(package, abbreviated)))
+}
+
+
+
+// ── origin policy (shared with content) ─────────────────────────────
+
+/// Whether the local-origin machinery (harvest + durable mirror) is
+/// enabled.  `JHOL_NO_HARVEST=1` turns the whole idea off: no reads
+/// from, and no writes to, the machine's durable caches.
+///
+/// Delegates to [`crate::content`], the single owner of the origin's
+/// policy — metadata and content must agree on when the machine may
+/// be used.
+pub(crate) fn harvest_enabled() -> bool {
+    crate::content::enabled()
+}
+
+/// Cache roots that outlive a single project cache: the login-home
+/// jhol cache (resolved through `getpwuid`, so a temporary `HOME`
+/// used by benches/tests does not blind it) plus any
+/// `JHOL_HARVEST_CACHES` roots.  The current `JHOL_CACHE_DIR` is
+/// excluded — it is the primary read/write target, not a durable
+/// mirror of itself.
+///
+/// Delegates to [`crate::content::durable_roots`]: content and
+/// metadata share one root list, which is what stops "read from
+/// here, write to there".
+pub(crate) fn durable_roots() -> Vec<PathBuf> {
+    crate::content::durable_roots()
+}
+
+/// Copy a packument cache file from a durable jhol root (login-home)
+/// when the current `JHOL_CACHE_DIR` has never seen this package.
+pub(crate) fn harvest_packument_file(package: &str, abbreviated: bool) -> Option<Vec<u8>> {
+    if !harvest_enabled() {
+        return None;
+    }
+    let filename = format!("{}.json", packument_key(package, abbreviated));
+    for root in durable_roots() {
+        let src = root.join("packuments").join(&filename);
+        if let Ok(bytes) = std::fs::read(&src) {
+            if !bytes.is_empty() {
+                if std::env::var("JHOL_DEBUG_HARVEST").is_ok() {
+                    eprintln!("[HARVEST] packument {} <- {}", package, src.display());
+                }
+                return Some(bytes);
+            }
+        }
+    }
+    None
+}
+
+// ── atomic write + compression helpers ──────────────────────────────
+
+/// Write `bytes` to `dst` atomically (temp sibling + rename) so a
+/// concurrent reader can never observe a half-written packument.
+pub(crate) fn write_file_atomically(dst: &Path, bytes: &[u8]) {
+    let Some(parent) = dst.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let tmp = parent.join(format!(
+        ".{}.tmp{}",
+        dst.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("packument"),
+        std::process::id()
+    ));
+    if std::fs::write(&tmp, bytes).is_ok() {
+        let _ = std::fs::rename(&tmp, dst);
+    } else {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// gzip a byte buffer (used for the packument disk cache).
+pub(crate) fn gzip_bytes(data: &[u8]) -> Option<Vec<u8>> {
+    use flate2::write::GzEncoder;
+    use std::io::Write;
+    let mut enc = GzEncoder::new(Vec::new(), flate2::Compression::default());
+    enc.write_all(data).ok()?;
+    enc.finish().ok()
+}
+
+/// gunzip a byte buffer if it is gzip-framed; otherwise return it
+/// unchanged.
+pub(crate) fn gunzip_bytes(data: &[u8]) -> Vec<u8> {
+    if data.len() < 2 || data[0] != 0x1f || data[1] != 0x8b {
+        return data.to_vec();
+    }
+    use std::io::Read;
+    let mut dec = flate2::read::GzDecoder::new(data);
+    let mut out = Vec::with_capacity(data.len() * 4);
+    match dec.read_to_end(&mut out) {
+        Ok(_) => out,
+        Err(_) => data.to_vec(),
+    }
+}
+
+// ── packument cache ─────────────────────────────────────────────────
+
+/// How long a cached packument may be trusted without revalidation.
+///
+/// The cache was previously trusted forever, so a months-old cache
+/// silently resolved stale versions (`axios: ^1.13.0` would keep
+/// resolving whatever was newest when the cache was written — the
+/// same bug class as the bundled-index snapshot, E74).  Past the TTL
+/// the cache is skipped and the request is made conditionally, so the
+/// registry usually answers `304 Not Modified` for a few bytes.
+/// `JHOL_PACKUMENT_TTL_SECS=0` trusts the cache forever (old
+/// behaviour); unset uses the default.  Offline, the cache is never
+/// invalidated: there is nothing to revalidate against, and a stale
+/// answer beats no answer.
+pub(crate) fn packument_fresh(package: &str, abbreviated: bool) -> bool {
+    let p = packument_path(package, abbreviated);
+    if !p.exists() {
+        return false;
+    }
+    if crate::registry::offline_mode() {
+        return true;
+    }
+    let ttl = std::env::var("JHOL_PACKUMENT_TTL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(3600);
+    if ttl == 0 {
+        return true;
+    }
+    match std::fs::metadata(&p).and_then(|m| m.modified()) {
+        Ok(written) => written
+            .elapsed()
+            .map(|age| age.as_secs() < ttl)
+            .unwrap_or(true),
+        Err(_) => false,
+    }
+}
+
+/// Read a package's cached packument, returning `(body, etag)`.
+///
+/// The on-disk format is one header line `<etag>\t<encoding>\n` then
+/// the (possibly gzipped) body.  Legacy files written before gzip
+/// support have just `<etag>\n` or a raw body; both are handled.  A
+/// miss falls through to the durable origin before giving up, so a
+/// fresh project cache dir still reuses metadata the machine already
+/// holds.
+pub(crate) fn read_packument_cache(
+    package: &str,
+    abbreviated: bool,
+) -> (Option<Vec<u8>>, Option<String>) {
+    let body_path = packument_path(package, abbreviated);
+    let raw = match std::fs::read(&body_path) {
+        Ok(d) => d,
+        Err(_) => {
+            // Fair cold benches pin an empty JHOL_CACHE_DIR; still reuse
+            // the login-home packument cache (same durable-root idea as
+            // tarball harvest).
+            if let Some(raw) = harvest_packument_file(package, abbreviated) {
+                if let Some(parent) = body_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(&body_path, &raw);
+                raw
+            } else {
+                return (None, None);
+            }
+        }
+    };
+    let Some(pos) = raw.iter().position(|&b| b == b'\n') else {
+        return (Some(raw), None);
+    };
+    let header = String::from_utf8_lossy(&raw[..pos]).to_string();
+    let body = &raw[pos + 1..];
+    match header.split_once('\t') {
+        Some((etag, enc)) => {
+            let body = if enc.trim() == "gzip" {
+                gunzip_bytes(body)
+            } else {
+                body.to_vec()
+            };
+            let etag = etag.trim().to_string();
+            (Some(body), if etag.is_empty() { None } else { Some(etag) })
+        }
+        None => {
+            let etag = header.trim().to_string();
+            (
+                Some(body.to_vec()),
+                if etag.is_empty() { None } else { Some(etag) },
+            )
+        }
+    }
+}
+
+/// Write a package's packument to the cache and through to the
+/// machine's durable origin.
+///
+/// The body is gzip-compressed first: packuments are JSON and shrink
+/// ~10x (e.g. `next`'s abbreviated packument is 25 MB raw / ~2 MB
+/// gzipped), which keeps the disk cache small.  The write-through is
+/// what closes the "read but never write" gap — without it the durable
+/// store is only ever populated by installs that use the default cache
+/// dir, so every "cold" run re-fetches the same metadata forever.
+pub(crate) fn write_packument_cache(
+    package: &str,
+    abbreviated: bool,
+    body: &[u8],
+    etag: Option<&str>,
+) -> Result<(), String> {
+    let body_path = packument_path(package, abbreviated);
+    if let Some(parent) = body_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let (encoding, payload) = match gzip_bytes(body) {
+        Some(gz) => ("gzip", gz),
+        None => ("identity", body.to_vec()),
+    };
+    let mut out = Vec::with_capacity(payload.len() + 64);
+    out.extend_from_slice(etag.unwrap_or("").as_bytes());
+    out.push(b'\t');
+    out.extend_from_slice(encoding.as_bytes());
+    out.push(b'\n');
+    out.extend_from_slice(&payload);
+    std::fs::write(&body_path, &out).map_err(|e| e.to_string())?;
+    if harvest_enabled() {
+        if let Some(name) = body_path.file_name() {
+            mirror_packument_to_roots(&out, name, &durable_roots());
+        }
+    }
+    Ok(())
+}
+
+/// Pure mirror of a serialized packument cache file into each durable
+/// root (`<root>/packuments/<filename>`).  Split out so it can be
+/// tested without touching the environment or the real login-home
+/// cache.
+pub(crate) fn mirror_packument_to_roots(
+    bytes: &[u8],
+    filename: &std::ffi::OsStr,
+    roots: &[PathBuf],
+) {
+    for root in roots {
+        write_file_atomically(&root.join("packuments").join(filename), bytes);
+    }
+}
+
+// ── resolution records ──────────────────────────────────────────────
+//
+// A resolution record is metadata about *how* a package was resolved:
+// version, timestamp, TTL, deps, provenance sequence. It lived in
+// `grm`; it belongs here, because "what did we resolve" is a fact
+// about the metadata origin, and the origin is the one place that
+// should own the shape of that fact.
+
+/// Where a resolution came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub enum ResolutionSource {
+    #[default]
+    GRM,
+    SoulPath,
+    Cache,
+    Registry,
+}
+
+/// One resolved package, as remembered by the origin.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct ResolutionRecord {
+    pub package_spec: String,
+    pub resolved_version: String,
+    pub id: u64,
+    pub timestamp: u64,
+    pub ttl_secs: u64,
+    pub dependencies: std::collections::HashMap<String, String>,
+    pub platform: Option<String>,
+    pub node_version: Option<String>,
+    pub cached_at: u64,
+    pub hit_count: u64,
+    pub content_hash: crate::mpt_store::ContentHash,
+    pub dependency_hashes: Vec<crate::mpt_store::ContentHash>,
+    pub resolution_hash: crate::mpt_store::ContentHash,
+    pub provenance_sequence: Option<u64>,
+    pub source: ResolutionSource,
+    pub cache_priority: u32,
+}
+
+/// Counters for the resolution memory.
+#[derive(Debug, Clone, Default)]
+pub struct GRMStats {
+    pub total_records: u64,
+    pub total_hits: u64,
+    pub hits: u64,
+    pub misses: u64,
+    pub invalidations: u64,
+    pub unique_packages: u64,
+    pub next_id: u64,
+    pub low_priority_records: u64,
+}
+
+/// Seconds since the Unix epoch.
+pub fn current_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Handle onto the resolution memory.
+pub struct GrmHandle;
+
+impl Default for GrmHandle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GrmHandle {
+    pub fn new() -> Self {
+        Self
+    }
+    pub fn current_timestamp() -> u64 {
+        current_timestamp()
+    }
+}
+
+/// Look up a resolved package in the resolution memory.
+pub fn lookup(spec: &str) -> Option<ResolutionRecord> {
+    crate::lock_free_grm::query_global(spec, None, None)
+}
+
+/// Remember a resolved package.
+pub fn insert(record: ResolutionRecord) {
+    let _ = crate::lock_free_grm::store_global(record);
+}
+
+/// Drop expired records. Currently a no-op — expiry is enforced on read.
+pub fn garbage_collect() {}
+
+// ── append-only install log (IPL provenance) ────────────────────────
+
+/// One entry in the append-only install log.
+///
+/// `prev` is the hash of the previous entry and `hash` is the hash of
+/// this entry over every other field, so the log is a hash chain:
+/// altering any past entry breaks every later entry's `prev`.  That
+/// makes the installed history tamper-evident without trusting any
+/// single file.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct LogEntry {
+    pub seq: u64,
+    pub ts: u64,
+    pub action: String,
+    pub package: String,
+    pub version: String,
+    pub integrity: Option<String>,
+    pub prev: String,
+    pub hash: String,
+}
+
+/// Path of the append-only install log.
+pub fn log_path() -> PathBuf {
+    PathBuf::from(crate::utils::get_cache_dir()).join("install-log.jsonl")
+}
+
+/// Hash a log entry over every field except `hash` itself.
+fn entry_hash(e: &LogEntry) -> String {
+    let mut h = sha2::Sha256::new();
+    use sha2::Digest;
+    h.update(e.seq.to_le_bytes());
+    h.update(e.ts.to_le_bytes());
+    h.update(e.action.as_bytes());
+    h.update(b"|");
+    h.update(e.package.as_bytes());
+    h.update(b"|");
+    h.update(e.version.as_bytes());
+    h.update(b"|");
+    h.update(e.integrity.as_deref().unwrap_or("").as_bytes());
+    h.update(b"|");
+    h.update(e.prev.as_bytes());
+    hex::encode(h.finalize())
+}
+
+/// The hash of the most recent entry in the log at `path` (empty when
+/// the log does not exist yet).
+fn last_hash_at(path: &Path) -> String {
+    let Some(bytes) = std::fs::read(path).ok() else {
+        return String::new();
+    };
+    // The last non-empty line is the head of the chain.
+    let mut last = String::new();
+    for line in bytes.split(|&b| b == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(e) = serde_json::from_slice::<LogEntry>(line) {
+            last = e.hash;
+        }
+    }
+    last
+}
+
+/// Append one entry to the log at `path`, chaining it to the previous
+/// entry.  Returns the entry that was written.
+pub fn log_append_at(
+    path: &Path,
+    seq: u64,
+    action: &str,
+    package: &str,
+    version: &str,
+    integrity: Option<&str>,
+) -> Result<LogEntry, String> {
+    let prev = last_hash_at(path);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut entry = LogEntry {
+        seq,
+        ts,
+        action: action.to_string(),
+        package: package.to_string(),
+        version: version.to_string(),
+        integrity: integrity.map(str::to_string),
+        prev,
+        hash: String::new(),
+    };
+    entry.hash = entry_hash(&entry);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let line = serde_json::to_string(&entry).map_err(|e| e.to_string())?;
+    // Append-only: open in append mode so concurrent writers cannot
+    // truncate the chain, and write the whole line with one call.
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    writeln!(f, "{}", line).map_err(|e| e.to_string())?;
+    Ok(entry)
+}
+
+/// Append one entry to the project's install log.
+pub fn log_append(
+    seq: u64,
+    action: &str,
+    package: &str,
+    version: &str,
+    integrity: Option<&str>,
+) -> Result<LogEntry, String> {
+    log_append_at(&log_path(), seq, action, package, version, integrity)
+}
+
+/// Read the whole install log at `path`, in append order.  A malformed
+/// line is skipped, not fatal: the log is a history, and one corrupt
+/// entry must not make the rest unreadable.
+pub fn log_read_all_at(path: &Path) -> Vec<LogEntry> {
+    let Some(bytes) = std::fs::read(path).ok() else {
+        return Vec::new();
+    };
+    bytes
+        .split(|&b| b == b'\n')
+        .filter(|l| !l.is_empty())
+        .filter_map(|l| serde_json::from_slice::<LogEntry>(l).ok())
+        .collect()
+}
+
+/// Read the project's whole install log, in append order.
+pub fn log_read_all() -> Vec<LogEntry> {
+    log_read_all_at(&log_path())
+}
+
+/// Record a completed install in the provenance log.
+///
+/// One entry per install command: the project's root name and a digest
+/// of the lockfile it produced. Because the log is hash-chained, the
+/// sequence of entries *is* the project's dependency-tree history —
+/// altering any past entry breaks every later entry's `prev`, so the
+/// history is tamper-evident without trusting any single file.
+///
+/// Best-effort: a provenance log that cannot be written must never fail
+/// an install. Callers invoke this after the lockfile is on disk.
+pub fn log_install(lockfile: &Path) {
+    log_install_at(lockfile, &log_path());
+}
+
+/// [`log_install`] against an explicit log path (testable without the
+/// environment).
+pub fn log_install_at(lockfile: &Path, log: &Path) {
+    let Ok(bytes) = std::fs::read(lockfile) else {
+        return;
+    };
+    let digest = {
+        use sha2::Digest;
+        hex::encode(sha2::Sha256::digest(&bytes))
+    };
+    let root = serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(str::to_string))
+        .unwrap_or_default();
+    let seq = log_read_all_at(log).last().map(|e| e.seq + 1).unwrap_or(1);
+    let _ = log_append_at(log, seq, "install", &root, &digest, None);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn packument_key_is_stable_and_distinct() {
+        let a = packument_key("lodash", true);
+        let b = packument_key("lodash", false);
+        let c = packument_key("@scope/lodash", true);
+        assert_eq!(a, packument_key("lodash", true));
+        assert_ne!(a, b, "abbreviated and full are different documents");
+        assert_ne!(a, c, "scoped and unscoped names must not collide");
+        assert_eq!(a.len(), 16, "keys are 16 hex chars (64-bit hash)");
+    }
+
+    #[test]
+    fn gzip_roundtrips_and_passthrough() {
+        // Realistic packument shape, repeated: gzip has ~20 bytes of framing,
+        // so only a payload bigger than that can actually shrink.
+        let mut data = Vec::new();
+        for _ in 0..200 {
+            data.extend_from_slice(b"{\"version\":\"1.0.0\",\"dependencies\":{\"ms\":\"^2.1.3\"}}");
+        }
+        let gz = gzip_bytes(&data).expect("gzip works");
+        assert!(gz.len() < data.len(), "packuments compress");
+        assert_eq!(gunzip_bytes(&gz), data, "gunzip restores the body");
+        // Non-gzip data passes through unchanged.
+        assert_eq!(gunzip_bytes(&data), data);
+        // A too-short buffer is not gzip.
+        assert_eq!(gunzip_bytes(&[0x1f]), vec![0x1f]);
+    }
+
+    #[test]
+    fn install_log_chains_and_is_tamper_evident() {
+        let dir =
+            std::env::temp_dir().join(format!("jhol-origin-{}-{}", std::process::id(), line!()));
+        let _ = fs::remove_dir_all(&dir);
+        let log = dir.join("install-log.jsonl");
+
+        let e1 = log_append_at(&log, 1, "install", "lodash", "4.17.21", None).unwrap();
+        let e2 = log_append_at(&log, 2, "install", "rimraf", "5.0.0", None).unwrap();
+        let e3 = log_append_at(&log, 3, "remove", "rimraf", "5.0.0", None).unwrap();
+
+        assert_eq!(e1.prev, "", "the first entry chains to nothing");
+        assert_eq!(e2.prev, e1.hash, "the second entry chains to the first");
+        assert_eq!(e3.prev, e2.hash, "the third entry chains to the second");
+
+        let read = log_read_all_at(&log);
+        assert_eq!(read.len(), 3);
+        assert_eq!(read[0].package, "lodash");
+        assert_eq!(read[2].action, "remove");
+
+        // Tampering with a past entry breaks the chain: recomputing the
+        // next entry's hash over the altered history no longer matches
+        // the `prev` it recorded.
+        let mut tampered = read.clone();
+        tampered[0].version = "0.0.0".to_string();
+        let rehashed = entry_hash(&tampered[0]);
+        assert_ne!(rehashed, e1.hash, "changing a field changes the hash");
+        // The next entry recorded the *original* hash as its `prev`, so a
+        // recomputation over the tampered history no longer matches the chain.
+        assert_ne!(
+            rehashed, e2.prev,
+            "the recomputed hash no longer matches the chain"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_log_skips_a_corrupt_line() {
+        let dir =
+            std::env::temp_dir().join(format!("jhol-origin-{}-{}", std::process::id(), line!()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("install-log.jsonl");
+        fs::write(&log, b"not json at all\n").unwrap();
+        let e = log_append_at(&log, 1, "install", "ms", "2.1.3", None).unwrap();
+        // The corrupt line is skipped; the good entry is still readable.
+        let read = log_read_all_at(&log);
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].hash, e.hash);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn log_install_records_a_chained_entry_per_install() {
+        let dir =
+            std::env::temp_dir().join(format!("jhol-origin-{}-{}", std::process::id(), line!()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("install-log.jsonl");
+        let lock = dir.join("package-lock.json");
+        fs::write(&lock, br#"{"name":"my-app","lockfileVersion":3}"#).unwrap();
+
+        log_install_at(&lock, &log);
+        log_install_at(&lock, &log); // a second install still chains
+        let read = log_read_all_at(&log);
+        assert_eq!(read.len(), 2, "one entry per install");
+        assert_eq!(read[0].package, "my-app");
+        assert_eq!(read[0].action, "install");
+        assert_eq!(read[0].seq, 1);
+        assert_eq!(read[1].seq, 2);
+        assert_eq!(
+            read[1].prev, read[0].hash,
+            "each install chains to the last"
+        );
+        assert_eq!(
+            read[0].version.len(),
+            64,
+            "version is the lockfile sha256 hex"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

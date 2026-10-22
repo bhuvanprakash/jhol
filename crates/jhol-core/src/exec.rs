@@ -38,12 +38,16 @@ pub fn exec_binary(
 ) -> Result<std::process::ExitStatus, String> {
     #[cfg(unix)]
     {
-        let status = std::process::Command::new(binary_path)
+        let mut command = std::process::Command::new(binary_path);
+        for (k, v) in crate::utils::hoisted_fallback_env(cwd) {
+            command.env(k, v);
+        }
+        let status = command
             .args(args)
             .current_dir(cwd)
             .status()
             .map_err(|e| format!("Failed to execute: {}", e))?;
-        return Ok(status);
+        Ok(status)
     }
 
     #[cfg(windows)]
@@ -52,7 +56,11 @@ pub fn exec_binary(
         if ext == Some("cmd") || ext == Some("bat") {
             let mut cmd_args = vec!["/c".to_string(), binary_path.to_string_lossy().into_owned()];
             cmd_args.extend(args.iter().cloned());
-            let status = std::process::Command::new("cmd")
+            let mut command = std::process::Command::new("cmd");
+            for (k, v) in crate::utils::hoisted_fallback_env(cwd) {
+                command.env(k, v);
+            }
+            let status = command
                 .args(&cmd_args)
                 .current_dir(cwd)
                 .status()

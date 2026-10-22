@@ -34,6 +34,12 @@ pub struct Support {
     pub exponents: HashSet<Vec<usize>>,
 }
 
+impl Default for Support {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Support {
     pub fn new() -> Self {
         Self {
@@ -151,7 +157,7 @@ fn augment<F: Fn(usize, usize) -> bool>(
         if !visited[v] && has_edge(u, v) {
             visited[v] = true;
             let can_take = match_right[v].is_none()
-                || match_right[v].map_or(false, |u2| {
+                || match_right[v].is_some_and(|u2| {
                     augment(has_edge, u2, match_left, match_right, visited, n_right)
                 });
             if can_take {

@@ -24,6 +24,12 @@ pub struct SpectralSparsifier {
     node_idx: std::collections::HashMap<String, usize>,
 }
 
+impl Default for SpectralSparsifier {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SpectralSparsifier {
     pub fn new() -> Self {
         Self {

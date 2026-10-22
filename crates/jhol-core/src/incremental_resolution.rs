@@ -1,7 +1,8 @@
-//! Phase 13: Incremental Resolution with Dependency Fingerprinting
+//! Red-Green Dependency Fingerprinting (Fast Incremental Re-Install)
 //!
-//! Uses red-green algorithm from Rust compiler's incremental compilation.
-//! Only re-resolves changed subgraphs - 90% faster re-installs.
+//! Applies the rustc-style red-green algorithm to detect unchanged subgraphs via 128-bit
+//! SHA-256 fingerprints. Unchanged subtrees are colored Green and bypass the solver entirely.
+//! Fine-grained graph differential mutations live in nested `incremental_resolver` (was standalone file).
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -56,6 +57,12 @@ pub struct IncrementalResolver {
     changed_packages: Vec<String>,
 }
 
+impl Default for IncrementalResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IncrementalResolver {
     pub fn new() -> Self {
         Self {
@@ -75,6 +82,44 @@ impl IncrementalResolver {
                 node.color = NodeColor::Red;
             }
         }
+    }
+
+    /// Mark packages as changed using Cellular Sheaf Laplacian perturbation support $\operatorname{supp}(\Delta L_{\mathcal{F}})$.
+    /// Uses Hodge theory to identify the exact subcomplex perturbed by the changed packages
+    /// and their algebraic connectivity / spectral gap $\lambda_2$.
+    pub fn mark_changed_topological(
+        &mut self,
+        packages: &[String],
+        spectral_gap: f64,
+    ) -> std::collections::HashSet<String> {
+        let mut adj: HashMap<String, Vec<String>> = HashMap::new();
+        let mut rev_adj: HashMap<String, Vec<String>> = HashMap::new();
+
+        for (node_key, node) in &self.graph {
+            adj.insert(node_key.clone(), node.dependencies.clone());
+            for dep in &node.dependencies {
+                rev_adj
+                    .entry(dep.clone())
+                    .or_default()
+                    .push(node_key.clone());
+            }
+        }
+
+        let affected = crate::jagr_infinite::sheaf_laplacian::compute_perturbation_support(
+            packages,
+            &adj,
+            &rev_adj,
+            spectral_gap,
+        );
+
+        for pkg in &affected {
+            if let Some(node) = self.graph.get_mut(pkg) {
+                node.color = NodeColor::Red;
+            }
+        }
+
+        self.changed_packages = affected.iter().cloned().collect();
+        affected
     }
 
     /// Try to mark node as green (unchanged)
@@ -237,7 +282,7 @@ mod tests {
             .unwrap();
 
         // Mark react as changed
-        resolver.mark_changed(&vec!["react@^18.0.0".to_string()]);
+        resolver.mark_changed(&["react@^18.0.0".to_string()]);
 
         // React should be red
         let react_node = resolver.graph.get("react@^18.0.0").unwrap();
@@ -246,5 +291,111 @@ mod tests {
         // react-dom should still be green (not affected)
         let dom_node = resolver.graph.get("react-dom@^18.0.0").unwrap();
         assert_eq!(dom_node.color, NodeColor::Green);
+    }
+
+    #[test]
+    fn test_topological_red_green_marking() {
+        let mut resolver = IncrementalResolver::new();
+        resolver.resolve_incremental("react", "^18.0.0").unwrap();
+        resolver
+            .resolve_incremental("scheduler", "^0.23.0")
+            .unwrap();
+
+        // Connect react -> scheduler
+        if let Some(react_node) = resolver.graph.get_mut("react@^18.0.0") {
+            react_node
+                .dependencies
+                .push("scheduler@^0.23.0".to_string());
+        }
+
+        // With high spectral gap, marking scheduler as changed should propagate along incidence to react
+        let affected = resolver.mark_changed_topological(&["scheduler@^0.23.0".to_string()], 0.75);
+        assert!(affected.contains("scheduler@^0.23.0"));
+        assert!(affected.contains("react@^18.0.0"));
+
+        let sched_node = resolver.graph.get("scheduler@^0.23.0").unwrap();
+        assert_eq!(sched_node.color, NodeColor::Red);
+
+        let react_node = resolver.graph.get("react@^18.0.0").unwrap();
+        assert_eq!(react_node.color, NodeColor::Red);
+    }
+}
+
+/// Differential graph mutation engine (was `incremental_resolver.rs`).
+pub mod incremental_resolver {
+    use std::collections::HashMap;
+
+    #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+    pub struct PackageNode {
+        pub name: String,
+        pub version: String,
+        pub dependencies: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+    pub enum GraphChange {
+        AddPackage(PackageNode),
+        RemovePackage(String),
+        UpdateVersion(String, String),
+    }
+
+    pub struct IncrementalResolver {
+        packages: HashMap<String, PackageNode>,
+    }
+
+    impl Default for IncrementalResolver {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl IncrementalResolver {
+        pub fn new() -> Self {
+            Self {
+                packages: HashMap::new(),
+            }
+        }
+
+        pub fn add_package(&mut self, package: PackageNode) {
+            self.packages.insert(package.name.clone(), package);
+        }
+
+        pub fn update_package(&mut self, name: &str, new_version: &str) {
+            if let Some(pkg) = self.packages.get_mut(name) {
+                pkg.version = new_version.to_string();
+            }
+        }
+
+        pub fn remove_package(&mut self, name: &str) {
+            self.packages.remove(name);
+        }
+
+        pub fn get_resolved(&self) -> Vec<PackageNode> {
+            self.packages.values().cloned().collect()
+        }
+
+        pub fn step(&mut self) -> bool {
+            false
+        }
+    }
+
+    use parking_lot::RwLock;
+    use std::sync::OnceLock;
+
+    fn global_resolver() -> &'static RwLock<IncrementalResolver> {
+        static INSTANCE: OnceLock<RwLock<IncrementalResolver>> = OnceLock::new();
+        INSTANCE.get_or_init(|| RwLock::new(IncrementalResolver::new()))
+    }
+
+    pub fn add_package_global(package: PackageNode) {
+        global_resolver().write().add_package(package);
+    }
+
+    pub fn update_package_global(name: &str, version: &str) {
+        global_resolver().write().update_package(name, version);
+    }
+
+    pub fn get_resolved_global() -> Vec<PackageNode> {
+        global_resolver().read().get_resolved()
     }
 }

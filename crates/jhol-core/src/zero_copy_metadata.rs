@@ -54,31 +54,56 @@ pub struct MmapMetadataStore {
 
 fn default_store_path() -> PathBuf {
     let cache = crate::utils::get_cache_dir();
-    PathBuf::from(cache).join("zero-copy").join("store.meta")
+    let p = PathBuf::from(&cache).join("zero-copy").join("store.meta");
+    if let Some(parent) = p.parent() {
+        if fs::create_dir_all(parent).is_err() {
+            let tmp = std::env::temp_dir()
+                .join("jhol-zero-copy")
+                .join("store.meta");
+            if let Some(tmp_parent) = tmp.parent() {
+                let _ = fs::create_dir_all(tmp_parent);
+            }
+            return tmp;
+        }
+    }
+    p
 }
 
 impl MmapMetadataStore {
     pub fn new(store_path: PathBuf) -> Result<Self, String> {
-        if let Some(parent) = store_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("Failed to create store dir: {}", e))?;
-        }
-        let index = Self::load_index(&store_path);
-        let mmap = if store_path.exists()
-            && fs::metadata(&store_path)
+        let actual_path = if let Some(parent) = store_path.parent() {
+            if fs::create_dir_all(parent).is_err() {
+                let tmp = std::env::temp_dir()
+                    .join("jhol-zero-copy")
+                    .join("store.meta");
+                if let Some(tmp_parent) = tmp.parent() {
+                    fs::create_dir_all(tmp_parent)
+                        .map_err(|e| format!("Failed to create store dir: {}", e))?;
+                }
+                tmp
+            } else {
+                store_path
+            }
+        } else {
+            store_path
+        };
+        let index = Self::load_index(&actual_path);
+        let mmap = if actual_path.exists()
+            && fs::metadata(&actual_path)
                 .map(|m| m.len() > 0)
                 .unwrap_or(false)
         {
             let file =
-                File::open(&store_path).map_err(|e| format!("Failed to open store: {}", e))?;
+                File::open(&actual_path).map_err(|e| format!("Failed to open store: {}", e))?;
             let mmap =
                 unsafe { Mmap::map(&file) }.map_err(|e| format!("Failed to mmap store: {}", e))?;
             Some(mmap)
         } else {
-            File::create(&store_path).ok();
+            File::create(&actual_path).ok();
             None
         };
         Ok(Self {
-            store_path,
+            store_path: actual_path,
             mmap,
             index,
         })
@@ -118,11 +143,30 @@ impl MmapMetadataStore {
     pub fn insert(&mut self, name: &str, metadata: &PackageMetadata) -> Result<(), String> {
         let serialized = bincode::serialize(metadata)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-        let mut file = OpenOptions::new()
+        if let Some(parent) = self.store_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let mut file = match OpenOptions::new()
             .append(true)
             .create(true)
             .open(&self.store_path)
-            .map_err(|e| format!("Failed to open store: {}", e))?;
+        {
+            Ok(f) => f,
+            Err(_) => {
+                let tmp = std::env::temp_dir()
+                    .join("jhol-zero-copy")
+                    .join("store.meta");
+                if let Some(parent) = tmp.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                self.store_path = tmp;
+                OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(&self.store_path)
+                    .map_err(|e| format!("Failed to open store: {}", e))?
+            }
+        };
         let offset = file.metadata().map(|m| m.len()).unwrap_or(0);
         file.write_all(&serialized)
             .map_err(|e| format!("Failed to write: {}", e))?;
@@ -186,7 +230,9 @@ impl MmapMetadataStore {
             integrity: integrity.map(|s| s.to_string()),
             resolved_url: Some(tarball_url.to_string()),
         };
-        let _ = store.insert(name, &meta);
+        if let Err(e) = store.insert(name, &meta) {
+            eprintln!("store_packument insert error: {}", e);
+        }
     }
 
     /// Quick lookup: get cached packument deps from mmap.
@@ -375,5 +421,47 @@ mod tests {
             retrieved.dist.tarball_url,
             "https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz"
         );
+    }
+}
+
+#[cfg(test)]
+mod zero_copy_live_proof {
+    use super::*;
+
+    #[test]
+    fn store_packument_then_lookup_roundtrips_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_path = dir.path().join("zero-copy").join("store.meta");
+        // Mimic the write path used by registry's fetch (store_packument into
+        // the GLOBAL store) but against a known path, then read it back fresh.
+        let mut store = MmapMetadataStore::new(store_path.clone()).expect("new");
+        let meta = PackageMetadata {
+            name: "left-pad".to_string(),
+            version: "1.3.0".to_string(),
+            dependencies: vec![],
+            optional_dependencies: vec![],
+            peer_dependencies: vec![],
+            dev_dependencies: vec![],
+            dist: DistInfo {
+                tarball_url: "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz".to_string(),
+                shasum: String::new(),
+                integrity: Some("sha512-x".to_string()),
+                file_count: None,
+                unpacked_size: None,
+            },
+            bin: None,
+            scripts: vec![],
+            integrity: Some("sha512-x".to_string()),
+            resolved_url: None,
+        };
+        store.insert("left-pad", &meta).expect("insert");
+        store.get("left-pad").expect("read-back") ;
+        drop(store);
+        // Fresh process view: reload from disk (the .idx + .meta pair).
+        let reloaded = MmapMetadataStore::new(store_path.clone()).expect("reload");
+        let found = reloaded.get("left-pad");
+        assert!(found.is_some(), "store must survive reload — write-only otherwise");
+        assert_eq!(found.unwrap().version, "1.3.0");
+        assert!(store_path.exists(), "store.meta must exist on disk");
     }
 }

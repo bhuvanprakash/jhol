@@ -273,7 +273,7 @@ fn classify_package_for_dssc(name: &str) -> (u8, u32, u32) {
         "is-core-module",
         "supports-preserve-symlinks-flag",
     ];
-    let scoped_stable = [
+    let _scoped_stable = [
         "@babel/core",
         "@babel/preset-env",
         "@babel/preset-react",
@@ -382,7 +382,7 @@ fn generate_resolution_seed(binary_dir: &Path) {
     entries.dedup();
 
     let mut rust_code = String::new();
-    rust_code.push_str("pub fn load_seed_entries(store: &mut LatticeStore) {\n");
+    rust_code.push_str("fn load_seed_entries(store: &mut LatticeStore) {\n");
     for (name, version) in &entries {
         let escaped_name = name.replace('\\', "\\\\").replace('"', "\\\"");
         let escaped_version = version.replace('\\', "\\\\").replace('"', "\\\"");
@@ -406,7 +406,7 @@ fn generate_stub_resolution_seed() {
 
     let rust_code = r#"
 // Stub: no binary-packages/index.json found at build time.
-pub fn load_seed_entries(_store: &mut LatticeStore) {}
+fn load_seed_entries(_store: &mut LatticeStore) {}
 "#;
 
     fs::write(&dest_path, rust_code).expect("Failed to write stub resolution seed data");

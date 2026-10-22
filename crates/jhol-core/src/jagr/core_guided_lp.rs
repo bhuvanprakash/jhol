@@ -198,6 +198,12 @@ pub enum LPComparison {
     Eq, // =
 }
 
+impl Default for LP {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LP {
     pub fn new() -> Self {
         Self {
@@ -468,10 +474,11 @@ fn pivot_simplex(
                 if ratio < min_ratio - 1e-12 {
                     min_ratio = ratio;
                     leaving = i;
-                } else if (ratio - min_ratio).abs() < 1e-12 && leaving < m {
-                    if basis[i] > basis[leaving] {
-                        leaving = i;
-                    }
+                } else if (ratio - min_ratio).abs() < 1e-12
+                    && leaving < m
+                    && basis[i] > basis[leaving]
+                {
+                    leaving = i;
                 }
             }
         }
@@ -696,7 +703,7 @@ impl OL3PSolver {
         }
 
         if core_indices.is_empty() {
-            core_indices = self.formula.soft_clauses.iter().copied().collect();
+            core_indices = self.formula.soft_clauses.to_vec();
         }
 
         Core {
@@ -987,7 +994,7 @@ mod tests {
         lp.set_objective(0, 1.0);
         lp.add_constraint(vec![1.0], LPComparison::Le, 5.0);
 
-        let (val, sol) = lp.solve();
+        let (_val, sol) = lp.solve();
         assert_eq!(sol.len(), 1);
     }
 }

@@ -191,9 +191,9 @@ fn intersect_sheaves(sheaf1: &TropicalSheaf, sheaf2: &TropicalSheaf) -> Tropical
     }
     for ((v1, v2), rm2) in &sheaf2.restrictions {
         if let (Some(Some(n1)), Some(Some(n2))) = (v2_to_new.get(*v1), v2_to_new.get(*v2)) {
-            if !restrictions.contains_key(&(*n1, *n2)) {
-                restrictions.insert((*n1, *n2), rm2.clone());
-            }
+            restrictions
+                .entry((*n1, *n2))
+                .or_insert_with(|| rm2.clone());
         }
     }
 
@@ -328,7 +328,7 @@ use std::collections::HashMap;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jagr::tropical_math::{MaxAtom, MaxAtomSystem, Tropical};
+    use crate::jagr::tropical_math::{MaxAtom, MaxAtomSystem};
     use crate::jagr::tropical_polyhedron::TropicalPolyhedron;
     use crate::jagr::tropical_sheaf::build_tropical_sheaf;
 

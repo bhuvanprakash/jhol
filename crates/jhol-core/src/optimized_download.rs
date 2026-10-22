@@ -5,9 +5,9 @@
 //! 2. Binary packages (fast - pre-built, smaller)
 //! 3. Regular download (slowest - from npm registry)
 
-use crate::global_cache_2::GlobalCache2;
+use crate::global_cache::GlobalCache;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Optimized download that checks caches first
 pub fn download_optimized(
@@ -16,7 +16,7 @@ pub fn download_optimized(
     url: &str,
     integrity: Option<&str>,
     cache_dir: &Path,
-    global_cache: &mut GlobalCache2,
+    global_cache: &GlobalCache,
     binary_packages_dir: Option<&Path>,
 ) -> Result<Vec<u8>, String> {
     // Priority 1: Check global cache
@@ -28,7 +28,7 @@ pub fn download_optimized(
     if let Some(bin_dir) = binary_packages_dir {
         if let Some(data) = load_binary_package(bin_dir, package, version)? {
             // Save to global cache for next time
-            let _ = global_cache.add(package, version, &data, vec![]);
+            let _ = global_cache.add_with_deps(package, version, &data, vec![]);
             return Ok(data);
         }
     }
@@ -48,7 +48,7 @@ pub fn download_optimized(
         fs::read(&store_path).map_err(|e| format!("Failed to read downloaded file: {}", e))?;
 
     // Save to global cache for next time
-    let _ = global_cache.add(package, version, &data, vec![]);
+    let _ = global_cache.add_with_deps(package, version, &data, vec![]);
 
     Ok(data)
 }

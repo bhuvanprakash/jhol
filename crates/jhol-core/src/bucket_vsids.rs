@@ -9,13 +9,14 @@
 //! approximate VSIDS is sufficient and much faster.
 
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 /// Variable with VSIDS activity score
 #[derive(Clone, Debug)]
 struct VsidsVariable {
     package: String,
     activity: f64,
+    #[allow(dead_code)]
     decision_level: usize,
 }
 
@@ -147,15 +148,47 @@ impl BucketVsids {
 
     /// Add a new variable (package) to the heuristic
     pub fn add_variable(&mut self, package: &str) {
+        self.add_variable_with_curvature(package, 0);
+    }
+
+    /// Add a new variable (package) seeded with discrete Forman-Ricci curvature.
+    /// Negative curvature Ric(u) < 0 indicates topological bottleneck / choke point,
+    /// so the variable is initialized in a higher activity bucket for early decision.
+    pub fn add_variable_with_curvature(&mut self, package: &str, ricci_curvature: i32) {
+        let initial_activity = if ricci_curvature < 0 {
+            // Negative curvature gets boosted activity score
+            (ricci_curvature.abs() as f64) * 2.5
+        } else {
+            0.0
+        };
+
         let var = VsidsVariable {
             package: package.to_string(),
-            activity: 0.0,
+            activity: initial_activity,
             decision_level: 0,
         };
 
-        // Add to lowest bucket
-        self.buckets[0].push(var);
-        self.package_to_bucket.insert(package.to_string(), 0);
+        // Find appropriate initial bucket
+        let mut target_bucket = 0;
+        for (i, bucket) in self.buckets.iter().enumerate() {
+            if initial_activity >= bucket.min_activity && initial_activity < bucket.max_activity {
+                target_bucket = i;
+                break;
+            }
+        }
+
+        self.buckets[target_bucket].push(var);
+        self.package_to_bucket
+            .insert(package.to_string(), target_bucket);
+    }
+
+    /// Batch apply discrete Forman-Ricci curvature heuristics across all packages.
+    pub fn apply_curvature_heuristics(&mut self, package_curvatures: &HashMap<String, i32>) {
+        for (pkg, &curv) in package_curvatures {
+            if curv < 0 {
+                self.bump_activity(pkg, (curv.abs() as f64) * 2.5);
+            }
+        }
     }
 
     /// Bump activity of a variable (called when variable appears in conflict)
@@ -275,5 +308,18 @@ mod tests {
         // Activity should be scaled
         let decayed_activity = vsids.get_activity("pkg-a");
         assert!(decayed_activity <= initial_activity);
+    }
+
+    #[test]
+    fn test_bucket_vsids_curvature() {
+        let mut vsids = BucketVsids::new();
+
+        // pkg-bottleneck has negative Ricci curvature = -12
+        vsids.add_variable_with_curvature("pkg-leaf", 2);
+        vsids.add_variable_with_curvature("pkg-bottleneck", -12);
+
+        // pkg-bottleneck should have higher activity and be selected first
+        let selected = vsids.select_variable();
+        assert_eq!(selected, Some("pkg-bottleneck".to_string()));
     }
 }

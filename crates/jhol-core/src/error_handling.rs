@@ -306,6 +306,12 @@ pub struct ErrorHandler {
     enable_logging: bool,
 }
 
+impl Default for ErrorHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ErrorHandler {
     pub fn new() -> Self {
         Self {
@@ -602,7 +608,7 @@ mod tests {
         logger.add_user_action("install");
 
         let duration = logger.finish();
-        assert!(duration >= 0);
+        assert!(duration < 60_000);
     }
 
     #[test]

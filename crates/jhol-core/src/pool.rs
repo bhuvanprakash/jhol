@@ -1,7 +1,7 @@
 //! Jhol global thread pool — persistent rayon worker pool for all parallel work.
 //!
 //! Uses OnceLock so the pool is created once and reused across all install calls.
-//! Zero spawn overhead per operation. Pool has 64 threads. Jobs smaller than
+//! No pool construction per operation. Pool size is bounded by `io_pool_threads`. Jobs smaller than
 //! `sequential_threshold` run on the main thread to avoid pool contention.
 //!
 //! All module-local parallelism flows through this pool:
@@ -13,13 +13,30 @@
 use rayon::ThreadPool;
 use std::sync::OnceLock;
 
-/// Global thread pool — 64 persistent threads, zero spawn overhead per job.
+/// Shared bounded IO workers; default Rayon metadata discovery remains separate.
 /// Created on first use and reused for the lifetime of the process.
-fn global_pool() -> &'static ThreadPool {
+
+/// Thread count for the shared IO pool: `4 x cores`, clamped to `2..=32`.
+///
+/// NOTE: lowering this (e.g. to 8) together with the HTTP bounds deadlocked
+/// plain installs — the fetcher parks with the pool saturated — so it is left at
+/// the original sizing. A concurrency reduction here must be validated with a
+/// real `jhol install` before it ships.
+pub fn io_pool_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| (n.get() * 4).clamp(2, 32))
+        .unwrap_or(8)
+}
+
+pub(crate) fn global_pool() -> &'static ThreadPool {
     static POOL: OnceLock<ThreadPool> = OnceLock::new();
     POOL.get_or_init(|| {
         rayon::ThreadPoolBuilder::new()
-            .num_threads(64)
+            // Bound by machine size: a hard 64 threads times several concurrent
+            // installs oversubscribes a small laptop (10 cores / 6 GB here) and
+            // makes installs stall instead of finish. 4x cores, capped at 32,
+            // keeps the IO pool useful for latency-bound work without thrashing.
+            .num_threads(io_pool_threads())
             .thread_name(|i| format!("jhol-worker-{}", i))
             .build()
             .expect("jhol global thread pool: build failed")

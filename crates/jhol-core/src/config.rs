@@ -92,13 +92,10 @@ pub fn load_jholrc_registry(dir: &Path) -> Option<JholrcRegistryConfig> {
     ];
 
     // Find first existing candidate and its mtime
-    let (path, mtime) = match candidates.iter().find_map(|p| {
+    let (path, mtime) = candidates.iter().find_map(|p| {
         let m = std::fs::metadata(p).ok()?.modified().ok()?;
         Some((p.clone(), m))
-    }) {
-        Some(v) => v,
-        None => return None,
-    };
+    })?;
 
     // Check cache
     if let Ok(guard) = cache.read() {
@@ -465,8 +462,8 @@ fn load_config_cached(dir: &Path) -> Config {
     ];
     let latest_mtime = candidates
         .iter()
-        .filter_map(|p| p.is_file().then(|| p.metadata().ok()?.modified().ok()))
-        .flatten()
+        .filter(|&p| p.is_file())
+        .filter_map(|p| p.metadata().ok()?.modified().ok())
         .max();
 
     // Read lock — if cache is fresh, return cached copy
@@ -513,7 +510,7 @@ fn apply_env_overrides(cfg: &mut Config, overrides: &serde_json::Value) {
         cfg.backend = match b {
             "bun" => Some(Backend::Bun),
             "npm" => Some(Backend::Npm),
-            _ => cfg.backend.clone(),
+            _ => cfg.backend,
         };
     }
     // install sub-object

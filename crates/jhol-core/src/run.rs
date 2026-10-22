@@ -72,7 +72,11 @@ pub fn run_script(
     #[cfg(windows)]
     let (shell, shell_arg, script_arg) = { ("cmd".to_string(), "/c", script_cmd) };
 
-    let status = std::process::Command::new(&shell)
+    let mut command = std::process::Command::new(&shell);
+    for (k, v) in crate::utils::hoisted_fallback_env(cwd) {
+        command.env(k, v);
+    }
+    let status = command
         .arg(shell_arg)
         .arg(script_arg)
         .current_dir(cwd)

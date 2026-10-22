@@ -119,7 +119,7 @@ impl MPTStore {
         Ok(self.entries.get(package).cloned())
     }
     pub fn store_resolution_graph(&mut self, graph: &ResolvedGraph) -> Result<String, String> {
-        let hash = ContentHash::new(format!("{}", graph.graph_fingerprint).as_bytes())
+        let hash = ContentHash::new(graph.graph_fingerprint.to_string().as_bytes())
             .as_str()
             .to_string();
         self.graphs.insert(hash.clone(), graph.clone());
@@ -254,10 +254,10 @@ fn test_mpt_deduplication() {
         depth: 0,
     };
 
-    let hash1 = store
+    let _hash1 = store
         .insert(&PackageRef::new("lodash", Some("4.17.20")), vec![], node1)
         .unwrap();
-    let hash2 = store
+    let _hash2 = store
         .insert(&PackageRef::new("lodash", Some("4.17.21")), vec![], node2)
         .unwrap();
 

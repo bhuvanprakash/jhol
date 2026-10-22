@@ -255,7 +255,7 @@ mod tests {
         index.add_package(pkg);
 
         assert!(index.contains("test-pkg"));
-        assert!(index.len() >= 1);
+        assert!(!index.is_empty());
 
         let found = index.lookup("test-pkg", "^1.0.0").unwrap();
         assert_eq!(found.name, "test-pkg");

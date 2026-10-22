@@ -5,16 +5,19 @@
 
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
 use dashmap::DashMap;
 use sha2::{Digest, Sha256};
-use tokio::sync::Mutex as TokioMutex;
 
-use crate::utils;
+/// Standard base64 engine (the free `base64::encode` fn is deprecated).
+const B64: base64::engine::general_purpose::GeneralPurpose =
+    base64::engine::general_purpose::STANDARD;
+use tokio::sync::Mutex as TokioMutex;
 
 /// Configuration for Content-Addressable Store
 #[derive(Clone, Debug)]
@@ -173,7 +176,7 @@ impl ContentAddressableStore {
             .map_err(|e| format!("Failed to finalize store: {}", e))?;
 
         // Compute integrity hash
-        let integrity = format!("sha256-{}", base64::encode(Sha256::digest(content)));
+        let integrity = format!("sha256-{}", B64.encode(Sha256::digest(content)));
 
         // Create entry
         let entry = StoreEntry {
@@ -361,9 +364,8 @@ impl ContentAddressableStore {
         // Try reflink (platform-specific)
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
-            match reflink_copy::reflink(src, dest) {
-                Ok(()) => return true,
-                Err(_) => {}
+            if let Ok(()) = reflink_copy::reflink(src, dest) {
+                return true;
             }
         }
 
@@ -422,7 +424,7 @@ impl ContentAddressableStore {
             .collect();
 
         // Sort by last access time (oldest first)
-        entries_to_evict.sort_by(|a, b| a.1.cmp(&b.1));
+        entries_to_evict.sort_by_key(|a| a.1);
 
         // Evict until under limit
         let mut evicted_size = 0u64;
@@ -587,7 +589,7 @@ fn compute_hash(content: &[u8]) -> String {
 /// Verify content integrity
 fn verify_integrity(content: &[u8], expected_integrity: &str) -> bool {
     let hash = Sha256::digest(content);
-    let computed = format!("sha256-{}", base64::encode(hash));
+    let computed = format!("sha256-{}", B64.encode(hash));
     computed == expected_integrity
 }
 
@@ -632,7 +634,7 @@ mod tests {
         let cas = ContentAddressableStore::new(temp_dir.path().to_path_buf());
 
         let content = b"package content";
-        let hash = cas
+        let _hash = cas
             .store_package("test-pkg", "1.0.0", content, None)
             .await
             .unwrap();

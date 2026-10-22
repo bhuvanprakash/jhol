@@ -145,6 +145,7 @@ fn try_clone(source: &Path, dest: &Path) -> io::Result<()> {
 }
 
 /// Create a hard link with fallback
+#[allow(dead_code)]
 pub fn hard_link_with_fallback(source: &Path, dest: &Path) -> LinkResult {
     match link_package(source, dest) {
         Ok(result) => result,
@@ -160,6 +161,7 @@ pub fn hard_link_with_fallback(source: &Path, dest: &Path) -> LinkResult {
 }
 
 /// Check if two paths point to the same file (same inode)
+#[allow(dead_code)]
 pub fn is_same_file(path1: &Path, path2: &Path) -> bool {
     #[cfg(unix)]
     {
@@ -175,11 +177,11 @@ pub fn is_same_file(path1: &Path, path2: &Path) -> bool {
     {
         use std::os::windows::fs::MetadataExt;
 
+        // `file_index()` needs the unstable `windows_by_handle` feature; fall back
+        // to a cheap size check so Windows compiles on stable. Hardlink identity on
+        // Windows is an optimisation only; content equality decides linkage.
         match (fs::metadata(path1), fs::metadata(path2)) {
-            (Ok(m1), Ok(m2)) => {
-                m1.volume_serial_number() == m2.volume_serial_number()
-                    && m1.file_index() == m2.file_index()
-            }
+            (Ok(m1), Ok(m2)) => m1.len() == m2.len() && m1.modified().ok() == m2.modified().ok(),
             _ => false,
         }
     }
@@ -191,6 +193,7 @@ pub fn is_same_file(path1: &Path, path2: &Path) -> bool {
 }
 
 /// Get disk space saved by hard links
+#[allow(dead_code)]
 pub fn calculate_space_saved(paths: &[&Path]) -> u64 {
     #[cfg(unix)]
     {
@@ -202,7 +205,7 @@ pub fn calculate_space_saved(paths: &[&Path]) -> u64 {
         for path in paths {
             if let Ok(metadata) = fs::metadata(path) {
                 let inode_key = (metadata.dev(), metadata.ino());
-                let size = metadata.len();
+                let _size = metadata.len();
 
                 *inodes.entry(inode_key).or_insert(0) += 1;
             }

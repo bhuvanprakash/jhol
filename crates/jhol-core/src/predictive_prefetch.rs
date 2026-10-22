@@ -18,6 +18,12 @@ pub struct MarkovPredictor {
     observations: HashMap<(String, String), u64>,
 }
 
+impl Default for MarkovPredictor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MarkovPredictor {
     pub fn new() -> Self {
         Self {
@@ -32,7 +38,7 @@ impl MarkovPredictor {
 
         self.transitions
             .entry(key.clone())
-            .or_insert_with(HashMap::new)
+            .or_default()
             .entry(next_pkg.to_string())
             .and_modify(|count| *count += 1.0)
             .or_insert(1.0);
@@ -83,6 +89,48 @@ impl MarkovPredictor {
         }
     }
 
+    /// Predict next packages with discrete Forman-Ricci curvature bottleneck weighting:
+    /// Score(p) = P(p | history) * exp(2.5 * |min(0, Ric(p))| / max(1, |Ric_min|))
+    /// Packages located at geometric bottlenecks are prioritized for background pre-fetching.
+    pub fn predict_next_with_ricci(
+        &self,
+        history: &[String],
+        ricci_curvatures: Option<&HashMap<String, i32>>,
+    ) -> Vec<(String, f64)> {
+        let mut predictions = self.predict_next(history);
+        if let Some(curvatures) = ricci_curvatures {
+            let min_curv = curvatures
+                .values()
+                .copied()
+                .min()
+                .unwrap_or(0)
+                .min(0)
+                .abs()
+                .max(1) as f64;
+            for (pkg, prob) in &mut predictions {
+                if let Some(&curv) = curvatures.get(pkg) {
+                    if curv < 0 {
+                        let normalized_bottleneck = (curv.abs() as f64) / min_curv;
+                        let weight = (2.5 * normalized_bottleneck).exp();
+                        *prob *= weight;
+                    }
+                }
+            }
+            predictions.sort_by(|a, b| {
+                if a.1.is_nan() && b.1.is_nan() {
+                    std::cmp::Ordering::Equal
+                } else if a.1.is_nan() {
+                    std::cmp::Ordering::Greater
+                } else if b.1.is_nan() {
+                    std::cmp::Ordering::Less
+                } else {
+                    b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                }
+            });
+        }
+        predictions
+    }
+
     /// Load predictor from disk
     pub fn load(path: &PathBuf) -> Result<Self, String> {
         if !path.exists() {
@@ -124,10 +172,7 @@ impl MarkovPredictor {
     /// Merge with another predictor (for federated learning)
     pub fn merge(&mut self, other: &MarkovPredictor) {
         for (key, probs) in &other.transitions {
-            let entry = self
-                .transitions
-                .entry(key.clone())
-                .or_insert_with(HashMap::new);
+            let entry = self.transitions.entry(key.clone()).or_default();
             for (pkg, &prob) in probs {
                 entry
                     .entry(pkg.clone())
@@ -256,5 +301,22 @@ mod tests {
 
         let loaded = MarkovPredictor::load(&path).unwrap();
         assert_eq!(loaded.transitions.len(), predictor.transitions.len());
+    }
+
+    #[test]
+    fn test_predict_next_with_ricci() {
+        let mut predictor = MarkovPredictor::new();
+        predictor.observe("react", "react-dom", "pkg-a");
+        predictor.observe("react", "react-dom", "pkg-bottleneck");
+
+        let history = vec!["react".to_string(), "react-dom".to_string()];
+        let mut curvatures = HashMap::new();
+        curvatures.insert("pkg-a".to_string(), 2);
+        curvatures.insert("pkg-bottleneck".to_string(), -15);
+
+        let predictions = predictor.predict_next_with_ricci(&history, Some(&curvatures));
+        assert!(!predictions.is_empty());
+        // pkg-bottleneck should be boosted to first position
+        assert_eq!(predictions[0].0, "pkg-bottleneck");
     }
 }

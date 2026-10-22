@@ -245,7 +245,7 @@ fn build_polyhedron_key(polyhedron: &TropicalPolyhedron) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jagr::tropical_math::{MaxAtom, MaxAtomSystem, Tropical};
+    use crate::jagr::tropical_math::{MaxAtom, MaxAtomSystem};
     use crate::jagr::tropical_polyhedron::TropicalPolyhedron;
 
     #[test]

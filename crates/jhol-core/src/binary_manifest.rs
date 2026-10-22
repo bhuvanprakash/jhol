@@ -9,8 +9,7 @@
 //! Reference: https://bun.com/blog/behind-the-scenes-of-bun-install
 
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::fs::{self};
 use std::path::{Path, PathBuf};
 
 /// Magic number for binary manifest format
@@ -149,7 +148,7 @@ impl BinaryManifest {
             integrity_offset: int_off,
             integrity_len: int_len,
             dep_count: dependencies.len() as u16,
-            dep_offset: dep_offset,
+            dep_offset,
         });
     }
 

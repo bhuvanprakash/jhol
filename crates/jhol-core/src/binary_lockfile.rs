@@ -47,7 +47,7 @@ impl BinaryLockfile {
         if self.header.magic != BINARY_LOCKFILE_MAGIC {
             return Err("Invalid magic".to_string());
         }
-        let mut decompressed = zstd::decode_all(&self.data[..]).map_err(|e| e.to_string())?;
+        let decompressed = zstd::decode_all(&self.data[..]).map_err(|e| e.to_string())?;
         let checksum = xxhash_rust::xxh3::xxh3_64(&decompressed);
         if checksum != self.header.checksum {
             return Err("Checksum mismatch".to_string());
@@ -91,7 +91,7 @@ impl BinaryLockfile {
             return false;
         }
         let header_len = u32::from_le_bytes(len_buf) as usize;
-        if header_len > 1024 || header_len < 16 {
+        if !(16..=1024).contains(&header_len) {
             return false;
         }
         let mut header_bytes = vec![0u8; header_len];

@@ -5,12 +5,14 @@
 //! Enhanced with JAGR-1 optimizations: watched literals, conflict analysis, and incremental solving.
 //! Implements formal CSP/SAT-style mathematical model with semver interval arithmetic.
 
+#![allow(dead_code)]
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use semver::{Version, VersionReq};
+use semver::Version;
 
 #[derive(Clone, Debug)]
 pub struct PackageVersion {
@@ -102,14 +104,14 @@ impl SemverInterval {
     }
 
     fn contains(&self, version: &Version) -> bool {
-        version >= &self.min && self.max.as_ref().map_or(true, |max| version <= max)
+        version >= &self.min && self.max.as_ref().is_none_or(|max| version <= max)
     }
 
     fn intersects(&self, other: &Self) -> bool {
         self.contains(&other.min)
             || other.contains(&self.min)
-            || self.max.as_ref().map_or(false, |max| other.contains(max))
-            || other.max.as_ref().map_or(false, |max| self.contains(max))
+            || self.max.as_ref().is_some_and(|max| other.contains(max))
+            || other.max.as_ref().is_some_and(|max| self.contains(max))
     }
 
     fn intersection(&self, other: &Self) -> Option<Self> {
@@ -125,7 +127,7 @@ impl SemverInterval {
             (None, None) => None,
         };
 
-        if new_max.as_ref().map_or(true, |max| &new_min <= max) {
+        if new_max.as_ref().is_none_or(|max| &new_min <= max) {
             Some(Self::new(new_min, new_max))
         } else {
             None
@@ -313,7 +315,7 @@ pub fn solve_exact_with_stats(
     ctx.timeout = std::env::var("JHOL_SOLVER_TIMEOUT_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .map(|ms| Duration::from_millis(ms));
+        .map(Duration::from_millis);
 
     // Initialize persistent cache with lazy loading
     let cache_dir = std::env::var("JHOL_CACHE_DIR").ok();
@@ -408,16 +410,15 @@ fn dfs(
                     .insert((state_key.clone(), pkg.clone(), version.clone()));
 
                 // Enhanced conflict analysis and clause learning
-                if let SolveError::Unsat(ref msg) = e {
-                    let conflict_clause = learn_conflict_clause_enhanced(ctx, &pkg, &version, msg);
-                    if let Some(clause) = conflict_clause {
-                        // Add to clause database for faster lookup
-                        let clause_key = format!("{}@{}", clause.package, version);
-                        ctx.clause_database.insert(clause_key, clause.clone());
-                    }
+                let SolveError::Unsat(ref msg) = &e;
+                let conflict_clause = learn_conflict_clause_enhanced(ctx, &pkg, &version, msg);
+                if let Some(clause) = conflict_clause {
+                    // Add to clause database for faster lookup
+                    let clause_key = format!("{}@{}", clause.package, version);
+                    ctx.clause_database.insert(clause_key, clause.clone());
                 }
 
-                last_err = Some(e)
+                last_err = Some(e);
             }
         }
 
@@ -430,7 +431,7 @@ fn dfs(
 
     // Periodic restart strategy
     ctx.restart_counter += 1;
-    if ctx.restart_counter % 100 == 0 {
+    if ctx.restart_counter.is_multiple_of(100) {
         ctx.restart_frequency = ctx.restart_counter / 10;
         // Clear some learned constraints to allow new search paths
         if ctx.learned_forbid.len() > 500 {
@@ -510,7 +511,7 @@ fn propagate_watched_literals(
                     }
 
                     // Check if this literal can be true (version not yet ruled out)
-                    if let Some(candidates) = candidates_for(state, pkg, domains).ok() {
+                    if let Ok(candidates) = candidates_for(state, pkg, domains) {
                         if candidates.contains(ver) {
                             // Found a new literal to watch
                             let old_key = format!(
@@ -539,7 +540,7 @@ fn propagate_watched_literals(
                     let mut unit_literal: Option<(String, String)> = None;
 
                     for (pkg, ver) in &clause.literals {
-                        if let Some(candidates) = candidates_for(state, pkg, domains).ok() {
+                        if let Ok(candidates) = candidates_for(state, pkg, domains) {
                             if candidates.contains(ver) {
                                 if unit_literal.is_some() {
                                     // Multiple literals can be true - not unit
@@ -590,7 +591,7 @@ fn learn_conflict_clause_enhanced(
     ctx: &mut SearchCtx,
     package: &str,
     version: &str,
-    reason: &str,
+    _reason: &str,
 ) -> Option<ConflictClause> {
     // Extract minimal conflict set from decision stack using 1-UIP (Unique Implication Point)
     let mut conflict_versions = Vec::new();
@@ -699,7 +700,7 @@ pub fn solve_incremental(
     ctx.timeout = std::env::var("JHOL_SOLVER_TIMEOUT_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .map(|ms| Duration::from_millis(ms));
+        .map(Duration::from_millis);
 
     // Set up incremental solving context
     ctx.previous_assignment = previous_assignment.cloned();
@@ -722,7 +723,7 @@ pub fn solve_incremental(
 
 /// Check if a package version is compatible with the previous assignment for incremental solving
 fn is_compatible_with_previous(
-    state: &State,
+    _state: &State,
     pkg: &str,
     version: &str,
     previous_assignment: &Option<HashMap<String, String>>,
@@ -1280,5 +1281,97 @@ mod tests {
 
         let (_result, stats) = solve_exact_with_stats(&input, &domains).expect("solve with stats");
         assert!(stats.nodes_visited >= 1);
+    }
+
+    // --- from former sat_resolver_tests.rs (JAGR-1) ---
+
+    #[test]
+    fn test_simple_dependency() {
+        let mut domains: HashMap<String, PackageDomain> = HashMap::new();
+        let mut lodash_domain = PackageDomain::default();
+        let v4_17_21 = PackageVersion {
+            version: "4.17.21".to_string(),
+            dependencies: HashMap::new(),
+            optional_dependencies: HashMap::new(),
+            peer_dependencies: HashMap::new(),
+            optional_peers: std::collections::HashSet::new(),
+        };
+        lodash_domain
+            .versions
+            .insert("4.17.21".to_string(), v4_17_21);
+        domains.insert("lodash".to_string(), lodash_domain);
+        let mut input = SolveInput::default();
+        input
+            .root_requirements
+            .insert("lodash".to_string(), "^4.0.0".to_string());
+        let result = solve_exact(&input, &domains);
+        assert!(result.is_ok());
+        let assignment = result.unwrap().assignment;
+        assert_eq!(assignment.get("lodash"), Some(&"4.17.21".to_string()));
+    }
+
+    #[test]
+    fn test_no_solution() {
+        let mut domains: HashMap<String, PackageDomain> = HashMap::new();
+        let mut pkg_domain = PackageDomain::default();
+        let v1_0_0 = PackageVersion {
+            version: "1.0.0".to_string(),
+            dependencies: HashMap::new(),
+            optional_dependencies: HashMap::new(),
+            peer_dependencies: HashMap::new(),
+            optional_peers: std::collections::HashSet::new(),
+        };
+        pkg_domain.versions.insert("1.0.0".to_string(), v1_0_0);
+        domains.insert("pkg".to_string(), pkg_domain);
+        let mut input = SolveInput::default();
+        input
+            .root_requirements
+            .insert("pkg".to_string(), "^2.0.0".to_string());
+        let result = solve_exact(&input, &domains);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_transitive_dependencies() {
+        let mut domains: HashMap<String, PackageDomain> = HashMap::new();
+        let mut a_deps = HashMap::new();
+        a_deps.insert("B".to_string(), "^1.0.0".to_string());
+        let a_v1 = PackageVersion {
+            version: "1.0.0".to_string(),
+            dependencies: a_deps,
+            optional_dependencies: HashMap::new(),
+            peer_dependencies: HashMap::new(),
+            optional_peers: std::collections::HashSet::new(),
+        };
+        let mut a_domain = PackageDomain::default();
+        a_domain.versions.insert("1.0.0".to_string(), a_v1);
+        domains.insert("A".to_string(), a_domain);
+        let b_v1 = PackageVersion {
+            version: "1.0.0".to_string(),
+            dependencies: HashMap::new(),
+            optional_dependencies: HashMap::new(),
+            peer_dependencies: HashMap::new(),
+            optional_peers: std::collections::HashSet::new(),
+        };
+        let mut b_domain = PackageDomain::default();
+        b_domain.versions.insert("1.0.0".to_string(), b_v1);
+        domains.insert("B".to_string(), b_domain);
+        let mut input = SolveInput::default();
+        input
+            .root_requirements
+            .insert("A".to_string(), "^1.0.0".to_string());
+        let result = solve_exact(&input, &domains);
+        assert!(result.is_ok());
+        let assignment = result.unwrap().assignment;
+        assert!(assignment.contains_key("A"));
+        assert!(assignment.contains_key("B"));
+    }
+
+    #[test]
+    fn test_version_ordering() {
+        assert!(cmp_semver_desc("1.0.0", "2.0.0").is_gt());
+        assert!(cmp_semver_desc("1.0.0", "1.5.0").is_gt());
+        assert!(cmp_semver_desc("1.0.0", "1.0.0").is_eq());
+        assert!(cmp_semver_desc("2.0.0", "1.0.0").is_lt());
     }
 }

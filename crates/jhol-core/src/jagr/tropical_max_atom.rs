@@ -362,7 +362,7 @@ impl DiffGraph {
         }
 
         // One more relaxation to confirm negative cycle
-        for (_idx, &(u, v, w)) in self.arcs.iter().enumerate() {
+        for &(u, v, w) in self.arcs.iter() {
             if dist[u] + w < dist[v] - 1e-12 {
                 last_relaxed = Some(v);
                 break;
@@ -970,8 +970,7 @@ pub fn npm_range_to_max_atoms(
         return atoms;
     }
 
-    if range.starts_with(">=") {
-        let ver_str = &range[2..];
+    if let Some(ver_str) = range.strip_prefix(">=") {
         if let Some(ver_val) =
             semver_to_ordinal(ver_str).or_else(|| version_map.get(ver_str).copied())
         {
@@ -994,8 +993,7 @@ pub fn npm_range_to_max_atoms(
                 ver_val + 1e-9,
             ));
         }
-    } else if range.starts_with("<=") {
-        let ver_str = &range[2..];
+    } else if let Some(ver_str) = range.strip_prefix("<=") {
         if let Some(ver_val) =
             semver_to_ordinal(ver_str).or_else(|| version_map.get(ver_str).copied())
         {
@@ -1013,8 +1011,7 @@ pub fn npm_range_to_max_atoms(
                 ver_val - 1e-9,
             ));
         }
-    } else if range.starts_with('=') {
-        let ver_str = &range[1..];
+    } else if let Some(ver_str) = range.strip_prefix('=') {
         if let Some(ver_val) =
             semver_to_ordinal(ver_str).or_else(|| version_map.get(ver_str).copied())
         {
@@ -1026,8 +1023,7 @@ pub fn npm_range_to_max_atoms(
             ));
             atoms.push(MaxAtom::new(var_idx, var_idx, upper_bound_idx, ver_val));
         }
-    } else if range.starts_with('^') {
-        let ver_str = &range[1..];
+    } else if let Some(ver_str) = range.strip_prefix('^') {
         if let Some(ver_val) =
             semver_to_ordinal(ver_str).or_else(|| version_map.get(ver_str).copied())
         {
@@ -1051,8 +1047,7 @@ pub fn npm_range_to_max_atoms(
                 }
             }
         }
-    } else if range.starts_with('~') {
-        let ver_str = &range[1..];
+    } else if let Some(ver_str) = range.strip_prefix('~') {
         if let Some(ver_val) =
             semver_to_ordinal(ver_str).or_else(|| version_map.get(ver_str).copied())
         {
