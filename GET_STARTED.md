@@ -149,4 +149,4 @@ jhol audit --all-workspaces
 ## Next steps
 
 - Read [README.md](./README.md) for full command coverage.
-- Read [Documentation/main.md](./Documentation/main.md) for deeper guidance.
+- Read [docs/user/main.md](./docs/user/main.md) for deeper guidance.

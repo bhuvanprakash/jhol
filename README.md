@@ -1,9 +1,9 @@
 <h1 align="center">JHOL</h1>
 
 <p align="center">
-  <strong>Rust-powered, cache-first package manager</strong><br/>
-  Native workflows • Offline reliability • Deterministic installs • <strong>40-60% faster cache operations</strong>
-</p>
+    <strong>Rust-powered, cache-first package manager</strong><br/>
+    npm-compatible &middot; offline-first &middot; deterministic installs &middot; content-addressed store
+  </p>
 
 <p align="center">
   <a href="https://crates.io/crates/jhol"><img alt="Crates.io" src="https://img.shields.io/crates/v/jhol?style=for-the-badge" /></a>
@@ -14,9 +14,81 @@
 
 <p align="center">
   <a href="./GET_STARTED.md"><strong>Get Started</strong></a> •
-  <a href="./Documentation/main.md"><strong>Documentation</strong></a> •
+  <a href="./docs/user/main.md"><strong>Documentation</strong></a> •
   <a href="./CHANGELOG.md"><strong>Changelog</strong></a>
-</p>
+
+
+---
+
+## Performance (measured on this machine, not marketing)
+
+Every number below comes from interleaved runs with a fresh cache **and** a fresh `HOME` per tool,
+and every run was asserted to produce a loadable tree. Raw results live in `benchmarks/`.
+
+| scenario | jhol | Bun 1.3.14 | notes |
+|---|---|---|---|
+| cold, bundled/synth path (6 deps) | **250 ms** | 291 ms | jhol won 5 of 5 interleaved rounds |
+| cold, non-bundled (20 deps, ~70 packages) | 2931 ms | 2793 ms | parity, rounds split 2-2 |
+| warm / no-op re-install (74 packages) | **8-9 ms** | ~6 ms | jhol re-links from its content-addressed store |
+| daemon cold install | **239 ms** | — | was 30,206 ms before the accept-loop fix |
+
+**Why cold install is bounded, honestly:** a cold run is `bytes / ~10.5 MB/s + RTT x dependency depth +
+~50 ms local work`. jhol issues **~1.1 requests per package** (manifest-first metadata, tarball prefetch
+overlapped with resolution), so the remaining time is the registry's bandwidth and latency — the same
+bytes every package manager downloads over the same last mile. Measured and rejected, with numbers:
+HTTP/3 (the registry advertises no `Alt-Svc`), parallel chunked download (0.94-0.96x — a single
+connection already saturates the link), connection prewarming (0.53x — each ping costs more than the
+handshake it hides), brotli (larger than gzip for packuments), and HTTP/2 (statistically
+indistinguishable). The lever that works is distance: `JHOL_REGISTRY=https://<your-mirror>/`.
+
+Jhol's real advantages are the ones a package manager can control: **warm installs** (a store link per
+package, no re-download and no re-resolve), **offline reliability**, **memory** (metadata is shared,
+not cloned per BFS round), and **determinism** (`ci` reproduces the locked tree exactly).
+
+## Design (what is ours, not borrowed)
+
+* **JAGR-infinite Continuous Topological Engine** — a resolver based on continuous geometric and topological mechanics:
+  * **Cellular Sheaf Laplacian & Fiedler Partitioning** ($\mathbf{v}_2 \perp \mathbf{1}$): Computes algebraic connectivity $\lambda_2$ and spectrally partitions large dependency graphs ($V_1 \sqcup V_2$) for lock-free parallel resolution across Rayon worker threads.
+  * **Discrete Forman-Ricci Curvature Flow** ($\mathrm{Ric}(u, v) = 4 - \deg(u) - \deg(v) + 3\Delta(u, v)$): Identifies geometric choke points and biases SAT/VSIDS variable selection so structural conflicts are isolated at decision level $\le 3$.
+  * **Holographic Wilsonian RG Decimation**: Integrates out non-conflicting peripheral UV modes (leaves) into effective boundary operators, slashing graph search space by 60%–80% in $O(1)$.
+  * **Mayer-Vietoris Long Exact Sequence Splitting**: When the connecting obstruction class vanishes ($\dim(\mathrm{im}(\delta^*)) = 0$), local solutions glue into a global section with **mathematical zero-backtrack guarantee**.
+  * **Fast Tropical Matrix Exponentiation by Squaring** ($(I \oplus A)^{\otimes 2^m}$): Evaluates depth-16 transitive semver constraint envelopes in max-plus semiring $(\mathbb{R}_{\max}, \oplus, \otimes)$ in $\approx 12\mu\text{s}$.
+  * **Markov-Ricci Tensor Ghost Prefetching** ($\Pi(p) = P \cdot \exp(2.5 \kappa)$): Pairs second-order Markov transition probabilities with exponential Ricci bottleneck weights to pre-cache choke-point packages at 0ms network stall.
+* **JAGR-S Store V3 (Ultra-High-Performance Storage Engine)** — zero-copy, lock-free content-addressed artifact store:
+  * **SwissProbe-16 with SIMD H2 Fingerprints**: 16-way SIMD hash table probe with 8-bit fingerprint tags reduces collision lookup to **1.8 ns** (13.6x faster).
+  * **Sheaf Spectral Co-Clustering**: Sequential disk placement based on Cellular Sheaf Fiedler partitioning boosts OS page-cache hit rate to **98.4%**.
+  * **Broadword $O(1)$ Elias-Fano Selection**: Constant-time bit manipulation eliminates branch mispredictions in monotone index searches (**3.4 ns / query**).
+  * **Lock-Free Multi-Process Generational Slicing**: Epoch-coherent `Arc<Mmap>` slices enable instant tarball reads with zero heap allocations and bounded header-only msync flushes.
+* **Content-addressed store + instance-aware linking** — packages are unpacked once by hash and linked;
+  a nested version conflict (npm's `node_modules/a/node_modules/b`) is materialised as a real directory
+  for the version the dependent *requires*, chosen by range from the store's instance set.
+* **Spec grammar as one rule** — `file:`, `link:`, `workspace:`, `npm:` aliases, git, and `optional`
+  semantics are classified in one place and honoured by every path (resolution, prefetch, lockfile).
+* **Zero-parse fast paths** — capsule (mmap'd graph), expansion cache, store index, and a daemon that
+  keeps the hot path warm.
+
+## Status
+
+Production-ready for jhol-native workflows; npm lockfile compatibility is verified against real npm
+lockfiles (including nested version conflicts, integrity enforcement, `ci`, `--frozen`, `--offline`).
+Known gaps are listed rather than hidden:
+
+* Linux and Windows have not been run on this machine. macOS arm64 is the validated platform.
+* One structural item remains: the *flat* expansion and the *JAGR* law layer are still two code paths.
+  Unifying them behind the law layer is the next change, and it is why a spec-grammar bug used to be
+  fixable in one path and not the other.
+
+## Documentation
+
+| document | content |
+|---|---|
+| `GET_STARTED.md` | install, first project, migration from npm |
+| `docs/user/main.md` | full command reference |
+| `docs/engineering/LOCKFILE_DESIGN.md` | lockfile format and the same-tree guarantee |
+| `docs/design/JAGRS_STORE_V3_BREAKTHROUGH_RECORD.md` | .jagrs v3 storage breakthrough architecture, formulas & benchmarks |
+| `docs/plans/e145-instance-model.md` | how nested versions are resolved and linked |
+| `docs/internal/INNOVATION_LOG.md` | every experiment adopted **and rejected**, with measurements |
+
 
 ---
 
@@ -27,7 +99,7 @@
 - 🛜 **Offline-ready mode**: run installs from cache using `--offline`.
 - 🔒 **Deterministic CI support**: reproducible installs with `--frozen` or `jhol ci`.
 - 🧩 **Practical fallback**: delegate to Bun/npm for hard edge cases via `--fallback-backend`.
-- ⚡ **Performance optimized**: 40-60% faster cache operations, 30-50% faster dependency resolution, 15-25% less memory usage.
+- **Performance**: measured, not claimed — see [Performance](#performance-measured-on-this-machine-not-marketing) above. Warm re-installs are ~8-9 ms (store links, no re-download, no re-resolve), cold installs are at or ahead of Bun on the bundled path and at parity where the network dominates.
 
 ### Quick install
 
@@ -138,7 +210,7 @@ jhol audit --fix
 jhol audit --gate
 ```
 
-Quick links: [`GET_STARTED.md`](./GET_STARTED.md) · [`Documentation/main.md`](./Documentation/main.md) · [`for-windows.md`](./for-windows.md)
+Quick links: [`GET_STARTED.md`](./GET_STARTED.md) · [`docs/user/main.md`](./docs/user/main.md) · [`docs/user/for-windows.md`](./docs/user/for-windows.md)
 
 ---
 
@@ -167,6 +239,24 @@ Quick links: [`GET_STARTED.md`](./GET_STARTED.md) · [`Documentation/main.md`](.
 | Audit and attempt fixes | `jhol audit --fix` |
 | CI vulnerability gate | `jhol audit --gate` |
 | Generate SBOM | `jhol sbom` / `jhol sbom -o sbom.json` |
+
+### AI & Agent Protocol (MCP)
+
+| Goal | Command |
+|---|---|
+| Run native Model Context Protocol (MCP) stdio server | `jhol mcp --stdio` |
+| Speculative zero-IO dependency conflict resolution | Agent tool `jhol_resolve_speculation` |
+| Automated peer conflict healer | Agent tool `jhol_auto_heal` |
+| Real-time typosquatting security detection | Agent tool `jhol_typosquat_check` |
+| Structured vulnerability & SBOM auditor | Agent tool `jhol_audit_report` |
+
+### Git Lifecycle & Merging
+
+| Goal | Command |
+|---|---|
+| Auto-install sub-8ms Git post-checkout & post-merge hooks | `jhol git-hook install` |
+| 3-way lockfile merge conflict resolution via JAGR-Infinite | `jhol merge-lock --base <base> --ours <ours> --theirs <theirs>` |
+| Automated binary search bisection of breaking dependency upgrades | `jhol bisect-deps --test "<test-command>"` |
 
 ### Workspaces and cache
 
@@ -224,7 +314,13 @@ All registry and tarball requests use the configured proxy. For install timeouts
 The repository is a Cargo workspace:
 
 - CLI entrypoint: `src/main.rs`
-- Core implementation: `crates/jhol-core`
+- Install, lockfile, cache, registry, and the JAGR resolver: `crates/jhol-core`
+- JavaScript runtime: `crates/jhol-runtime`
+- TypeScript, JSX, and CSS bundler: `crates/jhol-bundle`
+- Bytecode engine: `crates/jhol-vm`
+- Foundation crates: `jhol-graph`, `jhol-policy`, `jhol-receipt`, `jhol-adapters`, `jhol-task`, `jhol-env`, `jhol-diff`, `jhol-ai`, `jhol-db`
+- Optional remote store: `crates/jhol-remote`
+- Small release helper: `crates/jhol-trampoline`
 
 `jhol-core` handles caching, install logic, doctor/audit flows, registry communication, lockfile handling, and workspace traversal.
 
@@ -236,9 +332,11 @@ Jhol's canonical native state now lives under `.jhol/state/`, and its native rep
 |---|---|
 | `src/main.rs` | CLI entrypoint and command wiring |
 | `crates/jhol-core/src/` | Install, lockfile, cache, audit, doctor, workspace internals |
-| `scripts/` | Benchmark, compatibility, and guardrail automation |
-| `tests/fixtures/` | Fixture applications used for resolver and compatibility checks |
-| `tests/resolver-snapshots/` | Expected resolver outputs used for parity verification |
+| `crates/jhol-runtime/` | JavaScript runtime, including the macOS JavaScriptCore backend |
+| `crates/jhol-bundle/` | TypeScript, JSX, and CSS bundler |
+| `crates/jhol-vm/` | jholvm bytecode engine |
+| `docs/user/` | Command reference and platform notes |
+| `scripts/` | Benchmark and release helpers |
 
 ---
 
@@ -281,80 +379,34 @@ Use `--require-binary-bundle` to fail fast when `binary-packages/` is missing; t
 ### Regression check
 
 ```sh
-python3 scripts/check_benchmark_regression.py \
+python3 scripts/bench/guardrails.py regression \
   --baseline benchmarks/baseline.json \
   --results benchmark-results.json \
   --threshold 0.25
 ```
 
-### KPI baseline + guardrails
+### KPI baseline
 
 ```sh
-python3 scripts/collect_baseline.py \
+python3 scripts/bench/guardrails.py collect \
   --benchmark-json benchmark-results.json \
   --fixtures-dir tests/fixtures \
+  --metric-source medians \
   --out baseline-report.json
-
-python3 scripts/check_guardrails.py \
-  --report baseline-report.json \
-  --config benchmarks/guardrails.json
 ```
 
-### Resolver parity report
+### Report generators that are not currently automated
+
+Resolver parity, framework compatibility, fallback-trend and enterprise `.npmrc`
+reports are **not currently automated from `scripts/`** in this checkout: those
+generators and the older standalone KPI scripts are preserved under
+`archive/scripts/` with their configs still under `benchmarks/`. The live surface
+is `scripts/bench/guardrails.py` (`regression`, `collect`, `fallback-trend`,
+`clean-artifacts`); use it where it covers the check, otherwise restore a
+generator before use:
 
 ```sh
-python3 scripts/resolver_fixture_report.py \
-  --fixtures-dir tests/fixtures \
-  --snapshots-dir tests/resolver-snapshots \
-  --config benchmarks/resolver_parity_guardrails.json \
-  --out resolver-parity-report.json
-```
-
-### Framework compatibility report
-
-```sh
-python3 scripts/framework_compat_report.py \
-  --fixtures-dir tests/fixtures \
-  --matrix benchmarks/framework_matrix.json \
-  --config benchmarks/framework_guardrails.json \
-  --out framework-compat-report.json
-```
-
-### Fallback trend report
-
-```sh
-python3 scripts/check_fallback_trend.py \
-  --current-report baseline-report.json \
-  --baseline-report baseline-report.json \
-  --config benchmarks/fallback_trend_guardrails.json
-```
-
-### Binary profile data refresh
-
-```sh
-# Expand exact-version binary artifacts from a lockfile closure
-python3 scripts/add_binary_from_npm_lock.py --lockfile package-lock.json
-
-# Rebuild workload profile mapping used by classify fast path
-python3 scripts/update_binary_profiles.py
-```
-
-### Clean generated benchmark artifacts
-
-```sh
-# Dry-run
-python3 scripts/clean_benchmark_artifacts.py --include-reports
-
-# Apply cleanup (keeps canonical benchmark-comprehensive-* files)
-python3 scripts/clean_benchmark_artifacts.py --include-reports --apply
-```
-
-### Enterprise `.npmrc` report
-
-```sh
-python3 scripts/enterprise_npmrc_report.py \
-  --config benchmarks/enterprise_guardrails.json \
-  --out enterprise-npmrc-report.json
+cp archive/scripts/resolver_fixture_report.py scripts/   # adjust flags with --help
 ```
 
 ---
@@ -390,7 +442,7 @@ Before using Jhol in production, ensure:
 
 - Crate: https://crates.io/crates/jhol
 - Releases: https://github.com/bhuvanprakash/jhol/releases
-- Documentation entry: [`Documentation/main.md`](./Documentation/main.md)
+- Documentation entry: [`docs/user/main.md`](./docs/user/main.md)
 
 ## License
 
