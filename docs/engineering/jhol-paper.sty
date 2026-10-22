@@ -1,0 +1,164 @@
+% jhol-paper.sty — shared visual language for the Jhol research trilogy
+% Clean grayscale academic style: structure and hierarchy, no accent colors.
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{jhol-paper}[2026/09/24 Jhol trilogy paper style (grayscale)]
+
+\RequirePackage{xcolor}
+\RequirePackage{tcolorbox}
+\tcbuselibrary{skins,breakable}
+\RequirePackage{booktabs}
+\RequirePackage{colortbl}
+\RequirePackage{titlesec}
+\RequirePackage{fancyhdr}
+\RequirePackage{caption}
+\RequirePackage{enumitem}
+\RequirePackage{tikz}
+\RequirePackage{hyperref}
+
+% ── Grayscale only ───────────────────────────────────────────────────────────
+\definecolor{jholPrimary}{gray}{0.15}
+\definecolor{jholAccent}{gray}{0.35}
+\definecolor{jholDeep}{gray}{0}
+\definecolor{jholSoft}{gray}{0.96}
+\definecolor{jholSoft2}{gray}{0.92}
+\definecolor{jholInk}{gray}{0}
+\definecolor{jholMute}{gray}{0.4}
+\definecolor{jholRule}{gray}{0.55}
+\definecolor{jholWarn}{gray}{0.2}
+\definecolor{jholWarnBg}{gray}{0.97}
+\definecolor{jholGood}{gray}{0.15}
+\definecolor{jholGoodBg}{gray}{0.96}
+\definecolor{codebg}{gray}{0.96}
+\definecolor{comment}{gray}{0.4}
+\definecolor{tabhead}{gray}{0.2}
+\definecolor{tabrow}{gray}{0.96}
+\definecolor{bestcell}{gray}{0.92}
+
+% Backward-compat aliases used by older paper bodies (charts / bars)
+\definecolor{rule}{gray}{0.2}
+\definecolor{bar}{gray}{0.45}
+\definecolor{barj}{gray}{0.15}
+\definecolor{track}{gray}{0.88}
+\definecolor{accent}{gray}{0.2}
+\definecolor{stable}{gray}{0.2}
+\definecolor{fragile}{gray}{0.25}
+
+% ── Typography helpers ───────────────────────────────────────────────────────
+\newcommand{\pkg}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\metric}[1]{\textbf{#1}}
+\newcommand{\seriesbadge}[1]{%
+  {\scriptsize\bfseries\textsc{#1}}%
+}
+
+% ── Section styling (black, light rule) ──────────────────────────────────────
+\titleformat{\section}
+  {\large\bfseries}
+  {\thesection}{0.65em}{}
+  [\vspace{-0.35em}{\color{jholRule}\hrule height 0.4pt}\vspace{0.35em}]
+\titleformat{\subsection}
+  {\normalsize\bfseries}
+  {\thesubsection}{0.55em}{}
+\titleformat{\subsubsection}
+  {\normalsize\bfseries}
+  {\thesubsubsection}{0.5em}{}
+\titlespacing*{\section}{0pt}{1.15em}{0.55em}
+\titlespacing*{\subsection}{0pt}{0.85em}{0.35em}
+
+\captionsetup{
+  font=small,
+  labelfont=bf,
+  skip=0.55em
+}
+
+% ── Header / footer ──────────────────────────────────────────────────────────
+\newcommand{\jholHeaders}[2]{%
+  \pagestyle{fancy}%
+  \fancyhf{}%
+  \fancyhead[L]{\small\textit{#1}}%
+  \fancyhead[R]{\small\bfseries #2}%
+  \fancyfoot[C]{\thepage}%
+  \renewcommand{\headrulewidth}{0.4pt}%
+  \renewcommand{\footrulewidth}{0pt}%
+}
+
+% ── Callout boxes (grayscale left-rule) ──────────────────────────────────────
+\newtcolorbox{takeaway}[1][Key Takeaway]{%
+  enhanced, breakable,
+  colback=white, colframe=black,
+  boxrule=0pt, leftrule=2pt,
+  arc=0pt, outer arc=0pt,
+  left=8pt, right=8pt, top=6pt, bottom=6pt,
+  before skip=0.75em, after skip=0.75em,
+  fonttitle=\bfseries\small,
+  title=#1,
+  attach title to upper={\par\smallskip},
+}
+
+\newtcolorbox{insight}[1][Design Insight]{%
+  enhanced, breakable,
+  colback=white, colframe=black,
+  boxrule=0pt, leftrule=2pt,
+  arc=0pt, outer arc=0pt,
+  left=8pt, right=8pt, top=6pt, bottom=6pt,
+  before skip=0.7em, after skip=0.7em,
+  fonttitle=\bfseries\small,
+  title=#1,
+  attach title to upper={\par\smallskip},
+}
+
+\newtcolorbox{caveat}[1][Honest Limitation]{%
+  enhanced, breakable,
+  colback=white, colframe=black,
+  boxrule=0pt, leftrule=2pt,
+  arc=0pt, outer arc=0pt,
+  left=8pt, right=8pt, top=6pt, bottom=6pt,
+  before skip=0.7em, after skip=0.7em,
+  fonttitle=\bfseries\small,
+  title=#1,
+  attach title to upper={\par\smallskip},
+}
+
+\newtcolorbox{abstractbox}{%
+  enhanced,
+  colback=white, colframe=black,
+  boxrule=0pt, toprule=0.6pt, bottomrule=0.6pt,
+  arc=0pt, outer arc=0pt,
+  left=4pt, right=4pt, top=8pt, bottom=8pt,
+  before skip=0.4em, after skip=0.6em,
+  fontupper=\small,
+}
+
+\newenvironment{jholabstract}{%
+  \begin{abstractbox}%
+  \noindent{\bfseries\large Abstract}\par\smallskip
+  \noindent\ignorespaces
+}{%
+  \end{abstractbox}%
+}
+
+\newcommand{\jholTitleBlock}[5]{%
+  \begin{center}
+  \seriesbadge{#1}\\[0.55em]
+  {\LARGE\bfseries #2\par}
+  \vspace{0.35em}
+  {\large\itshape #3\par}
+  \vspace{0.65em}
+  {\rule{0.28\textwidth}{0.6pt}}\\[0.55em]
+  #4
+  \vspace{0.35em}
+  {\small\textbf{Keywords:} #5\par}
+  \end{center}
+  \vspace{0.25em}
+}
+
+\newcommand{\best}[1]{\textbf{#1}}
+\newcommand{\tabheadrow}{}
+
+\setlist{itemsep=0.28em,topsep=0.45em,leftmargin=1.35em}
+\setlist[enumerate]{leftmargin=1.55em,
+  label=\bfseries\arabic*.}
+
+\hypersetup{
+  colorlinks=false,
+  pdfborder={0 0 0},
+}

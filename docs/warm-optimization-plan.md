@@ -16,7 +16,7 @@ Optimize jhol's **warm install** path (cache populated, `node_modules` directory
 
 ## Bottleneck Analysis
 
-### Measured gaps (from `brutal-bench.sh`)
+### Measured gaps (from `scripts/bench/run.sh brutal`)
 
 | Scenario | bun | jhol | Gap |
 |---|---|---|---|
@@ -256,7 +256,7 @@ For each fix, verify:
 - [ ] Cold install performance not regressed (no extra I/O in network path)
 - [ ] Thread safety: no data races from moving work into parallel pool
 - [ ] Compiles with `cargo check -p jhol-core` (zero errors)
-- [ ] All 18 CLI integration tests pass (`cargo test --test cli`)
+- [ ] All 18 CLI integration tests pass (`cargo test --test commands`)
 - [ ] All core unit tests pass (`cargo test -p jhol-core`)
 
 ---
@@ -266,7 +266,7 @@ For each fix, verify:
 After all fixes are applied:
 
 ```bash
-bash brutal-bench.sh
+bash scripts/bench/run.sh brutal
 ```
 
 Expected: 3-dep warm install from 15–50ms down to ~10ms. 20-dep warm install from ~985ms down to ~50ms.

@@ -124,7 +124,7 @@ Expected: exit 0; existing unrelated warnings are recorded but not treated as ne
 
 - [ ] **Step 4: Rerun Jhol-after versus Bun**
 
-Recreate `/tmp/jhol-bench` from `tests/fixtures/jagr-instance-bench/package.json` and run `bash bench_vs_bun.sh`. For noisy cases, rerun at least seven samples using the same fixture, caches, binaries, and command flags.
+Recreate `/tmp/jhol-bench` from `tests/fixtures/jagr-instance-bench/package.json` and run `bash scripts/bench/run.sh vs-bun`. For noisy cases, rerun at least seven samples using the same fixture, caches, binaries, and command flags.
 
 - [ ] **Step 5: Apply the guardrail**
 
