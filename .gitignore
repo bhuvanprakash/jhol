@@ -44,3 +44,10 @@ binary-packages/
 
 # Deepwork session state
 .slim/deepwork/
+
+# jhol's own local state (per-project cache + zero-parse capsule).
+.jhol/
+.jhol.capsule
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
