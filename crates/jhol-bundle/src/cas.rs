@@ -225,10 +225,20 @@ pub struct CasStore {
 impl CasStore {
     pub fn new(cache_dir: PathBuf, max_entries: usize) -> BundleResult<Self> {
         let base = cache_dir.join("bundle-cas");
-        fs::create_dir_all(base.join("manifests"))?;
-        fs::create_dir_all(base.join("transformed"))?;
-        fs::create_dir_all(base.join("sourcemaps"))?;
-        fs::create_dir_all(base.join("meta"))?;
+        let base = if fs::create_dir_all(base.join("manifests")).is_ok()
+            && fs::create_dir_all(base.join("transformed")).is_ok()
+            && fs::create_dir_all(base.join("sourcemaps")).is_ok()
+            && fs::create_dir_all(base.join("meta")).is_ok()
+        {
+            base
+        } else {
+            let tmp_base = std::env::temp_dir().join("jhol-bundle-cas");
+            let _ = fs::create_dir_all(tmp_base.join("manifests"));
+            let _ = fs::create_dir_all(tmp_base.join("transformed"));
+            let _ = fs::create_dir_all(tmp_base.join("sourcemaps"));
+            let _ = fs::create_dir_all(tmp_base.join("meta"));
+            tmp_base
+        };
 
         let mut shards = Vec::with_capacity(SHARD_COUNT);
         for _ in 0..SHARD_COUNT {
@@ -248,6 +258,7 @@ impl CasStore {
 
     /// Get a ParseManifest from CAS (memory cache → disk → absent).
     pub fn get_manifest(&self, hash: u64) -> Option<Arc<ParseManifest>> {
+        let hash = Self::manifest_key(hash);
         let idx = Self::shard_idx(hash);
         let shard = &self.shards[idx];
 
@@ -273,6 +284,7 @@ impl CasStore {
     }
 
     fn load_manifest_from_disk(&self, hash: u64) -> Option<Arc<ParseManifest>> {
+        let hash = Self::manifest_key(hash);
         let path = self
             .cache_dir
             .join("manifests")
@@ -297,12 +309,14 @@ impl CasStore {
         let shard2 = &self.shards[idx2];
         Self::touch_manifest(&shard2.access_order, hash);
 
-        self.get_manifest(hash)
+        // Return from the in-memory cache we just populated. (Calling
+        // `get_manifest` here would apply `manifest_key` a second time.)
+        shard2.manifests.read().ok()?.get(&hash).map(Arc::clone)
     }
 
     /// Store a ParseManifest in CAS (memory + disk).
     pub fn put_manifest(&self, manifest: &ParseManifest) -> BundleResult<()> {
-        let hash = manifest.content_hash;
+        let hash = Self::manifest_key(manifest.content_hash);
         let idx = Self::shard_idx(hash);
         let shard = &self.shards[idx];
 
@@ -355,6 +369,23 @@ impl CasStore {
         let mut h = DefaultHasher::new();
         source_hash.hash(&mut h);
         config_hash.hash(&mut h);
+        h.finish()
+    }
+
+    /// Bump whenever parse/manifest extraction logic changes.
+    ///
+    /// Manifests are cached by content hash alone, so without this a parser fix
+    /// would never reach a module that was already parsed — a stale manifest
+    /// (e.g. one recording a bogus import) would be reused indefinitely.
+    pub const PARSE_VERSION: u32 = 3;
+
+    /// Cache key for a parsed manifest: content hash folded with [`Self::PARSE_VERSION`].
+    pub fn manifest_key(content_hash: u64) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        content_hash.hash(&mut h);
+        Self::PARSE_VERSION.hash(&mut h);
         h.finish()
     }
 

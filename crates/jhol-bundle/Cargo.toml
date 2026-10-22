@@ -7,22 +7,34 @@ license-file = "../../LICENSE"
 repository = "https://github.com/bhuvanprakash/jhol"
 
 [features]
-default = ["native-node"]
+default = ["native-node", "native-fmt"]
 swc-backend = ["dep:swc_core"]
 lightningcss = ["dep:lightningcss"]
 native-node = []
+# Format JS/TS with JholVM's own parser instead of routing through swc.
+native-fmt = ["dep:jhol-vm"]
 
 [dependencies]
 # Parser & transforms (optional — use for full TS/JSX support)
 swc_core = { version = "71", default-features = false, features = [
+    "common",
+    "ecma_ast",
     "ecma_parser",
+    "ecma_parser_typescript",
     "ecma_transforms",
+    "ecma_transforms_react",
+    "ecma_transforms_typescript",
+    "ecma_visit",
     "ecma_codegen",
     "ecma_minifier",
 ], optional = true }
 
+# JholVM — the engine's own parser powers `jhol fmt`
+jhol-vm = { path = "../jhol-vm", optional = true, default-features = false }
+
 # CSS bundling (optional)
 lightningcss = { version = "1.0.0-alpha.71", optional = true }
+
 
 # Source maps — tiny hand-rolled VLQ, no heavy deps
 

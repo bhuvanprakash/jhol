@@ -17,7 +17,6 @@
 //! The result is a `used_hashes: HashSet<u64>` — all content hashes that must be emitted.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 
 use crate::cas::ParseManifest;
 use crate::graph::{GraphNode, ModuleGraph};
@@ -150,7 +149,7 @@ pub fn filter_graph<'a>(graph: &'a ModuleGraph, used: &HashSet<u64>) -> Vec<&'a 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::path::PathBuf;
 
     #[test]
     fn test_side_effect_status() {

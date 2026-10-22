@@ -100,6 +100,10 @@ impl ModuleGraph {
         for m in manifests {
             path_to_manifest.insert(m.path.to_string_lossy().into_owned(), m);
         }
+        // `build_from_manifests` receives modules that need not exist on disk, so
+        // resolution must also consult this virtual path set (see
+        // `resolve_in_manifests`).
+        let manifest_paths: HashSet<String> = path_to_manifest.keys().cloned().collect();
 
         // BFS/DFS to build graph
         let mut queue: VecDeque<(PathBuf, usize)> =
@@ -166,7 +170,19 @@ impl ModuleGraph {
                     .dynamic_imports
                     .iter()
                     .any(|d| &d.specifier == spec);
-                let resolved = self.resolve_specifier(spec, &path)?;
+                let resolved = match self.resolve_specifier(spec, &path) {
+                    Ok(r) => r,
+                    Err(err) => match self.resolve_in_manifests(spec, &path, &manifest_paths) {
+                        Some(found) => GraphEdge {
+                            path: found,
+                            content_hash: 0,
+                            specifier: spec.clone(),
+                            is_dynamic,
+                            is_external: false,
+                        },
+                        None => return Err(err),
+                    },
+                };
 
                 if resolved.is_external {
                     deps.push(GraphEdge {
@@ -359,6 +375,50 @@ impl ModuleGraph {
         })
     }
 
+    /// Resolve a specifier against the in-memory manifest path set.
+    ///
+    /// `try_resolve_path` only looks at the filesystem, which made
+    /// `build_from_manifests` unusable for modules that are not written to disk
+    /// (its entire reason for existing). This mirrors the same extension/index
+    /// probing over the supplied paths instead.
+    fn resolve_in_manifests(
+        &self,
+        specifier: &str,
+        base: &Path,
+        known: &HashSet<String>,
+    ) -> Option<PathBuf> {
+        const EXTS: [&str; 9] = [
+            ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts", ".json",
+        ];
+
+        let candidate = if specifier.starts_with('/') {
+            PathBuf::from(specifier)
+        } else if specifier.starts_with("./") || specifier.starts_with("../") {
+            base.parent().unwrap_or(base).join(specifier)
+        } else {
+            return None;
+        };
+        let normalized = normalize_lexically(&candidate.to_string_lossy());
+
+        if known.contains(&normalized) {
+            return Some(PathBuf::from(&normalized));
+        }
+        for ext in EXTS {
+            let with_ext = format!("{}{}", normalized, ext);
+            if known.contains(&with_ext) {
+                return Some(PathBuf::from(with_ext));
+            }
+        }
+        let dir = normalized.trim_end_matches('/');
+        for ext in EXTS {
+            let index = format!("{}/index{}", dir, ext);
+            if known.contains(&index) {
+                return Some(PathBuf::from(index));
+            }
+        }
+        None
+    }
+
     fn try_resolve_path(&self, base: &Path) -> Option<PathBuf> {
         let extensions = [
             ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts", ".json",
@@ -526,45 +586,72 @@ impl ModuleGraph {
     /// Topological sort — modules emitted after all their dependencies.
     /// Uses Kahn's algorithm (BFS-style).
     pub fn topological_order(&self) -> Vec<String> {
-        let mut in_degree: HashMap<String, usize> =
+        // Kahn's algorithm, dependencies first.
+        //
+        // `pending[k]` is the number of k's own (non-external) dependencies that
+        // have not been emitted yet. The previous implementation incremented the
+        // *dependency's* count instead, which produced the exact reverse order
+        // (dependents before their dependencies).
+        let mut pending: HashMap<String, usize> =
             self.nodes.keys().map(|k| (k.clone(), 0)).collect();
+        let mut dependents: HashMap<String, Vec<String>> = HashMap::new();
 
-        for (_, node) in &self.nodes {
+        for (key, node) in &self.nodes {
             for dep in &node.deps {
                 if dep.is_external {
                     continue;
                 }
                 let dep_key = dep.path.to_string_lossy().into_owned();
-                *in_degree.entry(dep_key).or_insert(0) += 1;
+                if !self.nodes.contains_key(&dep_key) {
+                    continue;
+                }
+                if let Some(p) = pending.get_mut(key) {
+                    *p += 1;
+                }
+                dependents.entry(dep_key).or_default().push(key.clone());
             }
         }
 
-        let mut queue: VecDeque<String> = in_degree
+        // Deterministic ordering: `HashMap` iteration order is randomised, which
+        // made bundle output differ between runs of identical input.
+        for deps in dependents.values_mut() {
+            deps.sort();
+        }
+        let mut ready: std::collections::BTreeSet<String> = pending
             .iter()
             .filter(|(_, &d)| d == 0)
             .map(|(k, _)| k.clone())
             .collect();
 
         let mut result = Vec::new();
-        while let Some(key) = queue.pop_front() {
+        while let Some(key) = ready.iter().next().cloned() {
+            ready.remove(&key);
             result.push(key.clone());
-            if let Some(node) = self.nodes.get(&key) {
-                for dep in &node.deps {
-                    if dep.is_external {
-                        continue;
-                    }
-                    let dep_key = dep.path.to_string_lossy().into_owned();
-                    if let Some(d) = in_degree.get_mut(&dep_key) {
-                        *d = d.saturating_sub(1);
-                        if *d == 0 {
-                            queue.push_back(dep_key);
+            if let Some(deps) = dependents.get(&key) {
+                for d in deps {
+                    if let Some(p) = pending.get_mut(d) {
+                        *p = p.saturating_sub(1);
+                        if *p == 0 {
+                            ready.insert(d.clone());
                         }
                     }
                 }
             }
         }
 
-        // If not all nodes are in result, there was a cycle (already detected above)
+        // Modules left over are part of a dependency cycle (detected separately).
+        // Append them so callers never silently lose modules.
+        if result.len() < self.nodes.len() {
+            let mut leftovers: Vec<String> = self
+                .nodes
+                .keys()
+                .filter(|k| !result.contains(k))
+                .cloned()
+                .collect();
+            leftovers.sort();
+            result.extend(leftovers);
+        }
+
         result
     }
 
@@ -591,12 +678,39 @@ impl ModuleGraph {
 
 use crate::externals;
 
+/// Collapse `.` / `..` components without touching the filesystem (the paths may
+/// not exist on disk when resolving purely from manifests).
+fn normalize_lexically(path: &str) -> String {
+    let absolute = path.starts_with('/');
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if matches!(parts.last(), Some(&p) if p != "..") {
+                    parts.pop();
+                } else if !absolute {
+                    parts.push("..");
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+    let joined = parts.join("/");
+    if absolute {
+        format!("/{}", joined)
+    } else if joined.is_empty() {
+        ".".to_string()
+    } else {
+        joined
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    #[ignore] // pre-existing: build_from_manifests can't resolve ./b from /a.js with manifests passed
     fn test_topological_sort_simple() {
         // Two modules: a → b (a imports b)
         let config = BundleConfig::default();

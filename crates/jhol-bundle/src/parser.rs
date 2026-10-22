@@ -8,7 +8,7 @@ use swc_core::common::{
 #[cfg(feature = "swc-backend")]
 use swc_core::ecma::{
     ast::{EsVersion, Program},
-    parser::{EsConfig, Parser, StringInput, Syntax, TsConfig},
+    parser::{EsSyntax, Parser, StringInput, Syntax, TsSyntax},
 };
 
 use crate::errors::BundleResult;
@@ -339,17 +339,13 @@ mod regex_lite {
                         // Find the first quoted string after the keyword
                         let mut in_quote = false;
                         let mut quote_char = ' ';
-                        let mut spec_start = 0;
-                        let mut spec_end = 0;
 
                         for (i, ch) in after_kw.char_indices() {
                             if !in_quote && (ch == '\'' || ch == '"') {
                                 in_quote = true;
                                 quote_char = ch;
-                                spec_start = self.pos + idx + i + 1;
                             } else if in_quote && ch == quote_char {
-                                spec_end = self.pos + idx + i;
-                                in_quote = false;
+                                let spec_end = self.pos + idx + i;
 
                                 let end = spec_end + 1;
                                 let text = self.text[start..end].to_string();

@@ -16,6 +16,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+#[cfg(feature = "swc-backend")]
+use swc_core::common::SourceMap;
+
 use rayon::prelude::*;
 
 use crate::cas::ParseManifest;
@@ -24,13 +27,24 @@ use crate::config::BundleConfig;
 use crate::errors::{BundleError, BundleResult};
 use crate::ingest::FileType;
 
+/// Bump whenever transform logic changes.
+///
+/// Cached transformed output is keyed by (source content hash, config hash), so
+/// without this a transform fix would never apply to an already-cached module —
+/// the same trap that `CasStore::PARSE_VERSION` fixes for parse manifests.
+pub const TRANSFORM_VERSION: u32 = 1;
+
 /// Compute a config hash — changes when transform output would differ.
-/// Includes: minify, target, jsx_runtime, jsx_import_source, define keys.
+/// Includes: transform version, minify, target, sourcemap, jsx runtime/import
+/// source and define keys.
 pub fn compute_config_hash(config: &BundleConfig) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut h = DefaultHasher::new();
+    TRANSFORM_VERSION.hash(&mut h);
     config.minify.hash(&mut h);
+    // SourceMapOption has no Hash impl; its discriminant is enough.
+    std::mem::discriminant(&config.sourcemap).hash(&mut h);
     config.target.hash(&mut h);
     config.jsx_runtime.hash(&mut h);
     config.jsx_import_source.hash(&mut h);
@@ -104,7 +118,7 @@ pub fn transform_manifest(
     let final_code = if config.minify {
         #[cfg(feature = "swc-backend")]
         {
-            minify_javascript(&code, &manifest.path)?
+            minify_javascript(&code, manifest.path.to_string_lossy().as_ref())?
         }
         #[cfg(not(feature = "swc-backend"))]
         {
@@ -175,55 +189,50 @@ fn transform_typescript(
     file_type: FileType,
     config: &BundleConfig,
 ) -> BundleResult<String> {
-    use swc_core::common::{errors::Handler, FileName, Globals, SourceMap, GLOBALS};
+    use swc_core::common::{sync::Lrc, FileName, Globals, Mark, SourceMap, Spanned, GLOBALS};
     use swc_core::ecma::{
+        ast::{Pass, Program},
         codegen::{text_writer::JsWriter as CodeGenWriter, Emitter},
-        parser::{Parser, StringInput, Syntax, TsConfig},
+        parser::{Parser, StringInput, Syntax, TsSyntax},
         transforms::base::fixer::fixer,
         transforms::typescript::strip,
     };
 
-    let cm = Arc::<SourceMap>::default();
-    let fm = cm.new_source_file(FileName::Custom("inline".into()), source.to_string());
+    let cm = Lrc::<SourceMap>::default();
+    let fm = cm.new_source_file(
+        Lrc::new(FileName::Custom("inline".into())),
+        source.to_string(),
+    );
 
-    let syntax = Syntax::Typescript(TsConfig {
+    let syntax = Syntax::Typescript(TsSyntax {
         tsx: matches!(file_type, FileType::Tsx),
         decorators: true,
         ..Default::default()
     });
 
-    let handler = Handler::with_tty_emitter(
-        swc_core::common::errors::ColorConfig::Never,
-        false,
-        false,
-        Some(cm.clone()),
-    );
-    let mut parser = Parser::new(syntax, StringInput::from(&*fm), Some(&handler));
+    let mut parser = Parser::new(syntax, StringInput::from(&*fm), None);
     let module = parser.parse_module().map_err(|e| BundleError::ParseError {
         path: "inline".to_string(),
-        line: e.loc().map(|l| l.row + 1).unwrap_or(1),
-        column: e.loc().map(|l| l.col + 1).unwrap_or(1),
+        line: cm.lookup_char_pos(e.span().lo).line,
+        column: cm.lookup_char_pos(e.span().lo).col_display + 1,
         message: format!("{:?}", e),
     })?;
 
     let result = GLOBALS.set(&Globals::new(), || {
-        let module = module.fold_with(&mut strip::strip_with_config(
-            swc_core::ecma::transforms::typescript::Config {
-                import_not_used_as_values:
-                    swc_core::ecma::transforms::typescript::ImportsNotUsedAsValues::Remove,
-                ..Default::default()
-            },
-            Default::default(),
-        ));
+        let unresolved_mark = Mark::new();
+        let top_level_mark = Mark::new();
+        let mut program = Program::Module(module);
+        strip(unresolved_mark, top_level_mark).process(&mut program);
 
         // Apply JSX transform if TSX
-        let module = if matches!(file_type, FileType::Tsx) {
-            module.fold_with(&mut jsx_transform(cm.clone(), config))
-        } else {
-            module
+        if matches!(file_type, FileType::Tsx) {
+            jsx_transform(cm.clone(), config, top_level_mark, unresolved_mark)
+                .process(&mut program);
+        }
+        fixer(None).process(&mut program);
+        let Program::Module(module) = program else {
+            unreachable!("parser produced a module")
         };
-
-        let module = module.fold_with(&mut fixer(None));
 
         let mut buf = Vec::new();
         {
@@ -246,45 +255,53 @@ fn transform_typescript(
 }
 
 #[cfg(feature = "swc-backend")]
-fn jsx_transform(cm: Arc<SourceMap>, config: &BundleConfig) -> impl swc_core::ecma::visit::Fold {
-    use swc_core::ecma::ast::Module;
+fn jsx_transform(
+    cm: swc_core::common::sync::Lrc<SourceMap>,
+    config: &BundleConfig,
+    top_level_mark: swc_core::common::Mark,
+    unresolved_mark: swc_core::common::Mark,
+) -> impl swc_core::ecma::ast::Pass + swc_core::ecma::visit::VisitMut {
     use swc_core::ecma::transforms::react::jsx;
 
     let runtime = match config.jsx_runtime {
-        crate::config::JsxRuntime::Automatic => swc_core::ecma::transforms::react::Jsx::Automatic {
-            import_source: config.jsx_import_source.clone(),
-        },
-        crate::config::JsxRuntime::Classic => swc_core::ecma::transforms::react::Jsx::Classic {
-            import_source: config.jsx_import_source.clone(),
-            ..Default::default()
-        },
+        crate::config::JsxRuntime::Automatic => {
+            swc_core::ecma::transforms::react::Runtime::Automatic
+        }
+        crate::config::JsxRuntime::Classic => swc_core::ecma::transforms::react::Runtime::Classic,
     };
 
     jsx(
         cm,
-        None,
+        None::<swc_core::common::comments::SingleThreadedComments>,
         swc_core::ecma::transforms::react::Options {
-            runtime,
-            development: false,
+            runtime: Some(runtime),
+            import_source: Some(config.jsx_import_source.clone().into()),
+            development: Some(false),
             ..Default::default()
         },
+        top_level_mark,
+        unresolved_mark,
     )
 }
 
 #[cfg(feature = "swc-backend")]
 fn transform_jsx(source: &str, config: &BundleConfig) -> BundleResult<String> {
-    use swc_core::common::{errors::Handler, FileName, Globals, SourceMap, GLOBALS};
+    use swc_core::common::{sync::Lrc, FileName, Globals, Mark, SourceMap, Spanned, GLOBALS};
     use swc_core::ecma::{
+        ast::Pass,
         codegen::{text_writer::JsWriter as CodeGenWriter, Emitter},
-        parser::{EsConfig, Parser, StringInput, Syntax},
+        parser::{EsSyntax, Parser, StringInput, Syntax},
         transforms::base::fixer::fixer,
     };
 
-    let cm = Arc::<SourceMap>::default();
-    let fm = cm.new_source_file(FileName::Custom("inline".into()), source.to_string());
+    let cm = Lrc::<SourceMap>::default();
+    let fm = cm.new_source_file(
+        Lrc::new(FileName::Custom("inline".into())),
+        source.to_string(),
+    );
 
     let mut parser = Parser::new(
-        Syntax::Es(EsConfig {
+        Syntax::Es(EsSyntax {
             jsx: true,
             ..Default::default()
         }),
@@ -293,14 +310,20 @@ fn transform_jsx(source: &str, config: &BundleConfig) -> BundleResult<String> {
     );
     let module = parser.parse_module().map_err(|e| BundleError::ParseError {
         path: "inline".to_string(),
-        line: e.loc().map(|l| l.row + 1).unwrap_or(1),
-        column: e.loc().map(|l| l.col + 1).unwrap_or(1),
+        line: cm.lookup_char_pos(e.span().lo).line,
+        column: cm.lookup_char_pos(e.span().lo).col_display + 1,
         message: format!("{:?}", e),
     })?;
 
     let result = GLOBALS.set(&Globals::new(), || {
-        let module = module.fold_with(&mut jsx_transform(cm.clone(), config));
-        let module = module.fold_with(&mut fixer(None));
+        let unresolved_mark = Mark::new();
+        let top_level_mark = Mark::new();
+        let mut program = swc_core::ecma::ast::Program::Module(module);
+        jsx_transform(cm.clone(), config, top_level_mark, unresolved_mark).process(&mut program);
+        fixer(None).process(&mut program);
+        let swc_core::ecma::ast::Program::Module(module) = program else {
+            unreachable!("parser produced a module")
+        };
 
         let mut buf = Vec::new();
         {
@@ -414,18 +437,24 @@ fn transform_jsx_simple(source: &str) -> BundleResult<String> {
 
 #[cfg(feature = "swc-backend")]
 fn minify_javascript(source: &str, path: &str) -> BundleResult<String> {
-    use swc_core::common::{errors::Handler, FileName, Globals, SourceMap, GLOBALS};
+    use swc_core::common::{sync::Lrc, FileName, Globals, Mark, SourceMap, GLOBALS};
     use swc_core::ecma::{
         codegen::{text_writer::JsWriter as CodeGenWriter, Emitter},
-        minifier::{compressor::Compressor, option::CompressOptions},
-        parser::{EsConfig, Parser, StringInput, Syntax},
+        minifier::{
+            optimize,
+            option::{CompressOptions, ExtraOptions, MinifyOptions},
+        },
+        parser::{EsSyntax, Parser, StringInput, Syntax},
     };
 
-    let cm = Arc::<SourceMap>::default();
-    let fm = cm.new_source_file(FileName::Custom(path.to_string()), source.to_string());
+    let cm = Lrc::<SourceMap>::default();
+    let fm = cm.new_source_file(
+        Lrc::new(FileName::Custom(path.to_string())),
+        source.to_string(),
+    );
 
     let mut parser = Parser::new(
-        Syntax::Es(EsConfig::default()),
+        Syntax::Es(EsSyntax::default()),
         StringInput::from(&*fm),
         None,
     );
@@ -434,14 +463,30 @@ fn minify_javascript(source: &str, path: &str) -> BundleResult<String> {
     })?;
 
     GLOBALS.set(&Globals::new(), || {
-        let module = module.fold_with(&mut Compressor::new(CompressOptions::default()));
+        let unresolved_mark = Mark::new();
+        let top_level_mark = Mark::new();
+        let program = optimize(
+            swc_core::ecma::ast::Program::Module(module),
+            cm.clone(),
+            None,
+            None,
+            &MinifyOptions {
+                compress: Some(CompressOptions::default()),
+                ..Default::default()
+            },
+            &ExtraOptions {
+                unresolved_mark,
+                top_level_mark,
+                mangle_name_cache: None,
+            },
+        );
+        let swc_core::ecma::ast::Program::Module(module) = program else {
+            unreachable!("parser produced a module")
+        };
         let mut buf = Vec::new();
         {
             let mut emitter = Emitter {
-                cfg: swc_core::ecma::codegen::Config {
-                    minify: true,
-                    ..Default::default()
-                },
+                cfg: swc_core::ecma::codegen::Config::default().with_minify(true),
                 cm: cm.clone(),
                 comments: None,
                 wr: Box::new(CodeGenWriter::new(cm.clone(), "\n", &mut buf, None)),
@@ -489,11 +534,25 @@ mod tests {
 
     #[test]
     fn test_config_hash_changes_with_minify() {
-        let mut config1 = BundleConfig::default();
+        let config1 = BundleConfig::default();
         let mut config2 = BundleConfig::default();
         config2.minify = true;
         let h1 = compute_config_hash(&config1);
         let h2 = compute_config_hash(&config2);
         assert_ne!(h1, h2);
+    }
+
+    #[cfg(feature = "swc-backend")]
+    #[test]
+    fn swc_typescript_and_jsx_transforms_emit_javascript() {
+        let config = BundleConfig::default();
+        let ts = transform_typescript("const answer: number = 42;", FileType::TypeScript, &config)
+            .unwrap();
+        assert!(ts.contains("answer"));
+        assert!(!ts.contains(": number"));
+
+        let jsx = transform_jsx("const view = <div />;", &config).unwrap();
+        assert!(jsx.contains("div"));
+        assert!(!jsx.contains("<div"));
     }
 }

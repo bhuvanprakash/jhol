@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use crate::cas::TransformedOutput;
 use crate::config::{BundleConfig, OutputFormat};
 use crate::errors::{BundleError, BundleResult};
+use crate::graph::GraphNode;
 use crate::graph::ModuleGraph;
 use crate::split::Chunk;
 
@@ -295,8 +296,12 @@ impl Emitter {
         ranges.sort_by_key(|(s, _, _)| *s);
 
         for (start, end, kind) in ranges {
-            if start < last_end { continue; }
-            if start > source.len() { continue; }
+            if start < last_end {
+                continue;
+            }
+            if start > source.len() {
+                continue;
+            }
             let safe_end = end.min(source.len()).max(start);
             if start < source.len() {
                 result.push_str(&source[last_end..start]);
@@ -334,6 +339,21 @@ impl Emitter {
 
         output.push_str("'use strict';\n\n");
 
+        // Specifier -> module id, shared by both layouts below.
+        let path_to_mid: HashMap<String, String> = chunk
+            .modules
+            .iter()
+            .enumerate()
+            .map(|(i, k)| (k.clone(), format!("__m{}", i)))
+            .collect();
+        let resolve_dep = |node: &GraphNode, spec: &str| -> Option<String> {
+            node.deps
+                .iter()
+                .find(|d| !d.is_external && d.specifier == spec)
+                .and_then(|d| path_to_mid.get(d.path.to_str().unwrap_or("")))
+                .cloned()
+        };
+
         if self.config.single_file {
             output.push_str("var __jhol_modules = {};\n");
             output.push_str("var __jhol_cache = {};\n\n");
@@ -351,7 +371,7 @@ impl Emitter {
                     None => continue,
                 };
                 let module_id = format!("__m{}", i);
-                let cjs_code = self.to_cjs_code(code, key, graph);
+                let cjs_code = self.to_cjs_code(code, key, graph, &|spec| resolve_dep(node, spec));
                 output.push_str(&format!(
                     "__jhol_modules['{}'] = function(module, exports, __require) {{\n{}\n}};\n\n",
                     module_id, cjs_code
@@ -381,7 +401,7 @@ impl Emitter {
                     Some(t) => t.code.as_str(),
                     None => continue,
                 };
-                let cjs_code = self.to_cjs_code(code, key, graph);
+                let cjs_code = self.to_cjs_code(code, key, graph, &|spec| resolve_dep(node, spec));
                 output.push_str(&cjs_code);
                 output.push('\n');
             }
@@ -390,7 +410,17 @@ impl Emitter {
         Ok(output)
     }
 
-    fn to_cjs_code(&self, source: &str, module_key: &str, graph: &ModuleGraph) -> String {
+    /// ESM → CJS conversion for the single-file layout.
+    ///
+    /// The final `require()` rewrite is delegated to `crate::rewrite` so this
+    /// path cannot drift from the other emitters.
+    fn to_cjs_code(
+        &self,
+        source: &str,
+        module_key: &str,
+        graph: &ModuleGraph,
+        resolve: &dyn Fn(&str) -> Option<String>,
+    ) -> String {
         let node = graph.get(module_key);
         let mut result = String::new();
         let last_end = 0;
@@ -453,7 +483,7 @@ impl Emitter {
         result = remove_import_statements(&result);
         result = convert_exports_to_cjs(&result);
 
-        result
+        crate::rewrite::rewrite_require_calls(&result, resolve)
     }
 
     fn format_iife(
@@ -483,6 +513,20 @@ impl Emitter {
             path_to_mid.insert(key.clone(), format!("__m{}", i));
         }
 
+        // Modules are emitted in dependency order, so the entry is not
+        // necessarily `__m0`. Resolve it instead of hardcoding the id.
+        let entry_module_id = chunk
+            .modules
+            .iter()
+            .enumerate()
+            .find_map(|(i, key)| {
+                graph
+                    .get(key)
+                    .filter(|n| n.is_entry && !n.is_external)
+                    .map(|_| format!("__m{}", i))
+            })
+            .unwrap_or_else(|| "__m0".to_string());
+
         for (i, key) in chunk.modules.iter().enumerate() {
             let node = match graph.get(key) {
                 Some(n) => n,
@@ -496,7 +540,7 @@ impl Emitter {
                 None => continue,
             };
             let module_id = format!("__m{}", i);
-            
+
             // Generate import → __require() preamble
             let mut preamble = String::new();
             let mut dep_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -505,8 +549,10 @@ impl Emitter {
                     Some(m) => m.clone(),
                     None => continue,
                 };
-                if !dep_ids.insert(dep_mid.clone()) { continue; }
-                
+                if !dep_ids.insert(dep_mid.clone()) {
+                    continue;
+                }
+
                 // Parse import clause from original source (simple string scan)
                 // import x from 'spec' → var x = __require('__mN').default;
                 // import { x } from 'spec' → var x = __require('__mN').x;
@@ -532,38 +578,68 @@ impl Emitter {
                                 let q = after_from.chars().next().unwrap();
                                 if let Some(end_q) = after_from[1..].find(q) {
                                     let spec_str = &after_from[1..=end_q];
-                                    let spec_str_clean = if spec_str.ends_with(q) { &spec_str[..spec_str.len()-1] } else { spec_str };
+                                    let spec_str_clean = if spec_str.ends_with(q) {
+                                        &spec_str[..spec_str.len() - 1]
+                                    } else {
+                                        spec_str
+                                    };
                                     if spec_str_clean == spec.as_str() {
                                         let clause = clause_str.trim();
                                         if clause.starts_with('{') {
                                             // { x, y as z } → var x = __require('__mN').x;
-                                            let inner = clause.trim_start_matches('{').trim_end_matches('}').trim();
+                                            let inner = clause
+                                                .trim_start_matches('{')
+                                                .trim_end_matches('}')
+                                                .trim();
                                             for part in inner.split(',') {
                                                 let part = part.trim();
-                                                if part.is_empty() { continue; }
-                                                let (orig, loc) = if let Some(as_pos) = part.find(" as ") {
-                                                    (&part[..as_pos], &part[as_pos + 4..])
-                                                } else {
-                                                    (part, part)
-                                                };
-                                                preamble.push_str(&format!("var {} = __require('{}').{};\n", loc.trim(), dep_mid, orig.trim()));
+                                                if part.is_empty() {
+                                                    continue;
+                                                }
+                                                let (orig, loc) =
+                                                    if let Some(as_pos) = part.find(" as ") {
+                                                        (&part[..as_pos], &part[as_pos + 4..])
+                                                    } else {
+                                                        (part, part)
+                                                    };
+                                                preamble.push_str(&format!(
+                                                    "var {} = __require('{}').{};\n",
+                                                    loc.trim(),
+                                                    dep_mid,
+                                                    orig.trim()
+                                                ));
                                             }
                                         } else if clause.starts_with("* as ") {
                                             let as_name = clause.trim_start_matches("* as ").trim();
-                                            preamble.push_str(&format!("var {} = __require('{}');\n", as_name, dep_mid));
+                                            preamble.push_str(&format!(
+                                                "var {} = __require('{}');\n",
+                                                as_name, dep_mid
+                                            ));
                                         } else if clause.starts_with('*') {
                                             // import * from — namespace, no name
-                                        } else if clause.starts_with('\'') || clause.starts_with('\"') {
+                                        } else if clause.starts_with('\'')
+                                            || clause.starts_with('\"')
+                                        {
                                             // side-effect import, no bindings
                                         } else {
                                             // default import: import x from 'spec'
                                             let default_name = clause;
                                             // If there's a default keyword, skip it
-                                            let default_name = default_name.strip_prefix("default").and_then(|r| {
-                                                let r = r.trim();
-                                                if r.starts_with(',') { Some(r[1..].trim()) } else { None }
-                                            }).unwrap_or(clause);
-                                            preamble.push_str(&format!("var {} = __require('{}').default;\n", default_name, dep_mid));
+                                            let default_name = default_name
+                                                .strip_prefix("default")
+                                                .and_then(|r| {
+                                                    let r = r.trim();
+                                                    if r.starts_with(',') {
+                                                        Some(r[1..].trim())
+                                                    } else {
+                                                        None
+                                                    }
+                                                })
+                                                .unwrap_or(clause);
+                                            preamble.push_str(&format!(
+                                                "var {} = __require('{}').default;\n",
+                                                default_name, dep_mid
+                                            ));
                                         }
                                         break;
                                     }
@@ -578,7 +654,16 @@ impl Emitter {
             }
 
             let stripped = remove_import_statements(code);
-            let cjs_code = convert_exports_to_cjs(&stripped);
+            let mut cjs_code = convert_exports_to_cjs(&stripped);
+            // CommonJS `require()` must become `__require('<module-id>')`.
+            // Without this every CJS module (most of npm) crashed at runtime.
+            cjs_code = crate::rewrite::rewrite_require_calls(&cjs_code, &|spec| {
+                node.deps
+                    .iter()
+                    .find(|d| !d.is_external && d.specifier == spec)
+                    .and_then(|d| path_to_mid.get(d.path.to_str().unwrap_or("")))
+                    .cloned()
+            });
             output.push_str(&format!(
                 "__jhol_modules['{}'] = function(module, exports, __require) {{\n{}{}\n}};\n\n",
                 module_id, preamble, cjs_code
@@ -593,7 +678,10 @@ impl Emitter {
         output.push_str("  return module.exports;\n");
         output.push_str("}\n\n");
 
-        output.push_str("var __entry = __require('__m0');\n");
+        output.push_str(&format!(
+            "var __entry = __require('{}');\n",
+            entry_module_id
+        ));
         output.push_str(&format!(
             "if (typeof window !== 'undefined') window['{}'] = __entry;\n",
             global_name
@@ -662,25 +750,39 @@ fn convert_exports_to_cjs(source: &str) -> String {
                 i += 1;
             }
             'e' if i + 11 <= chars.len()
-                && chars[i..i+8] == ['e','x','p','o','r','t',' ','d']
-                && chars[i+8..i+11] == ['e','f','a']
-            =>
+                && chars[i..i + 8] == ['e', 'x', 'p', 'o', 'r', 't', ' ', 'd']
+                && chars[i + 8..i + 11] == ['e', 'f', 'a'] =>
             {
                 // export default ... → module.exports = ...
                 i += 7; // skip "export "
-                // find the tokens "default", then rewrite the rest of line as "module.exports = <expr>"
+                        // find the tokens "default", then rewrite the rest of line as "module.exports = <expr>"
                 let after = &chars[i..];
                 let default_str: String = after.iter().take(12).collect();
                 if default_str.starts_with("default") {
+                    // Scan for the end of the exported expression. A `;` or newline
+                    // only ends it at nesting depth 0 — otherwise
+                    // `export default function run() { return label; }` was cut at
+                    // the `;` *inside* the function body, truncating the module
+                    // (and leaving the emitted wrapper unbalanced).
                     let mut expr_end = 0;
+                    let mut depth: i32 = 0;
                     for (j, &ch) in after.iter().enumerate() {
-                        if ch == ';' || ch == '\n' {
-                            expr_end = j;
-                            break;
+                        match ch {
+                            '{' | '(' | '[' => depth += 1,
+                            '}' | ')' | ']' => depth = (depth - 1).max(0),
+                            ';' | '\n' if depth == 0 => {
+                                expr_end = j;
+                                break;
+                            }
+                            _ => {}
                         }
                     }
                     let expr_len = if expr_end == 0 { after.len() } else { expr_end };
-                    let expr: String = after.iter().skip(8).take(expr_len.saturating_sub(8)).collect();
+                    let expr: String = after
+                        .iter()
+                        .skip(8)
+                        .take(expr_len.saturating_sub(8))
+                        .collect();
                     result.push_str("module.exports.default = ");
                     result.push_str(expr.trim());
                     result.push(';');
@@ -690,44 +792,61 @@ fn convert_exports_to_cjs(source: &str) -> String {
                     // The entry module might have named exports in IIFE format
                     // Read declaration keyword + name from one export at a time (per-line)
                     let after = &chars[i..];
-                    let mut line: String = String::new();
                     let mut line_end = 0;
                     for (j, &ch) in after.iter().enumerate() {
-                        if ch == '\n' || j == after.len() - 1 { line_end = j + 1; break; }
+                        if ch == '\n' || j == after.len() - 1 {
+                            line_end = j + 1;
+                            break;
+                        }
                     }
-                    if line_end == 0 { line_end = after.len(); }
+                    if line_end == 0 {
+                        line_end = after.len();
+                    }
                     let line_source: String = after[..line_end].iter().collect();
-                    
+
                     // Extract exported name: "export const/let/var/function NAME"
                     let name = if let Some(pos) = line_source.find("const ") {
                         let after_kw = &line_source[pos + 6..];
-                        after_kw.split(|c: char| c == ' ' || c == '=' || c == '(' || c == ';').next().unwrap_or("").to_string()
+                        after_kw
+                            .split(|c: char| c == ' ' || c == '=' || c == '(' || c == ';')
+                            .next()
+                            .unwrap_or("")
+                            .to_string()
                     } else if let Some(pos) = line_source.find("let ") {
                         let after_kw = &line_source[pos + 4..];
-                        after_kw.split(|c: char| c == ' ' || c == '=' || c == '(' || c == ';').next().unwrap_or("").to_string()
+                        after_kw
+                            .split(|c: char| c == ' ' || c == '=' || c == '(' || c == ';')
+                            .next()
+                            .unwrap_or("")
+                            .to_string()
                     } else if let Some(pos) = line_source.find("var ") {
                         let after_kw = &line_source[pos + 4..];
-                        after_kw.split(|c: char| c == ' ' || c == '=' || c == '(' || c == ';').next().unwrap_or("").to_string()
-                    } else { String::new() };
-                    
+                        after_kw
+                            .split(|c: char| c == ' ' || c == '=' || c == '(' || c == ';')
+                            .next()
+                            .unwrap_or("")
+                            .to_string()
+                    } else {
+                        String::new()
+                    };
+
                     if !name.is_empty() {
                         // Drop "export " prefix, add exports line
-                        let decl = &line_source[7..];  // skip "export "
+                        let decl = &line_source[7..]; // skip "export "
                         result.push_str(decl);
                         if !decl.trim().ends_with(';') {
                             result.push(';');
                         }
                         result.push_str(&format!("\nexports.{} = {};\n", name, name));
                     } else {
-                        result.push_str(&line_source[7..]);  // just copy without "export "
+                        result.push_str(&line_source[7..]); // just copy without "export "
                     }
                     i += line_end + 7; // "export " + line
                 }
                 continue;
             }
             'e' if i + 7 <= chars.len()
-                && chars[i..i+7] == ['e','x','p','o','r','t',' ']
-            =>
+                && chars[i..i + 7] == ['e', 'x', 'p', 'o', 'r', 't', ' '] =>
             {
                 // export const/let/var/function/class — strip "export", keep declaration, add re-export
                 // Read declaration keyword + name from one export at a time (per-line)
@@ -735,23 +854,42 @@ fn convert_exports_to_cjs(source: &str) -> String {
                 let after = &chars[i..];
                 let mut line_end = 0;
                 for (j, &ch) in after.iter().enumerate() {
-                    if ch == '\n' || ch == ';' || j == after.len() - 1 { line_end = j + 1; break; }
+                    if ch == '\n' || ch == ';' || j == after.len() - 1 {
+                        line_end = j + 1;
+                        break;
+                    }
                 }
-                if line_end == 0 { line_end = after.len(); }
+                if line_end == 0 {
+                    line_end = after.len();
+                }
                 let line_source: String = after[..line_end].iter().collect();
-                
+
                 // Extract exported name: "export const/let/var/function NAME"
                 let name = if let Some(pos) = line_source.find("const ") {
                     let after_kw = &line_source[pos + 6..];
-                    after_kw.split(|c: char| c == ' ' || c == '=' || c == '(' || c == ';').next().unwrap_or("").to_string()
+                    after_kw
+                        .split(|c: char| c == ' ' || c == '=' || c == '(' || c == ';')
+                        .next()
+                        .unwrap_or("")
+                        .to_string()
                 } else if let Some(pos) = line_source.find("let ") {
                     let after_kw = &line_source[pos + 4..];
-                    after_kw.split(|c: char| c == ' ' || c == '=' || c == '(' || c == ';').next().unwrap_or("").to_string()
+                    after_kw
+                        .split(|c: char| c == ' ' || c == '=' || c == '(' || c == ';')
+                        .next()
+                        .unwrap_or("")
+                        .to_string()
                 } else if let Some(pos) = line_source.find("var ") {
                     let after_kw = &line_source[pos + 4..];
-                    after_kw.split(|c: char| c == ' ' || c == '=' || c == '(' || c == ';').next().unwrap_or("").to_string()
-                } else { String::new() };
-                
+                    after_kw
+                        .split(|c: char| c == ' ' || c == '=' || c == '(' || c == ';')
+                        .next()
+                        .unwrap_or("")
+                        .to_string()
+                } else {
+                    String::new()
+                };
+
                 if !name.is_empty() {
                     result.push_str(&line_source);
                     if !line_source.trim().ends_with(';') {
@@ -833,19 +971,19 @@ fn find_statement_end(chars: &[char]) -> usize {
     let mut brace_depth: i32 = 0;
     for (i, &ch) in chars.iter().enumerate() {
         match ch {
-            '(' | '[' | '{' => {
+            '(' | '[' => {
                 paren_depth += 1;
             }
-            ')' | ']' | '}' => {
+            ')' | ']' => {
                 paren_depth = paren_depth.saturating_sub(1);
             }
-            ';' if paren_depth == 0 && brace_depth == 0 => return i + 1,
             '{' => {
                 brace_depth += 1;
             }
             '}' => {
                 brace_depth = brace_depth.saturating_sub(1);
             }
+            ';' if paren_depth == 0 && brace_depth == 0 => return i + 1,
             '\n' | '\r' if paren_depth == 0 && brace_depth == 0 => return i,
             _ => {}
         }

@@ -154,6 +154,21 @@ impl CodeGenerator {
 
         output.push_str(&format!("// Jhol Bundle — {} modules\n", sorted.len()));
 
+        // Resolve a specifier to its bundle module id for the module at `key`.
+        // Shared by every path so `require()` handling cannot diverge again.
+        let resolve_for = |key: &str, spec: &str| -> Option<String> {
+            let node = graph.get(key)?;
+            let dep = node
+                .deps
+                .iter()
+                .find(|d| !d.is_external && d.specifier == spec)?;
+            let dep_path = dep.path.to_str()?;
+            sorted
+                .iter()
+                .position(|k| k == dep_path)
+                .map(|idx| format!("__m{}", idx))
+        };
+
         if self.config.single_file {
             // Generate a CommonJS bundle with module registry
             output.push_str("var __jhol_modules = {};\n");
@@ -162,7 +177,9 @@ impl CodeGenerator {
             for (i, key) in sorted.iter().enumerate() {
                 if let Some(content) = transformed.get(key) {
                     let module_id = format!("__m{}", i);
-                    let processed = self.rewrite_cjs_imports(content, graph, i);
+                    let processed = crate::rewrite::rewrite_require_calls(content, &|spec| {
+                        resolve_for(key, spec)
+                    });
                     output.push_str(&format!(
                         "__jhol_modules['{}'] = function(module, exports, require) {{\n{}\n}};\n\n",
                         module_id, processed
@@ -186,7 +203,9 @@ impl CodeGenerator {
             // Simply concatenate
             for key in &sorted {
                 if let Some(content) = transformed.get(key) {
-                    let processed = self.rewrite_cjs_imports(content, graph, 0);
+                    let processed = crate::rewrite::rewrite_require_calls(content, &|spec| {
+                        resolve_for(key, spec)
+                    });
                     output.push_str(&processed);
                     output.push('\n');
                 }
@@ -225,10 +244,31 @@ impl CodeGenerator {
         output.push_str("var __jhol_cache = {};\n\n");
 
         let sorted = graph.sorted_modules();
+        // Same specifier -> module-id resolver as the CommonJS path, so both
+        // generators share one `require()` rewriting implementation.
+        let resolve_for = |key: &str, spec: &str| -> Option<String> {
+            let node = graph.get(key)?;
+            let dep = node
+                .deps
+                .iter()
+                .find(|d| !d.is_external && d.specifier == spec)?;
+            let dep_path = dep.path.to_str()?;
+            sorted
+                .iter()
+                .position(|k| k == dep_path)
+                .map(|idx| format!("__m{}", idx))
+        };
+        // The entry is not necessarily `__m0` (modules are emitted in dependency
+        // order), so look it up rather than hardcoding the id.
+        let mut entry_module_id: Option<String> = None;
         for (i, key) in sorted.iter().enumerate() {
+            if graph.get(key).map(|n| n.is_entry).unwrap_or(false) {
+                entry_module_id = Some(format!("__m{}", i));
+            }
             if let Some(content) = transformed.get(key) {
                 let module_id = format!("__m{}", i);
-                let processed = self.rewrite_cjs_imports(content, graph, i);
+                let processed =
+                    crate::rewrite::rewrite_require_calls(content, &|spec| resolve_for(key, spec));
                 output.push_str(&format!(
                     "__jhol_modules['{}'] = function(module, exports, require) {{\n{}\n}};\n\n",
                     module_id, processed
@@ -246,7 +286,10 @@ impl CodeGenerator {
         output.push_str("}\n\n");
 
         // Execute entry and expose to global scope
-        output.push_str("var __entry = __require('__m0');\n");
+        output.push_str(&format!(
+            "var __entry = __require('{}');\n",
+            entry_module_id.unwrap_or_else(|| "__m0".to_string())
+        ));
         output.push_str(&format!(
             "if (typeof window !== 'undefined') window['{}'] = __entry;\n",
             global_name
@@ -309,16 +352,6 @@ impl CodeGenerator {
         }
 
         result
-    }
-
-    fn rewrite_cjs_imports(
-        &self,
-        source: &str,
-        graph: &ModuleGraph,
-        _module_index: usize,
-    ) -> String {
-        // Rewrite require() calls to use the module registry
-        source.replace("require(", "__require(")
     }
 
     fn relative_path(&self, path: &Path) -> String {

@@ -1,27 +1,25 @@
-use crate::errors::BundleResult;
+use crate::errors::{BundleError, BundleResult};
 
 #[cfg(feature = "swc-backend")]
 pub fn minify_js(source: &str, filename: &str) -> BundleResult<String> {
-    use swc_core::common::{
-        errors::{ColorConfig, Handler},
-        FileName, Globals, SourceMap, GLOBALS,
-    };
+    use swc_core::common::{sync::Lrc, FileName, Globals, Mark, SourceMap, GLOBALS};
     use swc_core::ecma::{
-        ast::EsVersion,
         codegen::{text_writer::JsWriter, Emitter},
         minifier::{
-            compressor::Compressor,
-            option::{CompressOptions, MangleOptions, MinifyOptions},
+            optimize,
+            option::{CompressOptions, ExtraOptions, MinifyOptions},
         },
-        parser::{EsConfig, Parser, StringInput, Syntax},
-        transforms::base::helpers::HELPERS,
+        parser::{EsSyntax, Parser, StringInput, Syntax},
     };
 
-    let cm = Arc::<SourceMap>::default();
-    let fm = cm.new_source_file(FileName::Custom(filename.to_string()), source.to_string());
+    let cm = Lrc::<SourceMap>::default();
+    let fm = cm.new_source_file(
+        Lrc::new(FileName::Custom(filename.to_string())),
+        source.to_string(),
+    );
 
     let mut parser = Parser::new(
-        Syntax::Es(EsConfig::default()),
+        Syntax::Es(EsSyntax::default()),
         StringInput::from(&*fm),
         None,
     );
@@ -30,15 +28,31 @@ pub fn minify_js(source: &str, filename: &str) -> BundleResult<String> {
     })?;
 
     let result = GLOBALS.set(&Globals::new(), || {
-        let module_ast = module_ast.fold_with(&mut Compressor::new(CompressOptions::default()));
+        let unresolved_mark = Mark::new();
+        let top_level_mark = Mark::new();
+        let program = optimize(
+            swc_core::ecma::ast::Program::Module(module_ast),
+            cm.clone(),
+            None,
+            None,
+            &MinifyOptions {
+                compress: Some(CompressOptions::default()),
+                ..Default::default()
+            },
+            &ExtraOptions {
+                unresolved_mark,
+                top_level_mark,
+                mangle_name_cache: None,
+            },
+        );
+        let swc_core::ecma::ast::Program::Module(module_ast) = program else {
+            unreachable!("parser produced a module")
+        };
 
         let mut buf = Vec::new();
         {
             let mut emitter = Emitter {
-                cfg: swc_core::ecma::codegen::Config {
-                    minify: true,
-                    ..Default::default()
-                },
+                cfg: swc_core::ecma::codegen::Config::default().with_minify(true),
                 cm: cm.clone(),
                 comments: None,
                 wr: Box::new(JsWriter::new(cm.clone(), "\n", &mut buf, None)),

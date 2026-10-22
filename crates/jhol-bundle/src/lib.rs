@@ -12,11 +12,14 @@
 //!   config.out_dir = PathBuf::from("./dist");
 //!   let result = bundle(&config)?;
 
+#![allow(dead_code, unused_variables)]
+
 pub mod cas;
 pub mod emit;
 pub mod graph;
 pub mod ingest;
 pub mod parse;
+pub(crate) mod rewrite;
 pub mod transform;
 pub mod tree_shake;
 
@@ -24,6 +27,7 @@ pub mod codegen;
 pub mod config;
 pub mod css;
 pub mod errors;
+pub mod fmt;
 pub mod externals;
 pub mod minify;
 pub mod parser;
@@ -141,8 +145,10 @@ pub fn bundle(config: &BundleConfig) -> BundleResult<BundleResult_> {
     // Transform those too so emit has all content hashes.
     let mut expanded_transformed = transformed.clone();
     for node in graph.nodes.values() {
-        if !expanded_transformed.contains_key(&node.content_hash) && !node.is_external
-            && node.content_hash != 0 && node.manifest.path.exists()
+        if !expanded_transformed.contains_key(&node.content_hash)
+            && !node.is_external
+            && node.content_hash != 0
+            && node.manifest.path.exists()
         {
             let source = match std::fs::read_to_string(&node.manifest.path) {
                 Ok(s) => s,

@@ -98,10 +98,7 @@ fn process_css(
 fn minify_css(source: &str) -> BundleResult<String> {
     #[cfg(feature = "lightningcss")]
     {
-        use lightningcss::{
-            bundler::{Bundle, Bundler},
-            stylesheet::{MinifyOptions, ParserOptions, PrinterOptions, StyleSheet},
-        };
+        use lightningcss::stylesheet::{MinifyOptions, ParserOptions, PrinterOptions, StyleSheet};
 
         let mut stylesheet = StyleSheet::parse(source, ParserOptions::default())
             .map_err(|e| BundleError::CssError(format!("CSS parse error: {:?}", e)))?;
