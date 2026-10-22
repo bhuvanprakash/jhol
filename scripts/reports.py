@@ -1,5 +1,265 @@
 #!/usr/bin/env python3
+"""Engineering reports (merged suite)."""
 from __future__ import annotations
+
+import sys
+
+
+# ── enterprise-npmrc: was enterprise_npmrc_report.py ──
+
+import argparse
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def parse_npmrc(contents: str) -> dict:
+    out = {
+        "registry": None,
+        "scopedRegistries": {},
+        "hasAuthToken": False,
+        "proxy": None,
+        "httpsProxy": None,
+        "strictSsl": None,
+        "cafile": None,
+    }
+    for raw in contents.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith(";") or "=" not in line:
+            continue
+        key, value = [x.strip() for x in line.split("=", 1)]
+        if key == "registry":
+            out["registry"] = value.rstrip("/")
+        elif key.endswith(":registry") and key.startswith("@"):
+            out["scopedRegistries"][key[:-9]] = value.rstrip("/")
+        elif key.endswith(":_authToken"):
+            out["hasAuthToken"] = True
+        elif key == "proxy":
+            out["proxy"] = value
+        elif key in ("https-proxy", "https_proxy"):
+            out["httpsProxy"] = value
+        elif key == "strict-ssl":
+            out["strictSsl"] = value.lower() == "true"
+        elif key == "cafile":
+            out["cafile"] = value
+    return out
+
+
+def run_enterprise(argv: list[str] | None = None) -> int:
+    import sys
+    if argv is not None:
+        sys.argv = [sys.argv[0] if sys.argv else "reports.py", *argv]
+
+    parser = argparse.ArgumentParser(description="Enterprise .npmrc matrix report")
+    parser.add_argument("--config", default="benchmarks/enterprise_guardrails.json")
+    parser.add_argument("--out", default="enterprise-npmrc-report.json")
+    args = parser.parse_args()
+
+    guardrails = {"minPassRate": 1.0, "minScenarioCount": 4}
+    cfg = Path(args.config)
+    if cfg.exists():
+        guardrails.update(json.loads(cfg.read_text()))
+
+    scenarios = [
+        {
+            "name": "scoped_registry_and_token",
+            "npmrc": "registry=https://registry.npmjs.org/\n@acme:registry=https://npm.acme.local/\n//npm.acme.local/:_authToken=abc\n",
+            "expect": {"hasAuthToken": True, "scopedCount": 1},
+        },
+        {
+            "name": "proxy_and_https_proxy",
+            "npmrc": "proxy=http://proxy.local:8080\nhttps-proxy=http://proxy.local:8443\n",
+            "expect": {"proxy": "http://proxy.local:8080", "httpsProxy": "http://proxy.local:8443"},
+        },
+        {
+            "name": "strict_ssl_false",
+            "npmrc": "strict-ssl=false\n",
+            "expect": {"strictSsl": False},
+        },
+        {
+            "name": "cafile_present",
+            "npmrc": "cafile=/etc/ssl/certs/acme.pem\n",
+            "expect": {"cafile": "/etc/ssl/certs/acme.pem"},
+        },
+    ]
+
+    rows = []
+    failures: list[str] = []
+    for s in scenarios:
+        parsed = parse_npmrc(s["npmrc"])
+        expect = s["expect"]
+        ok = True
+        if "hasAuthToken" in expect and parsed["hasAuthToken"] != expect["hasAuthToken"]:
+            ok = False
+        if "scopedCount" in expect and len(parsed["scopedRegistries"]) != expect["scopedCount"]:
+            ok = False
+        for key in ("proxy", "httpsProxy", "strictSsl", "cafile"):
+            if key in expect and parsed.get(key) != expect[key]:
+                ok = False
+        if not ok:
+            failures.append(f"scenario {s['name']} failed")
+        rows.append({"name": s["name"], "parsed": parsed, "expect": expect, "pass": ok})
+
+    total = len(rows)
+    passed = len([r for r in rows if r["pass"]])
+    pass_rate = (passed / total) if total else 0.0
+    if total < int(guardrails.get("minScenarioCount", 4)):
+        failures.append(
+            f"scenario count {total} below minScenarioCount {guardrails.get('minScenarioCount')}"
+        )
+    if pass_rate < float(guardrails.get("minPassRate", 1.0)):
+        failures.append(
+            f"pass rate {pass_rate:.2%} below threshold {float(guardrails.get('minPassRate', 1.0)):.2%}"
+        )
+
+    report = {
+        "schemaVersion": "1",
+        "generatedAtUtc": datetime.now(timezone.utc).isoformat(),
+        "guardrails": guardrails,
+        "totals": {
+            "scenarioCount": total,
+            "passed": passed,
+            "failed": total - passed,
+            "passRate": pass_rate,
+        },
+        "rows": rows,
+        "failures": failures,
+        "status": "pass" if not failures else "fail",
+    }
+    Path(args.out).write_text(json.dumps(report, indent=2) + "\n")
+    print(f"scenarios={total} passed={passed} pass_rate={pass_rate:.2%}")
+    print(f"report={args.out}")
+    if failures:
+        print("Failures:")
+        for f in failures:
+            print(f"- {f}")
+        return 1
+    return 0
+
+
+# ── framework-compat: was framework_compat_report.py ──
+
+import argparse
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def load_json(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+
+def run_framework(argv: list[str] | None = None) -> int:
+    import sys
+    if argv is not None:
+        sys.argv = [sys.argv[0] if sys.argv else "reports.py", *argv]
+
+    parser = argparse.ArgumentParser(description="Framework compatibility matrix report")
+    parser.add_argument("--fixtures-dir", default="tests/fixtures")
+    parser.add_argument("--matrix", default="benchmarks/framework_matrix.json")
+    parser.add_argument("--config", default="benchmarks/framework_guardrails.json")
+    parser.add_argument("--out", default="framework-compat-report.json")
+    args = parser.parse_args()
+
+    fixtures_dir = Path(args.fixtures_dir)
+    matrix = load_json(Path(args.matrix))
+    guardrails = {"minPassRate": 1.0, "minFrameworkCount": 1}
+    guardrails.update(load_json(Path(args.config)))
+
+    frameworks = matrix.get("frameworks", [])
+    rows = []
+    failures: list[str] = []
+
+    for fw in frameworks:
+        name = fw.get("name", "unknown")
+        fixture = fw.get("fixture", "")
+        pkg_path = fixtures_dir / fixture / "package.json"
+        parsed = {}
+        valid_json = False
+        try:
+            parsed = json.loads(pkg_path.read_text())
+            valid_json = True
+        except Exception:
+            valid_json = False
+
+        deps = parsed.get("dependencies", {}) if isinstance(parsed, dict) else {}
+        dev_deps = parsed.get("devDependencies", {}) if isinstance(parsed, dict) else {}
+        workspaces = parsed.get("workspaces") if isinstance(parsed, dict) else None
+
+        req_deps = fw.get("requiredDependencies", [])
+        missing_deps = [d for d in req_deps if d not in deps and d not in dev_deps]
+        needs_workspaces = bool(fw.get("requiredWorkspaces", False))
+        workspace_ok = (not needs_workspaces) or bool(workspaces)
+
+        passed = valid_json and not missing_deps and workspace_ok
+        if not passed:
+            if not valid_json:
+                failures.append(f"{name}: invalid package.json ({pkg_path})")
+            if missing_deps:
+                failures.append(f"{name}: missing deps {missing_deps}")
+            if needs_workspaces and not workspace_ok:
+                failures.append(f"{name}: missing required workspaces field")
+
+        rows.append(
+            {
+                "framework": name,
+                "fixture": fixture,
+                "packageJson": str(pkg_path),
+                "validPackageJson": valid_json,
+                "requiredDependencies": req_deps,
+                "missingDependencies": missing_deps,
+                "requiredWorkspaces": needs_workspaces,
+                "workspacePresent": bool(workspaces),
+                "pass": passed,
+            }
+        )
+
+    total = len(rows)
+    passed = len([r for r in rows if r["pass"]])
+    pass_rate = (passed / total) if total else 0.0
+
+    if total < int(guardrails.get("minFrameworkCount", 1)):
+        failures.append(
+            f"framework count {total} below minFrameworkCount {guardrails.get('minFrameworkCount')}"
+        )
+    min_pass_rate = float(guardrails.get("minPassRate", 1.0))
+    if pass_rate < min_pass_rate:
+        failures.append(f"pass rate {pass_rate:.2%} below threshold {min_pass_rate:.2%}")
+
+    report = {
+        "schemaVersion": "1",
+        "generatedAtUtc": datetime.now(timezone.utc).isoformat(),
+        "fixturesDir": str(fixtures_dir),
+        "matrix": str(args.matrix),
+        "guardrails": guardrails,
+        "totals": {
+            "frameworkCount": total,
+            "passed": passed,
+            "failed": total - passed,
+            "passRate": pass_rate,
+        },
+        "rows": rows,
+        "failures": failures,
+        "status": "pass" if not failures else "fail",
+    }
+
+    Path(args.out).write_text(json.dumps(report, indent=2) + "\n")
+    print(f"frameworks={total} passed={passed} pass_rate={pass_rate:.2%}")
+    print(f"report={args.out}")
+    if failures:
+        print("Failures:")
+        for f in failures:
+            print(f"- {f}")
+        return 1
+    return 0
+
+
+# ── resolver-fixtures: was resolver_fixture_report.py ──
 
 import argparse
 import json
@@ -165,7 +425,11 @@ def semantic_diff(expected_graph: dict | None, actual_graph: dict) -> dict:
     }
 
 
-def main() -> int:
+def run_resolver(argv: list[str] | None = None) -> int:
+    import sys
+    if argv is not None:
+        sys.argv = [sys.argv[0] if sys.argv else "reports.py", *argv]
+
     parser = argparse.ArgumentParser(description="Resolver fixture parity report")
     parser.add_argument("--fixtures-dir", default="tests/fixtures")
     parser.add_argument("--snapshots-dir", default="tests/resolver-snapshots")
@@ -349,6 +613,29 @@ def main() -> int:
             print(f"- {failure}")
         return 1
     return 0
+
+
+_MODES = {
+    "enterprise-npmrc": run_enterprise,
+    "framework-compat": run_framework,
+    "resolver-fixtures": run_resolver,
+}
+
+_HELP = """
+Modes: enterprise-npmrc | framework-compat | resolver-fixtures
+"""
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(_HELP.strip())
+        return 0
+    mode = argv[0]
+    if mode not in _MODES:
+        raise SystemExit(f"unknown mode {mode!r}; choose: {', '.join(_MODES)}\n{_HELP}")
+    rc = _MODES[mode](argv[1:])
+    return int(rc or 0)
 
 
 if __name__ == "__main__":

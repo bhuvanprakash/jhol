@@ -355,6 +355,10 @@ def run_workload(
 
 
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "offline":
+        offline = Path(__file__).resolve().parent / "bench" / "offline.py"
+        return subprocess.call([sys.executable, str(offline), *sys.argv[2:]])
+
     parser = argparse.ArgumentParser(description="Benchmark Jhol install performance")
     parser.add_argument(
         "--jhol-bin",
