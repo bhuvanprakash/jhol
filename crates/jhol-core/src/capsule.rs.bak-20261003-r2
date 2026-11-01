@@ -1,0 +1,1423 @@
+//! JAGR Graph Capsule — zero-parse, mmap'd dependency graph.
+//!
+//! Store resolved dependency graph as flat `repr(C)` arrays.
+//! Install: mmap → pointer cast → linear scan → CAS hardlink.
+//! No JSON parse, no bincode, no tree build, no allocations.
+//!
+//! Layout: [Header][PackageEntry×N][StringTable][DepEdge×M]
+
+use memmap2::Mmap;
+use std::fs;
+use std::io::Write;
+use std::mem::size_of;
+use std::path::{Path, PathBuf};
+
+const _: () = assert!(
+    size_of::<CapsuleHeader>() == 64,
+    "CapsuleHeader must be 64 bytes"
+);
+const _: () = assert!(
+    size_of::<PackageEntry>() == 64,
+    "PackageEntry must be 64 bytes"
+);
+const _: () = assert!(size_of::<DepEdge>() == 8, "DepEdge must be 8 bytes");
+
+// ── Constants ────────────────────────────────────────────────────────────────────
+
+pub const MAGIC: [u8; 8] = *b"JHLCPL\0\0";
+/// Bumped when HAS_BIN (flag bit 8) is written from the store extract, so a
+/// capsule with no HAS_BIN bits means "no bins" rather than "unknown".
+const CAPSULE_VERSION: u32 = 2;
+const PACKAGE_ENTRY_SIZE: usize = 64;
+const DEP_EDGE_SIZE: usize = 8;
+const HEADER_SIZE: usize = 64;
+
+// ── On-disk packed structures ────────────────────────────────────────────────────
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct CapsuleHeader {
+    pub magic: [u8; 8],
+    pub version: u32,
+    pub package_count: u32,
+    pub dep_count: u32,
+    pub string_table_len: u32,
+    pub manifest_hash: [u8; 8],
+    pub total_unpacked_bytes: u64,
+    pub spectral_gap: f64,
+    pub predicted_beta1: u64,
+    pub knot_fingerprint: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PackageEntry {
+    pub name_off: u32,
+    pub version_off: u32,
+    pub tarball_hash: [u8; 32],
+    pub unpacked_size: u32,
+    pub dep_start: u32,
+    pub dep_count: u16,
+    pub flags: u16,
+    pub url_off: u32,
+    pub install_order: u16,
+    _reserved: [u8; 6],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct DepEdge {
+    pub pkg_idx: u32,
+    pub edge_type: u16,
+    _reserved: u16,
+}
+
+// ── Zero-copy mmap view ──────────────────────────────────────────────────────────
+
+pub struct CapsuleView {
+    _mmap: Mmap,
+    header: *const CapsuleHeader,
+    entries: *const PackageEntry,
+    string_table: *const u8,
+    dep_edges: *const DepEdge,
+    pkg_count: usize,
+    str_len: usize,
+    dep_count: usize,
+    /// Optional PBF trailer (after dep edges).
+    pbf: Option<u64>,
+}
+
+// Safety: CapsuleView is Send+Sync because Mmap is Send+Sync and the raw pointers
+// point into the mmap region which is immutable after construction.
+unsafe impl Send for CapsuleView {}
+unsafe impl Sync for CapsuleView {}
+
+impl CapsuleView {
+    pub fn open(path: &Path) -> Result<Self, String> {
+        let file =
+            fs::File::open(path).map_err(|e| format!("capsule open {}: {}", path.display(), e))?;
+        let mmap = unsafe { Mmap::map(&file).map_err(|e| format!("capsule mmap: {}", e))? };
+
+        if mmap.len() < HEADER_SIZE {
+            return Err("capsule: file too short for header".into());
+        }
+
+        let header = mmap.as_ptr() as *const CapsuleHeader;
+        let h = unsafe { &*header };
+
+        if h.magic != MAGIC {
+            return Err("capsule: bad magic".into());
+        }
+        // Accept older readable versions; writers always emit CAPSULE_VERSION.
+        if h.version == 0 || h.version > CAPSULE_VERSION {
+            return Err(format!("capsule: unsupported version {}", h.version));
+        }
+
+        let pkg_count = h.package_count as usize;
+        let dep_count = h.dep_count as usize;
+        let str_len = h.string_table_len as usize;
+
+        // Checked arithmetic: a crafted header could otherwise wrap these products and
+        // slip past the length check below, after which `from_raw_parts` would build a
+        // slice outside the mapping (UB, not an error). Also keeps 32-bit targets safe.
+        let entries_start = HEADER_SIZE;
+        let entries_end = pkg_count
+            .checked_mul(PACKAGE_ENTRY_SIZE)
+            .and_then(|n| entries_start.checked_add(n))
+            .ok_or("capsule: package table size overflows")?;
+        let str_start = entries_end;
+        let str_end = str_start
+            .checked_add(str_len)
+            .ok_or("capsule: string table size overflows")?;
+        let deps_start = str_end;
+        let deps_end = dep_count
+            .checked_mul(DEP_EDGE_SIZE)
+            .and_then(|n| deps_start.checked_add(n))
+            .ok_or("capsule: dependency table size overflows")?;
+
+        if mmap.len() < deps_end {
+            return Err(format!(
+                "capsule: truncated ({} < {})",
+                mmap.len(),
+                deps_end
+            ));
+        }
+
+        // The accessors build `&str` with `from_utf8_unchecked`, so the string table must
+        // be proven valid UTF-8 once, here, rather than trusted because it came from a
+        // cache file. A corrupt byte sequence would otherwise be UB (not merely a bad name).
+        std::str::from_utf8(&mmap[str_start..str_end])
+            .map_err(|e| format!("capsule: string table is not valid UTF-8: {}", e))?;
+
+        let entries = unsafe { mmap.as_ptr().add(entries_start) as *const PackageEntry };
+        let string_table = unsafe { mmap.as_ptr().add(str_start) };
+        let dep_edges = unsafe { mmap.as_ptr().add(deps_start) as *const DepEdge };
+
+        // Optional 8-byte PBF trailer after dep edges (KPSL).
+        let pbf = if mmap.len() >= deps_end + 8 {
+            let mut b = [0u8; 8];
+            b.copy_from_slice(&mmap[deps_end..deps_end + 8]);
+            Some(u64::from_le_bytes(b))
+        } else {
+            None
+        };
+
+        let view = Self {
+            _mmap: mmap,
+            header,
+            entries,
+            string_table,
+            dep_edges,
+            pkg_count,
+            str_len,
+            dep_count,
+            pbf,
+        };
+        // Reject a corrupt capsule up front: `entry_deps`/`entry` build slices from
+        // header-controlled offsets, and the public accessors can be called without
+        // `verify`, so structural validity has to be established at load.
+        view.verify()?;
+        Ok(view)
+    }
+
+    // ── Accessors ────────────────────────────────────────────────────────────────
+
+    pub fn package_count(&self) -> usize {
+        self.pkg_count
+    }
+
+    pub fn version(&self) -> u32 {
+        unsafe { (*self.header).version }
+    }
+
+    pub fn manifest_hash(&self) -> [u8; 8] {
+        unsafe { (*self.header).manifest_hash }
+    }
+
+    pub fn total_unpacked_bytes(&self) -> u64 {
+        unsafe { (*self.header).total_unpacked_bytes }
+    }
+
+    pub fn spectral_gap(&self) -> f64 {
+        unsafe { (*self.header).spectral_gap }
+    }
+
+    pub fn predicted_beta1(&self) -> u64 {
+        unsafe { (*self.header).predicted_beta1 }
+    }
+
+    pub fn knot_fingerprint(&self) -> u64 {
+        unsafe { (*self.header).knot_fingerprint }
+    }
+
+    /// Persistence barcode fingerprint stored in capsule trailer (if present).
+    pub fn pbf(&self) -> Option<u64> {
+        self.pbf
+    }
+
+    pub fn entry(&self, idx: usize) -> &PackageEntry {
+        assert!(
+            idx < self.pkg_count,
+            "capsule entry idx {} >= {}",
+            idx,
+            self.pkg_count
+        );
+        unsafe { &*self.entries.add(idx) }
+    }
+
+    pub fn entries_slice(&self) -> &[PackageEntry] {
+        unsafe { std::slice::from_raw_parts(self.entries, self.pkg_count) }
+    }
+
+    /// The string table as bytes (no bound checks; callers must range-check).
+    fn string_table(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.string_table, self.str_len) }
+    }
+
+    /// NUL-terminated string at `off`, or `""` when the offset is outside the table or the
+    /// bytes are not valid UTF-8.
+    ///
+    /// This replaced `unsafe { from_utf8_unchecked(&table[off..]) }`. Two problems with that:
+    /// an offset past the end **panicked** (and release builds abort), and an offset pointing
+    /// *inside* a multi-byte sequence — or into bytes rewritten after `open()` validated them
+    /// — produced an invalid `&str`, which is undefined behaviour rather than a wrong value.
+    /// Validating a few dozen bytes per package costs nothing next to the I/O a capsule saves.
+    fn read_str(&self, off: u32) -> &str {
+        let table = self.string_table();
+        let start = off as usize;
+        if start >= table.len() {
+            return "";
+        }
+        let rest = &table[start..];
+        let end = rest.iter().position(|&b| b == 0).unwrap_or(rest.len());
+        std::str::from_utf8(&rest[..end]).unwrap_or("")
+    }
+
+    pub fn entry_name(&self, entry: &PackageEntry) -> &str {
+        self.read_str(entry.name_off)
+    }
+
+    pub fn entry_version(&self, entry: &PackageEntry) -> &str {
+        self.read_str(entry.version_off)
+    }
+
+    /// Read tarball URL from string table (zero-copy).
+    pub fn entry_url(&self, entry: &PackageEntry) -> &str {
+        // Convention: a zero URL offset means "no URL recorded" (names and versions do use
+        // offset 0, so this check belongs here and not in `read_str`).
+        if entry.url_off == 0 {
+            return "";
+        }
+        self.read_str(entry.url_off)
+    }
+
+    pub fn entry_deps(&self, entry: &PackageEntry) -> &[DepEdge] {
+        // `from_raw_parts(dep_edges.add(start), count)` had no bound check at all: a crafted
+        // or corrupted capsule could read arbitrary memory past the dep table. `verify()`
+        // checks this at open time, but the mapping can change afterwards (TOCTOU), so the
+        // accessor checks for itself and returns nothing rather than reading out of bounds.
+        let start = entry.dep_start as usize;
+        let count = entry.dep_count as usize;
+        if start > self.dep_count || count > self.dep_count.saturating_sub(start) {
+            return &[];
+        }
+        unsafe { std::slice::from_raw_parts(self.dep_edges.add(start), count) }
+    }
+
+    /// Verify structural integrity: all string offsets valid, dep indices in range.
+    pub fn verify(&self) -> Result<(), String> {
+        let str_bytes = unsafe { std::slice::from_raw_parts(self.string_table, self.str_len) };
+        for i in 0..self.pkg_count {
+            let e = self.entry(i);
+            if e.name_off as usize >= self.str_len {
+                return Err(format!(
+                    "pkg {}: name_off {} >= str_len {}",
+                    i, e.name_off, self.str_len
+                ));
+            }
+            let name_end = str_bytes[e.name_off as usize..]
+                .iter()
+                .position(|&b| b == 0)
+                .ok_or_else(|| format!("pkg {}: name not null-term", i))?;
+            if name_end == 0 {
+                return Err(format!("pkg {}: empty name", i));
+            }
+            if e.version_off as usize >= self.str_len {
+                return Err(format!(
+                    "pkg {}: version_off {} >= str_len {}",
+                    i, e.version_off, self.str_len
+                ));
+            }
+            let ver_end = str_bytes[e.version_off as usize..]
+                .iter()
+                .position(|&b| b == 0)
+                .ok_or_else(|| format!("pkg {}: version not null-term", i))?;
+            if ver_end == 0 {
+                return Err(format!("pkg {}: empty version", i));
+            }
+            if (e.dep_start as usize + e.dep_count as usize) > self.dep_count {
+                return Err(format!("pkg {}: deps out of range", i));
+            }
+            for d in self.entry_deps(e) {
+                if d.pkg_idx as usize >= self.pkg_count {
+                    return Err(format!(
+                        "pkg {}: dep idx {} >= {}",
+                        i, d.pkg_idx, self.pkg_count
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+// ── Builder ──────────────────────────────────────────────────────────────────────
+
+pub struct CapsuleBuilder {
+    entries: Vec<u8>,
+    dep_edges: Vec<u8>,
+    string_table: Vec<u8>,
+    string_offsets: std::collections::HashMap<String, u32>,
+    pkg_count: u32,
+    dep_count: u32,
+    total_unpacked: u64,
+    manifest_hash: [u8; 8],
+    spectral_gap: f64,
+    predicted_beta1: u64,
+    knot_fingerprint: u64,
+    /// Persistence barcode fingerprint (PBF) trailer — written after dep edges.
+    pbf: u64,
+    has_pbf: bool,
+}
+
+impl CapsuleBuilder {
+    pub fn new(manifest_hash: [u8; 8]) -> Self {
+        Self {
+            entries: Vec::new(),
+            dep_edges: Vec::new(),
+            string_table: Vec::new(),
+            string_offsets: std::collections::HashMap::new(),
+            pkg_count: 0,
+            dep_count: 0,
+            total_unpacked: 0,
+            manifest_hash,
+            spectral_gap: 1.0,
+            predicted_beta1: 0,
+            knot_fingerprint: 0,
+            pbf: 0,
+            has_pbf: false,
+        }
+    }
+
+    fn intern_string(&mut self, s: &str) -> u32 {
+        if let Some(&off) = self.string_offsets.get(s) {
+            return off;
+        }
+        let off = self.string_table.len() as u32;
+        self.string_table.extend_from_slice(s.as_bytes());
+        self.string_table.push(0);
+        self.string_offsets.insert(s.to_string(), off);
+        off
+    }
+
+    pub fn add_package(
+        &mut self,
+        name: &str,
+        version: &str,
+        tarball_hash: &[u8; 32],
+        unpacked_size: u32,
+        deps: &[(u32, u16)],
+        install_order: u16,
+        flags: u16,
+        tarball_url: &str,
+    ) -> u32 {
+        let name_off = self.intern_string(name);
+        let version_off = self.intern_string(version);
+        let url_off = if tarball_url.is_empty() {
+            0
+        } else {
+            self.intern_string(tarball_url)
+        };
+        let dep_start = self.dep_count;
+
+        for &(pkg_idx, edge_type) in deps {
+            self.dep_edges.extend_from_slice(&pkg_idx.to_le_bytes());
+            self.dep_edges.extend_from_slice(&edge_type.to_le_bytes());
+            self.dep_edges.extend_from_slice(&[0u8; 2]);
+            self.dep_count += 1;
+        }
+
+        let idx = self.pkg_count;
+        self.entries.extend_from_slice(&name_off.to_le_bytes());
+        self.entries.extend_from_slice(&version_off.to_le_bytes());
+        self.entries.extend_from_slice(tarball_hash);
+        self.entries.extend_from_slice(&unpacked_size.to_le_bytes());
+        self.entries.extend_from_slice(&dep_start.to_le_bytes());
+        self.entries
+            .extend_from_slice(&(deps.len() as u16).to_le_bytes());
+        self.entries.extend_from_slice(&flags.to_le_bytes());
+        self.entries.extend_from_slice(&url_off.to_le_bytes());
+        self.entries.extend_from_slice(&install_order.to_le_bytes());
+        self.entries.extend_from_slice(&[0u8; 6]);
+
+        self.pkg_count += 1;
+        self.total_unpacked += unpacked_size as u64;
+        idx
+    }
+
+    pub fn build(mut self) -> Vec<u8> {
+        // 4-byte align string table
+        while !self.string_table.len().is_multiple_of(4) {
+            self.string_table.push(0);
+        }
+
+        let mut buf = Vec::with_capacity(
+            HEADER_SIZE + self.entries.len() + self.string_table.len() + self.dep_edges.len(),
+        );
+
+        // Header
+        buf.extend_from_slice(&MAGIC);
+        buf.extend_from_slice(&CAPSULE_VERSION.to_le_bytes());
+        buf.extend_from_slice(&self.pkg_count.to_le_bytes());
+        buf.extend_from_slice(&self.dep_count.to_le_bytes());
+        buf.extend_from_slice(&(self.string_table.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&self.manifest_hash);
+        buf.extend_from_slice(&self.total_unpacked.to_le_bytes());
+        buf.extend_from_slice(&self.spectral_gap.to_le_bytes());
+        buf.extend_from_slice(&self.predicted_beta1.to_le_bytes());
+        buf.extend_from_slice(&self.knot_fingerprint.to_le_bytes());
+
+        // Entries
+        buf.extend_from_slice(&self.entries);
+
+        // String table
+        buf.extend_from_slice(&self.string_table);
+
+        // Dep edges
+        buf.extend_from_slice(&self.dep_edges);
+
+        // Optional PBF trailer (8 bytes). Old readers ignore trailing bytes.
+        if self.has_pbf {
+            buf.extend_from_slice(&self.pbf.to_le_bytes());
+        }
+
+        buf
+    }
+
+    pub fn set_spectral(&mut self, spectral_gap: f64, predicted_beta1: u64) {
+        self.spectral_gap = spectral_gap;
+        self.predicted_beta1 = predicted_beta1;
+    }
+
+    pub fn set_knot_fingerprint(&mut self, fp: u64) {
+        self.knot_fingerprint = fp;
+    }
+
+    pub fn set_pbf(&mut self, pbf: u64) {
+        self.pbf = pbf;
+        self.has_pbf = true;
+    }
+
+    pub fn package_count(&self) -> usize {
+        self.pkg_count as usize
+    }
+}
+
+// ── Write / Read helpers ─────────────────────────────────────────────────────────
+
+pub fn write_capsule(path: &Path, builder: CapsuleBuilder) -> Result<(), String> {
+    let data = builder.build();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("capsule mkdir: {}", e))?;
+    }
+    let tmp = path.with_extension("tmp");
+    {
+        let mut f = fs::File::create(&tmp).map_err(|e| format!("capsule create tmp: {}", e))?;
+        f.write_all(&data)
+            .map_err(|e| format!("capsule write: {}", e))?;
+    }
+    fs::rename(&tmp, path).map_err(|e| format!("capsule rename: {}", e))?;
+    Ok(())
+}
+
+pub fn read_capsule(path: &Path) -> Result<CapsuleView, String> {
+    let view = CapsuleView::open(path)?;
+    view.verify()?;
+    Ok(view)
+}
+
+pub fn capsule_path(project_dir: &Path) -> PathBuf {
+    project_dir.join(".jhol.capsule")
+}
+
+pub fn daemon_capsule_path(cache_dir: &str) -> PathBuf {
+    PathBuf::from(cache_dir).join("daemon-capsule.bin")
+}
+
+// ── Compute manifest hash ────────────────────────────────────────────────────────
+
+/// Bump when anything that changes the *materialized* node_modules layout
+/// changes.
+///
+/// This hash backs `node_modules/.nm_fingerprint` and the daemon status file,
+/// which gate the "node_modules is fresh, skip the install entirely" bypass. Keyed
+/// by manifest contents alone, a layout change would be silently ignored for every
+/// existing project — the install would be skipped and the old layout kept.
+pub const LAYOUT_VERSION: u32 = 2;
+
+/// Compute the manifest hash: xxh3 of (layout version || package.json || package-lock.json).
+pub fn compute_manifest_hash(project_dir: &Path) -> Result<[u8; 8], String> {
+    use xxhash_rust::xxh3::xxh3_64;
+    let pj = fs::read(project_dir.join("package.json"))
+        .map_err(|e| format!("read package.json: {}", e))?;
+    let lf = fs::read(project_dir.join("package-lock.json"))
+        .map_err(|e| format!("read package-lock.json: {}", e))?;
+    let mut combined = LAYOUT_VERSION.to_le_bytes().to_vec();
+    combined.extend_from_slice(&pj);
+    combined.extend_from_slice(&lf);
+    Ok(xxh3_64(&combined).to_le_bytes())
+}
+
+/// Compute manifest hash for a hypothetical dep set (predicted adds).
+/// Hashes package.json + package-lock.json + predicted package names.
+/// This lets the status.bin reflect a future state before the user adds the package.
+pub fn compute_manifest_hash_with_deps(
+    project_dir: &Path,
+    predicted_deps: &[(&str, &str)],
+) -> Result<[u8; 8], String> {
+    use xxhash_rust::xxh3::xxh3_64;
+    let pj = fs::read(project_dir.join("package.json"))
+        .map_err(|e| format!("read package.json: {}", e))?;
+    let lf = fs::read(project_dir.join("package-lock.json"))
+        .map_err(|e| format!("read package-lock.json: {}", e))?;
+    let mut combined = LAYOUT_VERSION.to_le_bytes().to_vec();
+    combined.extend_from_slice(&pj);
+    combined.extend_from_slice(&lf);
+    for (name, version) in predicted_deps {
+        combined.extend_from_slice(name.as_bytes());
+        combined.extend_from_slice(version.as_bytes());
+    }
+    Ok(xxh3_64(&combined).to_le_bytes())
+}
+
+// ── Install from capsule ─────────────────────────────────────────────────────────
+
+/// Install all packages from a capsule into node_modules.
+/// Soul Path: mmap → install_order waves → JAGR-S / store_unpacked project.
+pub fn install_from_capsule(view: &CapsuleView, project_dir: &Path) -> Result<(), String> {
+    let n = view.package_count();
+    if n == 0 {
+        return Ok(());
+    }
+    // Refuse a capsule whose entries have no content hash — waveform would
+    // look up `store/000…0` and fall back to a multi-second serial walk.
+    for i in 0..n {
+        if view.entry(i).tarball_hash.iter().all(|&b| b == 0) {
+            return Err(format!(
+                "capsule entry {} has empty tarball hash — refusing install",
+                i
+            ));
+        }
+    }
+    // Prefer waveform path (parallel by install_order)
+    if crate::soul_path::stream_install_enabled() || n > 0 {
+        return crate::soul_path::waveform_install_capsule(view, project_dir).or_else(|e| {
+            crate::utils::log(&format!(
+                "Soul Path waveform fallback to serial capsule: {}",
+                e
+            ));
+            install_from_capsule_serial(view, project_dir)
+        });
+    }
+    install_from_capsule_serial(view, project_dir)
+}
+
+fn install_from_capsule_serial(view: &CapsuleView, project_dir: &Path) -> Result<(), String> {
+    crate::soul_path::ensure_jagrs_migrated();
+    let node_modules = project_dir.join("node_modules");
+    fs::create_dir_all(&node_modules).map_err(|e| format!("capsule: mkdir node_modules: {}", e))?;
+    fs::create_dir_all(node_modules.join(".bin"))
+        .map_err(|e| format!("capsule: mkdir .bin: {}", e))?;
+
+    let cache_dir = PathBuf::from(crate::utils::get_cache_dir());
+    let store_dir = cache_dir.join("store");
+    let n = view.package_count();
+    let mut install_any = false;
+    let mut index_batch: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+
+    // Sort by install_order for serial correctness
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by_key(|&i| view.entry(i).install_order);
+
+    for i in order {
+        let entry = view.entry(i);
+        let name = view.entry_name(entry);
+        let version = view.entry_version(entry);
+        let tarball_hex = hex::encode(entry.tarball_hash);
+
+        let pkg_dir = if name.starts_with('@') {
+            let slash = name
+                .find('/')
+                .ok_or_else(|| format!("invalid scoped name: {}", name))?;
+            let scope_dir = node_modules.join(&name[..slash]);
+            fs::create_dir_all(&scope_dir).map_err(|e| format!("capsule: mkdir scope: {}", e))?;
+            scope_dir.join(&name[slash + 1..])
+        } else {
+            node_modules.join(name)
+        };
+
+        if pkg_dir.join("package.json").exists() {
+            continue;
+        }
+        install_any = true;
+
+        if crate::soul_path::project_package(name, version, &tarball_hex, &node_modules, &cache_dir)
+            .is_ok()
+        {
+            index_batch.insert(format!("{}@{}", name, version), tarball_hex);
+            continue;
+        }
+
+        // Cold: fetch URL from capsule
+        let url = if entry.url_off != 0 {
+            view.entry_url(entry).to_string()
+        } else {
+            // Reuse the shared builder: it honours the configured registry
+            // (`JHOL_REGISTRY` / `.npmrc registry=` / scoped registries). A
+            // hardcoded npm host here would send private package names to the
+            // public registry and 404 for anything not on npm.
+            crate::lockfile::tarball_url_from_registry(name, version)
+        };
+        let pkg_key = format!("{}@{}", name, version);
+        let hash: String = crate::jagrs::download_and_stream_to_store(
+            &url,
+            cache_dir.to_str().unwrap_or("."),
+            &pkg_key,
+        )
+        .or_else(|_| -> Result<String, String> {
+            let bytes = crate::http_client::get_bytes_with_bearer(&url, None)?;
+            fs::create_dir_all(&store_dir).ok();
+            let store_path = store_dir.join(format!("{}.tgz", tarball_hex));
+            fs::write(&store_path, &bytes).map_err(|e| e.to_string())?;
+            let _ = crate::jagrs::store_tarball(&bytes);
+            let _ = crate::registry::ensure_unpacked_in_store(&store_path, &cache_dir);
+            Ok(tarball_hex.clone())
+        })?;
+        crate::soul_path::project_package(name, version, &hash, &node_modules, &cache_dir)
+            .map_err(|e| format!("capsule: project {}: {}", name, e))?;
+        index_batch.insert(format!("{}@{}", name, version), hash);
+    }
+
+    if !index_batch.is_empty() {
+        let mut index = crate::utils::read_store_index();
+        index.extend(index_batch);
+        let _ = crate::utils::write_store_index(&index);
+    }
+    if install_any {
+        crate::bin_links::rebuild_bin_links(&node_modules).ok();
+    }
+    Ok(())
+}
+
+// ── Build capsule from project directory ────────────────────────────────────────
+
+/// Build and write a capsule from the current project state.
+/// Real DepEdges + topo install_order (Soul Path graph plane).
+pub fn write_capsule_from_project(project_dir: &Path) -> Result<(), String> {
+    let manifest_hash = compute_manifest_hash(project_dir)?;
+    write_capsule_from_project_with_hash(project_dir, manifest_hash)
+}
+
+/// Real DepEdges + topo install_order (Soul Path graph plane).
+pub fn write_capsule_from_project_with_hash(
+    project_dir: &Path,
+    manifest_hash: [u8; 8],
+) -> Result<(), String> {
+    let lockfile_path = project_dir.join("package-lock.json");
+    if !lockfile_path.exists() {
+        return Ok(());
+    }
+
+    let cap_file = capsule_path(project_dir);
+    if let Ok(mut f) = std::fs::File::open(&cap_file) {
+        use std::io::{Read, Seek, SeekFrom};
+        // CapsuleHeader: magic@0, version@8, package_count@12, manifest_hash@24.
+        let mut hdr = [0u8; 32];
+        if f.read_exact(&mut hdr).is_ok() && hdr[..8] == MAGIC && hdr[24..32] == manifest_hash {
+            // A matching hash is not enough: a prior write can have recorded
+            // zero tarball hashes (store index not yet visible). Those capsules
+            // make waveform install fall back to a multi-second serial path.
+            let pkg_count = u32::from_le_bytes(hdr[12..16].try_into().unwrap_or([0; 4])) as usize;
+            let mut all_hashed = pkg_count > 0;
+            if all_hashed {
+                let _ = f.seek(SeekFrom::Start(HEADER_SIZE as u64));
+                for _ in 0..pkg_count {
+                    let mut entry = [0u8; PACKAGE_ENTRY_SIZE];
+                    if f.read_exact(&mut entry).is_err() {
+                        all_hashed = false;
+                        break;
+                    }
+                    // tarball_hash sits at bytes 8..40 of PackageEntry
+                    if entry[8..40].iter().all(|&b| b == 0) {
+                        all_hashed = false;
+                        break;
+                    }
+                }
+            }
+            if all_hashed {
+                return Ok(());
+            }
+        }
+    }
+    let lockfile_bytes =
+        std::fs::read(&lockfile_path).map_err(|e| format!("read lockfile: {}", e))?;
+    let lockfile: serde_json::Value =
+        serde_json::from_slice(&lockfile_bytes).map_err(|e| format!("parse lockfile: {}", e))?;
+
+    let packages = match lockfile.get("packages").and_then(|p| p.as_object()) {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+
+    // name → lockfile key (prefer top-level node_modules/<name>)
+    let mut name_to_key: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut ordered_names: Vec<String> = Vec::new();
+    for key in packages.keys() {
+        if key.is_empty() {
+            continue;
+        }
+        let name = lockfile_key_to_name(key);
+        // Prefer shallowest key for a name
+        let depth = key.matches("node_modules").count();
+        match name_to_key.get(&name) {
+            Some(existing) => {
+                let ed = existing.matches("node_modules").count();
+                if depth < ed {
+                    name_to_key.insert(name.clone(), key.clone());
+                }
+            }
+            None => {
+                name_to_key.insert(name.clone(), key.clone());
+                ordered_names.push(name);
+            }
+        }
+    }
+    if ordered_names.is_empty() {
+        return Ok(());
+    }
+
+    // name → capsule index
+    let mut name_idx: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    for (i, n) in ordered_names.iter().enumerate() {
+        name_idx.insert(n.clone(), i as u32);
+    }
+
+    // Build adjacency for topo order
+    let mut edges_by_name: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    let mut indeg: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    for n in &ordered_names {
+        indeg.entry(n.clone()).or_insert(0);
+    }
+    for name in &ordered_names {
+        let key = match name_to_key.get(name) {
+            Some(k) => k,
+            None => continue,
+        };
+        let pkg = &packages[key];
+        let mut deps = Vec::new();
+        if let Some(obj) = pkg.get("dependencies").and_then(|d| d.as_object()) {
+            for dname in obj.keys() {
+                if name_idx.contains_key(dname) {
+                    deps.push(dname.clone());
+                    *indeg.entry(dname.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+        edges_by_name.insert(name.clone(), deps);
+    }
+
+    // Kahn topo → install_order (deps first = lower order)
+    let mut order_map: std::collections::HashMap<String, u16> = std::collections::HashMap::new();
+    let mut queue: std::collections::VecDeque<String> = indeg
+        .iter()
+        .filter(|(_, &d)| d == 0)
+        .map(|(n, _)| n.clone())
+        .collect();
+    // Reverse edges: dep → dependents for Kahn on "deps first"
+    // Actually indeg counts how many packages depend ON this? We incremented for deps of name,
+    // so indeg[dep] = number of packages that list dep. Roots have indeg 0 = nothing depends... wait
+    // We want deps installed BEFORE dependents. So edge name→dep means name needs dep first.
+    // indeg[dep] was incremented when name depends on dep — that's wrong for "deps first".
+    // Fix: indeg[name] = number of deps name still needs.
+    let mut indeg2: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut rev: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for n in &ordered_names {
+        indeg2.insert(n.clone(), 0);
+    }
+    for (name, deps) in &edges_by_name {
+        indeg2.insert(name.clone(), deps.len() as u32);
+        for d in deps {
+            rev.entry(d.clone()).or_default().push(name.clone());
+        }
+    }
+    queue = indeg2
+        .iter()
+        .filter(|(_, &d)| d == 0)
+        .map(|(n, _)| n.clone())
+        .collect();
+    let mut wave: u16 = 0;
+    let mut placed = 0usize;
+    while !queue.is_empty() {
+        let layer: Vec<String> = queue.drain(..).collect();
+        for n in &layer {
+            order_map.insert(n.clone(), wave);
+            placed += 1;
+            if let Some(dependents) = rev.get(n) {
+                for depn in dependents {
+                    if let Some(c) = indeg2.get_mut(depn) {
+                        *c = c.saturating_sub(1);
+                        if *c == 0 {
+                            queue.push_back(depn.clone());
+                        }
+                    }
+                }
+            }
+        }
+        wave = wave.saturating_add(1);
+    }
+    // Cycles / leftovers
+    for n in &ordered_names {
+        order_map.entry(n.clone()).or_insert(wave);
+        if !order_map.contains_key(n) {
+            placed += 1;
+        }
+    }
+    let _ = placed;
+
+    let mut builder = CapsuleBuilder::new(manifest_hash);
+
+    // Set spectral gate fields and knot fingerprint from root deps (parse package.json once)
+    if let Ok(pj_bytes) = std::fs::read(project_dir.join("package.json")) {
+        if let Ok(pj) = serde_json::from_slice::<serde_json::Value>(&pj_bytes) {
+            if let Some(deps_obj) = pj.get("dependencies").and_then(|d| d.as_object()) {
+                let deps: std::collections::HashMap<String, String> = deps_obj
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("*").to_string()))
+                    .collect();
+                let gate = crate::soul_path::spectral_gate_from_deps(&deps);
+                builder.set_spectral(gate.spectral_gap, gate.predicted_beta1 as u64);
+                let fp = crate::resolution_mirror::fingerprint_deps(&deps);
+                builder.set_knot_fingerprint(fp);
+                let pbf = crate::jagr::resolution_differential::pbf_from_deps(&deps);
+                builder.set_pbf(pbf);
+            }
+        }
+    }
+
+    crate::utils::with_store_index(|store_index| {
+        // Add packages in ordered_names order so indices match name_idx
+        for name in &ordered_names {
+            let key = name_to_key.get(name).unwrap();
+            let pkg = &packages[key];
+            let version = pkg
+                .get("version")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0.0.0");
+            let tarball_hash = resolve_tarball_hash(name, version, pkg, store_index);
+            if std::env::var("JHOL_DEBUG_CAPSULE").is_ok() && tarball_hash.iter().all(|&b| b == 0) {
+                let idx_hit = store_index.contains_key(&format!("{}@{}", name, version));
+                let sess =
+                    crate::registry::get_session_tarball_hash(&format!("{}@{}", name, version))
+                        .is_some();
+                let integ = pkg.get("integrity").and_then(|v| v.as_str()).unwrap_or("");
+                eprintln!(
+                    "[CAPSULE] zero hash for {}@{} index_hit={} session_hit={} integrity={} index_len={}",
+                    name,
+                    version,
+                    idx_hit,
+                    sess,
+                    if integ.is_empty() { "<none>" } else { &integ[..integ.len().min(24)] },
+                    store_index.len()
+                );
+            }
+            let unpacked_size = 0u32;
+            let mut flags = extract_flags(pkg);
+            // Lockfile entries rarely carry `bin`; look at the store extract so
+            // warm capsule installs only open package.json for packages that
+            // actually ship a binary (measured: 1 of 34 in a typical tree).
+            if (flags & 8) == 0 && store_package_declares_bin(&tarball_hash) {
+                flags |= 8;
+            }
+            let install_order = *order_map.get(name).unwrap_or(&0);
+            let url = pkg.get("resolved").and_then(|v| v.as_str()).unwrap_or("");
+
+            let mut deps_idx: Vec<(u32, u16)> = Vec::new();
+            if let Some(dlist) = edges_by_name.get(name) {
+                for d in dlist {
+                    if let Some(&idx) = name_idx.get(d) {
+                        deps_idx.push((idx, 0)); // 0 = runtime dep
+                    }
+                }
+            }
+            builder.add_package(
+                name,
+                version,
+                &tarball_hash,
+                unpacked_size,
+                &deps_idx,
+                install_order,
+                flags,
+                url,
+            );
+        }
+    });
+
+    let cap_path = capsule_path(project_dir);
+    write_capsule(&cap_path, builder)?;
+
+    // Install markers are written by the install pipeline (write_install_markers).
+    // This function only writes the capsule — the single marker write happens in
+    // install_package after all fast paths and the full pipeline complete.
+
+    Ok(())
+}
+
+/// Write a capsule that includes the current lockfile packages PLUS predicted deps.
+/// Predicted deps must already be cached in JAGR-S (from daemon prefetch).
+/// This pre-builds the capsule so `jhol add <predicted>` exits 0ms via trampoline.
+pub fn write_capsule_from_deps(
+    project_dir: &Path,
+    predicted: &[(&str, &str)],
+) -> Result<(), String> {
+    let lockfile_path = project_dir.join("package-lock.json");
+    if !lockfile_path.exists() || predicted.is_empty() {
+        return write_capsule_from_project(project_dir);
+    }
+
+    let _manifest_hash = compute_manifest_hash(project_dir)?;
+    let lockfile_bytes =
+        std::fs::read(&lockfile_path).map_err(|e| format!("read lockfile: {}", e))?;
+    let mut lockfile: serde_json::Value =
+        serde_json::from_slice(&lockfile_bytes).map_err(|e| format!("parse lockfile: {}", e))?;
+
+    let packages = match lockfile.get_mut("packages").and_then(|p| p.as_object_mut()) {
+        Some(p) => p,
+        None => return write_capsule_from_project(project_dir),
+    };
+
+    let _cache_dir = crate::utils::get_cache_dir();
+
+    // For each predicted package, add a synthetic lockfile entry
+    for &(name, version) in predicted {
+        let key = format!("node_modules/{}", name);
+        if packages.contains_key(&key) {
+            continue; // already in lockfile
+        }
+
+        let hash = {
+            let spec = format!("{}@{}", name, version);
+            crate::utils::with_store_index(|idx| idx.get(&spec).cloned().unwrap_or_default())
+        };
+
+        let mut entry = serde_json::Map::new();
+        entry.insert(
+            "version".to_string(),
+            serde_json::Value::String(version.to_string()),
+        );
+        if !hash.is_empty() {
+            entry.insert(
+                "integrity".to_string(),
+                serde_json::Value::String(format!("sha256-{}", hash)),
+            );
+        }
+        entry.insert(
+            "dependencies".to_string(),
+            serde_json::Value::Object(serde_json::Map::new()),
+        );
+        packages.insert(key, serde_json::Value::Object(entry));
+    }
+
+    // Delegate to write_capsule_from_project logic via lockfile write-back
+    // We write a temp lockfile so write_capsule_from_project can read it
+    let tmp_lockfile = project_dir.join("package-lock.predict.tmp");
+    std::fs::write(
+        &tmp_lockfile,
+        serde_json::to_string(&lockfile).map_err(|e| format!("serialize: {}", e))?,
+    )
+    .map_err(|e| format!("write predict lockfile: {}", e))?;
+
+    let result = write_capsule_from_project(project_dir);
+    let _ = std::fs::remove_file(&tmp_lockfile);
+    result
+}
+
+fn lockfile_key_to_name(key: &str) -> String {
+    // node_modules/foo or node_modules/@s/p or nested .../node_modules/foo
+    if let Some(idx) = key.rfind("node_modules/") {
+        return key[idx + "node_modules/".len()..].to_string();
+    }
+    key.trim_start_matches("node_modules/").to_string()
+}
+
+fn extract_flags(pkg: &serde_json::Value) -> u16 {
+    let mut flags = 0u16;
+    if pkg.get("dev").and_then(|v| v.as_bool()).unwrap_or(false) {
+        flags |= 1;
+    }
+    if pkg.get("peer").and_then(|v| v.as_bool()).unwrap_or(false) {
+        flags |= 2;
+    }
+    if pkg
+        .get("optional")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        flags |= 4;
+    }
+    if pkg.get("bin").is_some() {
+        flags |= 8;
+    }
+    flags
+}
+
+/// True when `store_unpacked/<shard>/<hash>/package.json` declares a `bin` field.
+fn store_package_declares_bin(tarball_hash: &[u8; 32]) -> bool {
+    let hex = hex::encode(tarball_hash);
+    let shard = if hex.len() >= 2 { &hex[..2] } else { "xx" };
+    let cache = crate::utils::get_cache_dir();
+    let candidates = [
+        std::path::PathBuf::from(&cache)
+            .join("store_unpacked")
+            .join(shard)
+            .join(&hex)
+            .join("package.json"),
+        std::path::PathBuf::from(&cache)
+            .join("store_unpacked")
+            .join(&hex)
+            .join("package.json"),
+    ];
+    for pj in &candidates {
+        if let Ok(text) = std::fs::read_to_string(pj) {
+            // Cheap substring check — same gate `link_bins_for_package` uses.
+            if text.contains("\"bin\"") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn hex_to_hash32(hex_hash: &str) -> Option<[u8; 32]> {
+    let bytes = hex::decode(hex_hash).ok()?;
+    if bytes.len() != 32 {
+        return None;
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    Some(arr)
+}
+
+fn resolve_tarball_hash(
+    name: &str,
+    version: &str,
+    pkg: &serde_json::Value,
+    store_index: &std::collections::HashMap<String, String>,
+) -> [u8; 32] {
+    use base64::Engine;
+    let index_key = format!("{}@{}", name, version);
+
+    // 1) Store index (pkg@version → content sha256)
+    if let Some(hex_hash) = store_index.get(&index_key) {
+        if let Some(arr) = hex_to_hash32(hex_hash) {
+            return arr;
+        }
+    }
+
+    // 2) Session map — harvest/download records hashes here *before* the index
+    //    flush, and the first capsule write often races that flush (measured:
+    //    cold capsule had 34/34 zero hashes while store_index.json already had
+    //    every key; a rewrite one install later filled them).
+    if let Some(hex_hash) = crate::registry::get_session_tarball_hash(&index_key) {
+        if let Some(arr) = hex_to_hash32(&hex_hash) {
+            return arr;
+        }
+    }
+    if let Some(url) = pkg.get("resolved").and_then(|v| v.as_str()) {
+        if let Some(hex_hash) = crate::registry::get_session_tarball_hash(url) {
+            if let Some(arr) = hex_to_hash32(&hex_hash) {
+                return arr;
+            }
+        }
+    }
+
+    // 3) sha256 integrity is the store key itself
+    if let Some(integrity) = pkg.get("integrity").and_then(|v| v.as_str()) {
+        if let Some(b64) = integrity.strip_prefix("sha256-") {
+            if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(b64) {
+                if decoded.len() == 32 {
+                    let mut arr = [0u8; 32];
+                    arr.copy_from_slice(&decoded);
+                    return arr;
+                }
+            }
+        }
+        // 4) sha512 SRI → durable store hit (login-home / harvest index), never
+        //    truncate sha512 into a fake sha256 — that cannot look up store/.
+        if let Some((hash, _, _)) = crate::content::find_unpacked(integrity) {
+            if let Some(arr) = hex_to_hash32(&hash) {
+                return arr;
+            }
+        }
+    }
+    [0u8; 32]
+}
+
+#[cfg(test)]
+fn resolve_tarball_hash_for_test(
+    name: &str,
+    version: &str,
+    pkg: &serde_json::Value,
+    store_index: &std::collections::HashMap<String, String>,
+) -> [u8; 32] {
+    resolve_tarball_hash(name, version, pkg, store_index)
+}
+
+/// Classifier: look up capsule by knot fingerprint AND manifest hash.
+/// Returns Some(CapsuleView) if fingerprint matches, None otherwise.
+pub fn classifier_lookup(project_dir: &Path, knot_fp: u64) -> Option<CapsuleView> {
+    let cap_path = capsule_path(project_dir);
+    if !cap_path.exists() {
+        return None;
+    }
+    let view = CapsuleView::open(&cap_path).ok()?;
+    if view.knot_fingerprint() != knot_fp {
+        return None;
+    }
+    view.verify().ok()?;
+    Some(view)
+}
+
+/// Write CGA capsule (git-committable) — includes knot fingerprint for classifier.
+/// Writes to `.jhol/capsule.bin` path (git-friendly).
+pub fn write_cga_capsule(project_dir: &Path, builder: CapsuleBuilder) -> Result<(), String> {
+    let cap_path = cga_capsule_path(project_dir);
+    if let Some(parent) = cap_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("cga mkdir: {}", e))?;
+    }
+    write_capsule(&cap_path, builder)
+}
+
+/// Build and write a CGA capsule from the current project state.
+/// Convenience wrapper around write_capsule_from_project + .jhol/capsule.bin.
+pub fn write_cga_capsule_from_project(project_dir: &Path) -> Result<(), String> {
+    // Build regular capsule first
+    write_capsule_from_project(project_dir)?;
+    // Copy to CGA path if it doesn't exist already
+    let src = capsule_path(project_dir);
+    let dst = cga_capsule_path(project_dir);
+    if src != dst && src.exists() {
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("cga mkdir: {}", e))?;
+        }
+        fs::copy(&src, &dst).map_err(|e| format!("cga copy: {}", e))?;
+    }
+    Ok(())
+}
+
+/// Path to the CGA capsule artifact (`.jhol/capsule.bin`).
+pub fn cga_capsule_path(project_dir: &Path) -> PathBuf {
+    project_dir.join(".jhol").join("capsule.bin")
+}
+
+/// Try to install from CGA capsule at `.jhol/capsule.bin`.
+/// Validates knot fingerprint + manifest hash before installing.
+pub fn try_git_capsule_install(
+    project_dir: &Path,
+    knot_fp: u64,
+    manifest_hash: [u8; 8],
+    quiet: bool,
+) -> Result<bool, String> {
+    let cap_path = cga_capsule_path(project_dir);
+    if !cap_path.exists() {
+        return Ok(false);
+    }
+    let view = CapsuleView::open(&cap_path)?;
+    // Check manifest hash (fast)
+    if view.manifest_hash() != manifest_hash {
+        return Ok(false);
+    }
+    // Check knot fingerprint (cohomology match)
+    if view.knot_fingerprint() != knot_fp {
+        return Ok(false);
+    }
+    view.verify()?;
+    if !quiet {
+        crate::utils::log("KCC³: CGA capsule hit — installing from .jhol/capsule.bin");
+    }
+    install_from_capsule(&view, project_dir)?;
+    Ok(true)
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_tmp_dir() -> PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let c = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let d =
+            std::env::temp_dir().join(format!("jhol-capsule-test-{}-{}", std::process::id(), c));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn test_build_and_read_roundtrip() {
+        let dir = make_tmp_dir();
+        let path = dir.join("test.jhlcpl");
+        let mut builder = CapsuleBuilder::new([0xab; 8]);
+
+        let idx0 = builder.add_package("left-pad", "1.0.0", &[0x01; 32], 1024, &[], 0, 0, "");
+        let dep1 = [(idx0, 0)];
+        let idx1 = builder.add_package("is-positive", "1.0.0", &[0x02; 32], 512, &dep1, 1, 0, "");
+        let dep2 = [(idx1, 0)];
+        let idx2 = builder.add_package("@scope/foo", "2.1.3", &[0x03; 32], 2048, &dep2, 2, 0, "");
+        let dep3 = [(idx0, 0), (idx2, 0)];
+        builder.add_package("bar", "0.5.0", &[0x04; 32], 256, &dep3, 3, 0, "");
+
+        assert_eq!(builder.package_count(), 4);
+
+        write_capsule(&path, builder).unwrap();
+
+        let view = read_capsule(&path).unwrap();
+        assert_eq!(view.package_count(), 4);
+        assert_eq!(view.manifest_hash(), [0xab; 8]);
+
+        let e0 = view.entry(0);
+        assert_eq!(view.entry_name(e0), "left-pad");
+        assert_eq!(view.entry_version(e0), "1.0.0");
+        assert_eq!(e0.unpacked_size, 1024);
+        assert_eq!(e0.install_order, 0);
+        assert_eq!(e0.dep_count, 0);
+
+        let e3 = view.entry(3);
+        assert_eq!(view.entry_name(e3), "bar");
+        assert_eq!(view.entry_version(e3), "0.5.0");
+        assert_eq!(e3.dep_count, 2);
+        assert_eq!(e3.unpacked_size, 256);
+        let deps = view.entry_deps(e3);
+        assert_eq!(deps.len(), 2);
+        assert_eq!(deps[0].pkg_idx, 0);
+        assert_eq!(deps[1].pkg_idx, 2);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_corrupt_capsule_rejected() {
+        let dir = make_tmp_dir();
+        let mut builder = CapsuleBuilder::new([0xab; 8]);
+        builder.add_package("pkg", "1.0", &[0x01; 32], 100, &[], 0, 0, "");
+        let mut data = builder.build();
+        data[0] = 0xFF; // corrupt magic
+        let path = dir.join("bad.jhlcpl");
+        fs::write(&path, &data).unwrap();
+        assert!(read_capsule(&path).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_truncated_capsule_rejected() {
+        let dir = make_tmp_dir();
+        let builder = CapsuleBuilder::new([0x00; 8]);
+        let data = builder.build();
+        let truncated = &data[..data.len().min(16)];
+        let path = dir.join("trunc.jhlcpl");
+        fs::write(&path, truncated).unwrap();
+        assert!(read_capsule(&path).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_empty_capsule() {
+        let dir = make_tmp_dir();
+        let builder = CapsuleBuilder::new([0x00; 8]);
+        let path = dir.join("empty.jhlcpl");
+        write_capsule(&path, builder).unwrap();
+        let view = read_capsule(&path).unwrap();
+        assert_eq!(view.package_count(), 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_string_table_intern_shared() {
+        let dir = make_tmp_dir();
+        let mut builder = CapsuleBuilder::new([0x00; 8]);
+        // Two packages with same name but different versions
+        builder.add_package("lodash", "4.17.21", &[0x01; 32], 100, &[], 0, 0, "");
+        builder.add_package("lodash", "4.17.20", &[0x02; 32], 100, &[], 1, 0, "");
+        let path = dir.join("shared.jhlcpl");
+        write_capsule(&path, builder).unwrap();
+        let view = read_capsule(&path).unwrap();
+        assert_eq!(view.package_count(), 2);
+        // Both see same "lodash" string at same offset
+        let e0 = view.entry(0);
+        let e1 = view.entry(1);
+        assert_eq!(e0.name_off, e1.name_off);
+        assert_ne!(e0.version_off, e1.version_off);
+        assert_eq!(view.entry_name(e0), "lodash");
+        assert_eq!(view.entry_name(e1), "lodash");
+        assert_eq!(view.entry_version(e0), "4.17.21");
+        assert_eq!(view.entry_version(e1), "4.17.20");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_manifest_hash_compute() {
+        let dir = make_tmp_dir();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        fs::write("package.json", b"{}").unwrap();
+        fs::write("package-lock.json", b"{}").unwrap();
+        let hash = compute_manifest_hash(Path::new(".")).unwrap();
+        let hash2 = compute_manifest_hash(Path::new(".")).unwrap();
+        assert_eq!(hash, hash2);
+        fs::write("package.json", b"{\"name\":\"x\"}").unwrap();
+        let hash3 = compute_manifest_hash(Path::new(".")).unwrap();
+        assert_ne!(hash, hash3);
+        std::env::set_current_dir(&original_dir).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// A capsule is a cache file: it can be truncated, corrupted by a disk error, or
+/// written by something else. Every `unsafe` read in this module trusts header
+/// fields (offsets, counts) and uses `from_utf8_unchecked`, so a malformed file
+/// must be rejected at `open` — not produce UB later.
+#[cfg(test)]
+mod capsule_soundness_tests {
+    use super::*;
+
+    fn header(pkg_count: u32, dep_count: u32, str_len: u32) -> Vec<u8> {
+        let mut h = vec![0u8; HEADER_SIZE];
+        h[0..8].copy_from_slice(&MAGIC);
+        h[8..12].copy_from_slice(&CAPSULE_VERSION.to_le_bytes());
+        h[12..16].copy_from_slice(&pkg_count.to_le_bytes());
+        h[16..20].copy_from_slice(&dep_count.to_le_bytes());
+        h[20..24].copy_from_slice(&str_len.to_le_bytes());
+        h
+    }
+
+    fn entry(name_off: u32, version_off: u32) -> Vec<u8> {
+        let mut e = vec![0u8; PACKAGE_ENTRY_SIZE];
+        e[0..4].copy_from_slice(&name_off.to_le_bytes());
+        e[4..8].copy_from_slice(&version_off.to_le_bytes());
+        e
+    }
+
+    #[test]
+    fn invalid_utf8_string_table_is_rejected() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("bad.capsule");
+        let mut bytes = header(0, 0, 1);
+        bytes.extend_from_slice(&[0xffu8]); // not valid UTF-8
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(
+            CapsuleView::open(&path).is_err(),
+            "a capsule whose string table is not valid UTF-8 must be rejected (the accessors use from_utf8_unchecked)"
+        );
+    }
+
+    #[test]
+    fn out_of_range_entry_offsets_are_rejected() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("bad2.capsule");
+        let mut bytes = header(1, 0, 1);
+        bytes.extend_from_slice(&entry(999, 0)); // name_off far beyond str_len
+        bytes.extend_from_slice(&[0u8]);
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(
+            CapsuleView::open(&path).is_err(),
+            "entry offsets outside the string table must be rejected before any accessor runs"
+        );
+    }
+
+    #[test]
+    fn absurd_counts_do_not_overflow_the_length_check() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("bad3.capsule");
+        let bytes = header(u32::MAX, u32::MAX, u32::MAX);
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(
+            CapsuleView::open(&path).is_err(),
+            "wrapping size arithmetic must not let a crafted header pass the length check"
+        );
+    }
+}

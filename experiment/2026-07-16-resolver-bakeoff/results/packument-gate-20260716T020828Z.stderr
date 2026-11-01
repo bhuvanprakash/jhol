@@ -1,0 +1,7 @@
+packument express-app: pkgs=40 vers=69 edges=73 build=1056.7ms errs=0
+  arms: full_vars=41 residual_vars=5 shell=36
+packument overrides-app: pkgs=2 vers=3 edges=2 build=288.6ms errs=0
+  arms: full_vars=3 residual_vars=1 shell=3
+packument peer-deps-app: pkgs=5 vers=24 edges=7 build=139.3ms errs=0
+  arms: full_vars=13 residual_vars=11 shell=2
+wrote ../results/packument-gate-20260716T020828Z.json

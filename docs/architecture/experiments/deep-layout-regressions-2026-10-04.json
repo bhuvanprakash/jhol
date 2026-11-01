@@ -1,0 +1,844 @@
+{
+  "classification": "local causal correctness fixtures; not registry speed evidence",
+  "before_binary_sha256": "27301fa1f29af4fe1603648014e9fdaad9372c9e7f62d21b01fb1b0f9066cf99",
+  "observations": {
+    "missing_required_before": [
+      {
+        "mode": "unsatisfiable",
+        "native_only": false,
+        "exit": 0,
+        "elapsed_ms": 140.3042089950759,
+        "requests": [
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-a-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-b-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-child"
+          ]
+        ],
+        "raw_output": "Added 2 packages in 79ms\n[2026-10-04 17:58:49] installing 2 dependencies\n",
+        "success_marker": true,
+        "pass": false
+      },
+      {
+        "mode": "unsatisfiable",
+        "native_only": true,
+        "exit": 0,
+        "elapsed_ms": 45.005291991401464,
+        "requests": [
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-a-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child"
+          ]
+        ],
+        "raw_output": "Added 2 packages in 29ms\n[2026-10-04 17:58:49] installing 2 dependencies\n[2026-10-04 17:58:49] Installed jhol-request-b@1.0.0 (native)\n",
+        "success_marker": true,
+        "pass": false
+      }
+    ],
+    "nested_clones_before": [
+      {
+        "mode": "valid",
+        "native_only": false,
+        "exit": 0,
+        "elapsed_ms": 108.41158399125561,
+        "requests": [
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-child/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-a-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child"
+          ],
+          [
+            "GET",
+            "/jhol-request-child-2.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child-1.0.0.tgz"
+          ]
+        ],
+        "raw_output": "Added 2 packages in 56ms\n[2026-10-04 17:59:21] installing 2 dependencies\n[2026-10-04 17:59:21] flat resolution conflict (jhol-request-b requires jhol-request-child 2.0.0, resolved 1.0.0); resolving nested layout\n[2026-10-04 17:59:21] single-pass: nested layout built from in-memory metadata (no second resolution)\n[2026-10-04 17:59:21] [layout] 4 entries from the lockfile\n[2026-10-04 17:59:21] [layout]   jhol-request-a@1.0.0 install_path=node_modules/jhol-request-a top_level=true resolved=http://127.0.0.1:57765/jhol-request-a-1.0.0.tgz\n[2026-10-04 17:59:21] [layout]   jhol-request-b@1.0.0 install_path=node_modules/jhol-request-b top_level=true resolved=http://127.0.0.1:57765/jhol-request-b-1.0.0.tgz\n[2026-10-04 17:59:21] [layout]   jhol-request-child@2.0.0 install_path=node_modules/jhol-request-b/node_modules/jhol-request-child top_level=false resolved=http://127.0.0.1:57765/jhol-request-child-2.0.0.tgz\n[2026-10-04 17:59:21] [layout]   jhol-request-child@1.0.0 install_path=node_modules/jhol-request-child top_level=true resolved=http://127.0.0.1:57765/jhol-request-child-1.0.0.tgz\n[2026-10-04 17:59:21] [layout]   MATERIALIZE jhol-request-child@1.0.0 -> node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-request-budget-1ho7u0ry/cache/store/01011e934e82f2b5e590e40f34d650907f51428c34a387ec8f56f22d6a5b48aa.tgz\n[2026-10-04 17:59:21] [layout]   MATERIALIZE jhol-request-a@1.0.0 -> node_modules/jhol-request-a via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-request-budget-1ho7u0ry/cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 17:59:21] [layout]   MATERIALIZE jhol-request-b@1.0.0 -> node_modules/jhol-request-b via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-request-budget-1ho7u0ry/cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 17:59:21] [layout]   MATERIALIZE jhol-request-child@2.0.0 -> node_modules/jhol-request-b/node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-request-budget-1ho7u0ry/cache/store/a0855c4a12d55f33f64818755ab370b0b10679fd37bfb10338db28e8e65d692f.tgz\n[2026-10-04 17:59:21] [collect] 3 names, 4 instances; debug -> None\n",
+        "success_marker": true,
+        "consumer_exit": 0,
+        "generated_aliases": [
+          "node_modules/jhol-request-a/node_modules/jhol-request-child",
+          "node_modules/jhol-request-a/node_modules/jhol-request-a",
+          "node_modules/jhol-request-child/node_modules/jhol-request-child",
+          "node_modules/jhol-request-b/node_modules/jhol-request-b",
+          "node_modules/jhol-request-b/node_modules/jhol-request-child/node_modules/jhol-request-child"
+        ],
+        "relink_passes": 1,
+        "pass": true
+      },
+      {
+        "mode": "valid",
+        "native_only": true,
+        "exit": 0,
+        "elapsed_ms": 89.26362500642426,
+        "requests": [
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child/2.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-a-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child"
+          ],
+          [
+            "GET",
+            "/jhol-request-child-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child-2.0.0.tgz"
+          ]
+        ],
+        "raw_output": "Added 2 packages in 63ms\n[2026-10-04 17:59:21] installing 2 dependencies\n[2026-10-04 17:59:21] flat resolution conflict (jhol-request-a requires jhol-request-child 1.0.0, resolved 2.0.0); resolving nested layout\n[2026-10-04 17:59:21] single-pass: nested layout built from in-memory metadata (no second resolution)\n[2026-10-04 17:59:21] [layout] 4 entries from the lockfile\n[2026-10-04 17:59:21] [layout]   jhol-request-a@1.0.0 install_path=node_modules/jhol-request-a top_level=true resolved=http://127.0.0.1:57765/jhol-request-a-1.0.0.tgz\n[2026-10-04 17:59:21] [layout]   jhol-request-child@1.0.0 install_path=node_modules/jhol-request-a/node_modules/jhol-request-child top_level=false resolved=http://127.0.0.1:57765/jhol-request-child-1.0.0.tgz\n[2026-10-04 17:59:21] [layout]   jhol-request-b@1.0.0 install_path=node_modules/jhol-request-b top_level=true resolved=http://127.0.0.1:57765/jhol-request-b-1.0.0.tgz\n[2026-10-04 17:59:21] [layout]   jhol-request-child@2.0.0 install_path=node_modules/jhol-request-child top_level=true resolved=http://127.0.0.1:57765/jhol-request-child-2.0.0.tgz\n[2026-10-04 17:59:21] [layout]   SOURCE local-tarball jhol-request-a@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-request-budget-15dddq2x/cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 17:59:21] [layout]   SOURCE local-tarball jhol-request-b@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-request-budget-15dddq2x/cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 17:59:21] [layout]   MATERIALIZE jhol-request-a@1.0.0 -> node_modules/jhol-request-a via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-request-budget-15dddq2x/cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 17:59:21] [layout]   MATERIALIZE jhol-request-b@1.0.0 -> node_modules/jhol-request-b via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-request-budget-15dddq2x/cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 17:59:21] [layout]   MATERIALIZE jhol-request-child@2.0.0 -> node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-request-budget-15dddq2x/cache/store/a0855c4a12d55f33f64818755ab370b0b10679fd37bfb10338db28e8e65d692f.tgz\n[2026-10-04 17:59:21] [layout]   MATERIALIZE jhol-request-child@1.0.0 -> node_modules/jhol-request-a/node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-request-budget-15dddq2x/cache/store/01011e934e82f2b5e590e40f34d650907f51428c34a387ec8f56f22d6a5b48aa.tgz\n[2026-10-04 17:59:21] [collect] 3 names, 4 instances; debug -> None\n",
+        "success_marker": true,
+        "consumer_exit": 0,
+        "generated_aliases": [
+          "node_modules/jhol-request-a/node_modules/jhol-request-a",
+          "node_modules/jhol-request-a/node_modules/jhol-request-child/node_modules/jhol-request-child",
+          "node_modules/jhol-request-child/node_modules/jhol-request-child",
+          "node_modules/jhol-request-b/node_modules/jhol-request-b",
+          "node_modules/jhol-request-b/node_modules/jhol-request-child"
+        ],
+        "relink_passes": 1,
+        "pass": true
+      }
+    ],
+    "fresh_cache_reuse_before": [
+      {
+        "mode": "valid",
+        "native_only": false,
+        "fresh_project_reuse": false,
+        "exit": 0,
+        "elapsed_ms": 692.2445000091102,
+        "requests": [
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-a-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child"
+          ],
+          [
+            "GET",
+            "/jhol-request-child-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child-2.0.0.tgz"
+          ]
+        ],
+        "raw_output": "Added 2 packages in 68ms\n[2026-10-04 18:08:49] installing 2 dependencies\n[2026-10-04 18:08:49] flat resolution conflict (jhol-request-b requires jhol-request-child 2.0.0, resolved 1.0.0); resolving nested layout\n[2026-10-04 18:08:49] single-pass: nested layout built from in-memory metadata (no second resolution)\n[2026-10-04 18:08:49] [layout] 4 entries from the lockfile\n[2026-10-04 18:08:49] [layout]   jhol-request-a@1.0.0 install_path=node_modules/jhol-request-a top_level=true resolved=http://127.0.0.1:57895/jhol-request-a-1.0.0.tgz\n[2026-10-04 18:08:49] [layout]   jhol-request-b@1.0.0 install_path=node_modules/jhol-request-b top_level=true resolved=http://127.0.0.1:57895/jhol-request-b-1.0.0.tgz\n[2026-10-04 18:08:49] [layout]   jhol-request-child@2.0.0 install_path=node_modules/jhol-request-b/node_modules/jhol-request-child top_level=false resolved=http://127.0.0.1:57895/jhol-request-child-2.0.0.tgz\n[2026-10-04 18:08:49] [layout]   jhol-request-child@1.0.0 install_path=node_modules/jhol-request-child top_level=true resolved=http://127.0.0.1:57895/jhol-request-child-1.0.0.tgz\n[2026-10-04 18:08:49] [layout]   SOURCE local-tarball jhol-request-a@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-x4uifmuc/plain-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:08:49] [layout]   SOURCE local-tarball jhol-request-b@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-x4uifmuc/plain-cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 18:08:50] [layout]   MATERIALIZE jhol-request-a@1.0.0 -> node_modules/jhol-request-a via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-x4uifmuc/plain-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:08:50] [layout]   MATERIALIZE jhol-request-b@1.0.0 -> node_modules/jhol-request-b via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-x4uifmuc/plain-cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 18:08:50] [layout]   MATERIALIZE jhol-request-child@1.0.0 -> node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-x4uifmuc/plain-cache/store/01011e934e82f2b5e590e40f34d650907f51428c34a387ec8f56f22d6a5b48aa.tgz\n[2026-10-04 18:08:50] [layout]   MATERIALIZE jhol-request-child@2.0.0 -> node_modules/jhol-request-b/node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-x4uifmuc/plain-cache/store/a0855c4a12d55f33f64818755ab370b0b10679fd37bfb10338db28e8e65d692f.tgz\n[2026-10-04 18:08:50] [collect] 3 names, 4 instances; debug -> None\n",
+        "success_marker": true,
+        "consumer_exit": 0,
+        "generated_aliases": [
+          "node_modules/jhol-request-a/node_modules/jhol-request-child",
+          "node_modules/jhol-request-a/node_modules/jhol-request-a",
+          "node_modules/jhol-request-child/node_modules/jhol-request-child",
+          "node_modules/jhol-request-b/node_modules/jhol-request-b",
+          "node_modules/jhol-request-b/node_modules/jhol-request-child/node_modules/jhol-request-child"
+        ],
+        "relink_passes": 1,
+        "pass": true
+      },
+      {
+        "mode": "valid",
+        "native_only": false,
+        "fresh_project_reuse": true,
+        "exit": 0,
+        "elapsed_ms": 34.76716598379426,
+        "requests": [],
+        "raw_output": "Added 2 packages in 15ms\n[2026-10-04 18:08:50] installing 2 dependencies\n",
+        "success_marker": true,
+        "consumer_exit": 1,
+        "generated_aliases": [],
+        "relink_passes": 0,
+        "pass": false
+      },
+      {
+        "mode": "valid",
+        "native_only": true,
+        "fresh_project_reuse": false,
+        "exit": 0,
+        "elapsed_ms": 78.95937500870787,
+        "requests": [
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-a-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child"
+          ],
+          [
+            "GET",
+            "/jhol-request-child-2.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child-1.0.0.tgz"
+          ]
+        ],
+        "raw_output": "Added 2 packages in 64ms\n[2026-10-04 18:08:50] installing 2 dependencies\n[2026-10-04 18:08:50] flat resolution conflict (jhol-request-b requires jhol-request-child 2.0.0, resolved 1.0.0); resolving nested layout\n[2026-10-04 18:08:50] single-pass: nested layout built from in-memory metadata (no second resolution)\n[2026-10-04 18:08:50] [layout] 4 entries from the lockfile\n[2026-10-04 18:08:50] [layout]   jhol-request-a@1.0.0 install_path=node_modules/jhol-request-a top_level=true resolved=http://127.0.0.1:57895/jhol-request-a-1.0.0.tgz\n[2026-10-04 18:08:50] [layout]   jhol-request-b@1.0.0 install_path=node_modules/jhol-request-b top_level=true resolved=http://127.0.0.1:57895/jhol-request-b-1.0.0.tgz\n[2026-10-04 18:08:50] [layout]   jhol-request-child@2.0.0 install_path=node_modules/jhol-request-b/node_modules/jhol-request-child top_level=false resolved=http://127.0.0.1:57895/jhol-request-child-2.0.0.tgz\n[2026-10-04 18:08:50] [layout]   jhol-request-child@1.0.0 install_path=node_modules/jhol-request-child top_level=true resolved=http://127.0.0.1:57895/jhol-request-child-1.0.0.tgz\n[2026-10-04 18:08:50] [layout]   SOURCE local-tarball jhol-request-a@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-x4uifmuc/native-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:08:50] [layout]   SOURCE local-tarball jhol-request-b@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-x4uifmuc/native-cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 18:08:50] [layout]   MATERIALIZE jhol-request-a@1.0.0 -> node_modules/jhol-request-a via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-x4uifmuc/native-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:08:50] [layout]   MATERIALIZE jhol-request-child@1.0.0 -> node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-x4uifmuc/native-cache/store/01011e934e82f2b5e590e40f34d650907f51428c34a387ec8f56f22d6a5b48aa.tgz\n[2026-10-04 18:08:50] [layout]   MATERIALIZE jhol-request-b@1.0.0 -> node_modules/jhol-request-b via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-x4uifmuc/native-cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 18:08:50] [layout]   MATERIALIZE jhol-request-child@2.0.0 -> node_modules/jhol-request-b/node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-x4uifmuc/native-cache/store/a0855c4a12d55f33f64818755ab370b0b10679fd37bfb10338db28e8e65d692f.tgz\n[2026-10-04 18:08:50] [collect] 3 names, 4 instances; debug -> None\n",
+        "success_marker": true,
+        "consumer_exit": 0,
+        "generated_aliases": [
+          "node_modules/jhol-request-a/node_modules/jhol-request-child",
+          "node_modules/jhol-request-a/node_modules/jhol-request-a",
+          "node_modules/jhol-request-child/node_modules/jhol-request-child",
+          "node_modules/jhol-request-b/node_modules/jhol-request-b",
+          "node_modules/jhol-request-b/node_modules/jhol-request-child/node_modules/jhol-request-child"
+        ],
+        "relink_passes": 1,
+        "pass": true
+      },
+      {
+        "mode": "valid",
+        "native_only": true,
+        "fresh_project_reuse": true,
+        "exit": 0,
+        "elapsed_ms": 31.865457975072786,
+        "requests": [],
+        "raw_output": "Added 2 packages in 15ms\n[2026-10-04 18:08:51] installing 2 dependencies\n",
+        "success_marker": true,
+        "consumer_exit": 1,
+        "generated_aliases": [],
+        "relink_passes": 0,
+        "pass": false
+      }
+    ]
+  },
+  "baseline_ancestor_tests": {
+    "passed": 0,
+    "failed": 2
+  },
+  "after": {
+    "default": [
+      {
+        "native_only": false,
+        "requests": [
+          [
+            "GET",
+            "/fixture.tgz"
+          ]
+        ],
+        "consumer": "42",
+        "executable": "42",
+        "sri_preserved": true
+      },
+      {
+        "native_only": true,
+        "requests": [
+          [
+            "GET",
+            "/fixture.tgz"
+          ]
+        ],
+        "consumer": "42",
+        "executable": "42",
+        "sri_preserved": true
+      }
+    ],
+    "unsat": [
+      {
+        "mode": "unsatisfiable",
+        "native_only": false,
+        "fresh_project_reuse": false,
+        "exit": 1,
+        "elapsed_ms": 635.853165993467,
+        "requests": [
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-child/2.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-a-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child"
+          ],
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ]
+        ],
+        "raw_output": "[2026-10-04 18:19:02] installing 2 dependencies\n[2026-10-04 18:19:02] flat resolution conflict (jhol-request-a requires jhol-request-child 1.0.0, resolved 2.0.0); resolving nested layout\n[2026-10-04 18:19:02] single-pass: rejected by the completeness guard; using the full resolver\nError: Application error in resolve_nested_layout: JAGR-\u221e legality: jhol-request-a@1.0.0 requires jhol-request-child 1.0.0, got 2.0.0 (details: resolution_failed)\n",
+        "success_marker": false,
+        "pass": true
+      },
+      {
+        "mode": "unsatisfiable",
+        "native_only": true,
+        "fresh_project_reuse": false,
+        "exit": 1,
+        "elapsed_ms": 65.61558399698697,
+        "requests": [
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-child/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-a-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-b-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child"
+          ],
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-child/1.0.0"
+          ]
+        ],
+        "raw_output": "[2026-10-04 18:19:02] installing 2 dependencies\n[2026-10-04 18:19:02] flat resolution conflict (jhol-request-a requires jhol-request-child 1.0.0, resolved <missing>); resolving nested layout\n[2026-10-04 18:19:02] single-pass: rejected by the completeness guard; using the full resolver\nError: Application error in resolve_nested_layout: JAGR-\u221e legality: jhol-request-a@1.0.0 requires jhol-request-child 1.0.0, got 2.0.0 (details: resolution_failed)\n",
+        "success_marker": false,
+        "pass": true
+      }
+    ],
+    "reuse": [
+      {
+        "mode": "valid",
+        "native_only": false,
+        "fresh_project_reuse": false,
+        "exit": 0,
+        "elapsed_ms": 803.3383330039214,
+        "requests": [
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-child/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-a-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child"
+          ],
+          [
+            "GET",
+            "/jhol-request-child-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child-2.0.0.tgz"
+          ]
+        ],
+        "raw_output": "Added 2 packages in 147ms\n[2026-10-04 18:19:02] installing 2 dependencies\n[2026-10-04 18:19:02] flat resolution conflict (jhol-request-b requires jhol-request-child 2.0.0, resolved 1.0.0); resolving nested layout\n[2026-10-04 18:19:02] single-pass: nested layout built from in-memory metadata (no second resolution)\n[2026-10-04 18:19:02] [layout] 4 entries from the lockfile\n[2026-10-04 18:19:02] [layout]   jhol-request-a@1.0.0 install_path=node_modules/jhol-request-a top_level=true resolved=http://127.0.0.1:58150/jhol-request-a-1.0.0.tgz\n[2026-10-04 18:19:02] [layout]   jhol-request-b@1.0.0 install_path=node_modules/jhol-request-b top_level=true resolved=http://127.0.0.1:58150/jhol-request-b-1.0.0.tgz\n[2026-10-04 18:19:02] [layout]   jhol-request-child@2.0.0 install_path=node_modules/jhol-request-b/node_modules/jhol-request-child top_level=false resolved=http://127.0.0.1:58150/jhol-request-child-2.0.0.tgz\n[2026-10-04 18:19:02] [layout]   jhol-request-child@1.0.0 install_path=node_modules/jhol-request-child top_level=true resolved=http://127.0.0.1:58150/jhol-request-child-1.0.0.tgz\n[2026-10-04 18:19:02] [layout]   SOURCE local-tarball jhol-request-a@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/plain-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:19:02] [layout]   MATERIALIZE jhol-request-a@1.0.0 -> node_modules/jhol-request-a via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/plain-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:19:02] [layout]   MATERIALIZE jhol-request-b@1.0.0 -> node_modules/jhol-request-b via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/plain-cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 18:19:02] [layout]   MATERIALIZE jhol-request-child@1.0.0 -> node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/plain-cache/store/01011e934e82f2b5e590e40f34d650907f51428c34a387ec8f56f22d6a5b48aa.tgz\n[2026-10-04 18:19:02] [layout]   MATERIALIZE jhol-request-child@2.0.0 -> node_modules/jhol-request-b/node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/plain-cache/store/a0855c4a12d55f33f64818755ab370b0b10679fd37bfb10338db28e8e65d692f.tgz\n",
+        "success_marker": true,
+        "consumer_exit": 0,
+        "generated_aliases": [],
+        "relink_passes": 0,
+        "pass": true
+      },
+      {
+        "mode": "valid",
+        "native_only": false,
+        "fresh_project_reuse": true,
+        "exit": 0,
+        "elapsed_ms": 50.13824999332428,
+        "requests": [
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ]
+        ],
+        "raw_output": "Added 2 packages in 33ms\n[2026-10-04 18:19:02] installing 2 dependencies\n[2026-10-04 18:19:02] flat resolution conflict (jhol-request-b requires jhol-request-child 2.0.0, resolved <missing>); resolving nested layout\n[2026-10-04 18:19:02] single-pass: nested layout built from in-memory metadata (no second resolution)\n[2026-10-04 18:19:02] [layout] 4 entries from the lockfile\n[2026-10-04 18:19:02] [layout]   jhol-request-a@1.0.0 install_path=node_modules/jhol-request-a top_level=true resolved=http://127.0.0.1:58150/jhol-request-a-1.0.0.tgz\n[2026-10-04 18:19:02] [layout]   jhol-request-child@1.0.0 install_path=node_modules/jhol-request-a/node_modules/jhol-request-child top_level=false resolved=http://127.0.0.1:58150/jhol-request-child-1.0.0.tgz\n[2026-10-04 18:19:02] [layout]   jhol-request-b@1.0.0 install_path=node_modules/jhol-request-b top_level=true resolved=http://127.0.0.1:58150/jhol-request-b-1.0.0.tgz\n[2026-10-04 18:19:02] [layout]   jhol-request-child@2.0.0 install_path=node_modules/jhol-request-b/node_modules/jhol-request-child top_level=false resolved=http://127.0.0.1:58150/jhol-request-child-2.0.0.tgz\n[2026-10-04 18:19:02] [layout]   SOURCE local-tarball jhol-request-a@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/plain-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:19:02] [layout]   SOURCE local-tarball jhol-request-child@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/plain-cache/store/01011e934e82f2b5e590e40f34d650907f51428c34a387ec8f56f22d6a5b48aa.tgz\n[2026-10-04 18:19:02] [layout]   SOURCE local-tarball jhol-request-b@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/plain-cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 18:19:02] [layout]   SOURCE local-tarball jhol-request-child@2.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/plain-cache/store/a0855c4a12d55f33f64818755ab370b0b10679fd37bfb10338db28e8e65d692f.tgz\n[2026-10-04 18:19:02] [layout]   MATERIALIZE jhol-request-a@1.0.0 -> node_modules/jhol-request-a via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/plain-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:19:02] [layout]   MATERIALIZE jhol-request-b@1.0.0 -> node_modules/jhol-request-b via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/plain-cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 18:19:02] [layout]   MATERIALIZE jhol-request-child@1.0.0 -> node_modules/jhol-request-a/node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/plain-cache/store/01011e934e82f2b5e590e40f34d650907f51428c34a387ec8f56f22d6a5b48aa.tgz\n[2026-10-04 18:19:02] [layout]   MATERIALIZE jhol-request-child@2.0.0 -> node_modules/jhol-request-b/node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/plain-cache/store/a0855c4a12d55f33f64818755ab370b0b10679fd37bfb10338db28e8e65d692f.tgz\n",
+        "success_marker": true,
+        "consumer_exit": 0,
+        "generated_aliases": [],
+        "relink_passes": 0,
+        "pass": true
+      },
+      {
+        "mode": "valid",
+        "native_only": true,
+        "fresh_project_reuse": false,
+        "exit": 0,
+        "elapsed_ms": 84.1527910088189,
+        "requests": [
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child/2.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-a-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child"
+          ],
+          [
+            "GET",
+            "/jhol-request-child-2.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child-1.0.0.tgz"
+          ]
+        ],
+        "raw_output": "Added 2 packages in 61ms\n[2026-10-04 18:19:03] installing 2 dependencies\n[2026-10-04 18:19:03] flat resolution conflict (jhol-request-a requires jhol-request-child 1.0.0, resolved 2.0.0); resolving nested layout\n[2026-10-04 18:19:03] single-pass: nested layout built from in-memory metadata (no second resolution)\n[2026-10-04 18:19:03] [layout] 4 entries from the lockfile\n[2026-10-04 18:19:03] [layout]   jhol-request-a@1.0.0 install_path=node_modules/jhol-request-a top_level=true resolved=http://127.0.0.1:58150/jhol-request-a-1.0.0.tgz\n[2026-10-04 18:19:03] [layout]   jhol-request-child@1.0.0 install_path=node_modules/jhol-request-a/node_modules/jhol-request-child top_level=false resolved=http://127.0.0.1:58150/jhol-request-child-1.0.0.tgz\n[2026-10-04 18:19:03] [layout]   jhol-request-b@1.0.0 install_path=node_modules/jhol-request-b top_level=true resolved=http://127.0.0.1:58150/jhol-request-b-1.0.0.tgz\n[2026-10-04 18:19:03] [layout]   jhol-request-child@2.0.0 install_path=node_modules/jhol-request-child top_level=true resolved=http://127.0.0.1:58150/jhol-request-child-2.0.0.tgz\n[2026-10-04 18:19:03] [layout]   SOURCE local-tarball jhol-request-a@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/native-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:19:03] [layout]   SOURCE local-tarball jhol-request-b@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/native-cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 18:19:03] [layout]   MATERIALIZE jhol-request-a@1.0.0 -> node_modules/jhol-request-a via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/native-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:19:03] [layout]   MATERIALIZE jhol-request-b@1.0.0 -> node_modules/jhol-request-b via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/native-cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 18:19:03] [layout]   MATERIALIZE jhol-request-child@2.0.0 -> node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/native-cache/store/a0855c4a12d55f33f64818755ab370b0b10679fd37bfb10338db28e8e65d692f.tgz\n[2026-10-04 18:19:03] [layout]   MATERIALIZE jhol-request-child@1.0.0 -> node_modules/jhol-request-a/node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/native-cache/store/01011e934e82f2b5e590e40f34d650907f51428c34a387ec8f56f22d6a5b48aa.tgz\n",
+        "success_marker": true,
+        "consumer_exit": 0,
+        "generated_aliases": [],
+        "relink_passes": 0,
+        "pass": true
+      },
+      {
+        "mode": "valid",
+        "native_only": true,
+        "fresh_project_reuse": true,
+        "exit": 0,
+        "elapsed_ms": 38.451041997177526,
+        "requests": [
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ]
+        ],
+        "raw_output": "Added 2 packages in 24ms\n[2026-10-04 18:19:03] installing 2 dependencies\n[2026-10-04 18:19:03] flat resolution conflict (jhol-request-a requires jhol-request-child 1.0.0, resolved <missing>); resolving nested layout\n[2026-10-04 18:19:03] single-pass: nested layout built from in-memory metadata (no second resolution)\n[2026-10-04 18:19:03] [layout] 4 entries from the lockfile\n[2026-10-04 18:19:03] [layout]   jhol-request-a@1.0.0 install_path=node_modules/jhol-request-a top_level=true resolved=http://127.0.0.1:58150/jhol-request-a-1.0.0.tgz\n[2026-10-04 18:19:03] [layout]   jhol-request-child@1.0.0 install_path=node_modules/jhol-request-a/node_modules/jhol-request-child top_level=false resolved=http://127.0.0.1:58150/jhol-request-child-1.0.0.tgz\n[2026-10-04 18:19:03] [layout]   jhol-request-b@1.0.0 install_path=node_modules/jhol-request-b top_level=true resolved=http://127.0.0.1:58150/jhol-request-b-1.0.0.tgz\n[2026-10-04 18:19:03] [layout]   jhol-request-child@2.0.0 install_path=node_modules/jhol-request-b/node_modules/jhol-request-child top_level=false resolved=http://127.0.0.1:58150/jhol-request-child-2.0.0.tgz\n[2026-10-04 18:19:03] [layout]   SOURCE local-tarball jhol-request-a@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/native-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:19:03] [layout]   SOURCE local-tarball jhol-request-child@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/native-cache/store/01011e934e82f2b5e590e40f34d650907f51428c34a387ec8f56f22d6a5b48aa.tgz\n[2026-10-04 18:19:03] [layout]   SOURCE local-tarball jhol-request-b@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/native-cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 18:19:03] [layout]   SOURCE local-tarball jhol-request-child@2.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/native-cache/store/a0855c4a12d55f33f64818755ab370b0b10679fd37bfb10338db28e8e65d692f.tgz\n[2026-10-04 18:19:03] [layout]   MATERIALIZE jhol-request-a@1.0.0 -> node_modules/jhol-request-a via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/native-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:19:03] [layout]   MATERIALIZE jhol-request-b@1.0.0 -> node_modules/jhol-request-b via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/native-cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 18:19:03] [layout]   MATERIALIZE jhol-request-child@1.0.0 -> node_modules/jhol-request-a/node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/native-cache/store/01011e934e82f2b5e590e40f34d650907f51428c34a387ec8f56f22d6a5b48aa.tgz\n[2026-10-04 18:19:03] [layout]   MATERIALIZE jhol-request-child@2.0.0 -> node_modules/jhol-request-b/node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-nd2tq0j6/native-cache/store/a0855c4a12d55f33f64818755ab370b0b10679fd37bfb10338db28e8e65d692f.tgz\n",
+        "success_marker": true,
+        "consumer_exit": 0,
+        "generated_aliases": [],
+        "relink_passes": 0,
+        "pass": true
+      }
+    ],
+    "budget": [
+      {
+        "mode": "budget",
+        "native_only": false,
+        "fresh_project_reuse": false,
+        "exit": 1,
+        "elapsed_ms": 583.287959016161,
+        "requests": [
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child/2.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-a-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child"
+          ]
+        ],
+        "raw_output": "[2026-10-04 18:19:02] installing 2 dependencies\nError: Application error in resolve_nested_layout: Required dependency conflict exceeds nested-analysis budget; raise JHOL_JAGR_MAX_DEPS (details: resolution_budget)\n",
+        "success_marker": false,
+        "pass": true
+      },
+      {
+        "mode": "budget",
+        "native_only": true,
+        "fresh_project_reuse": false,
+        "exit": 1,
+        "elapsed_ms": 38.764333992730826,
+        "requests": [
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-a-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child/2.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-child"
+          ]
+        ],
+        "raw_output": "[2026-10-04 18:19:02] installing 2 dependencies\nError: Application error in resolve_nested_layout: Required dependency conflict exceeds nested-analysis budget; raise JHOL_JAGR_MAX_DEPS (details: resolution_budget)\n",
+        "success_marker": false,
+        "pass": true
+      }
+    ],
+    "symlink": [
+      {
+        "mode": "valid",
+        "native_only": false,
+        "fresh_project_reuse": false,
+        "exit": 0,
+        "elapsed_ms": 582.2362919861916,
+        "requests": [
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-child/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-a-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-b-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child"
+          ],
+          [
+            "GET",
+            "/jhol-request-child-2.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child-1.0.0.tgz"
+          ]
+        ],
+        "raw_output": "Added 2 packages in 121ms\n[2026-10-04 18:19:02] installing 2 dependencies\n[2026-10-04 18:19:02] flat resolution conflict (jhol-request-b requires jhol-request-child 2.0.0, resolved 1.0.0); resolving nested layout\n[2026-10-04 18:19:02] single-pass: nested layout built from in-memory metadata (no second resolution)\n[2026-10-04 18:19:02] [layout] 4 entries from the lockfile\n[2026-10-04 18:19:02] [layout]   jhol-request-a@1.0.0 install_path=node_modules/jhol-request-a top_level=true resolved=http://127.0.0.1:58154/jhol-request-a-1.0.0.tgz\n[2026-10-04 18:19:02] [layout]   jhol-request-b@1.0.0 install_path=node_modules/jhol-request-b top_level=true resolved=http://127.0.0.1:58154/jhol-request-b-1.0.0.tgz\n[2026-10-04 18:19:02] [layout]   jhol-request-child@2.0.0 install_path=node_modules/jhol-request-b/node_modules/jhol-request-child top_level=false resolved=http://127.0.0.1:58154/jhol-request-child-2.0.0.tgz\n[2026-10-04 18:19:02] [layout]   jhol-request-child@1.0.0 install_path=node_modules/jhol-request-child top_level=true resolved=http://127.0.0.1:58154/jhol-request-child-1.0.0.tgz\n[2026-10-04 18:19:02] [layout]   SOURCE local-tarball jhol-request-a@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/plain-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:19:02] [layout]   SOURCE local-tarball jhol-request-b@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/plain-cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 18:19:02] [layout]   MATERIALIZE jhol-request-a@1.0.0 -> node_modules/jhol-request-a via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/plain-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:19:02] [layout]   MATERIALIZE jhol-request-b@1.0.0 -> node_modules/jhol-request-b via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/plain-cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 18:19:02] [layout]   MATERIALIZE jhol-request-child@1.0.0 -> node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/plain-cache/store/01011e934e82f2b5e590e40f34d650907f51428c34a387ec8f56f22d6a5b48aa.tgz\n[2026-10-04 18:19:02] [layout]   MATERIALIZE jhol-request-child@2.0.0 -> node_modules/jhol-request-b/node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/plain-cache/store/a0855c4a12d55f33f64818755ab370b0b10679fd37bfb10338db28e8e65d692f.tgz\n[2026-10-04 18:19:02] [collect] 3 names, 4 instances; debug -> None\n",
+        "success_marker": true,
+        "consumer_exit": 0,
+        "generated_aliases": [
+          "node_modules/jhol-request-b",
+          "node_modules/jhol-request-child",
+          "node_modules/jhol-request-a"
+        ],
+        "relink_passes": 1,
+        "pass": true
+      },
+      {
+        "mode": "valid",
+        "native_only": false,
+        "fresh_project_reuse": true,
+        "exit": 0,
+        "elapsed_ms": 52.714332996401936,
+        "requests": [
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ]
+        ],
+        "raw_output": "Added 2 packages in 34ms\n[2026-10-04 18:19:02] installing 2 dependencies\n[2026-10-04 18:19:02] flat resolution conflict (jhol-request-b requires jhol-request-child 2.0.0, resolved <missing>); resolving nested layout\n[2026-10-04 18:19:02] single-pass: nested layout built from in-memory metadata (no second resolution)\n[2026-10-04 18:19:02] [layout] 4 entries from the lockfile\n[2026-10-04 18:19:02] [layout]   jhol-request-a@1.0.0 install_path=node_modules/jhol-request-a top_level=true resolved=http://127.0.0.1:58154/jhol-request-a-1.0.0.tgz\n[2026-10-04 18:19:02] [layout]   jhol-request-child@1.0.0 install_path=node_modules/jhol-request-a/node_modules/jhol-request-child top_level=false resolved=http://127.0.0.1:58154/jhol-request-child-1.0.0.tgz\n[2026-10-04 18:19:02] [layout]   jhol-request-b@1.0.0 install_path=node_modules/jhol-request-b top_level=true resolved=http://127.0.0.1:58154/jhol-request-b-1.0.0.tgz\n[2026-10-04 18:19:02] [layout]   jhol-request-child@2.0.0 install_path=node_modules/jhol-request-b/node_modules/jhol-request-child top_level=false resolved=http://127.0.0.1:58154/jhol-request-child-2.0.0.tgz\n[2026-10-04 18:19:02] [layout]   SOURCE local-tarball jhol-request-a@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/plain-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:19:02] [layout]   SOURCE local-tarball jhol-request-child@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/plain-cache/store/01011e934e82f2b5e590e40f34d650907f51428c34a387ec8f56f22d6a5b48aa.tgz\n[2026-10-04 18:19:02] [layout]   SOURCE local-tarball jhol-request-b@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/plain-cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 18:19:02] [layout]   SOURCE local-tarball jhol-request-child@2.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/plain-cache/store/a0855c4a12d55f33f64818755ab370b0b10679fd37bfb10338db28e8e65d692f.tgz\n[2026-10-04 18:19:02] [layout]   MATERIALIZE jhol-request-a@1.0.0 -> node_modules/jhol-request-a via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/plain-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:19:02] [layout]   MATERIALIZE jhol-request-b@1.0.0 -> node_modules/jhol-request-b via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/plain-cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 18:19:02] [layout]   MATERIALIZE jhol-request-child@1.0.0 -> node_modules/jhol-request-a/node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/plain-cache/store/01011e934e82f2b5e590e40f34d650907f51428c34a387ec8f56f22d6a5b48aa.tgz\n[2026-10-04 18:19:02] [layout]   MATERIALIZE jhol-request-child@2.0.0 -> node_modules/jhol-request-b/node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/plain-cache/store/a0855c4a12d55f33f64818755ab370b0b10679fd37bfb10338db28e8e65d692f.tgz\n[2026-10-04 18:19:02] [collect] 3 names, 4 instances; debug -> None\n",
+        "success_marker": true,
+        "consumer_exit": 0,
+        "generated_aliases": [
+          "node_modules/jhol-request-b",
+          "node_modules/jhol-request-a"
+        ],
+        "relink_passes": 1,
+        "pass": true
+      },
+      {
+        "mode": "valid",
+        "native_only": true,
+        "fresh_project_reuse": false,
+        "exit": 0,
+        "elapsed_ms": 101.50508297374472,
+        "requests": [
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-a-1.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child/2.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-child"
+          ],
+          [
+            "GET",
+            "/jhol-request-child-2.0.0.tgz"
+          ],
+          [
+            "GET",
+            "/jhol-request-child-1.0.0.tgz"
+          ]
+        ],
+        "raw_output": "Added 2 packages in 78ms\n[2026-10-04 18:19:03] installing 2 dependencies\n[2026-10-04 18:19:03] flat resolution conflict (jhol-request-a requires jhol-request-child 1.0.0, resolved 2.0.0); resolving nested layout\n[2026-10-04 18:19:03] single-pass: nested layout built from in-memory metadata (no second resolution)\n[2026-10-04 18:19:03] [layout] 4 entries from the lockfile\n[2026-10-04 18:19:03] [layout]   jhol-request-a@1.0.0 install_path=node_modules/jhol-request-a top_level=true resolved=http://127.0.0.1:58154/jhol-request-a-1.0.0.tgz\n[2026-10-04 18:19:03] [layout]   jhol-request-child@1.0.0 install_path=node_modules/jhol-request-a/node_modules/jhol-request-child top_level=false resolved=http://127.0.0.1:58154/jhol-request-child-1.0.0.tgz\n[2026-10-04 18:19:03] [layout]   jhol-request-b@1.0.0 install_path=node_modules/jhol-request-b top_level=true resolved=http://127.0.0.1:58154/jhol-request-b-1.0.0.tgz\n[2026-10-04 18:19:03] [layout]   jhol-request-child@2.0.0 install_path=node_modules/jhol-request-child top_level=true resolved=http://127.0.0.1:58154/jhol-request-child-2.0.0.tgz\n[2026-10-04 18:19:03] [layout]   SOURCE local-tarball jhol-request-a@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/native-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:19:03] [layout]   SOURCE local-tarball jhol-request-b@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/native-cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 18:19:03] [layout]   MATERIALIZE jhol-request-a@1.0.0 -> node_modules/jhol-request-a via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/native-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:19:03] [layout]   MATERIALIZE jhol-request-b@1.0.0 -> node_modules/jhol-request-b via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/native-cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 18:19:03] [layout]   MATERIALIZE jhol-request-child@2.0.0 -> node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/native-cache/store/a0855c4a12d55f33f64818755ab370b0b10679fd37bfb10338db28e8e65d692f.tgz\n[2026-10-04 18:19:03] [layout]   MATERIALIZE jhol-request-child@1.0.0 -> node_modules/jhol-request-a/node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/native-cache/store/01011e934e82f2b5e590e40f34d650907f51428c34a387ec8f56f22d6a5b48aa.tgz\n[2026-10-04 18:19:03] [collect] 3 names, 4 instances; debug -> None\n",
+        "success_marker": true,
+        "consumer_exit": 0,
+        "generated_aliases": [
+          "node_modules/jhol-request-b",
+          "node_modules/jhol-request-child",
+          "node_modules/jhol-request-a"
+        ],
+        "relink_passes": 1,
+        "pass": true
+      },
+      {
+        "mode": "valid",
+        "native_only": true,
+        "fresh_project_reuse": true,
+        "exit": 0,
+        "elapsed_ms": 37.51287501654588,
+        "requests": [
+          [
+            "GET",
+            "/jhol-request-a/1.0.0"
+          ],
+          [
+            "GET",
+            "/jhol-request-b/1.0.0"
+          ]
+        ],
+        "raw_output": "Added 2 packages in 22ms\n[2026-10-04 18:19:03] installing 2 dependencies\n[2026-10-04 18:19:03] flat resolution conflict (jhol-request-b requires jhol-request-child 2.0.0, resolved 1.0.0); resolving nested layout\n[2026-10-04 18:19:03] single-pass: nested layout built from in-memory metadata (no second resolution)\n[2026-10-04 18:19:03] [layout] 4 entries from the lockfile\n[2026-10-04 18:19:03] [layout]   jhol-request-a@1.0.0 install_path=node_modules/jhol-request-a top_level=true resolved=http://127.0.0.1:58154/jhol-request-a-1.0.0.tgz\n[2026-10-04 18:19:03] [layout]   jhol-request-b@1.0.0 install_path=node_modules/jhol-request-b top_level=true resolved=http://127.0.0.1:58154/jhol-request-b-1.0.0.tgz\n[2026-10-04 18:19:03] [layout]   jhol-request-child@2.0.0 install_path=node_modules/jhol-request-b/node_modules/jhol-request-child top_level=false resolved=http://127.0.0.1:58154/jhol-request-child-2.0.0.tgz\n[2026-10-04 18:19:03] [layout]   jhol-request-child@1.0.0 install_path=node_modules/jhol-request-child top_level=true resolved=http://127.0.0.1:58154/jhol-request-child-1.0.0.tgz\n[2026-10-04 18:19:03] [layout]   SOURCE local-tarball jhol-request-a@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/native-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:19:03] [layout]   SOURCE local-tarball jhol-request-b@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/native-cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 18:19:03] [layout]   SOURCE local-tarball jhol-request-child@2.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/native-cache/store/a0855c4a12d55f33f64818755ab370b0b10679fd37bfb10338db28e8e65d692f.tgz\n[2026-10-04 18:19:03] [layout]   SOURCE local-tarball jhol-request-child@1.0.0 path=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/native-cache/store/01011e934e82f2b5e590e40f34d650907f51428c34a387ec8f56f22d6a5b48aa.tgz\n[2026-10-04 18:19:03] [layout]   MATERIALIZE jhol-request-a@1.0.0 -> node_modules/jhol-request-a via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/native-cache/store/7b61dee01e9d873aa27bac428b0af4de80d7f556f4fb3b455f60355ceb1ce33b.tgz\n[2026-10-04 18:19:03] [layout]   MATERIALIZE jhol-request-child@1.0.0 -> node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/native-cache/store/01011e934e82f2b5e590e40f34d650907f51428c34a387ec8f56f22d6a5b48aa.tgz\n[2026-10-04 18:19:03] [layout]   MATERIALIZE jhol-request-b@1.0.0 -> node_modules/jhol-request-b via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/native-cache/store/b4e2ffb761125e6b11c047234eedcee130a726c91ccb57b2d01f69b00f63719f.tgz\n[2026-10-04 18:19:03] [layout]   MATERIALIZE jhol-request-child@2.0.0 -> node_modules/jhol-request-b/node_modules/jhol-request-child via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-resolution-reuse-dzco7cc9/native-cache/store/a0855c4a12d55f33f64818755ab370b0b10679fd37bfb10338db28e8e65d692f.tgz\n[2026-10-04 18:19:03] [collect] 3 names, 4 instances; debug -> None\n",
+        "success_marker": true,
+        "consumer_exit": 0,
+        "generated_aliases": [
+          "node_modules/jhol-request-b",
+          "node_modules/jhol-request-child",
+          "node_modules/jhol-request-a"
+        ],
+        "relink_passes": 1,
+        "pass": true
+      }
+    ]
+  },
+  "after_binary_sha256": "7e9cf4b558432bba027affa43ebee41155ea19ba0a22a752d3168db0b8eb5ffd",
+  "runner_source": "#!/usr/bin/env python3\n\"\"\"Check cold installs fetch package data, with no implicit registry-root probes.\n\nLocal server delay only makes background probes observable. Not a speed benchmark.\n\"\"\"\nimport argparse\nimport base64\nimport gzip\nimport hashlib\nimport io\nimport json\nimport os\nfrom pathlib import Path\nimport subprocess\nimport tarfile\nimport tempfile\nimport threading\nimport time\nfrom http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n\n\ndef check(binary, expect_probes, resolution_mode=None, expect_relinks=False, fresh_reuse=False, symlink_mode=False):\n    payload = io.BytesIO()\n    with tarfile.open(fileobj=payload, mode=\"w\") as archive:\n        for name, content, mode in [\n            (\"package.json\", b'{\"name\":\"jhol-request-fixture\",\"version\":\"1.0.0\",\"main\":\"index.js\",\"bin\":{\"jhol-fixture\":\"cli.js\"}}', 0o644),\n            (\"index.js\", b\"module.exports = 42;\\n\", 0o644),\n            (\"cli.js\", b\"#!/usr/bin/env node\\nconsole.log(42);\\n\", 0o755),\n        ]:\n            entry = tarfile.TarInfo(\"package/\" + name)\n            entry.size, entry.mode = len(content), mode\n            archive.addfile(entry, io.BytesIO(content))\n    body = gzip.compress(payload.getvalue(), mtime=0)\n    integrity = \"sha512-\" + base64.b64encode(hashlib.sha512(body).digest()).decode()\n    requests = []\n    responses = {}\n    if resolution_mode:\n        packages = [(\"jhol-request-a\", \"1.0.0\", {\"jhol-request-child\": \"1.0.0\"}),\n                    (\"jhol-request-b\", \"1.0.0\", {\"jhol-request-child\": \"2.0.0\"}),\n                    (\"jhol-request-child\", \"2.0.0\", {})]\n        if resolution_mode in (\"valid\", \"budget\"):\n            packages.append((\"jhol-request-child\", \"1.0.0\", {}))\n        for name, version, deps in packages:\n            info = {\"name\": name, \"version\": version, \"main\": \"index.js\", \"dependencies\": deps}\n            data = io.BytesIO()\n            code = (\"module.exports = require('jhol-request-child');\\n\" if deps else \"module.exports = \" + json.dumps(version) + \";\\n\")\n            with tarfile.open(fileobj=data, mode=\"w\") as archive:\n                for filename, content in [(\"package.json\", json.dumps(info).encode()), (\"index.js\", code.encode())]:\n                    entry = tarfile.TarInfo(\"package/\" + filename)\n                    entry.size, entry.mode = len(content), 0o644\n                    archive.addfile(entry, io.BytesIO(content))\n            compressed = gzip.compress(data.getvalue(), mtime=0)\n            responses[\"/\" + name + \"-\" + version + \".tgz\"] = compressed\n            responses[\"/\" + name + \"/\" + version] = info\n    requests = []\n\n    class Handler(BaseHTTPRequestHandler):\n        def do_HEAD(self):\n            requests.append([\"HEAD\", self.path])\n            self.send_response(200)\n            self.send_header(\"Content-Length\", \"0\")\n            self.end_headers()\n\n        def do_GET(self):\n            requests.append([\"GET\", self.path])\n            data = responses.get(self.path, body if self.path == \"/fixture.tgz\" else b\"{}\")\n            if isinstance(data, dict):\n                data = json.dumps(data).encode()\n            if self.path == \"/fixture.tgz\":\n                time.sleep(0.15)\n            self.send_response(200)\n            self.send_header(\"Content-Length\", str(len(data)))\n            self.end_headers()\n            self.wfile.write(data)\n\n        def log_message(self, *args):\n            pass\n\n    server = ThreadingHTTPServer((\"127.0.0.1\", 0), Handler)\n    thread = threading.Thread(target=server.serve_forever, daemon=True)\n    thread.start()\n    registry = \"http://127.0.0.1:\" + str(server.server_port)\n    if resolution_mode:\n        for name, version, deps in packages:\n            info = responses[\"/\" + name + \"/\" + version]\n            archive = responses[\"/\" + name + \"-\" + version + \".tgz\"]\n            info[\"dist\"] = {\"tarball\": registry + \"/\" + name + \"-\" + version + \".tgz\",\n                            \"integrity\": \"sha512-\" + base64.b64encode(hashlib.sha512(archive).digest()).decode()}\n            meta = responses.setdefault(\"/\" + name, {\"name\": name, \"versions\": {}, \"dist-tags\": {\"latest\": version}})\n            meta[\"versions\"][version] = info\n    observations = []\n    shared = tempfile.TemporaryDirectory(prefix=\"jhol-resolution-reuse-\")\n    try:\n        for native, replay in [(n, r) for n in [False, True] for r in range(2 if fresh_reuse else 1)]:\n            requests.clear()\n            with tempfile.TemporaryDirectory(prefix=\"jhol-request-budget-\") as temporary:\n                project = Path(temporary)\n                manifest = {\"name\": \"request-budget\", \"version\": \"1.0.0\", \"dependencies\": {\"jhol-request-fixture\": \"1.0.0\"}}\n                lock = {\"name\": \"request-budget\", \"version\": \"1.0.0\", \"lockfileVersion\": 3, \"packages\": {\"\": manifest, \"node_modules/jhol-request-fixture\": {\"version\": \"1.0.0\", \"resolved\": registry + \"/fixture.tgz\", \"integrity\": integrity}}}\n                (project / \"package.json\").write_text(json.dumps(manifest))\n                if resolution_mode:\n                    manifest[\"dependencies\"] = {\"jhol-request-a\": \"1.0.0\", \"jhol-request-b\": \"1.0.0\"}\n                    (project / \"package.json\").write_text(json.dumps(manifest))\n                else:\n                    (project / \"package-lock.json\").write_text(json.dumps(lock))\n                env = dict({k: v for k, v in os.environ.items() if not k.startswith(\"JHOL_\")}, HOME=temporary, JHOL_CACHE_DIR=str(project / \"cache\"), JHOL_REGISTRY=registry, JHOL_NO_HARVEST=\"1\", JHOL_NO_DAEMON=\"1\", JHOL_AUTO_DAEMON=\"0\", JHOL_JGRID=\"0\", JHOL_JGRID_L0=\"0\", JHOL_JAGRS_MIRROR=\"0\", JHOL_STREAM_EXTRACT=\"0\", JHOL_HTTP2_POOL_SIZE=\"2\", JHOL_NO_SPLASH=\"1\")\n                if fresh_reuse:\n                    env.update(HOME=shared.name, JHOL_CACHE_DIR=str(Path(shared.name) / (\"native-cache\" if native else \"plain-cache\")))\n                env.pop(\"JHOL_OFFLINE\", None)\n                env.pop(\"JHOL_NO_HTTP2\", None)\n                args = [str(binary), \"install\", \"--no-scripts\"] + ([\"--native-only\"] if native else [])\n                env.update(JHOL_PREBUILT=\"0\", JHOL_NO_JMR=\"1\", JHOL_NO_SPLASH=\"1\", JHOL_DEBUG_LAYOUT=\"1\")\n                if resolution_mode == \"budget\":\n                    env[\"JHOL_JAGR_MAX_DEPS\"] = \"1\"\n                env.pop(\"JHOL_LINK\", None)\n                if symlink_mode:\n                    env[\"JHOL_LINK\"] = \"1\"\n                started = time.perf_counter()\n                result = subprocess.run(args, cwd=project, env=env, capture_output=True, text=True, timeout=30)\n                if resolution_mode:\n                    observation = {\"mode\": resolution_mode, \"native_only\": native, \"fresh_project_reuse\": bool(replay), \"exit\": result.returncode,\n                                   \"elapsed_ms\": (time.perf_counter()-started)*1000,\n                                   \"requests\": list(requests), \"raw_output\": result.stdout + result.stderr,\n                                   \"success_marker\": (project / \"node_modules/.jhol-ok\").exists()}\n                    if resolution_mode in (\"unsatisfiable\", \"budget\"):\n                        observation[\"pass\"] = result.returncode != 0 and not observation[\"success_marker\"]\n                    else:\n                        q = subprocess.run([\"node\", \"-e\", \"const a=require('jhol-request-a'), b=require('jhol-request-b'); if(a!=='1.0.0'||b!=='2.0.0')process.exit(1);\"], cwd=project, capture_output=True, text=True, timeout=10)\n                        aliases = [str(p.relative_to(project)) for p in (project / \"node_modules\").rglob(\"*\") if p.is_symlink() and \".bin\" not in p.parts]\n                        observation.update(consumer_exit=q.returncode, generated_aliases=aliases,\n                                           relink_passes=observation[\"raw_output\"].count(\"[collect]\"))\n                        observation[\"pass\"] = result.returncode == q.returncode == 0 and bool(aliases) == expect_relinks\n                    observations.append(observation)\n                    continue\n                assert result.returncode == 0, result.stderr\n                consumer = subprocess.check_output([\"node\", \"-e\", \"console.log(require('jhol-request-fixture'))\"], cwd=project, text=True).strip()\n                executable = subprocess.check_output([str(project / \"node_modules/.bin/jhol-fixture\")], cwd=project, text=True).strip()\n                assert consumer == executable == \"42\"\n                written = json.loads((project / \"package-lock.json\").read_text())\n                assert written[\"packages\"][\"node_modules/jhol-request-fixture\"][\"integrity\"] == integrity\n                assert requests.count([\"GET\", \"/fixture.tgz\"]) == 1, requests\n                roots = [r for r in requests if r[1] == \"/\"]\n                assert bool(roots) == expect_probes, requests\n                observations.append({\"native_only\": native, \"requests\": list(requests), \"consumer\": consumer, \"executable\": executable, \"sri_preserved\": True})\n    finally:\n        server.shutdown()\n        server.server_close()\n        thread.join()\n        shared.cleanup()\n    return observations\n\n\nif __name__ == \"__main__\":\n    parser = argparse.ArgumentParser(description=__doc__)\n    parser.add_argument(\"binary\", type=Path)\n    parser.add_argument(\"--resolution-mode\", choices=[\"valid\", \"unsatisfiable\", \"budget\"], help=\"Check a conflicting version domain against the local registry\")\n    parser.add_argument(\"--symlink\", action=\"store_true\", help=\"Check explicit store symlink mode\")\n    parser.add_argument(\"--fresh-reuse\", action=\"store_true\", help=\"Repeat in a fresh project using the first project cache\")\n    parser.add_argument(\"--expect-relinks\", action=\"store_true\", help=\"Reproduce redundant clone dependency aliases on saved baseline\")\n    parser.add_argument(\"--expect-probes\", action=\"store_true\", help=\"Reproduce old behavior using saved baseline\")\n    options = parser.parse_args()\n    observations = check(options.binary.resolve(), options.expect_probes, options.resolution_mode, options.expect_relinks, options.fresh_reuse, options.symlink)\n    print(json.dumps(observations, indent=2))\n    if options.resolution_mode and not all(o[\"pass\"] for o in observations):\n        raise SystemExit(1)\n",
+  "final_checks": {
+    "core": {
+      "passed": 544,
+      "failed": 0,
+      "ignored": 3,
+      "peak_memory_percent": 69
+    },
+    "cli": {
+      "passed": 30,
+      "failed": 0
+    },
+    "rust_front_proof": {
+      "passed": 6,
+      "failed": 0
+    },
+    "capsule_adversarial": {
+      "passed": 1,
+      "failed": 0
+    },
+    "local_release_cases": 14,
+    "cold_diagnostic_installs": 18,
+    "frontdoor_reuse_checks": 6
+  }
+}

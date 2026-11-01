@@ -1,0 +1,47 @@
+[
+  {
+    "workload": "6-Package Core (Synth/Bundled)",
+    "cold": {
+      "jhol": 153.239209,
+      "bun": 98.222667
+    },
+    "warm": {
+      "jhol": 80.246333,
+      "bun": 94.628458
+    },
+    "noop": {
+      "jhol": 15.887084,
+      "bun": 43.419167
+    }
+  },
+  {
+    "workload": "React 18 + DOM App",
+    "cold": {
+      "jhol": 73.352417,
+      "bun": 20.551417
+    },
+    "warm": {
+      "jhol": 16.3455,
+      "bun": 15.133125
+    },
+    "noop": {
+      "jhol": 10.6775,
+      "bun": 15.526417
+    }
+  },
+  {
+    "workload": "TypeScript + Utility Suite",
+    "cold": {
+      "jhol": 119.00625,
+      "bun": 45.100833
+    },
+    "warm": {
+      "jhol": 44.337083,
+      "bun": 50.86475
+    },
+    "noop": {
+      "jhol": 9.370917,
+      "bun": 11.767
+    }
+  }
+]

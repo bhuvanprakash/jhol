@@ -1,7 +1,7 @@
 //! Optional config from .jholrc or ~/.jholrc (JSON). Merged with env and CLI.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 use std::time::SystemTime;
 
@@ -80,7 +80,7 @@ pub struct JholrcRegistryConfig {
 /// Load the `.jholrc` registry section from `dir`, then `~/.jholrc`.
 pub fn load_jholrc_registry(dir: &Path) -> Option<JholrcRegistryConfig> {
     static CACHE: std::sync::OnceLock<
-        std::sync::RwLock<Option<(std::time::SystemTime, JholrcRegistryConfig)>>,
+        std::sync::RwLock<Option<(PathBuf, [u8; 32], JholrcRegistryConfig)>>,
     > = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::RwLock::new(None));
 
@@ -91,24 +91,27 @@ pub fn load_jholrc_registry(dir: &Path) -> Option<JholrcRegistryConfig> {
             .unwrap_or_else(|| dir.join(".none")),
     ];
 
-    // Find first existing candidate and its mtime
-    let (path, mtime) = candidates.iter().find_map(|p| {
-        let m = std::fs::metadata(p).ok()?.modified().ok()?;
-        Some((p.clone(), m))
+    // Read the small config file so same-mtime edits and same-mtime files in
+    // different projects cannot alias one global cache entry.
+    let (path, contents) = candidates.iter().find_map(|p| {
+        std::fs::read_to_string(p)
+            .ok()
+            .map(|contents| (p.clone(), contents))
     })?;
+    use sha2::{Digest, Sha256};
+    let content_hash: [u8; 32] = Sha256::digest(contents.as_bytes()).into();
 
     // Check cache
     if let Ok(guard) = cache.read() {
-        if let Some((cached_mtime, ref cached)) = *guard {
-            if cached_mtime == mtime {
-                return Some(cached.clone());
+        if let Some((cached_path, cached_hash, cached)) = guard.as_ref() {
+            if cached_path == &path && cached_hash == &content_hash {
+                return Some(resolve_jholrc_registry_auth(cached.clone()));
             }
         }
     }
 
     // Read and parse
-    let s = std::fs::read_to_string(&path).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&s).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&contents).ok()?;
     let reg = v.get("registry")?.as_object()?;
     let mut out = JholrcRegistryConfig::default();
     if let Some(d) = reg.get("default").and_then(|x| x.as_str()) {
@@ -125,15 +128,21 @@ pub fn load_jholrc_registry(dir: &Path) -> Option<JholrcRegistryConfig> {
     if let Some(tokens) = reg.get("authTokens").and_then(|x| x.as_object()) {
         for (host, tok_val) in tokens {
             if let Some(raw) = tok_val.as_str() {
-                let resolved = interpolate_env_vars(raw);
-                out.auth_tokens.insert(host.clone(), resolved);
+                out.auth_tokens.insert(host.clone(), raw.to_string());
             }
         }
     }
     if let Ok(mut guard) = cache.write() {
-        *guard = Some((mtime, out.clone()));
+        *guard = Some((path, content_hash, out.clone()));
     }
-    Some(out)
+    Some(resolve_jholrc_registry_auth(out))
+}
+
+fn resolve_jholrc_registry_auth(mut config: JholrcRegistryConfig) -> JholrcRegistryConfig {
+    for token in config.auth_tokens.values_mut() {
+        *token = interpolate_env_vars(token);
+    }
+    config
 }
 
 /// Interpolate `${VAR_NAME}` patterns in a string with environment variable values.
@@ -178,10 +187,58 @@ pub struct NpmRcConfig {
     pub cafile: Option<String>,
 }
 
-static NPMRC_CACHE: OnceLock<RwLock<HashMap<String, NpmRcConfig>>> = OnceLock::new();
+// Keep only the last project config. A daemon may serve unbounded distinct
+// working directories, so a per-directory map would grow for its lifetime.
+static NPMRC_CACHE: OnceLock<RwLock<Option<(PathBuf, [u8; 32], NpmRcConfig)>>> = OnceLock::new();
 
-fn npmrc_cache_key(dir: &Path) -> String {
-    dir.to_string_lossy().to_string()
+fn npmrc_cache_fingerprint(dir: &Path) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+
+    fn field(hash: &mut Sha256, value: &[u8]) {
+        hash.update((value.len() as u64).to_le_bytes());
+        hash.update(value);
+    }
+
+    let mut hash = Sha256::new();
+    hash.update(b"jhol-npmrc-config-v1\0");
+    let project = dir.join(".npmrc");
+    let home = dirs_home().map(|path| path.join(".npmrc"));
+    for (slot, path) in [Some(project), home].into_iter().enumerate() {
+        hash.update([slot as u8]);
+        let Some(path) = path else {
+            hash.update([0]);
+            continue;
+        };
+        match std::fs::read_to_string(path) {
+            Ok(contents) => {
+                hash.update([1]);
+                field(&mut hash, contents.as_bytes());
+                for line in contents.lines() {
+                    let Some((_, raw_value)) = line.trim().split_once('=') else {
+                        continue;
+                    };
+                    let value = raw_value.trim();
+                    if value.starts_with("${") && value.ends_with('}') && value.len() > 3 {
+                        let name = &value[2..value.len() - 1];
+                        field(&mut hash, name.as_bytes());
+                        match std::env::var(name) {
+                            Ok(value) => {
+                                hash.update([1]);
+                                field(&mut hash, value.as_bytes());
+                            }
+                            Err(_) => {
+                                hash.update([0]);
+                            }
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                hash.update([0]);
+            }
+        }
+    }
+    hash.finalize().into()
 }
 
 /// Load config from .jholrc in dir, then ~/.jholrc. Missing or invalid file = default.
@@ -826,11 +883,14 @@ fn read_npmrc(path: &Path) -> NpmRcConfig {
 
 /// Load .npmrc from project then home, with project taking precedence.
 pub fn load_npmrc(dir: &Path) -> NpmRcConfig {
-    let cache_key = npmrc_cache_key(dir);
+    let cache_key = dir.to_path_buf();
+    let fingerprint = npmrc_cache_fingerprint(dir);
     if let Some(cache) = NPMRC_CACHE.get() {
         if let Ok(guard) = cache.read() {
-            if let Some(cached) = guard.get(&cache_key) {
-                return cached.clone();
+            if let Some((cached_dir, cached_fingerprint, cached)) = guard.as_ref() {
+                if cached_dir == &cache_key && cached_fingerprint == &fingerprint {
+                    return cached.clone();
+                }
             }
         }
     }
@@ -860,9 +920,9 @@ pub fn load_npmrc(dir: &Path) -> NpmRcConfig {
         cafile: project.cafile.or(home_cfg.cafile),
     };
 
-    let cache = NPMRC_CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+    let cache = NPMRC_CACHE.get_or_init(|| RwLock::new(None));
     if let Ok(mut guard) = cache.write() {
-        guard.insert(cache_key, merged.clone());
+        *guard = Some((cache_key, fingerprint, merged.clone()));
     }
 
     merged
@@ -1078,5 +1138,85 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn jholrc_registry_cache_tracks_path_and_same_mtime_content_changes() {
+        fn write_registry(dir: &Path, registry: &str, modified: std::time::SystemTime) {
+            let path = dir.join(".jholrc");
+            std::fs::write(
+                &path,
+                format!(r#"{{"registry":{{"default":"{registry}"}}}}"#),
+            )
+            .unwrap();
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(modified))
+                .unwrap();
+            assert_eq!(
+                std::fs::metadata(path).unwrap().modified().unwrap(),
+                modified
+            );
+        }
+
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        write_registry(first.path(), "https://first.example", modified);
+        write_registry(second.path(), "https://second.example", modified);
+
+        assert_eq!(
+            load_jholrc_registry(first.path())
+                .and_then(|config| config.default)
+                .as_deref(),
+            Some("https://first.example")
+        );
+        write_registry(first.path(), "https://changed.example", modified);
+        assert_eq!(
+            load_jholrc_registry(first.path())
+                .and_then(|config| config.default)
+                .as_deref(),
+            Some("https://changed.example")
+        );
+        assert_eq!(
+            load_jholrc_registry(second.path())
+                .and_then(|config| config.default)
+                .as_deref(),
+            Some("https://second.example")
+        );
+    }
+
+    #[test]
+    fn npmrc_cache_tracks_same_mtime_content_changes() {
+        fn write_registry(dir: &Path, registry: &str, modified: std::time::SystemTime) {
+            let path = dir.join(".npmrc");
+            std::fs::write(&path, format!("registry={registry}/\n")).unwrap();
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(modified))
+                .unwrap();
+            assert_eq!(
+                std::fs::metadata(path).unwrap().modified().unwrap(),
+                modified
+            );
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        write_registry(dir.path(), "https://first.example", modified);
+        assert_eq!(
+            load_npmrc(dir.path()).registry.as_deref(),
+            Some("https://first.example")
+        );
+
+        write_registry(dir.path(), "https://other.example", modified);
+        assert_eq!(
+            load_npmrc(dir.path()).registry.as_deref(),
+            Some("https://other.example")
+        );
     }
 }

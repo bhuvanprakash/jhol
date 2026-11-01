@@ -1,0 +1,94 @@
+# Build jhol for macOS, Linux, and Windows and attach binaries to GitHub Release.
+name: Release build (macOS + Linux + Windows)
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to upload assets to (example: v1.0.1)"
+        required: true
+        type: string
+  release:
+    types: [published]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macos-arm64
+            target: aarch64-apple-darwin
+            artifact: jhol-macos-arm64
+            binary_path: target/aarch64-apple-darwin/release/jhol
+          - os: ubuntu-latest
+            name: linux-x64
+            target: x86_64-unknown-linux-musl
+            artifact: jhol-linux-x64
+            binary_path: target/x86_64-unknown-linux-musl/release/jhol
+          - os: ubuntu-latest
+            name: linux-arm64
+            target: aarch64-unknown-linux-musl
+            artifact: jhol-linux-arm64
+            binary_path: target/aarch64-unknown-linux-musl/release/jhol
+          - os: windows-latest
+            name: windows-x64
+            target: x86_64-pc-windows-msvc
+            artifact: jhol-windows-x64
+            binary_path: target/x86_64-pc-windows-msvc/release/jhol.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Linux ships a musl static binary: it runs on every distro without
+      # glibc-version coupling, which is what the curl installer relies on.
+      - name: Install musl tools (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build (release, static where possible)
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary_path }}
+
+  upload-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Normalize release asset names
+        run: |
+          mv jhol-macos-arm64 _tmp-macos
+          mv jhol-linux-x64 _tmp-lx
+          mv jhol-linux-arm64 _tmp-la
+          mv jhol-windows-x64 _tmp-w
+
+          mv _tmp-macos/jhol jhol-macos-arm64
+          mv _tmp-lx/jhol jhol-linux-x64
+          mv _tmp-la/jhol jhol-linux-arm64
+          mv _tmp-w/jhol.exe jhol-windows-x64.exe
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name || inputs.tag }}
+          files: |
+            jhol-macos-arm64
+            jhol-linux-x64
+            jhol-linux-arm64
+            jhol-windows-x64.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

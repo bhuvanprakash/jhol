@@ -1,0 +1,128 @@
+{
+  "timestamp": "20260716T013722Z",
+  "timeout_secs": 60,
+  "jhol": "/Users/bhuvanprakash/j/jhol/target/release/jhol",
+  "bun": "/Users/bhuvanprakash/.bun/bin/bun",
+  "note": "dual_proxy = jhol jagr --run-all-layers (topology+OL3P). pulse_proxy = skip L2/L3. Dual-Geometry Loom not implemented; this is best available proxy.",
+  "runs": [
+    {
+      "fixture": "express-app",
+      "arm": "dual_proxy",
+      "seconds": 10.010925,
+      "exit": 0,
+      "cmd": "jhol jagr --run-all-layers"
+    },
+    {
+      "fixture": "express-app",
+      "arm": "pulse_proxy",
+      "seconds": 4.456384,
+      "exit": 0,
+      "cmd": "jhol jagr --skip-layer2 --skip-layer3"
+    },
+    {
+      "fixture": "express-app",
+      "arm": "bun",
+      "seconds": 2.130436,
+      "exit": 0,
+      "cmd": "bun install"
+    },
+    {
+      "fixture": "overrides-app",
+      "arm": "dual_proxy",
+      "seconds": 0.523592,
+      "exit": 0,
+      "cmd": "jhol jagr --run-all-layers"
+    },
+    {
+      "fixture": "overrides-app",
+      "arm": "pulse_proxy",
+      "seconds": 0.276856,
+      "exit": 0,
+      "cmd": "jhol jagr --skip-layer2 --skip-layer3"
+    },
+    {
+      "fixture": "overrides-app",
+      "arm": "bun",
+      "seconds": 0.24172,
+      "exit": 0,
+      "cmd": "bun install"
+    },
+    {
+      "fixture": "peer-deps-app",
+      "arm": "dual_proxy",
+      "seconds": 0.625887,
+      "exit": 0,
+      "cmd": "jhol jagr --run-all-layers"
+    },
+    {
+      "fixture": "peer-deps-app",
+      "arm": "pulse_proxy",
+      "seconds": 0.313505,
+      "exit": 0,
+      "cmd": "jhol jagr --skip-layer2 --skip-layer3"
+    },
+    {
+      "fixture": "peer-deps-app",
+      "arm": "bun",
+      "seconds": 0.288333,
+      "exit": 0,
+      "cmd": "bun install"
+    }
+  ],
+  "microbench": {
+    "name": "topo_vs_pulse_microbench",
+    "note": "Structural cost only. Not resolver correctness.",
+    "dual_geometry_proxy_cubic": [
+      {
+        "n": 32,
+        "seconds_median": 0.0002519170520827174,
+        "model": "dense_gf2_elim"
+      },
+      {
+        "n": 64,
+        "seconds_median": 0.0008831660961732268,
+        "model": "dense_gf2_elim"
+      },
+      {
+        "n": 96,
+        "seconds_median": 0.002417084062471986,
+        "model": "dense_gf2_elim"
+      },
+      {
+        "n": 128,
+        "seconds_median": 0.004602790926583111,
+        "model": "dense_gf2_elim"
+      }
+    ],
+    "pulse_force_wave": [
+      {
+        "packages": 50,
+        "versions": 16,
+        "edges": 200,
+        "seconds_median": 6.766605656594038e-05,
+        "model": "bitset_force_wave"
+      },
+      {
+        "packages": 200,
+        "versions": 16,
+        "edges": 800,
+        "seconds_median": 0.0002856251085177064,
+        "model": "bitset_force_wave"
+      },
+      {
+        "packages": 500,
+        "versions": 16,
+        "edges": 2000,
+        "seconds_median": 0.0011418330250307918,
+        "model": "bitset_force_wave"
+      },
+      {
+        "packages": 1000,
+        "versions": 16,
+        "edges": 4000,
+        "seconds_median": 0.0022324579767882824,
+        "model": "bitset_force_wave"
+      }
+    ]
+  }
+}

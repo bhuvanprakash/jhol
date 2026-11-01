@@ -64,7 +64,24 @@ else
 fi
 
 note "== engine correctness vs node (adversarial) =="
-[ -d /tmp/jhol-adv ] || note "  (no /tmp/jhol-adv fixtures — skipped)"
+ADV="$(cd "$(dirname -- "$0")" && pwd)/tests/adv"
+if [ -d "$ADV" ]; then
+  apass=0; axfail=0; afail=0
+  for f in "$ADV"/adv-*.js; do
+    b="${f%.js}"
+    got=$("$BIN/run" "$f" 2>&1)
+    if [ "$got" = "$(cat "$b.expected")" ]; then
+      apass=$((apass+1))
+    elif [ -f "$b.xfail" ]; then
+      axfail=$((axfail+1))
+    else
+      afail=$((afail+1)); note "  ADV-FAIL $(basename "$f")"; fail=1
+    fi
+  done
+  note "  ok   adversarial fixtures ($apass pass, $axfail known, $afail fail)"
+else
+  note "  (no adversarial fixtures — skipped)"
+fi
 
 note ""
 if [ "$fail" = "0" ]; then note "GATE: PASS"; else note "GATE: FAIL"; fi

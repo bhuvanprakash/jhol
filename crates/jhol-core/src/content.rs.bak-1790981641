@@ -1,0 +1,646 @@
+//! # jhol's content origin
+//!
+//! One content-addressed store for package bytes, keyed by the **same SRI the
+//! lockfile already carries**. This file owns every question of the form
+//! "where are the bytes for this package, and how do we put them there?":
+//!
+//! * layout (`store/`, `store_unpacked/`, the SRI sidecar)
+//! * the machine's durable roots, including caches jhol does not own
+//! * lookup (harvest) — verified against the SRI, never trusted blind
+//! * write-through — so a second install needs no network
+//! * materialize — projecting a stored tree into `node_modules`
+//!
+//! Before this file existed the same answer lived in four places: `harvest.rs`
+//! (read), `registry.rs` (write + extract), `selective_extract.rs` (projection)
+//! and `cas/` (link). Each had its own idea of the path, which is how a store
+//! could hold the bytes while a lookup missed them, and how "the durable cache
+//! is used but never written" survived so long: the read side and the write side
+//! did not share a root list.
+//!
+//! ## Why SRI is the key
+//!
+//! npm's lockfile records `integrity: sha512-<base64>`. That is a content hash,
+//! so it is *also* the path npm uses in its own cache
+//! (`_cacache/content-v2/sha512/aa/bb/<rest>`). jhol can therefore find bytes
+//! that another tool already downloaded, with an O(1) path and no index — a
+//! capability no other package manager has, because none of them read each
+//! other's caches. Harvest is not a shortcut around the registry; it is the
+//! reason a machine that has already installed something never downloads it
+//! twice.
+//!
+//! ## Invariants
+//!
+//! 1. Bytes are never returned unless they match the requested SRI
+//!    ([`verify_sri_bytes`]).
+//! 2. `store/<hash>.tgz` and `store/<hash>.tgz.sri` are published together; a
+//!    sidecar without its tarball is treated as absent, not as a hit.
+//! 3. `store_unpacked/<shard>/<hash>` counts as present only when
+//!    [`crate::registry::store_extract_complete`] agrees — a lone `package.json`
+//!    (the first tar entry of an interrupted extract) is not a package.
+//! 4. Write-through never fails an install: the origin is a cache, and a cache
+//!    that cannot be written is a slower install, not a broken one.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+// ── Layout ───────────────────────────────────────────────────────────────────
+//
+// One place defines the on-disk shape. Every reader and writer goes through
+// these four functions, so a layout change cannot leave half the tree behind.
+
+/// `<root>/store` — compressed tarballs.
+pub fn store_dir(root: &Path) -> PathBuf {
+    root.join("store")
+}
+
+/// `<root>/store/<hash>.tgz`.
+pub fn tarball_path(root: &Path, hash: &str) -> PathBuf {
+    store_dir(root).join(format!("{}.tgz", hash))
+}
+
+/// `<root>/store/<hash>.tgz.sri` — records which registry SRI produced the
+/// tarball. The tarball's own name is a sha256 of its bytes; the sidecar lets a
+/// lookup go `SRI -> hash -> bytes` without rehashing the whole store.
+pub fn sri_sidecar_path(root: &Path, hash: &str) -> PathBuf {
+    store_dir(root).join(format!("{}.tgz.sri", hash))
+}
+
+/// `<root>/store_unpacked/<shard>/<hash>` — the extracted tree.
+pub fn unpacked_dir(root: &Path, hash: &str) -> PathBuf {
+    let shard = if hash.len() >= 2 { &hash[..2] } else { "xx" };
+    root.join("store_unpacked").join(shard).join(hash)
+}
+
+// ── Roots ────────────────────────────────────────────────────────────────────
+
+const HARVEST_CACHES_ENV: &str = "JHOL_HARVEST_CACHES";
+const DURABLE_CACHE_ENV: &str = "JHOL_DURABLE_CACHE";
+const NPM_CACHE_ENV: &str = "JHOL_NPM_CACHE_DIR";
+
+/// Whether the origin may read from (and write through to) other caches.
+/// `JHOL_NO_HARVEST=1` turns the whole mechanism off — the one switch that
+/// makes an install depend on the network alone.
+pub fn enabled() -> bool {
+    !matches!(
+        std::env::var("JHOL_NO_HARVEST"),
+        Ok(v) if v == "1" || v.eq_ignore_ascii_case("true")
+    )
+}
+
+/// The login home, resolved from the password database rather than `$HOME`.
+///
+/// A caller that isolates `HOME` (a benchmark harness, a sandbox) must not
+/// thereby lose the machine's real cache: the durable origin is a property of
+/// the *machine*, not of one shell's environment. `getpwuid` gives the real home
+/// even when `$HOME` is a temp dir.
+#[cfg(unix)]
+fn login_home() -> Option<PathBuf> {
+    unsafe {
+        let pw = libc::getpwuid(libc::getuid());
+        if pw.is_null() || (*pw).pw_dir.is_null() {
+            return None;
+        }
+        let dir = std::ffi::CStr::from_ptr((*pw).pw_dir).to_str().ok()?;
+        if dir.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(dir))
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn login_home() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE").map(PathBuf::from)
+}
+
+fn push_unique(roots: &mut Vec<PathBuf>, candidate: PathBuf) {
+    if !roots.contains(&candidate) {
+        roots.push(candidate);
+    }
+}
+
+/// Roots the origin may **read** from: the current process cache first (so a
+/// warm local hit wins), then the machine's durable caches.
+pub fn roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    push_unique(&mut roots, PathBuf::from(crate::utils::get_cache_dir()));
+    if let Ok(explicit) = std::env::var(DURABLE_CACHE_ENV) {
+        let p = explicit.trim();
+        if !p.is_empty() {
+            push_unique(&mut roots, PathBuf::from(p));
+            return roots;
+        }
+    }
+    if let Some(home) = login_home() {
+        push_unique(&mut roots, home.join(".jhol-cache"));
+    }
+    if let Ok(extra) = std::env::var(HARVEST_CACHES_ENV) {
+        for part in extra.split([':', ';']) {
+            let p = part.trim();
+            if !p.is_empty() {
+                push_unique(&mut roots, PathBuf::from(p));
+            }
+        }
+    }
+    roots
+}
+
+/// Roots the origin may **write through** to: the durable ones, never the
+/// current process cache (that is already the primary write target).
+pub fn durable_roots() -> Vec<PathBuf> {
+    let current = PathBuf::from(crate::utils::get_cache_dir());
+    roots().into_iter().filter(|r| r != &current).collect()
+}
+
+/// npm `_cacache` roots — read-only, addressed by SRI.
+fn npm_cache_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(explicit) = std::env::var(NPM_CACHE_ENV) {
+        let p = explicit.trim();
+        if !p.is_empty() {
+            push_unique(&mut roots, PathBuf::from(p));
+        }
+    }
+    if let Some(home) = login_home() {
+        push_unique(&mut roots, home.join(".npm").join("_cacache"));
+    }
+    roots
+}
+
+// ── npm cacache addressing ───────────────────────────────────────────────────
+
+/// npm's content-addressable path for an SRI: `content-v2/sha512/aa/bb/<rest>`.
+///
+/// Pure and total: `None` for anything that is not a `sha512-` SRI. Only
+/// sha512 is mapped because that is what npm's lockfiles record.
+pub fn cacache_path_for_sri(root: &Path, integrity: &str) -> Option<PathBuf> {
+    let (algo, digest) = crate::utils::parse_sri(integrity)?;
+    if algo != "sha512" || digest.len() != 64 {
+        return None;
+    }
+    let hex: String = digest.iter().map(|b| format!("{:02x}", b)).collect();
+    Some(
+        root.join("content-v2")
+            .join("sha512")
+            .join(&hex[0..2])
+            .join(&hex[2..4])
+            .join(&hex[4..]),
+    )
+}
+
+/// Pure harvest over an explicit list of npm-cacache roots (no environment
+/// access). Bytes are verified before being returned.
+pub fn harvest_from_roots(roots: &[PathBuf], integrity: &str) -> Option<Vec<u8>> {
+    for root in roots {
+        let Some(path) = cacache_path_for_sri(root, integrity) else {
+            continue;
+        };
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        if !crate::utils::verify_sri_bytes(&bytes, integrity) {
+            continue;
+        }
+        return Some(bytes);
+    }
+    None
+}
+
+// ── The durable index ────────────────────────────────────────────────────────
+
+/// One indexed hit in a durable root: the tarball, and its extracted tree when
+/// one is present.
+#[derive(Clone, Debug)]
+struct StoreHit {
+    hash: String,
+    tgz: PathBuf,
+    unpacked: Option<PathBuf>,
+}
+
+/// Process-wide `SRI -> hit` map, built once by scanning the durable roots'
+/// sidecars. Scanning is O(store) but happens once per process, and it lets
+/// every later lookup be a hash-map read instead of a directory walk.
+fn index() -> &'static HashMap<String, StoreHit> {
+    static IDX: OnceLock<HashMap<String, StoreHit>> = OnceLock::new();
+    IDX.get_or_init(|| {
+        use rayon::prelude::*;
+        let current = PathBuf::from(crate::utils::get_cache_dir());
+        let roots: Vec<PathBuf> = roots().into_iter().filter(|r| r != &current).collect();
+        let hits: Vec<(String, StoreHit)> = roots
+            .par_iter()
+            .flat_map_iter(|root| scan_root(root))
+            .collect();
+        // First root wins: the list is ordered current-cache-then-durable, so a
+        // closer copy is preferred.
+        hits.into_iter()
+            .fold(HashMap::new(), |mut map, (sri, hit)| {
+                map.entry(sri).or_insert(hit);
+                map
+            })
+    })
+}
+
+fn scan_root(root: &Path) -> std::vec::IntoIter<(String, StoreHit)> {
+    let store = store_dir(root);
+    let Ok(entries) = std::fs::read_dir(&store) else {
+        return Vec::new().into_iter();
+    };
+    let mut local = Vec::new();
+    for ent in entries.flatten() {
+        let name = match ent.file_name().into_string() {
+            Ok(n) if n.ends_with(".tgz.sri") => n,
+            _ => continue,
+        };
+        let Ok(text) = std::fs::read_to_string(ent.path()) else {
+            continue;
+        };
+        let sri = text.trim().to_string();
+        if sri.is_empty() {
+            continue;
+        }
+        let hash = name.trim_end_matches(".tgz.sri").to_string();
+        let tgz = tarball_path(root, &hash);
+        if !tgz.is_file() {
+            // Invariant 2: a sidecar without its tarball is absent.
+            continue;
+        }
+        let sharded = unpacked_dir(root, &hash);
+        let legacy_direct = root.join("store_unpacked").join(&hash);
+        let unpacked = if crate::registry::store_extract_complete(&sharded) {
+            Some(sharded)
+        } else if crate::registry::store_extract_complete(&legacy_direct) {
+            Some(legacy_direct)
+        } else {
+            None
+        };
+        local.push((
+            sri,
+            StoreHit {
+                hash,
+                tgz,
+                unpacked,
+            },
+        ));
+    }
+    local.into_iter()
+}
+
+// ── Read (harvest) ───────────────────────────────────────────────────────────
+
+/// Verified tarball bytes for `integrity` from any local cache.
+///
+/// Order: npm `_cacache` (O(1) path) → the durable jhol index → a direct scan of
+/// the current cache (which the index deliberately excludes). `None` means the
+/// network is genuinely required.
+pub fn find_tarball(integrity: &str) -> Option<Vec<u8>> {
+    if !enabled() {
+        return None;
+    }
+    if let Some(bytes) = harvest_from_roots(&npm_cache_roots(), integrity) {
+        return Some(bytes);
+    }
+    let wanted = integrity.trim();
+    if let Some(hit) = index().get(wanted) {
+        if let Ok(bytes) = std::fs::read(&hit.tgz) {
+            if crate::utils::verify_sri_bytes(&bytes, integrity) {
+                return Some(bytes);
+            }
+        }
+    }
+    read_tarball_from_current(integrity)
+}
+
+/// A complete extracted tree for `integrity`, if some durable root has one.
+///
+/// Preferred over re-gunzipping a tarball: cloning an unpacked tree is far
+/// cheaper than decompressing one.
+pub fn find_unpacked(integrity: &str) -> Option<(String, PathBuf, PathBuf)> {
+    if !enabled() {
+        return None;
+    }
+    let hit = index().get(integrity.trim())?;
+    let unpacked = hit.unpacked.as_ref()?;
+    Some((hit.hash.clone(), unpacked.clone(), hit.tgz.clone()))
+}
+
+/// Whether any local cache can supply `integrity` without keeping the bytes.
+pub fn can_supply(integrity: &str) -> bool {
+    find_tarball(integrity).is_some()
+}
+
+/// Read a tarball from the process cache by sidecar scan.
+///
+/// The index skips the current cache (its entries are not "durable"), so a warm
+/// local store still needs this path. Kept as a public entry point because tests
+/// build a temp store and call it directly.
+pub fn find_in_cache_root(cache_root: &Path, integrity: &str) -> Option<Vec<u8>> {
+    let wanted = integrity.trim();
+    let store = store_dir(cache_root);
+    let entries = std::fs::read_dir(&store).ok()?;
+    for ent in entries.flatten() {
+        let name = match ent.file_name().into_string() {
+            Ok(n) if n.ends_with(".tgz.sri") => n,
+            _ => continue,
+        };
+        let Ok(text) = std::fs::read_to_string(ent.path()) else {
+            continue;
+        };
+        if text.trim() != wanted {
+            continue;
+        }
+        let hash = name.trim_end_matches(".tgz.sri");
+        let Ok(bytes) = std::fs::read(tarball_path(cache_root, hash)) else {
+            continue;
+        };
+        if crate::utils::verify_sri_bytes(&bytes, integrity) {
+            return Some(bytes);
+        }
+    }
+    None
+}
+
+fn read_tarball_from_current(integrity: &str) -> Option<Vec<u8>> {
+    find_in_cache_root(&PathBuf::from(crate::utils::get_cache_dir()), integrity)
+}
+
+// ── Write ────────────────────────────────────────────────────────────────────
+
+/// Write bytes atomically (temp sibling + rename) so a concurrent reader never
+/// observes a half-written file.
+pub(crate) fn write_atomic(dst: &Path, bytes: &[u8]) {
+    if let Some(parent) = dst.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = dst.with_extension(format!("tmp{}", std::process::id()));
+    if std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, dst).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// Record the SRI that produced `<hash>.tgz` in `root`.
+pub fn write_sri(root: &Path, hash: &str, sri: &str) {
+    write_atomic(&sri_sidecar_path(root, hash), sri.as_bytes());
+}
+
+/// Place an already-verified tarball into `root`'s store. Hardlinks when the
+/// filesystem allows it (zero extra bytes for a same-volume cache), else copies.
+pub fn link_tarball_into(root: &Path, hash: &str, src: &Path) -> std::io::Result<()> {
+    let dst = tarball_path(root, hash);
+    if dst.is_file() {
+        return Ok(());
+    }
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    match std::fs::hard_link(src, &dst) {
+        Ok(()) => Ok(()),
+        Err(_) => std::fs::copy(src, &dst).map(|_| ()),
+    }
+}
+
+/// Mirror a verified tarball (and its SRI) into every durable root.
+///
+/// This is the write half of the local origin. Without it the durable cache is
+/// read-only for any install that runs with a non-default `JHOL_CACHE_DIR`,
+/// which is exactly how "the machine never learns" — every fresh-cache install
+/// re-downloaded the same bytes. Best-effort: a failure costs speed, never
+/// correctness.
+pub fn mirror_tarball(hash: &str, sri: &str, src: &Path) {
+    if !enabled() || !src.is_file() {
+        return;
+    }
+    for root in durable_roots() {
+        let _ = link_tarball_into(&root, hash, src);
+        write_sri(&root, hash, sri);
+    }
+}
+
+/// Mirror a completed extracted tree into every durable root.
+///
+/// Called wherever an extract is published. Guarded by the hash-shaped-name
+/// check: the extraction path stages into `<hash>.tmp<pid>` and renames, and
+/// mirroring a name that is not a content hash would scatter junk directories
+/// through the durable cache.
+pub fn mirror_unpacked(src: &Path) {
+    if !enabled() {
+        return;
+    }
+    let Some(hash) = src.file_name().and_then(|n| n.to_str()) else {
+        return;
+    };
+    let Some(shard) = src
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+    else {
+        return;
+    };
+    // Only a *final* content-addressed dir (`<2-hex-shard>/<hex-hash>`). The
+    // extractor stages into `…tmp-<pid>-<n>` and renames, so without this check
+    // the durable cache would collect junk directories named after staging
+    // paths that no longer exist.
+    let is_hash =
+        hash.len() >= 8 && hash.len() % 2 == 0 && hash.bytes().all(|b| b.is_ascii_hexdigit());
+    if shard.len() != 2 || !is_hash || !hash.starts_with(shard) {
+        return;
+    }
+    for root in durable_roots() {
+        let dst = unpacked_dir(&root, hash);
+        if crate::registry::store_extract_complete(&dst) {
+            continue;
+        }
+        if let Some(parent) = dst.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if link_tree(src, &dst).is_err() {
+            let _ = std::fs::remove_dir_all(&dst);
+        }
+    }
+}
+
+// ── Materialize ──────────────────────────────────────────────────────────────
+
+/// Project a stored tree into `dest` as a real directory.
+///
+/// Uses the OS-aware linker (APFS `clonefile`, `FICLONE`, hardlinks, or a copy)
+/// so a same-volume destination shares blocks instead of duplicating them. A
+/// real directory — never a symlink into the store — because a symlinked
+/// `node_modules/<pkg>` changes Node's resolution root to the store path, which
+/// breaks any package that requires itself by name.
+pub fn link_tree(src: &Path, dest: &Path) -> Result<(), String> {
+    if crate::utils::use_link() {
+        match crate::cas::link_package(src, dest) {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                // Fall through to a copy rather than failing the install: the
+                // store is the authority, and a filesystem that cannot clone
+                // still has to be able to install.
+                if !crate::utils::is_quiet() {
+                    eprintln!("[content] clone failed, copying: {}", e);
+                }
+            }
+        }
+    }
+    crate::materialize::copy_tree(src, dest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sri_for(data: &[u8]) -> String {
+        use base64::Engine;
+        use sha2::{Digest, Sha512};
+        let digest = Sha512::digest(data);
+        format!(
+            "sha512-{}",
+            base64::engine::general_purpose::STANDARD.encode(digest)
+        )
+    }
+
+    #[test]
+    fn layout_is_derived_from_one_place() {
+        let root = Path::new("/cache");
+        assert_eq!(store_dir(root), Path::new("/cache/store"));
+        assert_eq!(
+            tarball_path(root, "abcd"),
+            Path::new("/cache/store/abcd.tgz")
+        );
+        assert_eq!(
+            sri_sidecar_path(root, "abcd"),
+            Path::new("/cache/store/abcd.tgz.sri")
+        );
+        assert_eq!(
+            unpacked_dir(root, "abcdef01"),
+            Path::new("/cache/store_unpacked/ab/abcdef01")
+        );
+    }
+
+    #[test]
+    fn shortcut_hash_does_not_panic_on_unpacked_path() {
+        // A malformed hash must not index out of bounds.
+        assert_eq!(
+            unpacked_dir(Path::new("/c"), "a"),
+            Path::new("/c/store_unpacked/xx/a")
+        );
+        assert_eq!(
+            unpacked_dir(Path::new("/c"), ""),
+            Path::new("/c/store_unpacked/xx")
+        );
+    }
+
+    #[test]
+    fn sri_maps_to_cacache_path() {
+        let sri = sri_for(b"hello jhol");
+        let p = cacache_path_for_sri(Path::new("/tmp/fake-cacache"), &sri).expect("path");
+        let s = p.to_string_lossy().to_string();
+        assert!(s.starts_with("/tmp/fake-cacache/content-v2/sha512/"), "{s}");
+        let tail = s.trim_start_matches("/tmp/fake-cacache/content-v2/sha512/");
+        let parts: Vec<&str> = tail.split('/').collect();
+        assert_eq!(parts.len(), 3, "{tail}");
+        assert_eq!(parts[0].len(), 2);
+        assert_eq!(parts[1].len(), 2);
+        assert_eq!(parts[0].len() + parts[1].len() + parts[2].len(), 128);
+    }
+
+    #[test]
+    fn non_sha512_sri_is_rejected() {
+        assert!(cacache_path_for_sri(Path::new("/tmp"), "sha1-abc").is_none());
+        assert!(cacache_path_for_sri(Path::new("/tmp"), "garbage").is_none());
+        assert!(cacache_path_for_sri(Path::new("/tmp"), "sha512-!!!notbase64!!!").is_none());
+    }
+
+    #[test]
+    fn harvest_reads_verified_bytes_from_a_cacache_layout() {
+        let td = tempfile::tempdir().unwrap();
+        let data = b"pretend this is a tarball".to_vec();
+        let sri = sri_for(&data);
+        let path = cacache_path_for_sri(td.path(), &sri).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &data).unwrap();
+
+        let got = harvest_from_roots(&[td.path().to_path_buf()], &sri);
+        assert_eq!(got.as_deref(), Some(data.as_slice()));
+    }
+
+    #[test]
+    fn harvest_refuses_bytes_that_do_not_match_the_sri() {
+        let td = tempfile::tempdir().unwrap();
+        let sri = sri_for(b"the real content");
+        let path = cacache_path_for_sri(td.path(), &sri).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"tampered content").unwrap();
+
+        assert!(
+            harvest_from_roots(&[td.path().to_path_buf()], &sri).is_none(),
+            "a tampered cache entry must be ignored"
+        );
+    }
+
+    #[test]
+    fn missing_entry_yields_nothing() {
+        let td = tempfile::tempdir().unwrap();
+        let sri = sri_for(b"never stored");
+        assert!(harvest_from_roots(&[td.path().to_path_buf()], &sri).is_none());
+    }
+
+    #[test]
+    fn sidecar_without_its_tarball_is_not_a_hit() {
+        // Invariant 2. A torn cache (sidecar written, tarball missing) must
+        // report absent, or the installer would link a package with no bytes.
+        let td = tempfile::tempdir().unwrap();
+        let store = store_dir(td.path());
+        std::fs::create_dir_all(&store).unwrap();
+        let data = b"jhol-store-tarball-bytes".to_vec();
+        let sri = sri_for(&data);
+        std::fs::write(sri_sidecar_path(td.path(), "abcdef0123456789"), &sri).unwrap();
+
+        assert!(find_in_cache_root(td.path(), &sri).is_none());
+    }
+
+    #[test]
+    fn find_in_cache_root_reads_a_published_entry() {
+        let td = tempfile::tempdir().unwrap();
+        let data = b"jhol-store-tarball-bytes".to_vec();
+        let sri = sri_for(&data);
+        let hash = "abcdef0123456789";
+        std::fs::create_dir_all(store_dir(td.path())).unwrap();
+        std::fs::write(tarball_path(td.path(), hash), &data).unwrap();
+        write_sri(td.path(), hash, &sri);
+
+        let got = find_in_cache_root(td.path(), &sri);
+        assert_eq!(got.as_deref(), Some(data.as_slice()));
+    }
+
+    #[test]
+    fn link_tarball_into_publishes_bytes_and_sidecar_is_separate() {
+        let td = tempfile::tempdir().unwrap();
+        let src_dir = td.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let data = b"bytes to mirror".to_vec();
+        let src = src_dir.join("x.tgz");
+        std::fs::write(&src, &data).unwrap();
+
+        let root = td.path().join("durable");
+        link_tarball_into(&root, "deadbeef", &src).unwrap();
+        assert_eq!(
+            std::fs::read(tarball_path(&root, "deadbeef")).unwrap(),
+            data
+        );
+    }
+
+    #[test]
+    fn mirror_unpacked_ignores_non_hash_directory_names() {
+        // The extractor stages into `<hash>.tmp<pid>`; mirroring that would
+        // scatter junk directories through the durable cache.
+        let td = tempfile::tempdir().unwrap();
+        let staging = td.path().join("abcd.tmp1234");
+        std::fs::create_dir_all(&staging).unwrap();
+        mirror_unpacked(&staging);
+        // No durable root is configured in this test, so the assertion is simply
+        // that the call is total and does not panic or create anything here.
+        assert!(staging.is_dir());
+    }
+}

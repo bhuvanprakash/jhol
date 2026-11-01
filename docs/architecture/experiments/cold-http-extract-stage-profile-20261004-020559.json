@@ -1,0 +1,1261 @@
+{
+  "purpose": "3-round diagnostic to separate registry wait/body and per-package extract time; not performance claim",
+  "condition": "registry-cold; same locked React/Vite fixture, fresh project/cache, harvest disabled; HTTP/OS cache state uncontrolled",
+  "host": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "binary_sha256": "fba6910a0ce8e3bfe986bf20e44186dcc0faaa06de7679af4bcbec79873f13d2",
+  "binary_version": "jhol 1.0.2",
+  "rounds": 3,
+  "samples": [
+    {
+      "arm": "harvest",
+      "round": 1,
+      "condition": "registry-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 1534.8160840076162,
+      "cpu_user_seconds": 0.329799,
+      "cpu_system_seconds": 0.20561,
+      "peak_process_tree_rss_bytes": 32030720,
+      "cache_bytes_after": 31206056,
+      "downloaded_bytes": 7610763,
+      "package_layout_sha256": "0d81497fac9725735ae135df8d73467bbc6fc2d6c59e5776122b28bc27711243",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.64.0"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.64.0"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.2"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "mode:755",
+        "loose-envify": "mode:755",
+        "nanoid": "mode:755",
+        "rollup": "mode:755",
+        "vite": "mode:755"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "224cffe8383cde2189050c3b07559437e086e8ead049d09e7655db024f38d6f5",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "est-1791059749556468000/tool-cache/store/f63d6d9bce28989cd083add85af717c0264e44323d35c909ae99ac934e9641a6.tgz\n[2026-10-04 02:05:51] [layout]   MATERIALIZE scheduler@0.23.2 -> node_modules/scheduler via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/001-harvest-1791059749556468000/tool-cache/store/e4f1d8fe63a9ab93ef66c92b0ad1af9c1326adbf7f1bd5e9053cac0fee6f26ae.tgz\n[2026-10-04 02:05:51] [layout]   MATERIALIZE vite@5.0.0 -> node_modules/vite via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/001-harvest-1791059749556468000/tool-cache/store/de76095362f298ac15399cea3af028b6cdee5886bfcec13be21adebe5b2cf535.tgz\n[2026-10-04 02:05:51] [layout]   MATERIALIZE react@18.2.0 -> node_modules/react via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/001-harvest-1791059749556468000/tool-cache/store/a151f7caec911760e42b7a6f6f1dfcaba141fd11ff49e2af901a2eee0366297c.tgz\n[2026-10-04 02:05:51] [layout]   MATERIALIZE react-dom@18.2.0 -> node_modules/react-dom via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/001-harvest-1791059749556468000/tool-cache/store/20a71e86b691f860c781f3732a85c7b3c63c4d3d9a803dca9dfe6ed0eb30e2ef.tgz\n[jhol-profile] stage=layout_projection delta_ms=5 total_ms=1458\n[jhol-profile] stage=layout_index_relink delta_ms=0 total_ms=1458\n[jhol-profile] stage=layout_complete delta_ms=1458 total_ms=1460\n[jhol-profile] stage=layout_capsule_markers delta_ms=11 total_ms=1472\n[jhol-profile] stage=layout_l0_publish delta_ms=0 total_ms=1472\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "before_jgrid_early_lane": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 1,
+        "before_jgrid_early": 0,
+        "layout_lookup": 2,
+        "layout_fetch_extract": 1451,
+        "layout_projection": 5,
+        "layout_index_relink": 0,
+        "layout_complete": 1458,
+        "layout_capsule_markers": 11,
+        "layout_l0_publish": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0",
+        "JHOL_HTTP_TIMING": "1",
+        "JHOL_STREAM_EXTRACT": "1"
+      },
+      "seed_cache_sha256": null,
+      "variant": "streamed",
+      "http_timing": [],
+      "extract_timing": [
+        {
+          "ms": 213,
+          "mode": "stream",
+          "pkg": "loose-envify@1.4.0"
+        },
+        {
+          "ms": 215,
+          "mode": "stream",
+          "pkg": "nanoid@3.3.19"
+        },
+        {
+          "ms": 306,
+          "mode": "stream",
+          "pkg": "postcss@8.5.28"
+        },
+        {
+          "ms": 345,
+          "mode": "stream",
+          "pkg": "esbuild@0.19.12"
+        },
+        {
+          "ms": 512,
+          "mode": "stream",
+          "pkg": "rollup@4.64.0"
+        },
+        {
+          "ms": 555,
+          "mode": "stream",
+          "pkg": "vite@5.0.0"
+        },
+        {
+          "ms": 565,
+          "mode": "stream",
+          "pkg": "js-tokens@4.0.0"
+        },
+        {
+          "ms": 631,
+          "mode": "stream",
+          "pkg": "picocolors@1.1.1"
+        },
+        {
+          "ms": 677,
+          "mode": "stream",
+          "pkg": "react-dom@18.2.0"
+        },
+        {
+          "ms": 690,
+          "mode": "stream",
+          "pkg": "@types/estree@1.0.9"
+        },
+        {
+          "ms": 740,
+          "mode": "stream",
+          "pkg": "source-map-js@1.2.2"
+        },
+        {
+          "ms": 751,
+          "mode": "stream",
+          "pkg": "scheduler@0.23.2"
+        },
+        {
+          "ms": 1267,
+          "mode": "stream",
+          "pkg": "react@18.2.0"
+        },
+        {
+          "ms": 1309,
+          "mode": "stream",
+          "pkg": "fsevents@2.3.3"
+        },
+        {
+          "ms": 1409,
+          "mode": "stream",
+          "pkg": "@rollup/rollup-darwin-arm64@4.64.0"
+        },
+        {
+          "ms": 1449,
+          "mode": "stream",
+          "pkg": "@esbuild/darwin-arm64@0.19.12"
+        }
+      ]
+    },
+    {
+      "arm": "harvest",
+      "round": 1,
+      "condition": "registry-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 1087.8826249972917,
+      "cpu_user_seconds": 0.32276999999999995,
+      "cpu_system_seconds": 0.16606,
+      "peak_process_tree_rss_bytes": 30556160,
+      "cache_bytes_after": 31206056,
+      "downloaded_bytes": 7610763,
+      "package_layout_sha256": "0d81497fac9725735ae135df8d73467bbc6fc2d6c59e5776122b28bc27711243",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.64.0"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.64.0"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.2"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "mode:755",
+        "loose-envify": "mode:755",
+        "nanoid": "mode:755",
+        "rollup": "mode:755",
+        "vite": "mode:755"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "224cffe8383cde2189050c3b07559437e086e8ead049d09e7655db024f38d6f5",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "rvest-1791059751793378000/tool-cache/store/1d471bfcec2c605a1dc0cb53f7892163a290a5f2fc2adcfcfcbe369551ef24ab.tgz\n[2026-10-04 02:05:52] [layout]   MATERIALIZE scheduler@0.23.2 -> node_modules/scheduler via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/001-harvest-1791059751793378000/tool-cache/store/e4f1d8fe63a9ab93ef66c92b0ad1af9c1326adbf7f1bd5e9053cac0fee6f26ae.tgz\n[2026-10-04 02:05:52] [layout]   MATERIALIZE vite@5.0.0 -> node_modules/vite via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/001-harvest-1791059751793378000/tool-cache/store/de76095362f298ac15399cea3af028b6cdee5886bfcec13be21adebe5b2cf535.tgz\n[2026-10-04 02:05:52] [layout]   MATERIALIZE nanoid@3.3.19 -> node_modules/nanoid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/001-harvest-1791059751793378000/tool-cache/store/4e371b71e3d5081fa0052356d5c1904e7a60e049864c26f0724cfd32dc303849.tgz\n[2026-10-04 02:05:52] [layout]   MATERIALIZE esbuild@0.19.12 -> node_modules/esbuild via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/001-harvest-1791059751793378000/tool-cache/store/cdbd0cba6bd625d07f480f4cfa4105935c7ec606f52861862a93cfd255ea8fbc.tgz\n[jhol-profile] stage=layout_projection delta_ms=4 total_ms=1063\n[jhol-profile] stage=layout_index_relink delta_ms=0 total_ms=1064\n[jhol-profile] stage=layout_complete delta_ms=1064 total_ms=1064\n[jhol-profile] stage=layout_capsule_markers delta_ms=9 total_ms=1073\n[jhol-profile] stage=layout_l0_publish delta_ms=0 total_ms=1073\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "before_jgrid_early_lane": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0,
+        "before_jgrid_early": 0,
+        "layout_lookup": 0,
+        "layout_fetch_extract": 1058,
+        "layout_projection": 4,
+        "layout_index_relink": 0,
+        "layout_complete": 1064,
+        "layout_capsule_markers": 9,
+        "layout_l0_publish": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0",
+        "JHOL_HTTP_TIMING": "1"
+      },
+      "seed_cache_sha256": null,
+      "variant": "staged",
+      "http_timing": [],
+      "extract_timing": [
+        {
+          "ms": 2,
+          "mode": "staged",
+          "pkg": "scheduler@0.23.2"
+        },
+        {
+          "ms": 1,
+          "mode": "staged",
+          "pkg": "esbuild@0.19.12"
+        },
+        {
+          "ms": 1,
+          "mode": "staged",
+          "pkg": "loose-envify@1.4.0"
+        },
+        {
+          "ms": 21,
+          "mode": "staged",
+          "pkg": "vite@5.0.0"
+        },
+        {
+          "ms": 17,
+          "mode": "staged",
+          "pkg": "rollup@4.64.0"
+        },
+        {
+          "ms": 15,
+          "mode": "staged",
+          "pkg": "@rollup/rollup-darwin-arm64@4.64.0"
+        },
+        {
+          "ms": 0,
+          "mode": "staged",
+          "pkg": "@types/estree@1.0.9"
+        },
+        {
+          "ms": 2,
+          "mode": "staged",
+          "pkg": "nanoid@3.3.19"
+        },
+        {
+          "ms": 0,
+          "mode": "staged",
+          "pkg": "picocolors@1.1.1"
+        },
+        {
+          "ms": 3,
+          "mode": "staged",
+          "pkg": "source-map-js@1.2.2"
+        },
+        {
+          "ms": 4,
+          "mode": "staged",
+          "pkg": "react@18.2.0"
+        },
+        {
+          "ms": 72,
+          "mode": "staged",
+          "pkg": "@esbuild/darwin-arm64@0.19.12"
+        },
+        {
+          "ms": 0,
+          "mode": "staged",
+          "pkg": "js-tokens@4.0.0"
+        },
+        {
+          "ms": 2,
+          "mode": "staged",
+          "pkg": "fsevents@2.3.3"
+        },
+        {
+          "ms": 7,
+          "mode": "staged",
+          "pkg": "postcss@8.5.28"
+        },
+        {
+          "ms": 32,
+          "mode": "staged",
+          "pkg": "react-dom@18.2.0"
+        }
+      ]
+    },
+    {
+      "arm": "harvest",
+      "round": 2,
+      "condition": "registry-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 849.332207988482,
+      "cpu_user_seconds": 0.32223999999999997,
+      "cpu_system_seconds": 0.17073999999999995,
+      "peak_process_tree_rss_bytes": 30703616,
+      "cache_bytes_after": 31206056,
+      "downloaded_bytes": 7610763,
+      "package_layout_sha256": "0d81497fac9725735ae135df8d73467bbc6fc2d6c59e5776122b28bc27711243",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.64.0"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.64.0"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.2"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "mode:755",
+        "loose-envify": "mode:755",
+        "nanoid": "mode:755",
+        "rollup": "mode:755",
+        "vite": "mode:755"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "224cffe8383cde2189050c3b07559437e086e8ead049d09e7655db024f38d6f5",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "t-1791059753423304000/tool-cache/store/1d471bfcec2c605a1dc0cb53f7892163a290a5f2fc2adcfcfcbe369551ef24ab.tgz\n[2026-10-04 02:05:54] [layout]   MATERIALIZE esbuild@0.19.12 -> node_modules/esbuild via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/002-harvest-1791059753423304000/tool-cache/store/cdbd0cba6bd625d07f480f4cfa4105935c7ec606f52861862a93cfd255ea8fbc.tgz\n[2026-10-04 02:05:54] [layout]   MATERIALIZE js-tokens@4.0.0 -> node_modules/js-tokens via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/002-harvest-1791059753423304000/tool-cache/store/d884c7a2d8adb5568c1272d92b4f9c62707f4226cf9e7b22e7b957c7361e3c53.tgz\n[2026-10-04 02:05:54] [layout]   MATERIALIZE react-dom@18.2.0 -> node_modules/react-dom via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/002-harvest-1791059753423304000/tool-cache/store/20a71e86b691f860c781f3732a85c7b3c63c4d3d9a803dca9dfe6ed0eb30e2ef.tgz\n[2026-10-04 02:05:54] [layout]   MATERIALIZE nanoid@3.3.19 -> node_modules/nanoid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/002-harvest-1791059753423304000/tool-cache/store/4e371b71e3d5081fa0052356d5c1904e7a60e049864c26f0724cfd32dc303849.tgz\n[jhol-profile] stage=layout_projection delta_ms=5 total_ms=816\n[jhol-profile] stage=layout_index_relink delta_ms=0 total_ms=816\n[jhol-profile] stage=layout_complete delta_ms=817 total_ms=817\n[jhol-profile] stage=layout_capsule_markers delta_ms=9 total_ms=827\n[jhol-profile] stage=layout_l0_publish delta_ms=0 total_ms=827\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "before_jgrid_early_lane": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0,
+        "before_jgrid_early": 0,
+        "layout_lookup": 0,
+        "layout_fetch_extract": 810,
+        "layout_projection": 5,
+        "layout_index_relink": 0,
+        "layout_complete": 817,
+        "layout_capsule_markers": 9,
+        "layout_l0_publish": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0",
+        "JHOL_HTTP_TIMING": "1"
+      },
+      "seed_cache_sha256": null,
+      "variant": "staged",
+      "http_timing": [],
+      "extract_timing": [
+        {
+          "ms": 2,
+          "mode": "staged",
+          "pkg": "fsevents@2.3.3"
+        },
+        {
+          "ms": 7,
+          "mode": "staged",
+          "pkg": "postcss@8.5.28"
+        },
+        {
+          "ms": 2,
+          "mode": "staged",
+          "pkg": "source-map-js@1.2.2"
+        },
+        {
+          "ms": 28,
+          "mode": "staged",
+          "pkg": "vite@5.0.0"
+        },
+        {
+          "ms": 29,
+          "mode": "staged",
+          "pkg": "rollup@4.64.0"
+        },
+        {
+          "ms": 44,
+          "mode": "staged",
+          "pkg": "react-dom@18.2.0"
+        },
+        {
+          "ms": 1,
+          "mode": "staged",
+          "pkg": "loose-envify@1.4.0"
+        },
+        {
+          "ms": 1,
+          "mode": "staged",
+          "pkg": "picocolors@1.1.1"
+        },
+        {
+          "ms": 2,
+          "mode": "staged",
+          "pkg": "esbuild@0.19.12"
+        },
+        {
+          "ms": 0,
+          "mode": "staged",
+          "pkg": "js-tokens@4.0.0"
+        },
+        {
+          "ms": 1,
+          "mode": "staged",
+          "pkg": "@types/estree@1.0.9"
+        },
+        {
+          "ms": 2,
+          "mode": "staged",
+          "pkg": "scheduler@0.23.2"
+        },
+        {
+          "ms": 75,
+          "mode": "staged",
+          "pkg": "@esbuild/darwin-arm64@0.19.12"
+        },
+        {
+          "ms": 2,
+          "mode": "staged",
+          "pkg": "nanoid@3.3.19"
+        },
+        {
+          "ms": 4,
+          "mode": "staged",
+          "pkg": "react@18.2.0"
+        },
+        {
+          "ms": 12,
+          "mode": "staged",
+          "pkg": "@rollup/rollup-darwin-arm64@4.64.0"
+        }
+      ]
+    },
+    {
+      "arm": "harvest",
+      "round": 2,
+      "condition": "registry-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 861.2153750000289,
+      "cpu_user_seconds": 0.3196770000000001,
+      "cpu_system_seconds": 0.16499600000000003,
+      "peak_process_tree_rss_bytes": 32096256,
+      "cache_bytes_after": 31206056,
+      "downloaded_bytes": 7610763,
+      "package_layout_sha256": "0d81497fac9725735ae135df8d73467bbc6fc2d6c59e5776122b28bc27711243",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.64.0"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.64.0"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.2"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "mode:755",
+        "loose-envify": "mode:755",
+        "nanoid": "mode:755",
+        "rollup": "mode:755",
+        "vite": "mode:755"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "224cffe8383cde2189050c3b07559437e086e8ead049d09e7655db024f38d6f5",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "vest-1791059754988843000/tool-cache/store/f63d6d9bce28989cd083add85af717c0264e44323d35c909ae99ac934e9641a6.tgz\n[2026-10-04 02:05:55] [layout]   MATERIALIZE react-dom@18.2.0 -> node_modules/react-dom via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/002-harvest-1791059754988843000/tool-cache/store/20a71e86b691f860c781f3732a85c7b3c63c4d3d9a803dca9dfe6ed0eb30e2ef.tgz\n[2026-10-04 02:05:55] [layout]   MATERIALIZE vite@5.0.0 -> node_modules/vite via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/002-harvest-1791059754988843000/tool-cache/store/de76095362f298ac15399cea3af028b6cdee5886bfcec13be21adebe5b2cf535.tgz\n[2026-10-04 02:05:55] [layout]   MATERIALIZE esbuild@0.19.12 -> node_modules/esbuild via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/002-harvest-1791059754988843000/tool-cache/store/cdbd0cba6bd625d07f480f4cfa4105935c7ec606f52861862a93cfd255ea8fbc.tgz\n[2026-10-04 02:05:55] [layout]   MATERIALIZE scheduler@0.23.2 -> node_modules/scheduler via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/002-harvest-1791059754988843000/tool-cache/store/e4f1d8fe63a9ab93ef66c92b0ad1af9c1326adbf7f1bd5e9053cac0fee6f26ae.tgz\n[jhol-profile] stage=layout_projection delta_ms=5 total_ms=826\n[jhol-profile] stage=layout_index_relink delta_ms=0 total_ms=826\n[jhol-profile] stage=layout_complete delta_ms=826 total_ms=826\n[jhol-profile] stage=layout_capsule_markers delta_ms=12 total_ms=839\n[jhol-profile] stage=layout_l0_publish delta_ms=0 total_ms=839\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "before_jgrid_early_lane": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0,
+        "before_jgrid_early": 0,
+        "layout_lookup": 0,
+        "layout_fetch_extract": 820,
+        "layout_projection": 5,
+        "layout_index_relink": 0,
+        "layout_complete": 826,
+        "layout_capsule_markers": 12,
+        "layout_l0_publish": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0",
+        "JHOL_HTTP_TIMING": "1",
+        "JHOL_STREAM_EXTRACT": "1"
+      },
+      "seed_cache_sha256": null,
+      "variant": "streamed",
+      "http_timing": [],
+      "extract_timing": [
+        {
+          "ms": 240,
+          "mode": "stream",
+          "pkg": "nanoid@3.3.19"
+        },
+        {
+          "ms": 292,
+          "mode": "stream",
+          "pkg": "esbuild@0.19.12"
+        },
+        {
+          "ms": 293,
+          "mode": "stream",
+          "pkg": "source-map-js@1.2.2"
+        },
+        {
+          "ms": 315,
+          "mode": "stream",
+          "pkg": "picocolors@1.1.1"
+        },
+        {
+          "ms": 360,
+          "mode": "stream",
+          "pkg": "loose-envify@1.4.0"
+        },
+        {
+          "ms": 447,
+          "mode": "stream",
+          "pkg": "scheduler@0.23.2"
+        },
+        {
+          "ms": 530,
+          "mode": "stream",
+          "pkg": "js-tokens@4.0.0"
+        },
+        {
+          "ms": 620,
+          "mode": "stream",
+          "pkg": "@rollup/rollup-darwin-arm64@4.64.0"
+        },
+        {
+          "ms": 631,
+          "mode": "stream",
+          "pkg": "react@18.2.0"
+        },
+        {
+          "ms": 633,
+          "mode": "stream",
+          "pkg": "rollup@4.64.0"
+        },
+        {
+          "ms": 635,
+          "mode": "stream",
+          "pkg": "react-dom@18.2.0"
+        },
+        {
+          "ms": 689,
+          "mode": "stream",
+          "pkg": "fsevents@2.3.3"
+        },
+        {
+          "ms": 696,
+          "mode": "stream",
+          "pkg": "postcss@8.5.28"
+        },
+        {
+          "ms": 704,
+          "mode": "stream",
+          "pkg": "vite@5.0.0"
+        },
+        {
+          "ms": 753,
+          "mode": "stream",
+          "pkg": "@types/estree@1.0.9"
+        },
+        {
+          "ms": 819,
+          "mode": "stream",
+          "pkg": "@esbuild/darwin-arm64@0.19.12"
+        }
+      ]
+    },
+    {
+      "arm": "harvest",
+      "round": 3,
+      "condition": "registry-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 1199.8510420089588,
+      "cpu_user_seconds": 0.321159,
+      "cpu_system_seconds": 0.163339,
+      "peak_process_tree_rss_bytes": 31571968,
+      "cache_bytes_after": 31206056,
+      "downloaded_bytes": 7610763,
+      "package_layout_sha256": "0d81497fac9725735ae135df8d73467bbc6fc2d6c59e5776122b28bc27711243",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.64.0"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.64.0"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.2"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "mode:755",
+        "loose-envify": "mode:755",
+        "nanoid": "mode:755",
+        "rollup": "mode:755",
+        "vite": "mode:755"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "224cffe8383cde2189050c3b07559437e086e8ead049d09e7655db024f38d6f5",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "59756409626000/tool-cache/store/1218830a93538a4f730d530138e945ea6a65b45e099ee7a9ea538a05141babdc.tgz\n[2026-10-04 02:05:57] [layout]   MATERIALIZE scheduler@0.23.2 -> node_modules/scheduler via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/003-harvest-1791059756409626000/tool-cache/store/e4f1d8fe63a9ab93ef66c92b0ad1af9c1326adbf7f1bd5e9053cac0fee6f26ae.tgz\n[2026-10-04 02:05:57] [layout]   MATERIALIZE esbuild@0.19.12 -> node_modules/esbuild via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/003-harvest-1791059756409626000/tool-cache/store/cdbd0cba6bd625d07f480f4cfa4105935c7ec606f52861862a93cfd255ea8fbc.tgz\n[2026-10-04 02:05:57] [layout]   MATERIALIZE js-tokens@4.0.0 -> node_modules/js-tokens via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/003-harvest-1791059756409626000/tool-cache/store/d884c7a2d8adb5568c1272d92b4f9c62707f4226cf9e7b22e7b957c7361e3c53.tgz\n[2026-10-04 02:05:57] [layout]   MATERIALIZE nanoid@3.3.19 -> node_modules/nanoid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/003-harvest-1791059756409626000/tool-cache/store/4e371b71e3d5081fa0052356d5c1904e7a60e049864c26f0724cfd32dc303849.tgz\n[jhol-profile] stage=layout_projection delta_ms=4 total_ms=1170\n[jhol-profile] stage=layout_index_relink delta_ms=0 total_ms=1170\n[jhol-profile] stage=layout_complete delta_ms=1170 total_ms=1170\n[jhol-profile] stage=layout_capsule_markers delta_ms=11 total_ms=1181\n[jhol-profile] stage=layout_l0_publish delta_ms=0 total_ms=1181\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "before_jgrid_early_lane": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0,
+        "before_jgrid_early": 0,
+        "layout_lookup": 0,
+        "layout_fetch_extract": 1164,
+        "layout_projection": 4,
+        "layout_index_relink": 0,
+        "layout_complete": 1170,
+        "layout_capsule_markers": 11,
+        "layout_l0_publish": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0",
+        "JHOL_HTTP_TIMING": "1",
+        "JHOL_STREAM_EXTRACT": "1"
+      },
+      "seed_cache_sha256": null,
+      "variant": "streamed",
+      "http_timing": [],
+      "extract_timing": [
+        {
+          "ms": 190,
+          "mode": "stream",
+          "pkg": "js-tokens@4.0.0"
+        },
+        {
+          "ms": 192,
+          "mode": "stream",
+          "pkg": "nanoid@3.3.19"
+        },
+        {
+          "ms": 199,
+          "mode": "stream",
+          "pkg": "fsevents@2.3.3"
+        },
+        {
+          "ms": 343,
+          "mode": "stream",
+          "pkg": "loose-envify@1.4.0"
+        },
+        {
+          "ms": 466,
+          "mode": "stream",
+          "pkg": "picocolors@1.1.1"
+        },
+        {
+          "ms": 911,
+          "mode": "stream",
+          "pkg": "rollup@4.64.0"
+        },
+        {
+          "ms": 982,
+          "mode": "stream",
+          "pkg": "vite@5.0.0"
+        },
+        {
+          "ms": 996,
+          "mode": "stream",
+          "pkg": "react-dom@18.2.0"
+        },
+        {
+          "ms": 1045,
+          "mode": "stream",
+          "pkg": "esbuild@0.19.12"
+        },
+        {
+          "ms": 1060,
+          "mode": "stream",
+          "pkg": "@rollup/rollup-darwin-arm64@4.64.0"
+        },
+        {
+          "ms": 1061,
+          "mode": "stream",
+          "pkg": "@types/estree@1.0.9"
+        },
+        {
+          "ms": 1109,
+          "mode": "stream",
+          "pkg": "react@18.2.0"
+        },
+        {
+          "ms": 1131,
+          "mode": "stream",
+          "pkg": "@esbuild/darwin-arm64@0.19.12"
+        },
+        {
+          "ms": 1145,
+          "mode": "stream",
+          "pkg": "postcss@8.5.28"
+        },
+        {
+          "ms": 1146,
+          "mode": "stream",
+          "pkg": "scheduler@0.23.2"
+        },
+        {
+          "ms": 1164,
+          "mode": "stream",
+          "pkg": "source-map-js@1.2.2"
+        }
+      ]
+    },
+    {
+      "arm": "harvest",
+      "round": 3,
+      "condition": "registry-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 817.9252080008155,
+      "cpu_user_seconds": 0.32151299999999994,
+      "cpu_system_seconds": 0.15790899999999997,
+      "peak_process_tree_rss_bytes": 30916608,
+      "cache_bytes_after": 31206056,
+      "downloaded_bytes": 7610763,
+      "package_layout_sha256": "0d81497fac9725735ae135df8d73467bbc6fc2d6c59e5776122b28bc27711243",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.64.0"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.64.0"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.2"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "mode:755",
+        "loose-envify": "mode:755",
+        "nanoid": "mode:755",
+        "rollup": "mode:755",
+        "vite": "mode:755"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "224cffe8383cde2189050c3b07559437e086e8ead049d09e7655db024f38d6f5",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "harvest-1791059758165697000/tool-cache/store/05c8cf8e7c3a6b56cada7668fe9342b10f4b625efc92aba9ba05b9e8fe4d71a3.tgz\n[2026-10-04 02:05:58] [layout]   MATERIALIZE react-dom@18.2.0 -> node_modules/react-dom via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/003-harvest-1791059758165697000/tool-cache/store/20a71e86b691f860c781f3732a85c7b3c63c4d3d9a803dca9dfe6ed0eb30e2ef.tgz\n[2026-10-04 02:05:58] [layout]   MATERIALIZE vite@5.0.0 -> node_modules/vite via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/003-harvest-1791059758165697000/tool-cache/store/de76095362f298ac15399cea3af028b6cdee5886bfcec13be21adebe5b2cf535.tgz\n[2026-10-04 02:05:58] [layout]   MATERIALIZE nanoid@3.3.19 -> node_modules/nanoid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/003-harvest-1791059758165697000/tool-cache/store/4e371b71e3d5081fa0052356d5c1904e7a60e049864c26f0724cfd32dc303849.tgz\n[2026-10-04 02:05:58] [layout]   MATERIALIZE scheduler@0.23.2 -> node_modules/scheduler via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-profile-mczbjhnw/003-harvest-1791059758165697000/tool-cache/store/e4f1d8fe63a9ab93ef66c92b0ad1af9c1326adbf7f1bd5e9053cac0fee6f26ae.tgz\n[jhol-profile] stage=layout_projection delta_ms=5 total_ms=792\n[jhol-profile] stage=layout_index_relink delta_ms=0 total_ms=792\n[jhol-profile] stage=layout_complete delta_ms=792 total_ms=792\n[jhol-profile] stage=layout_capsule_markers delta_ms=12 total_ms=805\n[jhol-profile] stage=layout_l0_publish delta_ms=0 total_ms=805\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "before_jgrid_early_lane": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0,
+        "before_jgrid_early": 0,
+        "layout_lookup": 0,
+        "layout_fetch_extract": 785,
+        "layout_projection": 5,
+        "layout_index_relink": 0,
+        "layout_complete": 792,
+        "layout_capsule_markers": 12,
+        "layout_l0_publish": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0",
+        "JHOL_HTTP_TIMING": "1"
+      },
+      "seed_cache_sha256": null,
+      "variant": "staged",
+      "http_timing": [],
+      "extract_timing": [
+        {
+          "ms": 1,
+          "mode": "staged",
+          "pkg": "js-tokens@4.0.0"
+        },
+        {
+          "ms": 1,
+          "mode": "staged",
+          "pkg": "@types/estree@1.0.9"
+        },
+        {
+          "ms": 4,
+          "mode": "staged",
+          "pkg": "react@18.2.0"
+        },
+        {
+          "ms": 2,
+          "mode": "staged",
+          "pkg": "scheduler@0.23.2"
+        },
+        {
+          "ms": 2,
+          "mode": "staged",
+          "pkg": "nanoid@3.3.19"
+        },
+        {
+          "ms": 1,
+          "mode": "staged",
+          "pkg": "esbuild@0.19.12"
+        },
+        {
+          "ms": 1,
+          "mode": "staged",
+          "pkg": "fsevents@2.3.3"
+        },
+        {
+          "ms": 18,
+          "mode": "staged",
+          "pkg": "@rollup/rollup-darwin-arm64@4.64.0"
+        },
+        {
+          "ms": 1,
+          "mode": "staged",
+          "pkg": "picocolors@1.1.1"
+        },
+        {
+          "ms": 30,
+          "mode": "staged",
+          "pkg": "react-dom@18.2.0"
+        },
+        {
+          "ms": 2,
+          "mode": "staged",
+          "pkg": "source-map-js@1.2.2"
+        },
+        {
+          "ms": 6,
+          "mode": "staged",
+          "pkg": "postcss@8.5.28"
+        },
+        {
+          "ms": 1,
+          "mode": "staged",
+          "pkg": "loose-envify@1.4.0"
+        },
+        {
+          "ms": 24,
+          "mode": "staged",
+          "pkg": "rollup@4.64.0"
+        },
+        {
+          "ms": 28,
+          "mode": "staged",
+          "pkg": "vite@5.0.0"
+        },
+        {
+          "ms": 84,
+          "mode": "staged",
+          "pkg": "@esbuild/darwin-arm64@0.19.12"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "staged": {
+      "n": 3,
+      "median_elapsed_ms": 849.332207988482,
+      "median_http_ttfb_sum_ms": 0,
+      "median_http_body_sum_ms": 0,
+      "median_extract_sum_ms": 206,
+      "http_request_count": 0
+    },
+    "streamed": {
+      "n": 3,
+      "median_elapsed_ms": 1199.8510420089588,
+      "median_http_ttfb_sum_ms": 0,
+      "median_http_body_sum_ms": 0,
+      "median_extract_sum_ms": 11634,
+      "http_request_count": 0
+    }
+  }
+}

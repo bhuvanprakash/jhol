@@ -1,0 +1,26 @@
+{
+  "date": "2026-03-29",
+  "mode": "binary_packages_disabled_for_jhol",
+  "jhol": {
+    "cold_s": 11.618139625003096,
+    "cold_code": 0,
+    "warm_s": 0.04967475001467392,
+    "warm_code": 0
+  },
+  "bun": {
+    "cold_s": 11.407021208957303,
+    "cold_code": 0,
+    "warm_s": 0.1983537920168601,
+    "warm_code": 0
+  },
+  "ratio": {
+    "cold_jhol_over_bun": 1.018507760455465,
+    "warm_jhol_over_bun": 0.2504350913062028
+  },
+  "stderr_tail": {
+    "jhol_cold": "[2026-03-29 12:02:51] Installing dependencies from package.json\n",
+    "jhol_warm": "[2026-03-29 12:03:01] Installing dependencies from package.json\n",
+    "bun_cold": "Resolving dependencies\nResolved, downloaded and extracted [452]\nSaved lockfile\n",
+    "bun_warm": "Saved lockfile\n"
+  }
+}

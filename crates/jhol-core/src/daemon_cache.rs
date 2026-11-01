@@ -28,7 +28,7 @@ struct CacheEntry {
 /// The mmap arena file is at <cache_dir>/daemon-cache/arena.bin.
 /// Processes open the same file and mmap it; daemon writes, CLI reads.
 pub struct DaemonCache {
-    /// In-memory index: package_name → (abbreviated_mode, cached_bytes)
+    /// In-memory index: registry/credential/package identity + mode → bytes
     map: DashMap<String, CacheEntry>,
     /// Path to the shared mmap arena file
     arena_path: PathBuf,
@@ -56,8 +56,26 @@ impl DaemonCache {
 
     /// Record a packument in the cache (called by daemon after fetch).
     pub fn record(package: &str, abbreviated: bool, bytes: Vec<u8>) {
+        let identity = crate::registry::RegistryIdentity::for_package(package);
+        Self::record_with_identity(package, abbreviated, bytes, &identity);
+    }
+
+    pub(crate) fn record_with_identity(
+        package: &str,
+        abbreviated: bool,
+        bytes: Vec<u8>,
+        identity: &crate::registry::RegistryIdentity,
+    ) {
         let guard = global().read().expect("daemon cache lock");
-        let key = format!("{}{}", package, if abbreviated { ":a" } else { ":f" });
+        let key = format!(
+            "{}{}",
+            crate::registry::metadata_cache_key_for(
+                package,
+                &identity.registry,
+                identity.token.as_deref()
+            ),
+            if abbreviated { ":a" } else { ":f" }
+        );
         guard.map.insert(
             key,
             CacheEntry {
@@ -71,11 +89,42 @@ impl DaemonCache {
         guard.arena_size.fetch_add(1, Ordering::Relaxed);
     }
 
+    fn record_for_origin(
+        package: &str,
+        abbreviated: bool,
+        bytes: Vec<u8>,
+        registry: &str,
+        token: Option<&str>,
+    ) {
+        let identity = crate::registry::RegistryIdentity {
+            registry: registry.to_owned(),
+            token: token.map(str::to_owned),
+        };
+        Self::record_with_identity(package, abbreviated, bytes, &identity);
+    }
+
     /// Lookup a packument in the cache (called by CLI install).
     /// Returns the cached bytes if found and fresh (< 1 hour).
     pub fn lookup(package: &str, abbreviated: bool) -> Option<Vec<u8>> {
+        let identity = crate::registry::RegistryIdentity::for_package(package);
+        Self::lookup_with_identity(package, abbreviated, &identity)
+    }
+
+    pub(crate) fn lookup_with_identity(
+        package: &str,
+        abbreviated: bool,
+        identity: &crate::registry::RegistryIdentity,
+    ) -> Option<Vec<u8>> {
         let guard = global().read().ok()?;
-        let key = format!("{}{}", package, if abbreviated { ":a" } else { ":f" });
+        let key = format!(
+            "{}{}",
+            crate::registry::metadata_cache_key_for(
+                package,
+                &identity.registry,
+                identity.token.as_deref()
+            ),
+            if abbreviated { ":a" } else { ":f" }
+        );
         let entry = guard.map.get(&key)?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -88,6 +137,19 @@ impl DaemonCache {
         }
     }
 
+    fn lookup_for_origin(
+        package: &str,
+        abbreviated: bool,
+        registry: &str,
+        token: Option<&str>,
+    ) -> Option<Vec<u8>> {
+        let identity = crate::registry::RegistryIdentity {
+            registry: registry.to_owned(),
+            token: token.map(str::to_owned),
+        };
+        Self::lookup_with_identity(package, abbreviated, &identity)
+    }
+
     /// Check if daemon cache is populated (fast check).
     pub fn is_active() -> bool {
         global().read().map(|g| !g.map.is_empty()).unwrap_or(false)
@@ -95,7 +157,16 @@ impl DaemonCache {
 
     /// Pre-fetch a package and store in cache (background).
     pub fn prefetch(package: &str, abbreviated: bool) {
-        let key = format!("{}{}", package, if abbreviated { ":a" } else { ":f" });
+        let identity = crate::registry::RegistryIdentity::for_package(package);
+        let key = format!(
+            "{}{}",
+            crate::registry::metadata_cache_key_for(
+                package,
+                &identity.registry,
+                identity.token.as_deref()
+            ),
+            if abbreviated { ":a" } else { ":f" }
+        );
         // Check if already cached
         {
             let guard = global().read().expect("daemon cache lock");
@@ -105,16 +176,14 @@ impl DaemonCache {
         }
         // Fetch from network, using the *configured* registry (env / .jholrc /
         // .npmrc, including scoped registries) rather than hardcoding npm's host.
-        let base = crate::config::effective_registry_url_for_package(Path::new("."), package);
         let url = format!(
             "{}/{}",
-            base.trim_end_matches('/'),
+            identity.registry.trim_end_matches('/'),
             package.replace('/', "%2F")
         );
-        let auth = crate::registry::registry_auth_token();
-        let result = crate::http_client::get_bytes_with_bearer(&url, auth.as_deref());
+        let result = crate::http_client::get_bytes_with_bearer(&url, identity.token.as_deref());
         if let Ok(bytes) = result {
-            Self::record(package, abbreviated, bytes);
+            Self::record_with_identity(package, abbreviated, bytes, &identity);
         }
     }
 }
@@ -449,12 +518,99 @@ pub fn can_skip_install_before_clap() -> bool {
 
 /// Max package names in a single request
 pub const DAEMON_MAX_PKGS: usize = 100;
+/// Maximum concurrent daemon connections, including clients waiting for install serialization.
+pub const DAEMON_MAX_CONNECTIONS: usize = 64;
 /// Max cwd path length
 pub const DAEMON_CWD_LEN: usize = 4096;
 /// Max package name length
 pub const DAEMON_PKG_NAME_LEN: usize = 64;
 /// Max error message length
 pub const DAEMON_ERR_LEN: usize = 256;
+
+static ACTIVE_DAEMON_CONNECTIONS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Permit one connection worker while keeping daemon thread use bounded.
+pub struct DaemonConnectionPermit;
+
+pub fn try_daemon_connection_permit() -> Option<DaemonConnectionPermit> {
+    ACTIVE_DAEMON_CONNECTIONS
+        .fetch_update(
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+            |active| (active < DAEMON_MAX_CONNECTIONS).then_some(active + 1),
+        )
+        .ok()
+        .map(|_| DaemonConnectionPermit)
+}
+
+/// Number of accepted daemon connections still running or waiting to run.
+pub fn active_daemon_connections() -> usize {
+    ACTIVE_DAEMON_CONNECTIONS.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Hold the per-socket startup lock for the lifetime of the daemon process.
+///
+/// The sidecar persists intentionally; the OS releases its advisory lock when
+/// the process exits, including after a crash. This serializes stale-socket
+/// recovery with concurrent Jhol daemon starts without deleting a live socket.
+#[cfg(unix)]
+pub struct DaemonSocketLock {
+    _file: std::fs::File,
+}
+
+#[cfg(unix)]
+impl DaemonSocketLock {
+    pub fn acquire(socket_path: &Path) -> Result<Self, String> {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+        let mut lock_name = socket_path.as_os_str().to_os_string();
+        lock_name.push(".lock");
+        let lock_path = PathBuf::from(lock_name);
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&lock_path)
+            .map_err(|e| format!("open daemon startup lock {}: {e}", lock_path.display()))?;
+        let metadata = file
+            .metadata()
+            .map_err(|e| format!("inspect daemon startup lock {}: {e}", lock_path.display()))?;
+        // Do not chmod or truncate a pre-existing object: it may be a hard link
+        // to user data. Reject anything except a private, single-link regular file.
+        let owner = unsafe { libc::geteuid() };
+        if !metadata.is_file()
+            || metadata.uid() != owner
+            || metadata.nlink() != 1
+            || metadata.mode() & 0o077 != 0
+        {
+            return Err(format!(
+                "refusing unsafe daemon startup lock {}",
+                lock_path.display()
+            ));
+        }
+        // LOCK_NB makes a second daemon fail promptly. File drop releases the
+        // kernel lock even after an abnormal process exit.
+        let locked = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if locked != 0 {
+            let error = std::io::Error::last_os_error();
+            return Err(format!(
+                "daemon already starting or running for {}: {error}",
+                socket_path.display()
+            ));
+        }
+        Ok(Self { _file: file })
+    }
+}
+
+impl Drop for DaemonConnectionPermit {
+    fn drop(&mut self) {
+        ACTIVE_DAEMON_CONNECTIONS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
 
 /// Flag bits for DaemonRequest.flags
 const FLAG_QUIET: u32 = 1;
@@ -466,6 +622,17 @@ const FLAG_FROM_LOCKFILE: u32 = 1 << 5;
 const FLAG_LOCKFILE_ONLY: u32 = 1 << 6;
 const FLAG_NATIVE_ONLY: u32 = 1 << 7;
 const FLAG_NO_SCRIPTS: u32 = 1 << 8;
+const FLAG_SHUTDOWN: u32 = 1 << 9;
+const ALL_REQUEST_FLAGS: u32 = FLAG_QUIET
+    | FLAG_NO_CACHE
+    | FLAG_OFFLINE
+    | FLAG_STRICT_LOCKFILE
+    | FLAG_STRICT_PEER_DEPS
+    | FLAG_FROM_LOCKFILE
+    | FLAG_LOCKFILE_ONLY
+    | FLAG_NATIVE_ONLY
+    | FLAG_NO_SCRIPTS
+    | FLAG_SHUTDOWN;
 
 /// Packed request sent from CLI to daemon. ~10KB fixed-size.
 /// Read/written with a single read/write call — zero parse.
@@ -501,6 +668,59 @@ impl DaemonRequest {
         native_only: bool,
         no_scripts: bool,
     ) -> Self {
+        Self::try_new(
+            cwd,
+            packages,
+            quiet,
+            no_cache,
+            offline,
+            strict_lockfile,
+            strict_peer_deps,
+            from_lockfile,
+            lockfile_only,
+            native_only,
+            no_scripts,
+        )
+        .unwrap_or_else(|_| Self::invalid())
+    }
+
+    /// Build a request only when every field fits the wire format exactly.
+    pub fn try_new(
+        cwd: &str,
+        packages: &[String],
+        quiet: bool,
+        no_cache: bool,
+        offline: bool,
+        strict_lockfile: bool,
+        strict_peer_deps: bool,
+        from_lockfile: bool,
+        lockfile_only: bool,
+        native_only: bool,
+        no_scripts: bool,
+    ) -> Result<Self, String> {
+        if cwd.is_empty() || cwd.contains('\0') || cwd.len() >= DAEMON_CWD_LEN {
+            return Err(format!(
+                "daemon working directory must be 1..{} UTF-8 bytes without NUL",
+                DAEMON_CWD_LEN - 1
+            ));
+        }
+        if packages.len() > DAEMON_MAX_PKGS {
+            return Err(format!(
+                "daemon supports at most {} explicit package specs per request",
+                DAEMON_MAX_PKGS
+            ));
+        }
+        for (index, package) in packages.iter().enumerate() {
+            if package.is_empty() || package.contains('\0') || package.len() >= DAEMON_PKG_NAME_LEN
+            {
+                return Err(format!(
+                    "daemon package spec at position {} must be 1..{} UTF-8 bytes without NUL",
+                    index + 1,
+                    DAEMON_PKG_NAME_LEN - 1
+                ));
+            }
+        }
+
         let mut req = Self {
             magic: *b"JHLREQ\0\0",
             cwd: [0u8; DAEMON_CWD_LEN],
@@ -511,7 +731,7 @@ impl DaemonRequest {
         };
         // Copy cwd
         let cwd_bytes = cwd.as_bytes();
-        let len = cwd_bytes.len().min(DAEMON_CWD_LEN - 1);
+        let len = cwd_bytes.len();
         req.cwd[..len].copy_from_slice(&cwd_bytes[..len]);
         req.cwd[len] = 0;
         // Set flags
@@ -543,13 +763,45 @@ impl DaemonRequest {
             req.flags |= FLAG_NO_SCRIPTS;
         }
         // Copy package names
-        for (i, pkg) in packages.iter().enumerate().take(DAEMON_MAX_PKGS) {
+        for (i, pkg) in packages.iter().enumerate() {
             let pkg_bytes = pkg.as_bytes();
-            let plen = pkg_bytes.len().min(DAEMON_PKG_NAME_LEN - 1);
+            let plen = pkg_bytes.len();
             req.pkgs[i][..plen].copy_from_slice(&pkg_bytes[..plen]);
             req.pkgs[i][plen] = 0;
         }
-        req
+        req.validate().map_err(str::to_owned)?;
+        Ok(req)
+    }
+
+    /// Build an owner-authenticated control request that asks the daemon to stop.
+    pub fn shutdown(cwd: &str) -> Result<Self, String> {
+        let mut request = Self::try_new(
+            cwd,
+            &[],
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        )?;
+        request.flags |= FLAG_SHUTDOWN;
+        request.validate().map_err(str::to_owned)?;
+        Ok(request)
+    }
+
+    fn invalid() -> Self {
+        Self {
+            magic: [0; 8],
+            cwd: [0; DAEMON_CWD_LEN],
+            manifest_hash: [0; 8],
+            flags: 0,
+            pkg_count: 0,
+            pkgs: [[0; DAEMON_PKG_NAME_LEN]; DAEMON_MAX_PKGS],
+        }
     }
 
     /// True when the buffer really carries a daemon request.
@@ -560,6 +812,42 @@ impl DaemonRequest {
     /// with a clear error rather than acted on).
     pub fn has_valid_magic(&self) -> bool {
         &self.magic == b"JHLREQ\0\0"
+    }
+
+    /// Validate untrusted protocol bytes before using any request field.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !self.has_valid_magic() {
+            return Err("invalid daemon request magic");
+        }
+        let flags = self.flags;
+        if flags & !ALL_REQUEST_FLAGS != 0 {
+            return Err("unsupported daemon request flags");
+        }
+        let cwd_end = self
+            .cwd
+            .iter()
+            .position(|&byte| byte == 0)
+            .ok_or("daemon working directory is not terminated")?;
+        if cwd_end == 0 || std::str::from_utf8(&self.cwd[..cwd_end]).is_err() {
+            return Err("invalid daemon working directory encoding");
+        }
+        let package_count = self.pkg_count as usize;
+        if package_count > DAEMON_MAX_PKGS {
+            return Err("daemon package count exceeds protocol limit");
+        }
+        if flags & FLAG_SHUTDOWN != 0 && (flags != FLAG_SHUTDOWN || package_count != 0) {
+            return Err("daemon shutdown request cannot contain install options or packages");
+        }
+        for package in self.pkgs.iter().take(package_count) {
+            let end = package
+                .iter()
+                .position(|&byte| byte == 0)
+                .ok_or("daemon package spec is not terminated")?;
+            if end == 0 || std::str::from_utf8(&package[..end]).is_err() {
+                return Err("invalid daemon package spec encoding");
+            }
+        }
+        Ok(())
     }
 
     pub fn cwd_str(&self) -> &str {
@@ -619,6 +907,9 @@ impl DaemonRequest {
     pub fn no_scripts(&self) -> bool {
         self.flags & FLAG_NO_SCRIPTS != 0
     }
+    pub fn is_shutdown(&self) -> bool {
+        self.flags & FLAG_SHUTDOWN != 0
+    }
 }
 
 impl DaemonResponse {
@@ -661,6 +952,8 @@ pub const DAEMON_RESPONSE_SIZE: usize = std::mem::size_of::<DaemonResponse>();
 
 /// Write a daemon request to a stream. Single write — zero serde.
 pub fn write_request(stream: &mut impl std::io::Write, req: &DaemonRequest) -> std::io::Result<()> {
+    req.validate()
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
     let ptr = req as *const DaemonRequest as *const u8;
     let slice = unsafe { std::slice::from_raw_parts(ptr, DAEMON_REQUEST_SIZE) };
     stream.write_all(slice)
@@ -672,6 +965,8 @@ pub fn read_request(stream: &mut impl std::io::Read) -> std::io::Result<DaemonRe
     let ptr = &mut req as *mut DaemonRequest as *mut u8;
     let slice = unsafe { std::slice::from_raw_parts_mut(ptr, DAEMON_REQUEST_SIZE) };
     stream.read_exact(slice)?;
+    req.validate()
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
     Ok(req)
 }
 
@@ -735,7 +1030,11 @@ pub fn try_exit_before_clap() {
     // spellings may use the shared proof; `ci`, operands, flags, and no-command
     // invocations must reach normal dispatch and validation.
     if std::env::var("JHOL_DEBUG_INTEGRITY").is_ok() {
-        eprintln!("[lane] preclap: plain={} proof={}", is_plain_install_before_clap(&raw_args), crate::instant_lock_proof::prepared_tree_is_valid(Path::new(".")));
+        eprintln!(
+            "[lane] preclap: plain={} proof={}",
+            is_plain_install_before_clap(&raw_args),
+            crate::instant_lock_proof::prepared_tree_is_valid(Path::new("."))
+        );
     }
     if is_plain_install_before_clap(&raw_args)
         && crate::instant_lock_proof::prepared_tree_is_valid(Path::new("."))
@@ -745,6 +1044,18 @@ pub fn try_exit_before_clap() {
         // gains it when THIS lane serves the install (otherwise `jhol ci` /
         // `--frozen` stay unreachable no matter what the user is told to run).
         crate::install::backfill_lockfile_integrity_after_install();
+        // A successful install must SAY it succeeded. This lane used to exit
+        // silently, so a repeat `jhol install` on an up-to-date tree printed
+        // nothing at all. Same numbers as the CLI's own summary: count the
+        // packages on disk instead of echoing the requested set.
+        let quiet = std::env::args()
+            .skip(1)
+            .any(|a| a == "-q" || a == "--quiet")
+            || std::env::var("JHOL_QUIET").is_ok();
+        if !quiet {
+            let total = crate::install::count_installed_packages(Path::new("."));
+            println!("Up to date ({} packages in node_modules)", total);
+        }
         std::process::exit(0);
     }
 }
@@ -1061,6 +1372,45 @@ pub fn speculate_neighborhoods(
 
 #[cfg(test)]
 mod wire_protocol_tests {
+    #[test]
+    fn daemon_packuments_are_partitioned_by_registry_and_credentials() {
+        let name = "jhol-origin-test-package";
+        super::DaemonCache::record_for_origin(
+            name,
+            true,
+            b"one".to_vec(),
+            "https://a.example",
+            Some("token-a"),
+        );
+        assert_eq!(
+            super::DaemonCache::lookup_for_origin(name, true, "https://a.example", Some("token-a")),
+            Some(b"one".to_vec())
+        );
+        assert_eq!(
+            super::DaemonCache::lookup_for_origin(name, true, "https://b.example", Some("token-a")),
+            None
+        );
+        assert_eq!(
+            super::DaemonCache::lookup_for_origin(name, true, "https://a.example", Some("token-b")),
+            None
+        );
+        super::DaemonCache::record_for_origin(
+            name,
+            true,
+            b"two".to_vec(),
+            "https://b.example",
+            Some("token-a"),
+        );
+        assert_eq!(
+            super::DaemonCache::lookup_for_origin(name, true, "https://a.example", Some("token-a")),
+            Some(b"one".to_vec())
+        );
+        assert_eq!(
+            super::DaemonCache::lookup_for_origin(name, true, "https://b.example", Some("token-a")),
+            Some(b"two".to_vec())
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -1139,6 +1489,191 @@ mod wire_protocol_tests {
             true,
         );
         assert_eq!(req.packages(), vec!["a@1.0.0", "b@2.0.0"]);
+    }
+
+    #[test]
+    fn request_constructor_rejects_fields_that_would_be_truncated() {
+        let too_many = vec!["x".to_string(); DAEMON_MAX_PKGS + 1];
+        assert!(DaemonRequest::try_new(
+            "/tmp", &too_many, false, false, false, false, false, false, false, false, false,
+        )
+        .is_err());
+
+        let too_long = vec!["x".repeat(DAEMON_PKG_NAME_LEN)];
+        assert!(DaemonRequest::try_new(
+            "/tmp", &too_long, false, false, false, false, false, false, false, false, false,
+        )
+        .is_err());
+        assert!(DaemonRequest::try_new(
+            &"x".repeat(DAEMON_CWD_LEN),
+            &[],
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        )
+        .is_err());
+        assert!(DaemonRequest::try_new(
+            "/tmp\0elsewhere",
+            &[],
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        )
+        .is_err());
+
+        // Keep the old constructor source-compatible, but make its invalid result
+        // impossible to write as a valid request.
+        let invalid = DaemonRequest::new(
+            &"x".repeat(DAEMON_CWD_LEN),
+            &[],
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
+        let mut wire = Vec::new();
+        assert!(write_request(&mut wire, &invalid).is_err());
+        assert!(wire.is_empty());
+    }
+
+    #[test]
+    fn request_reader_rejects_invalid_magic_and_hostile_fields() {
+        fn wire_bytes(request: &DaemonRequest) -> Vec<u8> {
+            let ptr = request as *const DaemonRequest as *const u8;
+            unsafe { std::slice::from_raw_parts(ptr, DAEMON_REQUEST_SIZE).to_vec() }
+        }
+
+        let mut invalid_magic = DaemonRequest::try_new(
+            "/tmp",
+            &[],
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+        invalid_magic.magic = *b"BADREQ\0\0";
+        let error = read_request(&mut std::io::Cursor::new(wire_bytes(&invalid_magic)))
+            .err()
+            .expect("invalid magic must be rejected");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+
+        let mut excessive_count = DaemonRequest::try_new(
+            "/tmp",
+            &[],
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+        excessive_count.pkg_count = (DAEMON_MAX_PKGS + 1) as u32;
+        let error = read_request(&mut std::io::Cursor::new(wire_bytes(&excessive_count)))
+            .err()
+            .expect("over-limit package count must be rejected");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+
+        let mut invalid_package = DaemonRequest::try_new(
+            "/tmp",
+            &["pkg".to_string()],
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+        invalid_package.pkgs[0][0] = 0xff;
+        assert!(invalid_package.validate().is_err());
+    }
+
+    #[test]
+    fn shutdown_request_cannot_carry_install_work() {
+        let request = DaemonRequest::shutdown("/tmp").expect("valid shutdown request");
+        assert!(request.is_shutdown());
+        assert_eq!(request.packages(), Vec::<String>::new());
+
+        let mut mixed_request = request;
+        mixed_request.flags |= FLAG_OFFLINE;
+        assert!(mixed_request.validate().is_err());
+
+        let mut package_request = DaemonRequest::try_new(
+            "/tmp",
+            &["left-pad".to_string()],
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        )
+        .expect("valid package request");
+        package_request.flags |= FLAG_SHUTDOWN;
+        assert!(package_request.validate().is_err());
+    }
+
+    #[test]
+    fn daemon_connection_permits_are_bounded_and_released() {
+        let permits: Vec<_> = (0..DAEMON_MAX_CONNECTIONS)
+            .map(|_| try_daemon_connection_permit().expect("permit below the limit"))
+            .collect();
+        assert!(try_daemon_connection_permit().is_none());
+        drop(permits);
+        assert!(try_daemon_connection_permit().is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_socket_startup_lock_serializes_and_releases() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after epoch")
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("jhol-daemon-lock-{}-{nonce}", std::process::id()));
+        std::fs::create_dir(&dir).expect("create isolated lock directory");
+        let socket = dir.join("daemon.sock");
+
+        let first = DaemonSocketLock::acquire(&socket).expect("first process acquires lock");
+        assert!(DaemonSocketLock::acquire(&socket).is_err());
+        drop(first);
+        let next = DaemonSocketLock::acquire(&socket).expect("lock releases with file drop");
+        drop(next);
+        std::fs::remove_dir_all(dir).expect("remove isolated lock directory");
     }
 
     /// The wire sizes must stay exactly the struct sizes: `read_exact`/`from_raw_parts`

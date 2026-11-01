@@ -313,8 +313,14 @@ mod tests {
             Some(&affinities),
         );
 
-        let item_eq = classified.iter().find(|i| i.package == "pkg-equilibrium").unwrap();
-        let item_st = classified.iter().find(|i| i.package == "pkg-strained").unwrap();
+        let item_eq = classified
+            .iter()
+            .find(|i| i.package == "pkg-equilibrium")
+            .unwrap();
+        let item_st = classified
+            .iter()
+            .find(|i| i.package == "pkg-strained")
+            .unwrap();
 
         assert!(item_eq.http2_priority_weight > item_st.http2_priority_weight);
         assert_eq!(item_eq.http2_priority_weight, 128 + (0.85 * 32.0) as u8);

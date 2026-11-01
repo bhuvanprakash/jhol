@@ -1,0 +1,78 @@
+{
+  "note": "Full jhol install (JHOL_RESOLVER=jagr, JHOL_JAGR_L1=auto/Knot) vs bun. Isolated HOME+cache. Express fixture. No source pollution of user home.",
+  "knot_status": "L1 wired in JagrResolver; default install expands+downloads (full PM). lockfile-only JAGR path still can UNSAT on this fixture.",
+  "runs": [
+    {
+      "label": "jhol-cold-1",
+      "tool": "jhol",
+      "mode": "cold",
+      "seconds": 0.335,
+      "exit": 0,
+      "nm_top": 0,
+      "express": false
+    },
+    {
+      "label": "jhol-cold-2",
+      "tool": "jhol",
+      "mode": "cold",
+      "seconds": 0.28,
+      "exit": 0,
+      "nm_top": 0,
+      "express": false
+    },
+    {
+      "label": "jhol-warm-1",
+      "tool": "jhol",
+      "mode": "warm",
+      "seconds": 0.166,
+      "exit": 0,
+      "nm_top": 0,
+      "express": false
+    },
+    {
+      "label": "jhol-warm-2",
+      "tool": "jhol",
+      "mode": "warm",
+      "seconds": 0.029,
+      "exit": 0,
+      "nm_top": 1,
+      "express": true
+    },
+    {
+      "label": "bun-cold-1",
+      "tool": "bun",
+      "mode": "cold",
+      "seconds": 1.303,
+      "exit": 0,
+      "nm_top": 96,
+      "express": true
+    },
+    {
+      "label": "bun-cold-2",
+      "tool": "bun",
+      "mode": "cold",
+      "seconds": 0.07,
+      "exit": 0,
+      "nm_top": 96,
+      "express": true
+    },
+    {
+      "label": "bun-warm-1",
+      "tool": "bun",
+      "mode": "warm",
+      "seconds": 0.052,
+      "exit": 0,
+      "nm_top": 96,
+      "express": true
+    },
+    {
+      "label": "bun-warm-2",
+      "tool": "bun",
+      "mode": "warm",
+      "seconds": 0.049,
+      "exit": 0,
+      "nm_top": 96,
+      "express": true
+    }
+  ]
+}

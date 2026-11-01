@@ -1,0 +1,124 @@
+{
+  "timestamp_utc": "20260716T044025Z",
+  "fixture": "tests/fixtures/express-app/package.json",
+  "bakeoff_root": "/tmp/jhol-bakeoff-18984",
+  "part_a": {
+    "knot_rs": "crates/jhol-core/src/jagr/knot.rs",
+    "jagr_resolver_wiring": "crates/jhol-core/src/jagr/jagr_resolver.rs calls knot_solve when knot_enabled()",
+    "knot_tests": "3 passed"
+  },
+  "notes": [
+    "jhol often exits 0 with package-lock.json but no top-level express/nodemon dirs under node_modules (install/link gap).",
+    "jhol warm repeat 2 intermittently showed express+nodemon present; other jhol runs had nm_pkgs=0.",
+    "bun uses global cache; cold dirs were fresh under /tmp with no lockfile pre-seeded.",
+    "nm_pkgs = count of non-hidden direct child directories in node_modules."
+  ],
+  "runs": [
+    {
+      "tool": "jhol",
+      "mode": "cold",
+      "repeat": 1,
+      "seconds": 0.04,
+      "exit": 0,
+      "nm_pkgs": 0,
+      "express_present": false,
+      "nodemon_present": false,
+      "jhol_jagr_l1": "auto"
+    },
+    {
+      "tool": "jhol",
+      "mode": "cold",
+      "repeat": 2,
+      "seconds": 0.01,
+      "exit": 0,
+      "nm_pkgs": 0,
+      "express_present": false,
+      "nodemon_present": false,
+      "jhol_jagr_l1": "auto"
+    },
+    {
+      "tool": "jhol",
+      "mode": "cold-knot",
+      "repeat": 1,
+      "seconds": 0.01,
+      "exit": 0,
+      "nm_pkgs": 0,
+      "express_present": false,
+      "nodemon_present": false,
+      "jhol_jagr_l1": "knot"
+    },
+    {
+      "tool": "jhol",
+      "mode": "cold-knot",
+      "repeat": 2,
+      "seconds": 0.01,
+      "exit": 0,
+      "nm_pkgs": 0,
+      "express_present": false,
+      "nodemon_present": false,
+      "jhol_jagr_l1": "knot"
+    },
+    {
+      "tool": "jhol",
+      "mode": "warm",
+      "repeat": 1,
+      "seconds": 0.14,
+      "exit": 0,
+      "nm_pkgs": 0,
+      "express_present": false,
+      "nodemon_present": false,
+      "jhol_jagr_l1": "auto"
+    },
+    {
+      "tool": "jhol",
+      "mode": "warm",
+      "repeat": 2,
+      "seconds": 0.01,
+      "exit": 0,
+      "nm_pkgs": 0,
+      "express_present": true,
+      "nodemon_present": true,
+      "jhol_jagr_l1": "auto"
+    },
+    {
+      "tool": "bun",
+      "mode": "cold",
+      "repeat": 1,
+      "seconds": 0.07,
+      "exit": 0,
+      "nm_pkgs": 95,
+      "express_present": true,
+      "nodemon_present": true
+    },
+    {
+      "tool": "bun",
+      "mode": "cold",
+      "repeat": 2,
+      "seconds": 0.02,
+      "exit": 0,
+      "nm_pkgs": 95,
+      "express_present": true,
+      "nodemon_present": true
+    },
+    {
+      "tool": "bun",
+      "mode": "warm",
+      "repeat": 1,
+      "seconds": 0.02,
+      "exit": 0,
+      "nm_pkgs": 95,
+      "express_present": true,
+      "nodemon_present": true
+    },
+    {
+      "tool": "bun",
+      "mode": "warm",
+      "repeat": 2,
+      "seconds": 0.02,
+      "exit": 0,
+      "nm_pkgs": 95,
+      "express_present": true,
+      "nodemon_present": true
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+packument express-app: pkgs=40 vers=69 edges=73 build=773.5ms errs=0
+  ol3p_full_vars=41 residual_vars=5 knot_ok=true knot_ms=0.029 nodes=34 obj=Some(28)
+packument overrides-app: pkgs=2 vers=3 edges=2 build=288.4ms errs=0
+  ol3p_full_vars=3 residual_vars=1 knot_ok=true knot_ms=0.000 nodes=1 obj=Some(0)
+packument peer-deps-app: pkgs=5 vers=24 edges=7 build=61.8ms errs=0
+  ol3p_full_vars=13 residual_vars=11 knot_ok=true knot_ms=0.002 nodes=18 obj=Some(18)
+HARD packument express-app: pkgs=80 vers=220 edges=136
+HARD packument overrides-app: pkgs=2 vers=3 edges=2
+HARD packument peer-deps-app: pkgs=5 vers=24 edges=7
+wrote ../results/knot-v3-20260716T035746Z.json

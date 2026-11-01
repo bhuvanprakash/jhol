@@ -38,6 +38,13 @@ pub struct Snapshot {
     pub receipt: ExecutionReceipt,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub limitations: Vec<String>,
+    /// Exact `package.json` text at capture time. Restore refuses to write lock
+    /// files when the project's manifest no longer matches this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<String>,
+    /// Exact `package-lock.json` text at capture time (native JS tree identity).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_lock: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,7 +73,20 @@ impl Snapshot {
                 "restore does not mutate databases".into(),
                 "native package trees require jhol sync --apply / install".into(),
             ],
+            manifest: None,
+            package_lock: None,
         }
+    }
+
+    /// Attach the project's JS manifest and npm lock text captured by the CLI.
+    pub fn with_project_files(
+        mut self,
+        manifest: Option<String>,
+        package_lock: Option<String>,
+    ) -> Self {
+        self.manifest = manifest;
+        self.package_lock = package_lock;
+        self
     }
 
     pub fn save(&self, project: &Path) -> Result<PathBuf, SnapshotError> {
@@ -118,7 +138,34 @@ impl Snapshot {
         }
     }
 
-    /// Apply: write project.lock back. Refuse if caller asks for DB (flag).
+    /// Plan a restore against a concrete project. A restore is blocked when the
+    /// project's `package.json` is not byte-identical to the snapshot's, because
+    /// the captured `package-lock.json` describes a different manifest then.
+    pub fn restore_plan_in(&self, project: &Path) -> RestorePlan {
+        let mut plan = self.restore_plan();
+        match &self.manifest {
+            None => plan.blocked.push(
+                "snapshot predates manifest capture; it cannot be verified against package.json"
+                    .into(),
+            ),
+            Some(captured) => {
+                let current = fs::read_to_string(project.join("package.json")).ok();
+                if current.as_deref() != Some(captured.as_str()) {
+                    plan.blocked.push(
+                        "package.json differs from the snapshot; restore would pin a tree for another manifest"
+                            .into(),
+                    );
+                }
+            }
+        }
+        if self.package_lock.is_some() {
+            plan.would_write.push("package-lock.json".into());
+        }
+        plan
+    }
+
+    /// Apply: write `jhol.project.lock` and `package-lock.json` back. Never touches
+    /// `node_modules` (run `jhol sync --apply`), and refuses database restore.
     pub fn restore_apply(
         &self,
         project: &Path,
@@ -129,12 +176,17 @@ impl Snapshot {
                 "database restore is not supported; refuse rather than guess".into(),
             ));
         }
-        let plan = self.restore_plan();
-        let lock_path = project.join("jhol.project.lock");
+        let plan = self.restore_plan_in(project);
+        if !plan.blocked.is_empty() {
+            return Err(SnapshotError::Blocked(plan.blocked.join("; ")));
+        }
         fs::write(
-            &lock_path,
+            project.join("jhol.project.lock"),
             serde_json::to_string_pretty(&self.project_lock)?,
         )?;
+        if let Some(lock) = &self.package_lock {
+            fs::write(project.join("package-lock.json"), lock)?;
+        }
         Ok(plan)
     }
 }
@@ -160,11 +212,63 @@ mod tests {
         assert_eq!(loaded.id, snap.id);
         let plan = loaded.restore_plan();
         assert!(plan.would_write.contains(&"jhol.project.lock".into()));
-        loaded.restore_apply(dir.path(), false).unwrap();
-        assert!(dir.path().join("jhol.project.lock").is_file());
+        // No manifest captured: restore must refuse rather than guess.
+        assert!(matches!(
+            loaded.restore_apply(dir.path(), false),
+            Err(SnapshotError::Blocked(_))
+        ));
         assert!(matches!(
             loaded.restore_apply(dir.path(), true),
             Err(SnapshotError::Blocked(_))
         ));
+    }
+
+    #[test]
+    fn restore_writes_lock_only_when_manifest_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let pj = "{\"dependencies\":{\"left-pad\":\"1.3.0\"}}";
+        fs::write(dir.path().join("package.json"), pj).unwrap();
+        let lock = "{\"lockfileVersion\":3}";
+        let snap = Snapshot::create(
+            serde_json::json!({"native_locks": []}),
+            empty_ok_receipt(dir.path()),
+        )
+        .with_project_files(Some(pj.into()), Some(lock.into()));
+
+        // Same manifest: lock files are written.
+        let plan = snap.restore_plan_in(dir.path());
+        assert!(plan.blocked.is_empty(), "{:?}", plan.blocked);
+        assert!(plan.would_write.contains(&"package-lock.json".into()));
+        snap.restore_apply(dir.path(), false).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("package-lock.json")).unwrap(),
+            lock
+        );
+        assert!(
+            !dir.path().join("node_modules").exists(),
+            "restore must not create node_modules"
+        );
+
+        // Edited manifest: refused, and the lock on disk is left alone.
+        fs::write(dir.path().join("package.json"), "{\"dependencies\":{}}").unwrap();
+        assert!(matches!(
+            snap.restore_apply(dir.path(), false),
+            Err(SnapshotError::Blocked(m)) if m.contains("package.json differs")
+        ));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("package-lock.json")).unwrap(),
+            lock
+        );
+    }
+
+    #[test]
+    fn snapshots_without_project_files_still_load() {
+        // A snapshot written before manifest capture has no `manifest` key.
+        let dir = tempfile::tempdir().unwrap();
+        let old = Snapshot::create(serde_json::json!({}), empty_ok_receipt(dir.path()));
+        let mut v: serde_json::Value = serde_json::to_value(&old).unwrap();
+        v.as_object_mut().unwrap().remove("manifest");
+        let loaded: Snapshot = serde_json::from_value(v).unwrap();
+        assert!(loaded.manifest.is_none());
     }
 }

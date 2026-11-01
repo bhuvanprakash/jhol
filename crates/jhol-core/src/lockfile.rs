@@ -1,8 +1,8 @@
 //! Read package-lock.json and bun.lock for resolved versions (deterministic installs).
 
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
 
 fn package_name_from_lockfile_key(key: &str) -> Option<String> {
     if key.is_empty() {
@@ -525,7 +525,11 @@ fn read_lockfile_resolved_from_str(s: &str) -> Option<HashMap<String, String>> {
     let mut resolved = HashMap::new();
     let mut top_level_names = HashSet::new();
     for (key, val) in packages {
-        let version = val.get("version")?.as_str()?;
+        // Skip entries without a version (e.g. the root entry of a
+        // `--package-lock-only` lockfile) instead of failing the whole map.
+        let Some(version) = val.get("version").and_then(|v| v.as_str()) else {
+            continue;
+        };
         let Some(name) = package_name_from_lockfile_key(key) else {
             continue;
         };
@@ -880,8 +884,14 @@ fn read_lockfile_resolved_urls_with_integrity_from_str(
         let Some(name) = package_name_from_lockfile_key(key) else {
             continue;
         };
-        let version = val.get("version")?.as_str()?;
-        let resolved = val.get("resolved")?.as_str()?;
+        let Some(version) = val.get("version").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        // Entries without `resolved` (root, link:/file: packages) carry no
+        // tarball URL; skip them rather than discarding every other entry.
+        let Some(resolved) = val.get("resolved").and_then(|v| v.as_str()) else {
+            continue;
+        };
         if resolved.ends_with(".tgz") {
             let pkg_key = format!("{}@{}", name, version);
             urls.insert(pkg_key.clone(), resolved.to_string());
@@ -1228,7 +1238,10 @@ fn read_npm_lock_install_entries_from_str(s: &str) -> Option<Vec<LockfileInstall
         let Some(name) = package_name_from_lockfile_key(key) else {
             continue;
         };
-        let version = val.get("version")?.as_str()?.to_string();
+        let Some(version) = val.get("version").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let version = version.to_string();
         if skip_lockfile_materialization(&name, val) {
             continue;
         }
@@ -1303,7 +1316,10 @@ fn read_lockfile_full_entries_from_str(s: &str) -> Option<Vec<LockfileFullEntry>
         let Some(name) = package_name_from_lockfile_key(key) else {
             continue;
         };
-        let version = val.get("version")?.as_str()?.to_string();
+        let Some(version) = val.get("version").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let version = version.to_string();
         if skip_lockfile_materialization(&name, val) {
             continue;
         }
@@ -1569,6 +1585,48 @@ mod tests {
 
         let resolved = super::read_lockfile_resolved_from_str(lockfile).unwrap();
         assert_eq!(resolved.get("debug").map(String::as_str), Some("2.6.9"));
+    }
+
+    #[test]
+    fn resolved_map_survives_entries_without_version() {
+        // npm's `--package-lock-only` output can omit the version on the root
+        // entry; one such entry used to abort the whole map via `?`, which made
+        // `jhol why` claim "No lockfile found" on a perfectly good lockfile.
+        let lockfile = r#"{
+            "lockfileVersion": 3,
+            "packages": {
+                "": { "name": "fixture", "dependencies": { "left-pad": "^1.3.0" } },
+                "node_modules/left-pad": { "version": "1.3.0", "resolved": "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz" }
+            }
+        }"#;
+
+        let resolved = super::read_lockfile_resolved_from_str(lockfile).unwrap();
+        assert_eq!(resolved.get("left-pad").map(String::as_str), Some("1.3.0"));
+    }
+
+    #[test]
+    fn resolved_urls_survives_entries_without_resolved() {
+        // link:/file: entries have no `resolved` tarball URL; they must not
+        // poison the URL map for every other package.
+        let lockfile = r#"{
+            "lockfileVersion": 3,
+            "packages": {
+                "": { "name": "fixture" },
+                "node_modules/local": { "version": "1.0.0", "link": true },
+                "node_modules/left-pad": { "version": "1.3.0", "resolved": "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz", "integrity": "sha512-x" }
+            }
+        }"#;
+
+        let (urls, integrity) =
+            super::read_lockfile_resolved_urls_with_integrity_from_str(lockfile).unwrap();
+        assert_eq!(
+            urls.get("left-pad@1.3.0").map(String::as_str),
+            Some("https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz")
+        );
+        assert_eq!(
+            integrity.get("left-pad@1.3.0").map(String::as_str),
+            Some("sha512-x")
+        );
     }
 
     #[test]

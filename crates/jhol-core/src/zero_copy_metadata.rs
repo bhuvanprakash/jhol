@@ -210,6 +210,34 @@ impl MmapMetadataStore {
         bin: Option<&[String]>,
         scripts: &[(String, String)],
     ) {
+        Self::store_packument_for_key(
+            name,
+            name,
+            version,
+            deps,
+            opt_deps,
+            peer_deps,
+            dev_deps,
+            tarball_url,
+            integrity,
+            bin,
+            scripts,
+        );
+    }
+
+    pub fn store_packument_for_key(
+        key: &str,
+        name: &str,
+        version: &str,
+        deps: &[(String, String)],
+        opt_deps: &[(String, String)],
+        peer_deps: &[(String, String)],
+        dev_deps: &[(String, String)],
+        tarball_url: &str,
+        integrity: Option<&str>,
+        bin: Option<&[String]>,
+        scripts: &[(String, String)],
+    ) {
         let mut store = Self::global();
         let meta = PackageMetadata {
             name: name.to_string(),
@@ -230,7 +258,7 @@ impl MmapMetadataStore {
             integrity: integrity.map(|s| s.to_string()),
             resolved_url: Some(tarball_url.to_string()),
         };
-        if let Err(e) = store.insert(name, &meta) {
+        if let Err(e) = store.insert(key, &meta) {
             eprintln!("store_packument insert error: {}", e);
         }
     }
@@ -239,6 +267,11 @@ impl MmapMetadataStore {
     pub fn lookup_packument(name: &str) -> Option<PackageMetadata> {
         let store = Self::global();
         store.get(name)
+    }
+
+    pub fn lookup_packument_for_key(key: &str) -> Option<PackageMetadata> {
+        let store = Self::global();
+        store.get(key)
     }
 
     pub fn clear(&mut self) -> Result<(), String> {
@@ -297,6 +330,15 @@ pub struct MetadataStoreStats {
 
 /// Cache packument metadata from registry JSON in zero-copy store.
 pub fn cache_packument_metadata(name: &str, version: &str, data: &serde_json::Value) {
+    cache_packument_metadata_for_key(name, name, version, data);
+}
+
+pub fn cache_packument_metadata_for_key(
+    key: &str,
+    name: &str,
+    version: &str,
+    data: &serde_json::Value,
+) {
     let mut deps = Vec::new();
     if let Some(d) = data.get("dependencies").and_then(|v| v.as_object()) {
         for (k, v) in d {
@@ -346,7 +388,8 @@ pub fn cache_packument_metadata(name: &str, version: &str, data: &serde_json::Va
             scripts.push((k.clone(), v.as_str().unwrap_or("").to_string()));
         }
     }
-    MmapMetadataStore::store_packument(
+    MmapMetadataStore::store_packument_for_key(
+        key,
         name,
         version,
         &deps,
@@ -422,6 +465,21 @@ mod tests {
             "https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz"
         );
     }
+
+    #[test]
+    fn identity_packument_entries_do_not_cross_registry_keys() {
+        let data: serde_json::Value = serde_json::from_str(
+            r#"{"dependencies":{"left-pad":"^1.0.0"},"dist":{"tarball":"https://registry.example/pkg.tgz","integrity":"sha512-abc"}}"#,
+        )
+        .unwrap();
+        let key_a = "metadata-v2:registry-a-private-package";
+        let key_b = "metadata-v2:registry-b-private-package";
+        cache_packument_metadata_for_key(key_a, "@private/pkg", "1.0.0", &data);
+
+        let hit = MmapMetadataStore::lookup_packument_for_key(key_a).unwrap();
+        assert_eq!(hit.name, "@private/pkg");
+        assert!(MmapMetadataStore::lookup_packument_for_key(key_b).is_none());
+    }
 }
 
 #[cfg(test)]
@@ -455,12 +513,15 @@ mod zero_copy_live_proof {
             resolved_url: None,
         };
         store.insert("left-pad", &meta).expect("insert");
-        store.get("left-pad").expect("read-back") ;
+        store.get("left-pad").expect("read-back");
         drop(store);
         // Fresh process view: reload from disk (the .idx + .meta pair).
         let reloaded = MmapMetadataStore::new(store_path.clone()).expect("reload");
         let found = reloaded.get("left-pad");
-        assert!(found.is_some(), "store must survive reload — write-only otherwise");
+        assert!(
+            found.is_some(),
+            "store must survive reload — write-only otherwise"
+        );
         assert_eq!(found.unwrap().version, "1.3.0");
         assert!(store_path.exists(), "store.meta must exist on disk");
     }

@@ -1,0 +1,24 @@
+{
+  "fixture": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "next": "15.1.0",
+    "typescript": "5.7.2",
+    "express": "4.21.2"
+  },
+  "date": "2026-03-12",
+  "jhol": {
+    "seconds": 43.093,
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": "[jhol-native-download] 37583ms\n[jhol-native-link] 49ms\n",
+    "workdir": "/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-bench-juto7p8v"
+  },
+  "bun": {
+    "seconds": 51.753,
+    "exit_code": 0,
+    "stdout": "bun install v1.3.4 (5eb2145b)\n\n+ express@4.21.2 (v5.2.1 available)\n+ next@15.1.0 (v16.1.6 available)\n+ react@18.3.1 (v19.2.4 available)\n+ react-dom@18.3.1 (v19.2.4 available)\n+ typescript@5.7.2 (v5.9.3 available)\n\n101 packages installed [51.71s]\n",
+    "stderr": "Resolving dependencies\nResolved, downloaded and extracted [452]\nSaved lockfile\n",
+    "workdir": "/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/bun-bench-7sf6bwlz"
+  }
+}

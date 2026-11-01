@@ -24,14 +24,17 @@ struct LatticeEntry {
 }
 
 struct LatticeStore {
-    /// package → list of (constraint, version)
+    /// Registry identity → list of (constraint, version).
     by_pkg: HashMap<String, Vec<LatticeEntry>>,
+    /// Pre-origin cache entries stay on disk, but can never satisfy a lookup.
+    legacy_entries: HashMap<String, Vec<(String, String)>>,
 }
 
 impl LatticeStore {
     fn new() -> Self {
         Self {
             by_pkg: HashMap::new(),
+            legacy_entries: HashMap::new(),
         }
     }
 }
@@ -69,6 +72,10 @@ fn load_disk(store: &mut LatticeStore) {
         return;
     };
     for (pkg, entries) in map {
+        if !pkg.starts_with("metadata-v2:") {
+            store.legacy_entries.insert(pkg, entries);
+            continue;
+        }
         let mut parsed: Vec<LatticeEntry> = entries
             .into_iter()
             .filter_map(|(constraint, version)| {
@@ -87,7 +94,7 @@ fn load_disk(store: &mut LatticeStore) {
 }
 
 fn save_disk(store: &LatticeStore) {
-    let mut out: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    let mut out = store.legacy_entries.clone();
     for (pkg, entries) in &store.by_pkg {
         out.insert(
             pkg.clone(),
@@ -130,36 +137,22 @@ pub fn flush_disk() {
     save_disk(&g);
 }
 
-/// Remember that `constraint` resolved to `version` for `package`.
-/// Updates in-memory state immediately; disk write is buffered.
+/// Retain an originless legacy entry for migration diagnostics.
+/// It is never eligible to resolve a package; use an identity-bound writer.
 pub fn remember(package: &str, constraint: &str, version: &str) {
+    remember_legacy(package, constraint, version);
+}
+
+fn remember_legacy(package: &str, constraint: &str, version: &str) {
     let mut g = global().write();
-    let list = g.by_pkg.entry(package.to_string()).or_default();
-    if let Some(e) = list.iter_mut().find(|e| e.constraint == constraint) {
-        e.version = version.to_string();
-        if let Ok(pv) = semver::Version::parse(version) {
-            e.parsed_version = pv;
-        }
-        e.hits = e.hits.saturating_add(1);
-    } else if let Ok(parsed_version) = semver::Version::parse(version) {
-        list.push(LatticeEntry {
-            constraint: constraint.to_string(),
-            version: version.to_string(),
-            parsed_version,
-            hits: 1,
-        });
-        // Keep sorted by version descending for binary search
-        list.sort_by(|a, b| b.parsed_version.cmp(&a.parsed_version));
-    }
-    // Cap per package
-    if list.len() > 64 {
-        list.sort_by(|a, b| b.hits.cmp(&a.hits));
-        list.truncate(64);
-        list.sort_by(|a, b| b.parsed_version.cmp(&a.parsed_version));
+    let entries = g.legacy_entries.entry(package.to_string()).or_default();
+    if let Some(entry) = entries.iter_mut().find(|entry| entry.0 == constraint) {
+        entry.1 = version.to_string();
+    } else {
+        entries.push((constraint.to_string(), version.to_string()));
     }
     drop(g);
 
-    // Buffer disk write; auto-flush when buffer is large
     if let Ok(mut buf) = pending().lock() {
         buf.push((
             package.to_string(),
@@ -171,98 +164,95 @@ pub fn remember(package: &str, constraint: &str, version: &str) {
             flush_disk();
         }
     }
-
-    // Cross-project: also store in GRM shards so other projects or daemon
-    // queries hit without needing this JSON file loaded.
-    let _ = crate::lock_free_grm::store_global(crate::grm::ResolutionRecord {
-        package_spec: format!("{}@{}", package, version),
-        resolved_version: version.to_string(),
-        id: 0,
-        timestamp: crate::grm::current_timestamp(),
-        ttl_secs: 7200,
-        dependencies: std::collections::HashMap::new(),
-        platform: Some(std::env::consts::OS.to_string()),
-        node_version: std::env::var("NODE_VERSION").ok(),
-        cached_at: crate::grm::current_timestamp(),
-        hit_count: 1,
-        ..Default::default()
-    });
 }
 
-/// Lookup exact constraint hit.
+/// Remember a version under the captured registry and credential identity.
+/// Remember a version using an already-computed metadata identity key.
+pub(crate) fn remember_for_key(package: &str, constraint: &str, version: &str, key: &str) {
+    remember_scoped_key(package, constraint, version, key.to_string());
+}
+
+fn remember_scoped_key(_package: &str, constraint: &str, version: &str, key: String) {
+    let mut g = global().write();
+    let list = g.by_pkg.entry(key.clone()).or_default();
+    if let Some(entry) = list.iter_mut().find(|entry| entry.constraint == constraint) {
+        entry.version = version.to_string();
+        if let Ok(parsed) = semver::Version::parse(version) {
+            entry.parsed_version = parsed;
+        }
+        entry.hits = entry.hits.saturating_add(1);
+    } else if let Ok(parsed_version) = semver::Version::parse(version) {
+        list.push(LatticeEntry {
+            constraint: constraint.to_string(),
+            version: version.to_string(),
+            parsed_version,
+            hits: 1,
+        });
+        list.sort_by(|a, b| b.parsed_version.cmp(&a.parsed_version));
+    }
+    list.sort_by(|a, b| b.parsed_version.cmp(&a.parsed_version));
+    if list.len() > 64 {
+        list.sort_by(|a, b| b.hits.cmp(&a.hits));
+        list.truncate(64);
+        list.sort_by(|a, b| b.parsed_version.cmp(&a.parsed_version));
+    }
+    drop(g);
+    if let Ok(mut buf) = pending().lock() {
+        buf.push((key, constraint.to_string(), version.to_string()));
+        if buf.len() >= 64 {
+            drop(buf);
+            flush_disk();
+        }
+    }
+}
+
+/// Originless compatibility lookup. Always misses because the source is unknown.
 pub fn lookup_exact(package: &str, constraint: &str) -> Option<String> {
-    let g = global().read();
-    g.by_pkg
-        .get(package)?
-        .iter()
-        .find(|e| e.constraint == constraint)
-        .map(|e| e.version.clone())
+    let _ = (package, constraint);
+    None
 }
 
-/// Lattice lookup: any remembered version that satisfies the new constraint.
-pub fn lookup_lattice(package: &str, constraint: &str) -> Option<String> {
-    if let Some(v) = lookup_exact(package, constraint) {
-        return Some(v);
+pub(crate) fn lookup_lattice_for_key(key: &str, constraint: &str) -> Option<String> {
+    if let Some(version) = lookup_exact_for_key(key, constraint) {
+        return Some(version);
     }
     let req = VersionReq::parse(constraint.trim()).ok();
     let g = global().read();
-    let list = g.by_pkg.get(package)?;
-    // Entries are sorted by version descending. First match is the highest.
-    for e in list {
-        let ok = if let Some(ref r) = req {
-            r.matches(&e.parsed_version)
+    let list = g.by_pkg.get(key)?;
+    list.iter().find_map(|entry| {
+        let matches = if let Some(ref requirement) = req {
+            requirement.matches(&entry.parsed_version)
         } else {
             constraint == "latest"
                 || constraint == "*"
                 || constraint.is_empty()
-                || e.version == constraint
-                || crate::registry::version_satisfies(constraint, &e.version)
+                || entry.version == constraint
+                || crate::registry::version_satisfies(constraint, &entry.version)
         };
-        if ok {
-            return Some(e.version.clone());
-        }
-    }
+        matches.then(|| entry.version.clone())
+    })
+}
+
+pub(crate) fn lookup_exact_for_key(key: &str, constraint: &str) -> Option<String> {
+    global()
+        .read()
+        .by_pkg
+        .get(key)?
+        .iter()
+        .find(|entry| entry.constraint == constraint)
+        .map(|entry| entry.version.clone())
+}
+
+/// Originless compatibility lookup. Always misses because the source is unknown.
+pub fn lookup_lattice(package: &str, constraint: &str) -> Option<String> {
+    let _ = (package, constraint);
     None
 }
 
-/// Batch lattice lookup: returns resolved versions for multiple packages at once.
-/// Returns a map of package → version for every package that has a lattice hit.
-/// Uses GRM first, then lattice, then falls through (caller handles network miss).
+/// Originless compatibility batch lookup. Always empty because sources are unknown.
 pub fn lookup_lattice_batch(deps: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
-    let g = global().read();
-    let mut results = std::collections::HashMap::new();
-    for &(package, constraint) in deps {
-        // Try GRM first (cross-project memory) — query by package@constraint
-        let pkg_spec = format!("{}@{}", package, constraint);
-        if let Some(rec) = crate::lock_free_grm::query_global(
-            &pkg_spec,
-            Some(std::env::consts::OS),
-            std::env::var("NODE_VERSION").ok().as_deref(),
-        ) {
-            if crate::registry::version_satisfies(constraint, &rec.resolved_version) {
-                results.insert(package.to_string(), rec.resolved_version.clone());
-                continue;
-            }
-        }
-        // Try exact match
-        let list = match g.by_pkg.get(package) {
-            Some(l) => l,
-            None => continue,
-        };
-        let req = semver::VersionReq::parse(constraint.trim()).ok();
-        // Entries sorted by version desc; first match is highest.
-        let matched = list.iter().find(|e| {
-            if let Some(ref r) = req {
-                r.matches(&e.parsed_version)
-            } else {
-                constraint == "latest" || constraint == "*" || constraint.is_empty()
-            }
-        });
-        if let Some(e) = matched {
-            results.insert(package.to_string(), e.version.clone());
-        }
-    }
-    results
+    let _ = deps;
+    std::collections::HashMap::new()
 }
 
 /// Batch remember after a full resolve.
@@ -279,8 +269,26 @@ mod tests {
 
     #[test]
     fn lattice_satisfies_tighter() {
-        remember("lodash", "^4.0.0", "4.17.21");
-        let hit = lookup_lattice("lodash", "^4.17.0");
+        let key = "metadata-v2:test-registry-lodash";
+        remember_for_key("lodash", "^4.0.0", "4.17.21", key);
+        let hit = lookup_lattice_for_key(key, "^4.17.0");
         assert_eq!(hit.as_deref(), Some("4.17.21"));
+    }
+
+    #[test]
+    fn legacy_lattice_entries_are_preserved_but_never_used_for_resolution() {
+        let package = "legacy-cache-boundary-probe";
+        remember(package, "*", "9.9.9");
+        assert_eq!(lookup_lattice(package, "*"), None);
+        assert!(global().read().legacy_entries.contains_key(package));
+    }
+
+    #[test]
+    fn scoped_lattice_entries_do_not_cross_registry_keys() {
+        let a = "metadata-v2:registry-a-token-a";
+        let b = "metadata-v2:registry-b-token-b";
+        remember_for_key("private-pkg", "*", "1.0.0", a);
+        assert_eq!(lookup_lattice_for_key(a, "*"), Some("1.0.0".into()));
+        assert_eq!(lookup_lattice_for_key(b, "*"), None);
     }
 }

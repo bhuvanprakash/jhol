@@ -1,0 +1,78 @@
+{
+  "note": "Full jhol install (resolver=jagr, L1=Knot auto) vs bun. Isolated HOME+cache. Express fixture.",
+  "knot": "Fully wired as JAGR3 Layer 1 (knot.rs + jagr_resolver). Install uses full PM path.",
+  "runs": [
+    {
+      "label": "jhol-cold-1",
+      "tool": "jhol",
+      "mode": "cold",
+      "seconds": 1.119,
+      "exit": 0,
+      "nm_top": 0,
+      "express": false
+    },
+    {
+      "label": "jhol-cold-2",
+      "tool": "jhol",
+      "mode": "cold",
+      "seconds": 0.153,
+      "exit": 0,
+      "nm_top": 0,
+      "express": false
+    },
+    {
+      "label": "jhol-warm-1",
+      "tool": "jhol",
+      "mode": "warm",
+      "seconds": 0.155,
+      "exit": 0,
+      "nm_top": 1,
+      "express": true
+    },
+    {
+      "label": "jhol-warm-2",
+      "tool": "jhol",
+      "mode": "warm",
+      "seconds": 0.032,
+      "exit": 0,
+      "nm_top": 1,
+      "express": true
+    },
+    {
+      "label": "bun-cold-1",
+      "tool": "bun",
+      "mode": "cold",
+      "seconds": 0.101,
+      "exit": 0,
+      "nm_top": 96,
+      "express": true
+    },
+    {
+      "label": "bun-cold-2",
+      "tool": "bun",
+      "mode": "cold",
+      "seconds": 0.055,
+      "exit": 0,
+      "nm_top": 96,
+      "express": true
+    },
+    {
+      "label": "bun-warm-1",
+      "tool": "bun",
+      "mode": "warm",
+      "seconds": 0.056,
+      "exit": 0,
+      "nm_top": 96,
+      "express": true
+    },
+    {
+      "label": "bun-warm-2",
+      "tool": "bun",
+      "mode": "warm",
+      "seconds": 0.052,
+      "exit": 0,
+      "nm_top": 96,
+      "express": true
+    }
+  ]
+}

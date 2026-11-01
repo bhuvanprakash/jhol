@@ -1,0 +1,53 @@
+{
+  "summary": {
+    "jhol_seconds": 39.128,
+    "bun_seconds": 0.822,
+    "jhol_exit": 0,
+    "bun_exit": 0
+  },
+  "results": {
+    "jhol": {
+      "cmd": [
+        "/Users/bhuvanprakash/j/jhol/target/release/jhol",
+        "install",
+        "--native-only"
+      ],
+      "cwd": "/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-bun-bench-resolver-rerun-wseq5xa2/jhol-proj",
+      "elapsed_seconds": 39.128,
+      "exit_code": 0,
+      "stdout_tail": [],
+      "stderr_tail": [
+        "[jhol-native-download] 27882ms",
+        "[jhol-native-link] 3180ms"
+      ],
+      "interesting_stderr": [
+        "[jhol-native-download] 27882ms",
+        "[jhol-native-link] 3180ms"
+      ]
+    },
+    "bun": {
+      "cmd": [
+        "bun",
+        "install"
+      ],
+      "cwd": "/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-bun-bench-resolver-rerun-wseq5xa2/bun-proj",
+      "elapsed_seconds": 0.822,
+      "exit_code": 0,
+      "stdout_tail": [
+        "bun install v1.3.4 (5eb2145b)",
+        "",
+        "+ express@4.21.2 (v5.2.1 available)",
+        "+ next@15.1.0 (v16.1.6 available)",
+        "+ react@18.3.1 (v19.2.4 available)",
+        "+ react-dom@18.3.1 (v19.2.4 available)",
+        "+ typescript@5.7.2 (v5.9.3 available)",
+        "",
+        "101 packages installed [782.00ms]"
+      ],
+      "stderr_tail": [
+        "Saved lockfile"
+      ],
+      "interesting_stderr": []
+    }
+  }
+}

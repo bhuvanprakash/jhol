@@ -1,6 +1,6 @@
 [package]
 name = "jhol-trampoline"
-version = "1.0.2"
+version = "2.0.0"
 edition = "2021"
 description = "Ultra-thin jhol install front-door (warm sentinel + prebuilt L0)"
 license = "MIT"

@@ -438,7 +438,7 @@ fn tar_entry_hardlink_escape_is_blocked() {
 /// otherwise a legitimate archive would be rejected. Pairs with the escaping
 /// case above to show the guard discriminates rather than blanket-refusing.
 #[test]
-fn tar_entry_internal_symlink_is_allowed() {
+fn tar_entry_symlinks_are_materialized_or_reported() {
     use flate2::write::GzEncoder;
     use flate2::Compression;
     use std::io::Write;
@@ -475,9 +475,11 @@ fn tar_entry_internal_symlink_is_allowed() {
     let dest = td.path().join("node_modules").join("good");
     let mut tar_bytes = Vec::new();
     tar_bytes.extend_from_slice(&build("package/real.js", "", b'0', b"real"));
+    tar_bytes.extend_from_slice(&build("package/assets/", "", b'5', b""));
     // links inside the package: one sibling, one from a nested directory
     tar_bytes.extend_from_slice(&build("package/alias.js", "real.js", b'2', b""));
     tar_bytes.extend_from_slice(&build("package/sub/up.js", "../real.js", b'2', b""));
+    tar_bytes.extend_from_slice(&build("package/assets-link", "assets", b'2', b""));
     tar_bytes.extend_from_slice(&[0u8; 1024]);
 
     let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
@@ -490,6 +492,25 @@ fn tar_entry_internal_symlink_is_allowed() {
     assert_eq!(std::fs::read(dest.join("real.js")).unwrap(), b"real");
     assert_eq!(std::fs::read(dest.join("alias.js")).unwrap(), b"real");
     assert_eq!(std::fs::read(dest.join("sub/up.js")).unwrap(), b"real");
+    let assets_link = dest.join("assets-link");
+    assert!(assets_link.is_dir());
+    assert!(std::fs::symlink_metadata(assets_link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+
+    let mut conflicting_tar = Vec::new();
+    conflicting_tar.extend_from_slice(&build("package/conflict/", "", b'5', b""));
+    conflicting_tar.extend_from_slice(&build("package/conflict", "target", b'2', b""));
+    conflicting_tar.extend_from_slice(&[0u8; 1024]);
+    let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
+    gz.write_all(&conflicting_tar).unwrap();
+    let conflict_tgz = td.path().join("conflict-1.0.0.tgz");
+    std::fs::write(&conflict_tgz, gz.finish().unwrap()).unwrap();
+    let conflict_dest = td.path().join("node_modules/conflict");
+    let error = crate::registry::extract_tarball_to_dir(&conflict_tgz, &conflict_dest)
+        .expect_err("failed symlink creation must fail the extraction");
+    assert!(error.contains("Failed to create symlink"), "got: {error}");
 }
 
 /// npm/semver exclude prereleases unless the range itself names a prerelease on
@@ -742,5 +763,30 @@ mod streamed_store_tests {
             .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
             .collect();
         assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
+    }
+}
+
+/// Freshness contract for the build-time / machine-local bundled index: online it
+/// may answer an exact pin, never a range or `latest` (a snapshot would install an
+/// outdated version, e.g. dayjs 1.11.19 while the registry has 1.11.23).
+#[cfg(test)]
+mod bundled_freshness_tests {
+    use crate::registry::{bundled_index_allowed, offline_mode};
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn online_bundle_answers_only_exact_pins() {
+        if offline_mode() || std::env::var("JHOL_PREFER_BUNDLED").is_ok() {
+            return; // environment overrides the default policy under test
+        }
+        assert!(bundled_index_allowed(&s(&["1.11.19"])));
+        assert!(bundled_index_allowed(&s(&["1.11.19", "=1.11.19"])));
+        assert!(!bundled_index_allowed(&s(&["^1.11.13"])));
+        assert!(!bundled_index_allowed(&s(&["latest"])));
+        assert!(!bundled_index_allowed(&s(&["1.11.19", "^1.11.0"])));
+        assert!(!bundled_index_allowed(&[]));
     }
 }

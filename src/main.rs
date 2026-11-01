@@ -15,6 +15,8 @@ use std::env;
 use std::fs;
 use std::io::IsTerminal;
 use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
@@ -289,7 +291,23 @@ impl InstallProgress {
 }
 
 /// Print the final install summary line using accurate per-install metrics.
-fn print_install_summary(pkg_count: usize, elapsed: Duration, quiet: bool, json_out: bool) {
+/// Summary semantics from before/after package counts on disk. A fresh tree
+/// reports the full count as `added`; no change reports "up to date" instead
+/// of the lying "Added 0 packages"; growth reports only the delta.
+/// Returns (added, up_to_date if added == 0 and total > 0).
+fn install_summary_counts(before: usize, after: usize) -> (usize, bool) {
+    let added = after.saturating_sub(before);
+    let up_to_date = added == 0 && after > 0;
+    (added, up_to_date)
+}
+
+fn print_install_summary(
+    added: usize,
+    total: usize,
+    elapsed: Duration,
+    quiet: bool,
+    json_out: bool,
+) {
     if quiet || json_out {
         return;
     }
@@ -301,20 +319,33 @@ fn print_install_summary(pkg_count: usize, elapsed: Duration, quiet: bool, json_
         _ => format!("{}{:.2}s{}", "\x1b[33m", elapsed.as_secs_f64(), "\x1b[0m"),
     };
 
+    let up_to_date = added == 0 && total > 0;
     if use_color() {
-        let pkg_word = if pkg_count == 1 {
-            "package"
-        } else {
-            "packages"
-        };
+        if up_to_date {
+            println!();
+            println!(
+                "  {}  {}  {} {} in tree",
+                "✓".green().bold(),
+                "up to date".white().bold(),
+                format!("{}", total).white().bold(),
+                "packages".dimmed()
+            );
+            println!("  {}  {}", "│".dimmed(), speed);
+            println!();
+            return;
+        }
+        let pkg_word = if added == 1 { "package" } else { "packages" };
         println!();
         println!(
             "  {}  {} {}  {}",
             "✓".green().bold(),
-            format!("{}", pkg_count).white().bold(),
+            format!("{}", added).white().bold(),
             pkg_word.dimmed(),
             speed,
         );
+        if total != added {
+            println!("  {}  {} in node_modules", "│".dimmed(), total);
+        }
 
         // Accurate cache hit rate from per-install progress counters.
         let snap = jhol_core::progress_snapshot();
@@ -347,7 +378,16 @@ fn print_install_summary(pkg_count: usize, elapsed: Duration, quiet: bool, json_
         } else {
             format!("{:.2}s", elapsed.as_secs_f64())
         };
-        println!("Added {} packages in {}", pkg_count, ms_or_s);
+        if up_to_date {
+            println!("Up to date ({} packages in node_modules)", total);
+        } else {
+            let extra = if total != added {
+                format!(" ({} in node_modules)", total)
+            } else {
+                String::new()
+            };
+            println!("Added {} packages in {}{}", added, ms_or_s, extra);
+        }
     }
 }
 
@@ -420,13 +460,10 @@ fn daemon_socket_path() -> std::path::PathBuf {
     if let Ok(v) = env::var("JHOL_DAEMON_SOCKET") {
         return std::path::PathBuf::from(v);
     }
-    // Prefer XDG_RUNTIME_DIR (per-user runtime dir, survives reboots on systemd)
+    // Prefer the stable per-user runtime path so an auto-started daemon remains
+    // discoverable by later jhol processes.
     if let Ok(xdg) = env::var("XDG_RUNTIME_DIR") {
-        let p = std::path::PathBuf::from(xdg).join(format!("jhol-{}.sock", std::process::id()));
-        if let Some(parent) = p.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        return p;
+        return std::path::PathBuf::from(xdg).join("jhol-install.sock");
     }
     std::env::temp_dir().join("jhol-install.sock")
 }
@@ -454,7 +491,12 @@ fn anticipatory_daemon_loop(cwd: &Path) {
     let mut last_predicted_deps: Vec<(String, String)> = Vec::new();
 
     loop {
-        std::thread::sleep(std::time::Duration::from_secs(2));
+        for _ in 0..20 {
+            if DAEMON_SHUTDOWN_REQUESTED.load(Ordering::Acquire) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
 
         let current_mtime = std::fs::metadata(&pj_path)
             .ok()
@@ -572,7 +614,7 @@ fn anticipatory_daemon_loop(cwd: &Path) {
             let pkg_name = name.clone();
             let pkg_spec = spec.clone();
             let cache_dir_clone = cache_dir_s.clone();
-            std::thread::spawn(move || {
+            spawn_daemon_background("jhol-daemon-prefetch", move || {
                 let url = format!(
                     "https://registry.npmjs.org/{}",
                     pkg_name.replace('/', "%2F")
@@ -625,7 +667,7 @@ fn anticipatory_daemon_loop(cwd: &Path) {
             // No `set_current_dir` in a background thread: cwd is per-process, so it
             // would move the main thread's relative paths too. The capsule APIs take
             // an explicit project directory.
-            std::thread::spawn(move || {
+            spawn_daemon_background("jhol-daemon-capsule", move || {
                 // Write capsule with predicted deps included
                 let predicted_refs: Vec<(&str, &str)> = predicted_owned
                     .iter()
@@ -638,7 +680,7 @@ fn anticipatory_daemon_loop(cwd: &Path) {
         } else {
             // Fallback: standard capsule pre-build
             let cwd_clone = cwd.to_path_buf();
-            std::thread::spawn(move || {
+            spawn_daemon_background("jhol-daemon-capsule", move || {
                 let _ = jhol_core::capsule::write_capsule_from_project(&cwd_clone);
                 let _ = jhol_core::capsule::write_cga_capsule_from_project(&cwd_clone);
             });
@@ -744,12 +786,249 @@ fn train_markov_from_git(cwd: &Path, last_trained: &mut String) -> usize {
 /// it — which is exactly what made the sequential accept loop stall the daemon.
 static DAEMON_CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+static DAEMON_SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+static ACTIVE_DAEMON_BACKGROUND_TASKS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+struct DaemonBackgroundTaskPermit;
+
+impl Drop for DaemonBackgroundTaskPermit {
+    fn drop(&mut self) {
+        ACTIVE_DAEMON_BACKGROUND_TASKS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn spawn_daemon_background<F>(name: &'static str, task: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    ACTIVE_DAEMON_BACKGROUND_TASKS.fetch_add(1, Ordering::AcqRel);
+    let spawn = thread::Builder::new()
+        .name(name.to_string())
+        .spawn(move || {
+            let _permit = DaemonBackgroundTaskPermit;
+            task();
+        });
+    if let Err(spawn_error) = spawn {
+        ACTIVE_DAEMON_BACKGROUND_TASKS.fetch_sub(1, Ordering::AcqRel);
+        error(&format!(
+            "daemon background task failed to start: {spawn_error}"
+        ));
+    }
+}
+
+#[cfg(unix)]
+fn active_daemon_background_tasks() -> usize {
+    ACTIVE_DAEMON_BACKGROUND_TASKS.load(Ordering::Acquire)
+}
+
+#[cfg(unix)]
+fn prepare_daemon_socket(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    let initial = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("inspect daemon socket {}: {error}", path.display())),
+    };
+    if !initial.file_type().is_socket() {
+        return Err(format!(
+            "refusing to replace non-socket daemon path {}",
+            path.display()
+        ));
+    }
+
+    match UnixStream::connect(path) {
+        Ok(_) => return Err(format!("daemon already listening at {}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "cannot verify existing daemon socket {}: {error}",
+                path.display()
+            ));
+        }
+    }
+
+    // Startup is serialized by DaemonSocketLock. Recheck the inode as well so a
+    // replaced path is never mistaken for the stale socket observed above.
+    match fs::symlink_metadata(path) {
+        Ok(current)
+            if current.file_type().is_socket()
+                && current.dev() == initial.dev()
+                && current.ino() == initial.ino() =>
+        {
+            fs::remove_file(path)
+                .map_err(|error| format!("remove stale daemon socket {}: {error}", path.display()))
+        }
+        Ok(_) => Err(format!(
+            "daemon socket changed while checking {}; refusing replacement",
+            path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("recheck daemon socket {}: {error}", path.display())),
+    }
+}
+
+#[cfg(unix)]
+struct DaemonSocketCleanup {
+    path: PathBuf,
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(unix)]
+impl DaemonSocketCleanup {
+    fn capture(path: &Path) -> Result<Self, String> {
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+        let metadata = fs::symlink_metadata(path)
+            .map_err(|error| format!("inspect bound daemon socket {}: {error}", path.display()))?;
+        if !metadata.file_type().is_socket() {
+            return Err(format!(
+                "bound daemon path {} is not a socket",
+                path.display()
+            ));
+        }
+        Ok(Self {
+            path: path.to_path_buf(),
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+
+    fn remove_if_owned(&self) -> Result<(), String> {
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+        match fs::symlink_metadata(&self.path) {
+            Ok(metadata)
+                if metadata.file_type().is_socket()
+                    && metadata.dev() == self.device
+                    && metadata.ino() == self.inode =>
+            {
+                fs::remove_file(&self.path).map_err(|error| {
+                    format!("remove daemon socket {}: {error}", self.path.display())
+                })
+            }
+            Ok(_) => Err(format!(
+                "daemon socket path changed at {}; refusing removal",
+                self.path.display()
+            )),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!(
+                "inspect daemon socket {} during shutdown: {error}",
+                self.path.display()
+            )),
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for DaemonSocketCleanup {
+    fn drop(&mut self) {
+        let _ = self.remove_if_owned();
+    }
+}
+
+#[cfg(unix)]
+fn daemon_stop() -> Result<(), String> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    let timeout_secs = env::var("JHOL_DAEMON_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(60);
+    let socket_path = daemon_socket_path();
+    let initial = fs::symlink_metadata(&socket_path)
+        .map_err(|error| format!("inspect daemon socket {}: {error}", socket_path.display()))?;
+    if !initial.file_type().is_socket() {
+        return Err(format!(
+            "refusing to contact non-socket daemon path {}",
+            socket_path.display()
+        ));
+    }
+
+    let mut stream = UnixStream::connect(&socket_path)
+        .map_err(|error| format!("connect to daemon {}: {error}", socket_path.display()))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(timeout_secs)))
+        .map_err(|error| format!("set daemon response timeout: {error}"))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(timeout_secs)))
+        .map_err(|error| format!("set daemon request timeout: {error}"))?;
+    let connected = fs::symlink_metadata(&socket_path)
+        .map_err(|error| format!("recheck daemon socket {}: {error}", socket_path.display()))?;
+    if !connected.file_type().is_socket()
+        || connected.dev() != initial.dev()
+        || connected.ino() != initial.ino()
+    {
+        return Err("daemon socket changed while connecting; shutdown was not requested".into());
+    }
+
+    let cwd = env::current_dir()
+        .map_err(|error| format!("read current directory for daemon request: {error}"))?;
+    let cwd = cwd
+        .to_str()
+        .ok_or("daemon cannot represent a non-UTF-8 working directory")?;
+    let request = jhol_core::daemon_cache::DaemonRequest::shutdown(cwd)?;
+    jhol_core::daemon_cache::write_request(&mut stream, &request)
+        .map_err(|error| format!("write daemon shutdown request: {error}"))?;
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+
+    let response = jhol_core::daemon_cache::read_response(&mut stream)
+        .map_err(|error| format!("read daemon shutdown response: {error}"))?;
+    if response.ok != 0 {
+        let message = response.error_str();
+        return Err(if message.is_empty() {
+            "daemon rejected shutdown request".to_string()
+        } else {
+            message.to_string()
+        });
+    }
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(timeout_secs);
+    loop {
+        match fs::symlink_metadata(&socket_path) {
+            Ok(metadata)
+                if metadata.file_type().is_socket()
+                    && metadata.dev() == initial.dev()
+                    && metadata.ino() == initial.ino() => {}
+            Ok(_) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(format!(
+                    "wait for daemon socket {} to close: {error}",
+                    socket_path.display()
+                ));
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(format!(
+                "daemon accepted shutdown but has not drained active requests after {timeout_secs} seconds"
+            ));
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
 #[cfg(unix)]
 fn daemon_serve() -> Result<(), String> {
     let socket_path = daemon_socket_path();
-    if socket_path.exists() {
-        let _ = fs::remove_file(&socket_path);
+    if let Some(parent) = socket_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "create daemon socket directory {}: {error}",
+                parent.display()
+            )
+        })?;
     }
+    let _socket_lock = jhol_core::daemon_cache::DaemonSocketLock::acquire(&socket_path)?;
+    prepare_daemon_socket(&socket_path)?;
 
     let listener = UnixListener::bind(&socket_path).map_err(|e| {
         format!(
@@ -758,6 +1037,11 @@ fn daemon_serve() -> Result<(), String> {
             e
         )
     })?;
+    let socket_cleanup = DaemonSocketCleanup::capture(&socket_path)?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| format!("configure daemon listener: {error}"))?;
+    DAEMON_SHUTDOWN_REQUESTED.store(false, Ordering::Release);
 
     // Set socket permissions to 0o600 (owner only) to prevent unauthorized access
     #[cfg(unix)]
@@ -787,30 +1071,78 @@ fn daemon_serve() -> Result<(), String> {
     // install reported success while materializing into the daemon's own directory).
     // `DAEMON_CWD_LOCK` is taken *after* the request is read and held across the cwd
     // section, so it serializes the install without letting an idle reader block it.
-    for stream in listener.incoming() {
-        let stream = match stream {
-            Ok(s) => s,
-            Err(e) => {
-                error(&format!("daemon accept failed: {}", e));
+    let mut accept_failure = None;
+    loop {
+        if DAEMON_SHUTDOWN_REQUESTED.load(Ordering::Acquire) {
+            break;
+        }
+        let mut stream = match listener.accept() {
+            Ok((stream, _)) => stream,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(10));
                 continue;
             }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(accept_error) => {
+                error(&format!("daemon accept failed: {accept_error}"));
+                accept_failure = Some(accept_error);
+                break;
+            }
         };
-        std::thread::spawn(move || {
-            // A client that connects and then stalls must not hold the daemon hostage.
-            let read_timeout = std::env::var("JHOL_DAEMON_READ_TIMEOUT_SECS")
-                .ok()
-                .and_then(|v| v.parse::<u64>().ok())
-                .filter(|v| *v > 0)
-                .unwrap_or(30);
-            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(read_timeout)));
-            let _ = daemon_handle_one(stream);
-        });
+        if let Err(connection_error) = stream.set_nonblocking(false) {
+            error(&format!("configure daemon connection: {connection_error}"));
+            let response = jhol_core::daemon_cache::DaemonResponse::error(
+                "daemon could not configure the accepted connection",
+            );
+            let _ = jhol_core::daemon_cache::write_response(&mut stream, &response);
+            continue;
+        }
+        if DAEMON_SHUTDOWN_REQUESTED.load(Ordering::Acquire) {
+            let response =
+                jhol_core::daemon_cache::DaemonResponse::error("daemon is shutting down");
+            let _ = jhol_core::daemon_cache::write_response(&mut stream, &response);
+            continue;
+        }
+        let Some(permit) = jhol_core::daemon_cache::try_daemon_connection_permit() else {
+            let response = jhol_core::daemon_cache::DaemonResponse::error(
+                "daemon busy: connection limit reached",
+            );
+            let _ = jhol_core::daemon_cache::write_response(&mut stream, &response);
+            continue;
+        };
+        let spawn = std::thread::Builder::new()
+            .name("jhol-daemon-connection".to_string())
+            .spawn(move || {
+                let _permit = permit;
+                // A client that connects and then stalls must not hold the daemon hostage.
+                let read_timeout = std::env::var("JHOL_DAEMON_READ_TIMEOUT_SECS")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .filter(|v| *v > 0)
+                    .unwrap_or(30);
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(read_timeout)));
+                let _ = handle_daemon_request(stream);
+            });
+        if let Err(e) = spawn {
+            error(&format!("daemon connection worker failed to start: {e}"));
+        }
+    }
+
+    drop(listener);
+    while jhol_core::daemon_cache::active_daemon_connections() != 0
+        || active_daemon_background_tasks() != 0
+    {
+        thread::sleep(Duration::from_millis(10));
     }
 
     // Phase 3: flush JAGR-S store on daemon shutdown
     let _ = jhol_core::jagrs::daemon_flush();
+    socket_cleanup.remove_if_owned()?;
 
-    Ok(())
+    match accept_failure {
+        Some(error) => Err(format!("daemon accept loop stopped: {error}")),
+        None => Ok(()),
+    }
 }
 /// Try to install via daemon. On non-Unix, always returns an error (the daemon
 /// itself is Unix-only), and `install_via_daemon` exists only on Unix - the old
@@ -900,29 +1232,7 @@ fn install_via_daemon(
         if !opts.quiet {
             info("Daemon not running — auto-starting...");
         }
-        // Spawn daemon in background
-        let socket_path_clone = socket_path.clone();
-        let _ = std::thread::spawn(move || {
-            // Remove stale socket if any
-            let _ = fs::remove_file(&socket_path_clone);
-            // Run daemon in a new thread (this blocks on incoming connections)
-            let listener = std::os::unix::net::UnixListener::bind(&socket_path_clone);
-            if let Ok(listener) = listener {
-                // Set 0600 permissions
-                #[cfg(unix)]
-                {
-                    let _ =
-                        fs::set_permissions(&socket_path_clone, fs::Permissions::from_mode(0o600));
-                }
-                for stream in listener.incoming() {
-                    if let Ok(s) = stream {
-                        let _ = handle_daemon_request(s);
-                    }
-                }
-            }
-        });
-        // Give daemon a moment to start
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        start_daemon_process(&socket_path)?;
     }
 
     // Connect (retry once)
@@ -938,8 +1248,11 @@ fn install_via_daemon(
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(client_timeout)));
 
     // Packed struct — zero serde, zero alloc
-    let req = jhol_core::daemon_cache::DaemonRequest::new(
-        &cwd.display().to_string(),
+    let cwd_str = cwd
+        .to_str()
+        .ok_or("daemon cannot represent a non-UTF-8 working directory")?;
+    let req = jhol_core::daemon_cache::DaemonRequest::try_new(
+        cwd_str,
         packages,
         opts.quiet,
         opts.no_cache,
@@ -950,7 +1263,8 @@ fn install_via_daemon(
         opts.lockfile_only,
         opts.native_only,
         opts.no_scripts,
-    );
+    )
+    .map_err(|error| format!("cannot use daemon for this request: {error}"))?;
     jhol_core::daemon_cache::write_request(&mut stream, &req)
         .map_err(|e| format!("daemon write failed: {}", e))?;
     let _ = stream.shutdown(std::net::Shutdown::Write);
@@ -966,6 +1280,56 @@ fn install_via_daemon(
         } else {
             msg.to_string()
         })
+    }
+}
+
+/// Start a persistent daemon process and wait until its socket accepts clients.
+#[cfg(unix)]
+fn start_daemon_process(socket_path: &Path) -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+
+    let executable =
+        env::current_exe().map_err(|error| format!("locate jhol executable: {error}"))?;
+    let mut command = std::process::Command::new(executable);
+    command
+        .args(["daemon", "--serve"])
+        .env("JHOL_DAEMON_SOCKET", socket_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command.process_group(0);
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("start jhol daemon: {error}"))?;
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match UnixStream::connect(socket_path) {
+            Ok(stream) => {
+                drop(stream);
+                return Ok(());
+            }
+            Err(connect_error) => match child.try_wait() {
+                Ok(Some(status)) => {
+                    return Err(format!(
+                        "jhol daemon exited before becoming ready ({status}): {connect_error}"
+                    ));
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("check jhol daemon startup: {error}"));
+                }
+            },
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("jhol daemon did not become ready within 5 seconds".to_string());
+        }
+        thread::sleep(Duration::from_millis(25));
     }
 }
 
@@ -987,6 +1351,13 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
             return Ok(());
         }
     };
+
+    if req.is_shutdown() {
+        DAEMON_SHUTDOWN_REQUESTED.store(true, Ordering::Release);
+        let response = jhol_core::daemon_cache::DaemonResponse::success();
+        let _ = jhol_core::daemon_cache::write_response(&mut stream, &response);
+        return Ok(());
+    }
 
     let cwd = req.cwd_str().to_string();
     if cwd.is_empty() || cwd.len() > 4096 || cwd.contains('\0') {
@@ -1015,6 +1386,11 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
     // Serialize the cwd-dependent section (see DAEMON_CWD_LOCK). Poisoning is
     // ignored: a panic in one install must not permanently break the daemon.
     let _cwd_guard = DAEMON_CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if DAEMON_SHUTDOWN_REQUESTED.load(Ordering::Acquire) {
+        let response = jhol_core::daemon_cache::DaemonResponse::error("daemon is shutting down");
+        let _ = jhol_core::daemon_cache::write_response(&mut stream, &response);
+        return Ok(());
+    }
     let prev_cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let result = (|| -> Result<(), String> {
         std::env::set_current_dir(&cwd).map_err(|e| format!("chdir {}: {}", cwd, e))?;
@@ -1101,7 +1477,7 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
                 {
                     if deps.len() > 3 {
                         let wc: std::path::PathBuf = cwd.clone().into();
-                        std::thread::spawn(move || {
+                        spawn_daemon_background("jhol-daemon-watcher", move || {
                             anticipatory_daemon_loop(&wc);
                         });
                     }
@@ -1137,7 +1513,7 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
             // Pre-warm CAS + predictive prefetch in background
             let _packages = packages.clone();
             let cwd = cwd.clone();
-            std::thread::spawn(move || {
+            spawn_daemon_background("jhol-daemon-install-prefetch", move || {
                 let lock_path = std::path::Path::new(&cwd).join("package-lock.json");
                 if let Ok(bytes) = std::fs::read(&lock_path) {
                     if let Ok(lock) = serde_json::from_slice::<serde_json::Value>(&bytes) {
@@ -1399,7 +1775,10 @@ fn build_completions_cli() -> Command {
         .subcommand(Command::new("eval").about("Evaluate JavaScript/TypeScript code inline"))
         .subcommand(Command::new("exec").about("Run a binary from node_modules/.bin"))
         .subcommand(Command::new("build").about("Bundle JS/TS/CSS for browser, Node.js, or Jhol"))
-        .subcommand(Command::new("fmt").about("Format files in place (native Rust; JS/TS/JSON; Prettier-compatible)"))
+        .subcommand(
+            Command::new("fmt")
+                .about("Format files in place (native Rust; JS/TS/JSON; Prettier-compatible)"),
+        )
         .subcommand(Command::new("why").about("Explain why a package is installed"))
         .subcommand(Command::new("outdated").about("Show outdated dependencies"))
         .subcommand(Command::new("init").about("Initialize a new package.json"))
@@ -1447,7 +1826,12 @@ fn build_completions_cli() -> Command {
         )
         .subcommand(Command::new("dev").about("Service boot order; optional --probe / --spawn"))
         .subcommand(Command::new("gui").about("Open the jhol Terminal GUI"))
-        .subcommand(Command::new("daemon").about("Run persistent install daemon"))
+        .subcommand(
+            Command::new("daemon")
+                .about("Run persistent install daemon")
+                .arg(Arg::new("serve").long("serve").action(ArgAction::SetTrue))
+                .arg(Arg::new("stop").long("stop").action(ArgAction::SetTrue)),
+        )
         .subcommand(Command::new("global-install").about("Install jhol binary to PATH"))
         .subcommand(
             Command::new("mcp")
@@ -1476,6 +1860,157 @@ fn build_completions_cli() -> Command {
                         .help("Shell to generate completions for"),
                 ),
         )
+}
+
+/// A complete, valid `jhol.toml` for `jhol dev` (schema 1).
+const DEV_CONFIG_EXAMPLE: &str = r#"schema = 1
+
+[[service]]
+name = "db"
+kind = "process"
+run = ["docker", "compose", "up", "db"]
+ready_tcp = "127.0.0.1:5432"
+
+[[service]]
+name = "api"
+kind = "process"
+needs = ["db"]
+run = ["node", "server.js"]
+cwd = "."
+"#;
+
+fn read_optional_text(path: &std::path::Path) -> Option<String> {
+    std::fs::read_to_string(path).ok()
+}
+
+/// True when `node_modules` exists and has at least one entry.
+fn node_modules_present(root: &std::path::Path) -> bool {
+    std::fs::read_dir(root.join("node_modules"))
+        .map(|mut d| d.next().is_some())
+        .unwrap_or(false)
+}
+
+/// The snapshot with the latest `created_at`. Snapshot ids are random UUIDs, so
+/// id order says nothing about time.
+fn latest_snapshot(root: &std::path::Path) -> Result<Option<jhol_receipt::Snapshot>, String> {
+    let mut best: Option<jhol_receipt::Snapshot> = None;
+    for (id, _) in jhol_receipt::Snapshot::list(root).map_err(|e| format!("snapshot list: {e}"))? {
+        let snap =
+            jhol_receipt::Snapshot::load(root, &id).map_err(|e| format!("snapshot {id}: {e}"))?;
+        if best.as_ref().is_none_or(|b| snap.created_at > b.created_at) {
+            best = Some(snap);
+        }
+    }
+    Ok(best)
+}
+
+/// `jhol diff`: compare the project's manifest, npm lock and installed tree with a
+/// snapshot (the given id, or the latest one).
+fn cmd_state_diff(
+    root: &std::path::Path,
+    snapshot_id: Option<String>,
+    as_json: bool,
+    exit_code: bool,
+) -> Result<(), String> {
+    let snap = match snapshot_id {
+        Some(id) => jhol_receipt::Snapshot::load(root, &id).map_err(|e| format!("diff: {e}"))?,
+        None => latest_snapshot(root)?.ok_or_else(|| {
+            "diff: no snapshot to compare against; run `jhol snapshot create` first".to_string()
+        })?,
+    };
+    let cur_manifest = read_optional_text(&root.join("package.json"));
+    let cur_lock = read_optional_text(&root.join("package-lock.json"));
+    let base = jhol_diff::FileState {
+        manifest: snap.manifest.as_deref(),
+        lock: snap.package_lock.as_deref(),
+    };
+    let now = jhol_diff::FileState {
+        manifest: cur_manifest.as_deref(),
+        lock: cur_lock.as_deref(),
+    };
+    let mut report = jhol_diff::diff_state(base, now, node_modules_present(root));
+    // Files can match a snapshot while the tree on disk does not (for example
+    // after restoring an older lock). Compare what is installed with the lock.
+    if let (Some(lock), true) = (cur_lock.as_deref(), node_modules_present(root)) {
+        let locked = jhol_diff::lock_package_versions(lock).unwrap_or_default();
+        let installed: std::collections::BTreeMap<String, String> = locked
+            .keys()
+            .filter_map(|path| {
+                let pj = root.join(path).join("package.json");
+                let raw = std::fs::read_to_string(pj).ok()?;
+                let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+                Some((path.clone(), v.get("version")?.as_str()?.to_string()))
+            })
+            .collect();
+        match jhol_diff::installed_drift(lock, &installed) {
+            Ok(drift) => report.mark_installed(drift),
+            Err(e) => report
+                .notes
+                .push(format!("installed tree not compared: {e}")),
+        }
+    }
+    if snap.manifest.is_none() {
+        report
+            .notes
+            .push("snapshot predates manifest capture; package.json was not compared".into());
+    }
+    if as_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "snapshot": snap.id,
+                "report": report,
+            }))
+            .unwrap_or_default()
+        );
+    } else {
+        println!("diff against snapshot {} ({})", snap.id, snap.created_at);
+        println!("  package.json:      {:?}", report.manifest);
+        println!("  package-lock.json: {:?}", report.lock);
+        const SHOWN: usize = 50;
+        for c in report.packages.iter().take(SHOWN) {
+            match (&c.before, &c.after) {
+                (Some(b), Some(a)) => println!("  ~ {}  {b} -> {a}", c.path),
+                (None, Some(a)) => println!("  + {}  {a}", c.path),
+                (Some(b), None) => println!("  - {}  {b}", c.path),
+                (None, None) => {}
+            }
+        }
+        if report.packages.len() > SHOWN {
+            println!(
+                "  … {} more package changes (use --json)",
+                report.packages.len() - SHOWN
+            );
+        }
+        for n in &report.notes {
+            println!("  note: {n}");
+        }
+        if !report.installed.is_empty() {
+            println!("installed tree vs lock:");
+            for c in report.installed.iter().take(SHOWN) {
+                match (&c.before, &c.after) {
+                    (Some(have), Some(want)) => {
+                        println!("  ! {}  installed {have}, lock {want}", c.path)
+                    }
+                    (None, Some(want)) => println!("  ! {}  not installed, lock {want}", c.path),
+                    (Some(have), None) => println!("  ! {}  installed {have}, not in lock", c.path),
+                    _ => {}
+                }
+            }
+            if report.installed.len() > SHOWN {
+                println!("  … {} more (use --json)", report.installed.len() - SHOWN);
+            }
+        }
+        if report.needs_sync {
+            println!("next: jhol sync --apply");
+        } else {
+            println!("no changes since the snapshot; nothing to sync");
+        }
+    }
+    if exit_code && report.needs_sync {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 fn print_splash() {
@@ -1514,7 +2049,9 @@ fn term_width() -> usize {
     }
 }
 
-fn try_fast_install() -> Option<Result<(), String>> {
+/// Some(Ok((before, after))) on a fast lane: before/after are the
+/// node_modules package counts around the lane, for the honest summary.
+fn try_fast_install() -> Option<Result<(usize, usize), String>> {
     let raw_args: Vec<String> = env::args().skip(1).collect();
     if env::var("JHOL_DEBUG_INTEGRITY").is_ok() {
         eprintln!("[lane] try_fast_install entered");
@@ -1541,6 +2078,9 @@ fn try_fast_install() -> Option<Result<(), String>> {
         return None;
     }
 
+    // Count what is on disk before any fast lane runs, so the caller can say
+    // honestly whether the tree changed and by how many packages.
+    let count_before = jhol_core::count_installed_packages(Path::new("."));
     let result = if jhol_core::instant_lock_proof::prepared_tree_is_valid(Path::new(".")) {
         // 1. Zero-cost recheck: node_modules already matches lockfile fingerprint
         Some(Ok(()))
@@ -1563,7 +2103,15 @@ fn try_fast_install() -> Option<Result<(), String>> {
         }
         jhol_core::backfill_lockfile_integrity_after_install();
     }
-    result
+    // Attach the counts only on success so the error type stays a plain String.
+    result.map(|r| {
+        r.map(move |()| {
+            (
+                count_before,
+                jhol_core::count_installed_packages(Path::new(".")),
+            )
+        })
+    })
 }
 
 fn collect_fmt_files(root: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
@@ -1571,7 +2119,9 @@ fn collect_fmt_files(root: &std::path::Path, out: &mut Vec<std::path::PathBuf>) 
         out.push(root.to_path_buf());
         return;
     }
-    let Ok(entries) = std::fs::read_dir(root) else { return; };
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
     for e in entries.flatten() {
         let p = e.path();
         let name = e.file_name();
@@ -1612,8 +2162,19 @@ fn load_prettier_ignore(dir: &std::path::Path) -> globset::GlobSet {
 }
 
 fn run() -> Result<(), String> {
+    let fast_start = std::time::Instant::now();
     if let Some(fast_res) = try_fast_install() {
-        return fast_res;
+        let fast_elapsed = fast_start.elapsed();
+        return match fast_res {
+            Ok((before, after)) => {
+                let (added, _) = install_summary_counts(before, after);
+                let fast_quiet = env::var("JHOL_QUIET").is_ok()
+                    || env::args().any(|a| a == "-q" || a == "--quiet");
+                print_install_summary(added, after, fast_elapsed, fast_quiet, false);
+                Ok(())
+            }
+            Err(e) => Err(e),
+        };
     }
 
     // Splash first: it states which machine platform-specific packages are being
@@ -1921,6 +2482,12 @@ fn run() -> Result<(), String> {
                         .long("serve")
                         .action(ArgAction::SetTrue)
                         .help("Run daemon server loop"),
+                )
+                .arg(
+                    Arg::new("stop")
+                        .long("stop")
+                        .action(ArgAction::SetTrue)
+                        .help("Stop the daemon after accepted requests finish"),
                 ),
         )
         .subcommand(
@@ -2065,6 +2632,13 @@ fn run() -> Result<(), String> {
                         .value_parser(["js", "ts", "jsx", "tsx"])
                         .default_value("js")
                         .help("File type for inline evaluation"),
+                )
+                .arg(
+                    Arg::new("print")
+                        .long("print")
+                        .short('p')
+                        .action(ArgAction::SetTrue)
+                        .help("Print the value of the final expression (like node -p)"),
                 ),
         )
         .subcommand(
@@ -2205,16 +2779,27 @@ fn run() -> Result<(), String> {
         )
         .subcommand(
             Command::new("diff")
-                .about("Compare two execution receipt JSON files")
+                .about("Compare project state with a snapshot (default: latest), or two receipt JSON files")
                 .arg(
                     Arg::new("before")
-                        .required(true)
-                        .help("Earlier receipt JSON path"),
+                        .required(false)
+                        .help("Snapshot id, or an earlier receipt JSON path"),
                 )
                 .arg(
                     Arg::new("after")
-                        .required(true)
-                        .help("Later receipt JSON path"),
+                        .required(false)
+                        .help("Later receipt JSON path (two-receipt mode)"),
+                )
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .help("Project root (default: current directory)"),
+                )
+                .arg(
+                    Arg::new("exit-code")
+                        .long("exit-code")
+                        .action(ArgAction::SetTrue)
+                        .help("Exit 1 when `jhol sync --apply` is needed (for CI)"),
                 )
                 .arg(
                     Arg::new("json")
@@ -3048,6 +3633,21 @@ fn run() -> Result<(), String> {
     }
 
     if let Some(("daemon", sub_m)) = matches.subcommand() {
+        if sub_m.get_flag("serve") && sub_m.get_flag("stop") {
+            return Err("choose either `jhol daemon --serve` or `jhol daemon --stop`".to_string());
+        }
+        if sub_m.get_flag("stop") {
+            #[cfg(unix)]
+            {
+                daemon_stop()?;
+                success("Jhol daemon stopped after active requests finished.");
+                return Ok(());
+            }
+            #[cfg(not(unix))]
+            {
+                return Err("daemon mode is only supported on Unix".to_string());
+            }
+        }
         if sub_m.get_flag("serve") {
             #[cfg(unix)]
             {
@@ -3059,7 +3659,7 @@ fn run() -> Result<(), String> {
                 return Err("daemon mode is only supported on Unix".to_string());
             }
         }
-        return Err("use `jhol daemon --serve` to run daemon".to_string());
+        return Err("use `jhol daemon --serve` or `jhol daemon --stop`".to_string());
     }
 
     // cache list | size | prune | export | import | clean
@@ -3314,10 +3914,39 @@ fn run() -> Result<(), String> {
             .unwrap_or("js");
         let filename = format!("<eval>.{}", file_type);
 
+        // `jhol eval '1+1'` (like `node -e`) discards the completion value.
+        // `--print` matches `node -p` / `bun -e`: evaluate the code as an
+        // expression and print its value. The user's code is passed as a
+        // string through `eval()` so its syntax is unchanged; TypeScript and
+        // JSX are transpiled first because `eval()` sees raw source.
+        let code = if sub_m.get_flag("print") {
+            let transpiled = if file_type == "js" {
+                code.clone()
+            } else {
+                #[cfg(feature = "runtime")]
+                {
+                    jhol_runtime::compile_ts(code, &filename).map_err(|e| e.to_string())?
+                }
+                #[cfg(not(feature = "runtime"))]
+                {
+                    let _ = &filename;
+                    return Err(
+                        "Jhol runtime not enabled. Rebuild with --features runtime".to_string()
+                    );
+                }
+            };
+            format!(
+                "console.log(eval({}));",
+                serde_json::to_string(&transpiled).unwrap_or_else(|_| "\"\"".to_string())
+            )
+        } else {
+            code.clone()
+        };
+
         #[cfg(feature = "runtime")]
         {
             let exit_code =
-                jhol_runtime::eval_code(code, Some(&filename)).map_err(|e| e.to_string())?;
+                jhol_runtime::eval_code(&code, Some(&filename)).map_err(|e| e.to_string())?;
             std::process::exit(exit_code);
         }
         #[cfg(not(feature = "runtime"))]
@@ -3386,8 +4015,34 @@ fn run() -> Result<(), String> {
     }
 
     if let Some(("diff", sub_m)) = matches.subcommand() {
-        let before_path = sub_m.get_one::<String>("before").unwrap();
-        let after_path = sub_m.get_one::<String>("after").unwrap();
+        let before_arg = sub_m.get_one::<String>("before").cloned();
+        let after_arg = sub_m.get_one::<String>("after").cloned();
+        // Two-receipt mode needs both files. A single argument that is not a file
+        // is a snapshot id; no argument means "latest snapshot".
+        let two_receipts = after_arg.is_some();
+        let one_is_file = before_arg
+            .as_deref()
+            .is_some_and(|b| std::path::Path::new(b).is_file());
+        if !two_receipts && !one_is_file {
+            let root = sub_m
+                .get_one::<String>("path")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+                });
+            return cmd_state_diff(
+                &root,
+                before_arg,
+                sub_m.get_flag("json"),
+                sub_m.get_flag("exit-code"),
+            );
+        }
+        let before_path =
+            before_arg.ok_or("diff: give two receipt files, or a snapshot id, or nothing")?;
+        let after_path = after_arg
+            .ok_or("diff: two-receipt mode needs both files (or pass only a snapshot id)")?;
+        let before_path = &before_path;
+        let after_path = &after_path;
         let as_json = sub_m.get_flag("json");
         let before_s =
             std::fs::read_to_string(before_path).map_err(|e| format!("read {before_path}: {e}"))?;
@@ -3585,6 +4240,12 @@ fn run() -> Result<(), String> {
         } else {
             notes.push("partial execution receipt not cached".into());
         }
+        // Save the receipt for `jhol diff` and `jhol snapshot`, including partial
+        // ones: a failed sync is exactly what a later diff must be able to show.
+        match jhol_receipt::save_receipt(&root, &receipt) {
+            Ok(path) => notes.push(format!("receipt {} → {}", receipt.id, path.display())),
+            Err(e) => notes.push(format!("receipt not saved: {e}")),
+        }
 
         if as_json {
             let out = serde_json::json!({
@@ -3688,8 +4349,24 @@ fn run() -> Result<(), String> {
                         .map_err(|e| format!("write lock: {e}"))?;
                     serde_json::to_value(&lock).unwrap_or_default()
                 };
-                let snap =
-                    jhol_receipt::Snapshot::create(lock_val, jhol_receipt::empty_ok_receipt(&root));
+                // Attach the most recent saved `sync` receipt when there is one.
+                // Otherwise say so: a snapshot must not imply a sync that never ran.
+                let mut snap = match jhol_receipt::load_latest_receipt(&root) {
+                    Some(receipt) => jhol_receipt::Snapshot::create(lock_val, receipt),
+                    None => {
+                        let mut s = jhol_receipt::Snapshot::create(
+                            lock_val,
+                            jhol_receipt::empty_ok_receipt(&root),
+                        );
+                        s.limitations
+                            .push("no sync receipt recorded; run `jhol sync --apply` first".into());
+                        s
+                    }
+                };
+                snap = snap.with_project_files(
+                    read_optional_text(&root.join("package.json")),
+                    read_optional_text(&root.join("package-lock.json")),
+                );
                 let path = snap
                     .save(&root)
                     .map_err(|e| format!("save snapshot: {e}"))?;
@@ -3729,7 +4406,7 @@ fn run() -> Result<(), String> {
                     "restore --databases is refused (database restore is not supported)".into(),
                 );
             }
-            snap.restore_plan()
+            snap.restore_plan_in(&root)
         };
         if as_json {
             println!(
@@ -3748,8 +4425,16 @@ fn run() -> Result<(), String> {
             for s in &plan.would_skip {
                 println!("  skip: {s}");
             }
+            for b in &plan.blocked {
+                println!("  blocked: {b}");
+            }
             for lim in &plan.limitations {
                 println!("  limitation: {lim}");
+            }
+            if do_apply {
+                println!(
+                    "  next: jhol sync --apply   (installs node_modules from the restored lock)"
+                );
             }
         }
         return Ok(());
@@ -3832,8 +4517,17 @@ fn run() -> Result<(), String> {
             .get_one::<String>("hold-secs")
             .and_then(|s| s.parse().ok())
             .unwrap_or(1);
-        let services =
-            jhol_task::load_project_services(&root).map_err(|e| format!("dev config: {e}"))?;
+        let services = jhol_task::load_project_services(&root).map_err(|e| match e {
+            jhol_task::ServiceConfigError::Io(ref io)
+                if io.kind() == std::io::ErrorKind::NotFound =>
+            {
+                format!(
+                    "dev: no jhol.toml in {}. Declare services in one, for example:\n\n{DEV_CONFIG_EXAMPLE}",
+                    root.display()
+                )
+            }
+            other => format!("dev config: {other}"),
+        })?;
         let order =
             jhol_task::service_boot_order(&services).map_err(|e| format!("dev order: {e}"))?;
         let readiness: Vec<_> = services
@@ -4076,7 +4770,9 @@ fn run() -> Result<(), String> {
         }
         let artifact = jhol_ai::ModelArtifact::read_manifest(&man_path)
             .map_err(|e| format!("ai {action}: {e}"))?;
-        let receipt = if action == "verify" || !act_m.get_flag("allow-network") {
+        let receipt: Option<jhol_ai::DownloadReceipt> = if action == "verify"
+            || !act_m.get_flag("allow-network")
+        {
             jhol_ai::prepare_offline(&root, &man_path).map_err(|e| format!("ai {action}: {e}"))?;
             None
         } else {
@@ -5005,6 +5701,7 @@ fn run() -> Result<(), String> {
                 }
                 let install_start = std::time::Instant::now();
                 let pkg_count = specs.len();
+                let count_before = jhol_core::count_installed_packages(root);
                 let install_result = if use_daemon {
                     // Lanes before daemon: the transport serves *work*, not answers
                     // we can serve locally in milliseconds. A bundle published by a
@@ -5034,7 +5731,9 @@ fn run() -> Result<(), String> {
                 };
                 install_result?;
                 let elapsed = install_start.elapsed();
-                print_install_summary(pkg_count, elapsed, quiet, json_out);
+                let count_after = jhol_core::count_installed_packages(root);
+                let (added, _) = install_summary_counts(count_before, count_after);
+                print_install_summary(added, count_after, elapsed, quiet, json_out);
                 // Feature 6: post-install hook
                 if let Some(ref hook) = config.hook_post_install {
                     if let Err(e) = std::process::Command::new("sh")
@@ -5207,8 +5906,7 @@ fn run() -> Result<(), String> {
                         info(&format!("Workspace: {}", root.display()));
                     }
                     if packages.is_empty() && lockfile_only {
-                        jhol_core::install_lockfile_only(backend)
-                            .map_err(|e| e.to_string())?;
+                        jhol_core::install_lockfile_only(backend).map_err(|e| e.to_string())?;
                         continue;
                     }
                     if packages.is_empty()
@@ -5525,7 +6223,6 @@ fn run() -> Result<(), String> {
             audit_result?;
         }
         #[cfg(feature = "bundle")]
-        #[cfg(feature = "bundle")]
         Some(("fmt", sub_m)) => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let check = sub_m.get_flag("check") || sub_m.get_flag("list-different");
@@ -5577,9 +6274,11 @@ fn run() -> Result<(), String> {
             if let Some(fp) = sub_m.get_one::<String>("stdin-filepath") {
                 use std::io::Read;
                 let mut input = String::new();
-                std::io::stdin().read_to_string(&mut input).map_err(|e| e.to_string())?;
-                let out =
-                    jhol_bundle::fmt::format_source(&input, fp, &config).map_err(|e| e.to_string())?;
+                std::io::stdin()
+                    .read_to_string(&mut input)
+                    .map_err(|e| e.to_string())?;
+                let out = jhol_bundle::fmt::format_source(&input, fp, &config)
+                    .map_err(|e| e.to_string())?;
                 print!("{}", out);
                 return Ok(());
             }
@@ -5663,9 +6362,7 @@ fn run() -> Result<(), String> {
                                         );
                                         return Ok(false);
                                     }
-                                    Err(e) => {
-                                        return Err(format!("{} failed to run: {}", tool, e))
-                                    }
+                                    Err(e) => return Err(format!("{} failed to run: {}", tool, e)),
                                 };
                                 if !status.success() {
                                     return Err(format!("{} failed on {}", tool, p.display()));
@@ -5687,12 +6384,9 @@ fn run() -> Result<(), String> {
                         if !no_cache && cache_lock.lock().unwrap().is_fresh(&rel, &hash) {
                             return Ok(false); // same bytes already formatted
                         }
-                        let formatted = jhol_bundle::fmt::format_source(
-                            &src,
-                            &p.to_string_lossy(),
-                            &config,
-                        )
-                        .map_err(|e| e.to_string())?;
+                        let formatted =
+                            jhol_bundle::fmt::format_source(&src, &p.to_string_lossy(), &config)
+                                .map_err(|e| e.to_string())?;
                         if formatted == src {
                             cache_lock.lock().unwrap().record(&rel, &hash);
                             return Ok(false);
@@ -5702,9 +6396,7 @@ fn run() -> Result<(), String> {
                             // never leaves half-formatted source.
                             let tmp = p.with_file_name(format!(
                                 ".{}.jhol-tmp",
-                                p.file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or("fmt")
+                                p.file_name().and_then(|n| n.to_str()).unwrap_or("fmt")
                             ));
                             std::fs::write(&tmp, &formatted).map_err(|e| e.to_string())?;
                             std::fs::rename(&tmp, p).map_err(|e| e.to_string())?;
@@ -5712,10 +6404,10 @@ fn run() -> Result<(), String> {
                             // file as already done. In --check mode the file is
                             // untouched, so recording here would poison the cache
                             // and make the next real run skip the file forever.
-                            cache_lock.lock().unwrap().record(
-                                &rel,
-                                &jhol_bundle::fmt::content_hash(&formatted),
-                            );
+                            cache_lock
+                                .lock()
+                                .unwrap()
+                                .record(&rel, &jhol_bundle::fmt::content_hash(&formatted));
                         }
                         Ok(true)
                     })();
@@ -5759,7 +6451,9 @@ fn run() -> Result<(), String> {
         }
         #[cfg(not(feature = "bundle"))]
         Some(("fmt", _sub_m)) => {
-            return Err("fmt requires the bundle feature (build with default features)".to_string());
+            return Err(
+                "fmt requires the bundle feature (build with default features)".to_string(),
+            );
         }
         Some(("build", sub_m)) => {
             #[cfg(feature = "bundle")]
@@ -6717,10 +7411,7 @@ fn refine_star_specs(packages: &[&str]) {
         if let Some(deps) = json.get_mut("dependencies").and_then(|d| d.as_object_mut()) {
             if let Some(existing) = deps.get(&name).and_then(|v| v.as_str()) {
                 if existing == "*" || existing.is_empty() {
-                    deps.insert(
-                        name,
-                        serde_json::Value::String(format!("^{}", version)),
-                    );
+                    deps.insert(name, serde_json::Value::String(format!("^{}", version)));
                     changed = true;
                 }
             }
@@ -6790,4 +7481,89 @@ fn main() {
         }
     };
     std::process::exit(code);
+}
+
+#[cfg(all(test, unix))]
+mod daemon_socket_tests {
+    use super::{prepare_daemon_socket, DaemonSocketCleanup};
+    use std::os::unix::net::UnixListener;
+    use std::path::PathBuf;
+
+    fn isolated_dir() -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after epoch")
+            .as_nanos();
+        let dir = PathBuf::from("/tmp").join(format!(
+            "jhol-daemon-socket-test-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&dir).expect("create isolated socket directory");
+        dir
+    }
+
+    #[test]
+    fn active_daemon_socket_is_preserved() {
+        let dir = isolated_dir();
+        let socket = dir.join("daemon.sock");
+        let listener = UnixListener::bind(&socket).expect("bind active test socket");
+        assert!(prepare_daemon_socket(&socket).is_err());
+        assert!(std::fs::symlink_metadata(&socket).is_ok());
+        drop(listener);
+        std::fs::remove_dir_all(dir).expect("clean isolated socket directory");
+    }
+
+    #[test]
+    fn stale_daemon_socket_is_removed() {
+        let dir = isolated_dir();
+        let socket = dir.join("daemon.sock");
+        drop(UnixListener::bind(&socket).expect("bind stale test socket"));
+        prepare_daemon_socket(&socket).expect("remove stale socket");
+        assert!(std::fs::symlink_metadata(&socket).is_err());
+        std::fs::remove_dir_all(dir).expect("clean isolated socket directory");
+    }
+
+    #[test]
+    fn non_socket_daemon_path_is_preserved() {
+        let dir = isolated_dir();
+        let socket = dir.join("daemon.sock");
+        std::fs::write(&socket, b"keep me").expect("create non-socket path");
+        assert!(prepare_daemon_socket(&socket).is_err());
+        assert_eq!(
+            std::fs::read(&socket).expect("read preserved path"),
+            b"keep me"
+        );
+        std::fs::remove_dir_all(dir).expect("clean isolated socket directory");
+    }
+
+    #[test]
+    fn daemon_cleanup_removes_its_bound_socket() {
+        let dir = isolated_dir();
+        let socket = dir.join("daemon.sock");
+        let listener = UnixListener::bind(&socket).expect("bind owned socket");
+        let cleanup = DaemonSocketCleanup::capture(&socket).expect("capture socket identity");
+        drop(listener);
+
+        cleanup.remove_if_owned().expect("remove owned socket");
+        assert!(std::fs::symlink_metadata(&socket).is_err());
+        drop(cleanup);
+        std::fs::remove_dir_all(dir).expect("clean isolated socket directory");
+    }
+
+    #[test]
+    fn daemon_cleanup_preserves_replacement_socket() {
+        let dir = isolated_dir();
+        let socket = dir.join("daemon.sock");
+        let listener = UnixListener::bind(&socket).expect("bind original socket");
+        let cleanup = DaemonSocketCleanup::capture(&socket).expect("capture socket identity");
+        std::fs::remove_file(&socket).expect("remove original socket path");
+
+        let replacement = UnixListener::bind(&socket).expect("bind replacement socket");
+        drop(listener);
+        assert!(cleanup.remove_if_owned().is_err());
+        assert!(std::fs::symlink_metadata(&socket).is_ok());
+        drop(cleanup);
+        drop(replacement);
+        std::fs::remove_dir_all(dir).expect("clean isolated socket directory");
+    }
 }

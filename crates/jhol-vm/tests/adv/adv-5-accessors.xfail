@@ -1,0 +1,5 @@
+KNOWN FAILURE — property flags (design debt, see SESSION.md section 5 banner).
+Node tracks enumerable/writable per property; the prop bag stores (key, value)
+pairs, so defineProperty defaults (enumerable=false, writable=false) and
+non-writable write enforcement are not observed. Fixing requires adding a
+flags word to property slots — touches the JIT shape reads.

@@ -14,6 +14,8 @@ members = [
     "crates/jhol-diff",
     "crates/jhol-ai",
     "crates/jhol-db",
+    # Optional private control-plane domain model (no server, no network)
+    "crates/jhol-cloud",
     # Phase D optional remote CAS (not a default binary dep)
     "crates/jhol-remote",
     "crates/jhol-trampoline",
@@ -32,7 +34,7 @@ opt-level = "z"
 
 [package]
 name = "jhol"
-version = "1.0.2"
+version = "2.0.0"
 authors = ["Bhuvan Prakash <bhuvanstark6@gmail.com>"]
 edition = "2021"
 description = "Fast, offline-friendly package manager with cache, doctor, and npm fallback"
@@ -60,9 +62,9 @@ js-engine = ["jhol-runtime", "jhol-runtime/jsc-engine"]
 jholvm = ["jhol-runtime", "jhol-runtime/jholvm"]
 
 [dependencies]
-jhol-core = { version = "1.0.2", path = "crates/jhol-core" }
-jhol-runtime = { version = "1.0.2", path = "crates/jhol-runtime", optional = true }
-jhol-bundle = { version = "1.0.2", path = "crates/jhol-bundle", optional = true }
+jhol-core = { version = "2.0.0", path = "crates/jhol-core" }
+jhol-runtime = { version = "2.0.0", path = "crates/jhol-runtime", optional = true }
+jhol-bundle = { version = "2.0.0", path = "crates/jhol-bundle", optional = true }
 jhol-adapters = { path = "crates/jhol-adapters" }
 jhol-env = { path = "crates/jhol-env" }
 jhol-receipt = { path = "crates/jhol-receipt" }
@@ -98,7 +100,7 @@ criterion = "0.5"
 # `jhol run` on macOS. QuickJS stays the portable fallback elsewhere; the
 # dispatch lives in jhol-runtime's lib.rs.
 [target.'cfg(target_os = "macos")'.dependencies]
-jhol-runtime = { version = "1.0.2", path = "crates/jhol-runtime", optional = true, features = ["jsc-engine"] }
+jhol-runtime = { version = "2.0.0", path = "crates/jhol-runtime", optional = true, features = ["jsc-engine"] }
 
 [[bench]]
 name = "materialization"

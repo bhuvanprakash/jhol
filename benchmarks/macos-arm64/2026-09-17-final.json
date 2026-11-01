@@ -1,0 +1,48 @@
+{
+  "binary": "/Users/bhuvanprakash/j/jhol/target/release/jhol",
+  "host": "arm64",
+  "scales": {
+    "1 cold-1": {
+      "median_ms": 193.1,
+      "min_ms": 181.5,
+      "max_ms": 549.5,
+      "runs": 3
+    },
+    "2 cold-2": {
+      "median_ms": 161.0,
+      "min_ms": 156.8,
+      "max_ms": 174.3,
+      "runs": 3
+    },
+    "3 cold-5": {
+      "median_ms": 190.9,
+      "min_ms": 187.8,
+      "max_ms": 196.2,
+      "runs": 3
+    },
+    "4 cold-20": {
+      "median_ms": 2670.6,
+      "min_ms": 2572.8,
+      "max_ms": 2722.0,
+      "runs": 3
+    },
+    "5 cold-next": {
+      "median_ms": 10139.5,
+      "min_ms": 9423.5,
+      "max_ms": 10249.4,
+      "runs": 3
+    },
+    "6 warm-cache-20": {
+      "median_ms": 66.6,
+      "min_ms": 60.6,
+      "max_ms": 168.3,
+      "runs": 5
+    },
+    "7 warm-noop-20": {
+      "median_ms": 7.9,
+      "min_ms": 7.5,
+      "max_ms": 9.0,
+      "runs": 7
+    }
+  }
+}

@@ -1,0 +1,1322 @@
+{
+  "condition": "registry-cold; same exact roots; fresh HOME/XDG/tool caches per sample; harvest,daemon,prepared,JGrid/JAGR-S reuse disabled; OS/CDN/unrelated load uncontrolled",
+  "rounds": 1,
+  "classification": "one clean supplemental triplet; only unlocked-medium workload",
+  "fixture_inputs": {
+    "unlocked-medium": {
+      "package.json": {
+        "name": "coordinator-medium",
+        "version": "1.0.0",
+        "dependencies": {
+          "react": "18.2.0",
+          "typescript": "5.7.3",
+          "express": "4.21.2"
+        }
+      }
+    }
+  },
+  "samples": [
+    {
+      "fixture": "unlocked-medium",
+      "arm": "bun",
+      "round": 31,
+      "elapsed_ms": 1660.6200419773813,
+      "exit": 0,
+      "status": "pass",
+      "quality": {
+        "status": "pass",
+        "package_count": 73,
+        "bins_checked": 4,
+        "inventory": [
+          {
+            "path": "node_modules/accepts",
+            "name": "accepts",
+            "version": "1.3.8"
+          },
+          {
+            "path": "node_modules/array-flatten",
+            "name": "array-flatten",
+            "version": "1.1.1"
+          },
+          {
+            "path": "node_modules/body-parser",
+            "name": "body-parser",
+            "version": "1.20.3"
+          },
+          {
+            "path": "node_modules/bytes",
+            "name": "bytes",
+            "version": "3.1.2"
+          },
+          {
+            "path": "node_modules/call-bind-apply-helpers",
+            "name": "call-bind-apply-helpers",
+            "version": "1.0.2"
+          },
+          {
+            "path": "node_modules/call-bound",
+            "name": "call-bound",
+            "version": "1.0.4"
+          },
+          {
+            "path": "node_modules/content-disposition",
+            "name": "content-disposition",
+            "version": "0.5.4"
+          },
+          {
+            "path": "node_modules/content-type",
+            "name": "content-type",
+            "version": "1.0.5"
+          },
+          {
+            "path": "node_modules/cookie",
+            "name": "cookie",
+            "version": "0.7.1"
+          },
+          {
+            "path": "node_modules/cookie-signature",
+            "name": "cookie-signature",
+            "version": "1.0.6"
+          },
+          {
+            "path": "node_modules/debug",
+            "name": "debug",
+            "version": "2.6.9"
+          },
+          {
+            "path": "node_modules/depd",
+            "name": "depd",
+            "version": "2.0.0"
+          },
+          {
+            "path": "node_modules/destroy",
+            "name": "destroy",
+            "version": "1.2.0"
+          },
+          {
+            "path": "node_modules/dunder-proto",
+            "name": "dunder-proto",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/ee-first",
+            "name": "ee-first",
+            "version": "1.1.1"
+          },
+          {
+            "path": "node_modules/encodeurl",
+            "name": "encodeurl",
+            "version": "2.0.0"
+          },
+          {
+            "path": "node_modules/es-define-property",
+            "name": "es-define-property",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/es-errors",
+            "name": "es-errors",
+            "version": "1.3.0"
+          },
+          {
+            "path": "node_modules/es-object-atoms",
+            "name": "es-object-atoms",
+            "version": "1.1.2"
+          },
+          {
+            "path": "node_modules/escape-html",
+            "name": "escape-html",
+            "version": "1.0.3"
+          },
+          {
+            "path": "node_modules/etag",
+            "name": "etag",
+            "version": "1.8.1"
+          },
+          {
+            "path": "node_modules/express",
+            "name": "express",
+            "version": "4.21.2"
+          },
+          {
+            "path": "node_modules/finalhandler",
+            "name": "finalhandler",
+            "version": "1.3.1"
+          },
+          {
+            "path": "node_modules/forwarded",
+            "name": "forwarded",
+            "version": "0.2.0"
+          },
+          {
+            "path": "node_modules/fresh",
+            "name": "fresh",
+            "version": "0.5.2"
+          },
+          {
+            "path": "node_modules/function-bind",
+            "name": "function-bind",
+            "version": "1.1.2"
+          },
+          {
+            "path": "node_modules/get-intrinsic",
+            "name": "get-intrinsic",
+            "version": "1.3.0"
+          },
+          {
+            "path": "node_modules/get-proto",
+            "name": "get-proto",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/gopd",
+            "name": "gopd",
+            "version": "1.2.0"
+          },
+          {
+            "path": "node_modules/has-symbols",
+            "name": "has-symbols",
+            "version": "1.1.0"
+          },
+          {
+            "path": "node_modules/hasown",
+            "name": "hasown",
+            "version": "2.0.4"
+          },
+          {
+            "path": "node_modules/http-errors",
+            "name": "http-errors",
+            "version": "2.0.0"
+          },
+          {
+            "path": "node_modules/iconv-lite",
+            "name": "iconv-lite",
+            "version": "0.4.24"
+          },
+          {
+            "path": "node_modules/inherits",
+            "name": "inherits",
+            "version": "2.0.4"
+          },
+          {
+            "path": "node_modules/ipaddr.js",
+            "name": "ipaddr.js",
+            "version": "1.9.1"
+          },
+          {
+            "path": "node_modules/js-tokens",
+            "name": "js-tokens",
+            "version": "4.0.0"
+          },
+          {
+            "path": "node_modules/loose-envify",
+            "name": "loose-envify",
+            "version": "1.4.0"
+          },
+          {
+            "path": "node_modules/math-intrinsics",
+            "name": "math-intrinsics",
+            "version": "1.1.0"
+          },
+          {
+            "path": "node_modules/media-typer",
+            "name": "media-typer",
+            "version": "0.3.0"
+          },
+          {
+            "path": "node_modules/merge-descriptors",
+            "name": "merge-descriptors",
+            "version": "1.0.3"
+          },
+          {
+            "path": "node_modules/methods",
+            "name": "methods",
+            "version": "1.1.2"
+          },
+          {
+            "path": "node_modules/mime",
+            "name": "mime",
+            "version": "1.6.0"
+          },
+          {
+            "path": "node_modules/mime-db",
+            "name": "mime-db",
+            "version": "1.52.0"
+          },
+          {
+            "path": "node_modules/mime-types",
+            "name": "mime-types",
+            "version": "2.1.35"
+          },
+          {
+            "path": "node_modules/ms",
+            "name": "ms",
+            "version": "2.0.0"
+          },
+          {
+            "path": "node_modules/negotiator",
+            "name": "negotiator",
+            "version": "0.6.3"
+          },
+          {
+            "path": "node_modules/object-inspect",
+            "name": "object-inspect",
+            "version": "1.13.4"
+          },
+          {
+            "path": "node_modules/on-finished",
+            "name": "on-finished",
+            "version": "2.4.1"
+          },
+          {
+            "path": "node_modules/parseurl",
+            "name": "parseurl",
+            "version": "1.3.3"
+          },
+          {
+            "path": "node_modules/path-to-regexp",
+            "name": "path-to-regexp",
+            "version": "0.1.12"
+          },
+          {
+            "path": "node_modules/proxy-addr",
+            "name": "proxy-addr",
+            "version": "2.0.8"
+          },
+          {
+            "path": "node_modules/qs",
+            "name": "qs",
+            "version": "6.13.0"
+          },
+          {
+            "path": "node_modules/range-parser",
+            "name": "range-parser",
+            "version": "1.2.1"
+          },
+          {
+            "path": "node_modules/raw-body",
+            "name": "raw-body",
+            "version": "2.5.2"
+          },
+          {
+            "path": "node_modules/react",
+            "name": "react",
+            "version": "18.2.0"
+          },
+          {
+            "path": "node_modules/safe-buffer",
+            "name": "safe-buffer",
+            "version": "5.2.1"
+          },
+          {
+            "path": "node_modules/safer-buffer",
+            "name": "safer-buffer",
+            "version": "2.1.2"
+          },
+          {
+            "path": "node_modules/send",
+            "name": "send",
+            "version": "0.19.0"
+          },
+          {
+            "path": "node_modules/send/node_modules/encodeurl",
+            "name": "encodeurl",
+            "version": "1.0.2"
+          },
+          {
+            "path": "node_modules/send/node_modules/ms",
+            "name": "ms",
+            "version": "2.1.3"
+          },
+          {
+            "path": "node_modules/serve-static",
+            "name": "serve-static",
+            "version": "1.16.2"
+          },
+          {
+            "path": "node_modules/setprototypeof",
+            "name": "setprototypeof",
+            "version": "1.2.0"
+          },
+          {
+            "path": "node_modules/side-channel",
+            "name": "side-channel",
+            "version": "1.1.1"
+          },
+          {
+            "path": "node_modules/side-channel-list",
+            "name": "side-channel-list",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/side-channel-map",
+            "name": "side-channel-map",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/side-channel-weakmap",
+            "name": "side-channel-weakmap",
+            "version": "1.0.2"
+          },
+          {
+            "path": "node_modules/statuses",
+            "name": "statuses",
+            "version": "2.0.1"
+          },
+          {
+            "path": "node_modules/toidentifier",
+            "name": "toidentifier",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/type-is",
+            "name": "type-is",
+            "version": "1.6.18"
+          },
+          {
+            "path": "node_modules/typescript",
+            "name": "typescript",
+            "version": "5.7.3"
+          },
+          {
+            "path": "node_modules/unpipe",
+            "name": "unpipe",
+            "version": "1.0.0"
+          },
+          {
+            "path": "node_modules/utils-merge",
+            "name": "utils-merge",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/vary",
+            "name": "vary",
+            "version": "1.1.2"
+          }
+        ],
+        "quality": "exact root pins; required and peer SemVer edges; CJS resolution; ESM imports; executable bins"
+      },
+      "locked_input_unchanged": null,
+      "raw_output": "bun install v1.4.2 (744846f84)\n\n+ express@4.21.2 (v5.2.1 available)\n+ react@18.2.0 (v19.3.0 available)\n+ typescript@5.7.3 (v7.0.2 available)\n\n73 packages installed [1.62s]\n\nResolving dependencies\nResolved, downloaded and extracted [287]\nSaved lockfile\n        1.64 real         0.23 user         0.42 sys\n            78168064  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                5223  page reclaims\n                 378  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                 242  messages sent\n                 675  messages received\n                   0  signals received\n                 440  voluntary context switches\n                4300  involuntary context switches\n          3101696490  instructions retired\n          1285148001  cycles elapsed\n            42975904  peak memory footprint\n",
+      "peak_rss_bytes": 78168064,
+      "stage_times_ms": {},
+      "jagr_full_resolver_marker_observed": false,
+      "archive_request_count": 0,
+      "environment": {
+        "JHOL_CACHE_DIR": "/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-fresh-matched-g8z8q2zp/31-unlocked-medium-bun-pzyjztfn/cache/jhol",
+        "JHOL_NO_HARVEST": "1",
+        "JHOL_NO_DAEMON": "1",
+        "JHOL_AUTO_DAEMON": "0",
+        "JHOL_DAEMON_MODE": "0",
+        "JHOL_PREBUILT": "0",
+        "JHOL_JGRID": "0",
+        "JHOL_JGRID_L0": "0",
+        "JHOL_JAGRS_MIRROR": "0",
+        "JHOL_NO_JMR": "1",
+        "JHOL_STREAM_EXTRACT": "0",
+        "JHOL_NO_SPLASH": "1",
+        "JHOL_PROFILE_INSTALL": "1",
+        "JHOL_HTTP_TIMING": "1",
+        "JHOL_HTTP_METRICS": "1",
+        "JHOL_DEBUG_JINF": "1"
+      }
+    },
+    {
+      "fixture": "unlocked-medium",
+      "arm": "jhol",
+      "round": 31,
+      "elapsed_ms": 2637.5741660012864,
+      "exit": 0,
+      "status": "pass",
+      "quality": {
+        "status": "pass",
+        "package_count": 76,
+        "bins_checked": 4,
+        "inventory": [
+          {
+            "path": "node_modules/accepts",
+            "name": "accepts",
+            "version": "1.3.8"
+          },
+          {
+            "path": "node_modules/array-flatten",
+            "name": "array-flatten",
+            "version": "1.1.1"
+          },
+          {
+            "path": "node_modules/async-function",
+            "name": "async-function",
+            "version": "1.0.0"
+          },
+          {
+            "path": "node_modules/async-generator-function",
+            "name": "async-generator-function",
+            "version": "1.0.0"
+          },
+          {
+            "path": "node_modules/body-parser",
+            "name": "body-parser",
+            "version": "1.20.3"
+          },
+          {
+            "path": "node_modules/bytes",
+            "name": "bytes",
+            "version": "3.1.2"
+          },
+          {
+            "path": "node_modules/call-bind-apply-helpers",
+            "name": "call-bind-apply-helpers",
+            "version": "1.0.2"
+          },
+          {
+            "path": "node_modules/call-bound",
+            "name": "call-bound",
+            "version": "1.0.4"
+          },
+          {
+            "path": "node_modules/content-disposition",
+            "name": "content-disposition",
+            "version": "0.5.4"
+          },
+          {
+            "path": "node_modules/content-type",
+            "name": "content-type",
+            "version": "1.0.5"
+          },
+          {
+            "path": "node_modules/cookie",
+            "name": "cookie",
+            "version": "0.7.1"
+          },
+          {
+            "path": "node_modules/cookie-signature",
+            "name": "cookie-signature",
+            "version": "1.0.6"
+          },
+          {
+            "path": "node_modules/debug",
+            "name": "debug",
+            "version": "2.6.9"
+          },
+          {
+            "path": "node_modules/depd",
+            "name": "depd",
+            "version": "2.0.0"
+          },
+          {
+            "path": "node_modules/destroy",
+            "name": "destroy",
+            "version": "1.2.0"
+          },
+          {
+            "path": "node_modules/dunder-proto",
+            "name": "dunder-proto",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/ee-first",
+            "name": "ee-first",
+            "version": "1.1.1"
+          },
+          {
+            "path": "node_modules/encodeurl",
+            "name": "encodeurl",
+            "version": "2.0.0"
+          },
+          {
+            "path": "node_modules/es-define-property",
+            "name": "es-define-property",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/es-errors",
+            "name": "es-errors",
+            "version": "1.3.0"
+          },
+          {
+            "path": "node_modules/es-object-atoms",
+            "name": "es-object-atoms",
+            "version": "1.1.2"
+          },
+          {
+            "path": "node_modules/escape-html",
+            "name": "escape-html",
+            "version": "1.0.3"
+          },
+          {
+            "path": "node_modules/etag",
+            "name": "etag",
+            "version": "1.8.1"
+          },
+          {
+            "path": "node_modules/express",
+            "name": "express",
+            "version": "4.21.2"
+          },
+          {
+            "path": "node_modules/finalhandler",
+            "name": "finalhandler",
+            "version": "1.3.1"
+          },
+          {
+            "path": "node_modules/forwarded",
+            "name": "forwarded",
+            "version": "0.2.0"
+          },
+          {
+            "path": "node_modules/fresh",
+            "name": "fresh",
+            "version": "0.5.2"
+          },
+          {
+            "path": "node_modules/function-bind",
+            "name": "function-bind",
+            "version": "1.1.2"
+          },
+          {
+            "path": "node_modules/generator-function",
+            "name": "generator-function",
+            "version": "2.0.1"
+          },
+          {
+            "path": "node_modules/get-intrinsic",
+            "name": "get-intrinsic",
+            "version": "1.3.1"
+          },
+          {
+            "path": "node_modules/get-proto",
+            "name": "get-proto",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/gopd",
+            "name": "gopd",
+            "version": "1.2.0"
+          },
+          {
+            "path": "node_modules/has-symbols",
+            "name": "has-symbols",
+            "version": "1.1.0"
+          },
+          {
+            "path": "node_modules/hasown",
+            "name": "hasown",
+            "version": "2.0.4"
+          },
+          {
+            "path": "node_modules/http-errors",
+            "name": "http-errors",
+            "version": "2.0.0"
+          },
+          {
+            "path": "node_modules/iconv-lite",
+            "name": "iconv-lite",
+            "version": "0.4.24"
+          },
+          {
+            "path": "node_modules/inherits",
+            "name": "inherits",
+            "version": "2.0.4"
+          },
+          {
+            "path": "node_modules/ipaddr.js",
+            "name": "ipaddr.js",
+            "version": "1.9.1"
+          },
+          {
+            "path": "node_modules/js-tokens",
+            "name": "js-tokens",
+            "version": "4.0.0"
+          },
+          {
+            "path": "node_modules/loose-envify",
+            "name": "loose-envify",
+            "version": "1.4.0"
+          },
+          {
+            "path": "node_modules/math-intrinsics",
+            "name": "math-intrinsics",
+            "version": "1.1.0"
+          },
+          {
+            "path": "node_modules/media-typer",
+            "name": "media-typer",
+            "version": "0.3.0"
+          },
+          {
+            "path": "node_modules/merge-descriptors",
+            "name": "merge-descriptors",
+            "version": "1.0.3"
+          },
+          {
+            "path": "node_modules/methods",
+            "name": "methods",
+            "version": "1.1.2"
+          },
+          {
+            "path": "node_modules/mime",
+            "name": "mime",
+            "version": "1.6.0"
+          },
+          {
+            "path": "node_modules/mime-db",
+            "name": "mime-db",
+            "version": "1.52.0"
+          },
+          {
+            "path": "node_modules/mime-types",
+            "name": "mime-types",
+            "version": "2.1.35"
+          },
+          {
+            "path": "node_modules/ms",
+            "name": "ms",
+            "version": "2.0.0"
+          },
+          {
+            "path": "node_modules/negotiator",
+            "name": "negotiator",
+            "version": "0.6.3"
+          },
+          {
+            "path": "node_modules/object-inspect",
+            "name": "object-inspect",
+            "version": "1.13.4"
+          },
+          {
+            "path": "node_modules/on-finished",
+            "name": "on-finished",
+            "version": "2.4.1"
+          },
+          {
+            "path": "node_modules/parseurl",
+            "name": "parseurl",
+            "version": "1.3.3"
+          },
+          {
+            "path": "node_modules/path-to-regexp",
+            "name": "path-to-regexp",
+            "version": "0.1.12"
+          },
+          {
+            "path": "node_modules/proxy-addr",
+            "name": "proxy-addr",
+            "version": "2.0.8"
+          },
+          {
+            "path": "node_modules/qs",
+            "name": "qs",
+            "version": "6.13.0"
+          },
+          {
+            "path": "node_modules/range-parser",
+            "name": "range-parser",
+            "version": "1.2.1"
+          },
+          {
+            "path": "node_modules/raw-body",
+            "name": "raw-body",
+            "version": "2.5.2"
+          },
+          {
+            "path": "node_modules/react",
+            "name": "react",
+            "version": "18.2.0"
+          },
+          {
+            "path": "node_modules/safe-buffer",
+            "name": "safe-buffer",
+            "version": "5.2.1"
+          },
+          {
+            "path": "node_modules/safer-buffer",
+            "name": "safer-buffer",
+            "version": "2.1.2"
+          },
+          {
+            "path": "node_modules/send",
+            "name": "send",
+            "version": "0.19.0"
+          },
+          {
+            "path": "node_modules/send/node_modules/encodeurl",
+            "name": "encodeurl",
+            "version": "1.0.2"
+          },
+          {
+            "path": "node_modules/send/node_modules/ms",
+            "name": "ms",
+            "version": "2.1.3"
+          },
+          {
+            "path": "node_modules/serve-static",
+            "name": "serve-static",
+            "version": "1.16.2"
+          },
+          {
+            "path": "node_modules/setprototypeof",
+            "name": "setprototypeof",
+            "version": "1.2.0"
+          },
+          {
+            "path": "node_modules/side-channel",
+            "name": "side-channel",
+            "version": "1.1.1"
+          },
+          {
+            "path": "node_modules/side-channel-list",
+            "name": "side-channel-list",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/side-channel-map",
+            "name": "side-channel-map",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/side-channel-weakmap",
+            "name": "side-channel-weakmap",
+            "version": "1.0.2"
+          },
+          {
+            "path": "node_modules/statuses",
+            "name": "statuses",
+            "version": "2.0.1"
+          },
+          {
+            "path": "node_modules/toidentifier",
+            "name": "toidentifier",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/type-is",
+            "name": "type-is",
+            "version": "1.6.18"
+          },
+          {
+            "path": "node_modules/typescript",
+            "name": "typescript",
+            "version": "5.7.3"
+          },
+          {
+            "path": "node_modules/unpipe",
+            "name": "unpipe",
+            "version": "1.0.0"
+          },
+          {
+            "path": "node_modules/utils-merge",
+            "name": "utils-merge",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/vary",
+            "name": "vary",
+            "version": "1.1.2"
+          }
+        ],
+        "quality": "exact root pins; required and peer SemVer edges; CJS resolution; ESM imports; executable bins"
+      },
+      "locked_input_unchanged": null,
+      "raw_output": "HTTP Metrics:\n  Total requests: 151\n  Successful: 151\n  Failed: 0\n  Success rate: 100.00%\n  Bytes downloaded: 5539765 bytes\n  Bytes uploaded: 0 bytes\nAdded 3 packages in 2.59s\n\n[2026-10-04 23:45:16] installing 3 dependencies\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=1\n[jhol-profile] stage=after_capsule delta_ms=0 total_ms=1\n[TB-T] total     451ms  wait      0ms        3945B  https://registry.npmjs.org/typescript/5.7.3  (h2)\n[TB-T] total     451ms  wait      0ms        2795B  https://registry.npmjs.org/react/18.2.0  (h2)\n[TB-T] total     452ms  wait      0ms        3708B  https://registry.npmjs.org/express/4.21.2  (h2)\n[HTTP-T] total      49ms  ttfb     48ms  body      1ms  wire         0B  decoded      10044B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/content-type  (h2)\n[PACKUMENT-PARSE] package=content-type bytes=10044 elapsed_ms=0\n[HTTP-T] total     143ms  ttfb     96ms  body     47ms  wire         0B  decoded       9009B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/etag  (h2)\n[HTTP-T] total     133ms  ttfb     87ms  body     46ms  wire         0B  decoded       2563B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/escape-html  (h2)\n[HTTP-FILE-T] total     143ms  ttfb     97ms  read     45ms  body      58016B  protocol HTTP/2.0  https://registry.npmjs.org/express/-/express-4.21.2.tgz\n[PACKUMENT-PARSE] package=escape-html bytes=2563 elapsed_ms=0\n[PACKUMENT-PARSE] package=etag bytes=9009 elapsed_ms=0\n[PROJECT-T] total 6ms scope=staged-file-project mode=staged express@4.21.2\n[HTTP-T] total      57ms  ttfb     49ms  body      8ms  wire         0B  decoded      29123B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/type-is  (h2)\n[PACKUMENT-PARSE] package=type-is bytes=29123 elapsed_ms=0\n[TB-T] total      52ms  wait      0ms        2123B  https://registry.npmjs.org/finalhandler/1.3.1  (h2)\n[HTTP-T] total      54ms  ttfb     54ms  body      0ms  wire         0B  decoded       3634B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/methods  (h2)\n[HTTP-T] total      55ms  ttfb     55ms  body      0ms  wire         0B  decoded       8505B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/range-parser  (h2)\n[PACKUMENT-PARSE] package=methods bytes=3634 elapsed_ms=0\n[PACKUMENT-PARSE] package=range-parser bytes=8505 elapsed_ms=0\n[HTTP-FILE-T] total     268ms  ttfb     62ms  read    188ms  body    4232501B  protocol HTTP/2.0  https://registry.npmjs.org/typescript/-/typescript-5.7.3.tgz\n[HTTP-T] total     314ms  ttfb    314ms  body      0ms  wire         0B  decoded      26951B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/accepts  (h2)\n[PACKUMENT-PARSE] package=accepts bytes=26951 elapsed_ms=0\n[TB-T] total     314ms  wait      0ms        1399B  https://registry.npmjs.org/cookie-signature/1.0.6  (h2)\n[TB-T] total     315ms  wait      0ms        2096B  https://registry.npmjs.org/serve-static/1.16.2  (h2)\n[TB-T] total     335ms  wait      0ms        2049B  https://registry.npmjs.org/debug/2.6.9  (h2)\n[TB-T] total     301ms  wait      0ms        1941B  https://registry.npmjs.org/cookie/0.7.1  (h2)\n[HTTP-T] total      42ms  ttfb     41ms  body      1ms  wire         0B  decoded      24608B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/proxy-addr  (h2)\n[HTTP-T] total      42ms  ttfb     42ms  body      0ms  wire         0B  decoded       7304B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/parseurl  (h2)\n[PACKUMENT-PARSE] package=proxy-addr bytes=24608 elapsed_ms=0\n[PACKUMENT-PARSE] package=parseurl bytes=7304 elapsed_ms=0\n[HTTP-T] total      43ms  ttfb     43ms  body      0ms  wire         0B  decoded       4471B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/vary  (h2)\n[PACKUMENT-PARSE] package=vary bytes=4471 elapsed_ms=0\n[TB-T] total     309ms  wait      0ms        2906B  https://registry.npmjs.org/on-finished/2.4.1  (h2)\n[TB-T] total      42ms  wait      0ms        3029B  https://registry.npmjs.org/depd/2.0.0  (h2)\n[PROJECT-T] total 261ms scope=staged-file-project mode=staged typescript@5.7.3\n[TB-T] total     300ms  wait      0ms        3209B  https://registry.npmjs.org/statuses/2.0.1  (h2)\n[TB-T] total     300ms  wait      0ms        2243B  https://registry.npmjs.org/fresh/0.5.2  (h2)\n[TB-T] total     284ms  wait      0ms        3159B  https://registry.npmjs.org/http-errors/2.0.0  (h2)\n[TB-T] total     302ms  wait      0ms        1487B  https://registry.npmjs.org/array-flatten/1.1.1  (h2)\n[TB-T] total     289ms  wait      0ms        1610B  https://registry.npmjs.org/utils-merge/1.0.1  (h2)\n[TB-T] total     297ms  wait      0ms        2652B  https://registry.npmjs.org/safe-buffer/5.2.1  (h2)\n[HTTP-T] total      47ms  ttfb     47ms  body      0ms  wire         0B  decoded       2943B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/encodeurl  (h2)\n[TB-T] total      44ms  wait      0ms        2912B  https://registry.npmjs.org/setprototypeof/1.2.0  (h2)\n[PACKUMENT-PARSE] package=encodeurl bytes=2943 elapsed_ms=0\n[TB-T] total     295ms  wait      0ms        1699B  https://registry.npmjs.org/path-to-regexp/0.1.12  (h2)\n[HTTP-FILE-T] total      57ms  ttfb     54ms  read      0ms  body      81152B  protocol HTTP/2.0  https://registry.npmjs.org/react/-/react-18.2.0.tgz\n[HTTP-T] total      48ms  ttfb     48ms  body      0ms  wire         0B  decoded       4759B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/loose-envify  (h2)\n[HTTP-FILE-T] total      49ms  ttfb     49ms  read      0ms  body       3914B  protocol HTTP/2.0  https://registry.npmjs.org/content-type/-/content-type-1.0.5.tgz\n[PACKUMENT-PARSE] package=loose-envify bytes=4759 elapsed_ms=0\n[PROJECT-T] total 14ms scope=staged-file-project mode=staged react@18.2.0\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged content-type@1.0.5\n[HTTP-FILE-T] total      45ms  ttfb     45ms  read      0ms  body       1917B  protocol HTTP/2.0  https://registry.npmjs.org/escape-html/-/escape-html-1.0.3.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged escape-html@1.0.3\n[HTTP-FILE-T] total      49ms  ttfb     49ms  read      0ms  body       4386B  protocol HTTP/2.0  https://registry.npmjs.org/etag/-/etag-1.8.1.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged etag@1.8.1\n[HTTP-FILE-T] total      49ms  ttfb     49ms  read      0ms  body       5872B  protocol HTTP/2.0  https://registry.npmjs.org/type-is/-/type-is-1.6.18.tgz\n[PROJECT-T] total 4ms scope=staged-file-project mode=staged type-is@1.6.18\n[TB-T] total     299ms  wait      0ms        2406B  https://registry.npmjs.org/send/0.19.0  (h2)\n[HTTP-T] total      52ms  ttfb     51ms  body      1ms  wire         0B  decoded      54950B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/mime-types  (h2)\n[PACKUMENT-PARSE] package=mime-types bytes=54950 elapsed_ms=0\n[TB-T] total     291ms  wait      0ms        2980B  https://registry.npmjs.org/content-disposition/0.5.4  (h2)\n[HTTP-FILE-T] total      51ms  ttfb     51ms  read      0ms  body       6828B  protocol HTTP/2.0  https://registry.npmjs.org/finalhandler/-/finalhandler-1.3.1.tgz\n[HTTP-T] total      54ms  ttfb     54ms  body      0ms  wire         0B  decoded        673B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/unpipe  (h2)\n[PACKUMENT-PARSE] package=unpipe bytes=673 elapsed_ms=0\n[HTTP-FILE-T] total      56ms  ttfb     51ms  read      0ms  body       2475B  protocol HTTP/2.0  https://registry.npmjs.org/methods/-/methods-1.1.2.tgz\n[PROJECT-T] total 7ms scope=staged-file-project mode=staged finalhandler@1.3.1\n[PROJECT-T] total 4ms scope=staged-file-project mode=staged methods@1.1.2\n[HTTP-FILE-T] total      47ms  ttfb     47ms  read      0ms  body       3603B  protocol HTTP/2.0  https://registry.npmjs.org/range-parser/-/range-parser-1.2.1.tgz\n[TB-T] total     299ms  wait      0ms        2185B  https://registry.npmjs.org/merge-descriptors/1.0.3  (h2)\n[PROJECT-T] total 4ms scope=staged-file-project mode=staged range-parser@1.2.1\n[HTTP-FILE-T] total      47ms  ttfb     46ms  read      0ms  body       5403B  protocol HTTP/2.0  https://registry.npmjs.org/accepts/-/accepts-1.3.8.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged accepts@1.3.8\n[TB-T] total     313ms  wait      0ms        3215B  https://registry.npmjs.org/qs/6.13.0  (h2)\n[TB-T] total      46ms  wait      0ms        2830B  https://registry.npmjs.org/negotiator/0.6.3  (h2)\n[HTTP-FILE-T] total      46ms  ttfb     45ms  read      0ms  body       2111B  protocol HTTP/2.0  https://registry.npmjs.org/cookie-signature/-/cookie-signature-1.0.6.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged cookie-signature@1.0.6\n[HTTP-FILE-T] total      46ms  ttfb     46ms  read      0ms  body       8570B  protocol HTTP/2.0  https://registry.npmjs.org/serve-static/-/serve-static-1.16.2.tgz\n[TB-T] total     306ms  wait      0ms        2306B  https://registry.npmjs.org/body-parser/1.20.3  (h2)\n[HTTP-FILE-T] total      46ms  ttfb     46ms  read      0ms  body      16514B  protocol HTTP/2.0  https://registry.npmjs.org/debug/-/debug-2.6.9.tgz\n[PROJECT-T] total 3ms scope=staged-file-project mode=staged serve-static@1.16.2\n[PROJECT-T] total 5ms scope=staged-file-project mode=staged debug@2.6.9\n[HTTP-FILE-T] total      47ms  ttfb     46ms  read      0ms  body       8211B  protocol HTTP/2.0  https://registry.npmjs.org/cookie/-/cookie-0.7.1.tgz\n[PROJECT-T] total 3ms scope=staged-file-project mode=staged cookie@0.7.1\n[TB-T] total      41ms  wait      0ms        2863B  https://registry.npmjs.org/forwarded/0.2.0  (h2)\n[HTTP-FILE-T] total      48ms  ttfb     48ms  read      0ms  body       5670B  protocol HTTP/2.0  https://registry.npmjs.org/proxy-addr/-/proxy-addr-2.0.8.tgz\n[HTTP-FILE-T] total      42ms  ttfb     41ms  read      0ms  body       3952B  protocol HTTP/2.0  https://registry.npmjs.org/parseurl/-/parseurl-1.3.3.tgz\n[HTTP-FILE-T] total      41ms  ttfb     40ms  read      0ms  body       3772B  protocol HTTP/2.0  https://registry.npmjs.org/vary/-/vary-1.1.2.tgz\n[PROJECT-T] total 5ms scope=staged-file-project mode=staged vary@1.1.2\n[PROJECT-T] total 7ms scope=staged-file-project mode=staged parseurl@1.3.3\n[PROJECT-T] total 9ms scope=staged-file-project mode=staged proxy-addr@2.0.8\n[TB-T] total      44ms  wait      0ms        1649B  https://registry.npmjs.org/ee-first/1.1.1  (h2)\n[HTTP-FILE-T] total      49ms  ttfb     48ms  read      0ms  body       5052B  protocol HTTP/2.0  https://registry.npmjs.org/on-finished/-/on-finished-2.4.1.tgz\n[PROJECT-T] total 7ms scope=staged-file-project mode=staged on-finished@2.4.1\n[HTTP-FILE-T] total      46ms  ttfb     45ms  read      0ms  body       8374B  protocol HTTP/2.0  https://registry.npmjs.org/depd/-/depd-2.0.0.tgz\n[PROJECT-T] total 3ms scope=staged-file-project mode=staged depd@2.0.0\n[HTTP-FILE-T] total      51ms  ttfb     50ms  read      0ms  body       4229B  protocol HTTP/2.0  https://registry.npmjs.org/fresh/-/fresh-0.5.2.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged fresh@0.5.2\n[HTTP-FILE-T] total      52ms  ttfb     52ms  read      0ms  body       4683B  protocol HTTP/2.0  https://registry.npmjs.org/statuses/-/statuses-2.0.1.tgz\n[PROJECT-T] total 5ms scope=staged-file-project mode=staged statuses@2.0.1\n[HTTP-FILE-T] total      50ms  ttfb     49ms  read      0ms  body       6339B  protocol HTTP/2.0  https://registry.npmjs.org/http-errors/-/http-errors-2.0.0.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged http-errors@2.0.0\n[TB-T] total      47ms  wait      0ms        3084B  https://registry.npmjs.org/toidentifier/1.0.1  (h2)\n[TB-T] total     305ms  wait      0ms        1568B  https://registry.npmjs.org/media-typer/0.3.0  (h2)\n[HTTP-FILE-T] total      46ms  ttfb     45ms  read      0ms  body       1992B  protocol HTTP/2.0  https://registry.npmjs.org/array-flatten/-/array-flatten-1.1.1.tgz\n[PROJECT-T] total 4ms scope=staged-file-project mode=staged array-flatten@1.1.1\n[HTTP-FILE-T] total      48ms  ttfb     48ms  read      0ms  body       1953B  protocol HTTP/2.0  https://registry.npmjs.org/utils-merge/-/utils-merge-1.0.1.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged utils-merge@1.0.1\n[HTTP-FILE-T] total      46ms  ttfb     45ms  read      0ms  body       9972B  protocol HTTP/2.0  https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.2.1.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged safe-buffer@5.2.1\n[HTTP-FILE-T] total      47ms  ttfb     46ms  read      0ms  body       1969B  protocol HTTP/2.0  https://registry.npmjs.org/setprototypeof/-/setprototypeof-1.2.0.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged setprototypeof@1.2.0\n[HTTP-FILE-T] total      46ms  ttfb     45ms  read      0ms  body       3020B  protocol HTTP/2.0  https://registry.npmjs.org/encodeurl/-/encodeurl-2.0.0.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged encodeurl@2.0.0\n[HTTP-T] total      44ms  ttfb     43ms  body      1ms  wire         0B  decoded      18314B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/js-tokens  (h2)\n[PACKUMENT-PARSE] package=js-tokens bytes=18314 elapsed_ms=0\n[HTTP-FILE-T] total      48ms  ttfb     47ms  read      0ms  body       3067B  protocol HTTP/2.0  https://registry.npmjs.org/path-to-regexp/-/path-to-regexp-0.1.12.tgz\n[HTTP-FILE-T] total      47ms  ttfb     46ms  read      0ms  body       2842B  protocol HTTP/2.0  https://registry.npmjs.org/loose-envify/-/loose-envify-1.4.0.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged path-to-regexp@0.1.12\n[HTTP-FILE-T] total      45ms  ttfb     42ms  read      1ms  body      15634B  protocol HTTP/2.0  https://registry.npmjs.org/send/-/send-0.19.0.tgz\n[PROJECT-T] total 3ms scope=staged-file-project mode=staged loose-envify@1.4.0\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged send@0.19.0\n[TB-T] total      38ms  wait      0ms        1703B  https://registry.npmjs.org/mime/1.6.0  (h2)\n[HTTP-FILE-T] total      41ms  ttfb     41ms  read      0ms  body       5591B  protocol HTTP/2.0  https://registry.npmjs.org/mime-types/-/mime-types-2.1.35.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged mime-types@2.1.35\n[TB-T] total      41ms  wait      0ms        3338B  https://registry.npmjs.org/mime-db/1.52.0  (h2)\n[HTTP-FILE-T] total      43ms  ttfb     43ms  read      0ms  body       2096B  protocol HTTP/2.0  https://registry.npmjs.org/unpipe/-/unpipe-1.0.0.tgz\n[HTTP-FILE-T] total      44ms  ttfb     43ms  read      0ms  body       6739B  protocol HTTP/2.0  https://registry.npmjs.org/content-disposition/-/content-disposition-0.5.4.tgz\n[TB-T] total     295ms  wait      0ms        1557B  https://registry.npmjs.org/ms/2.0.0  (h2)\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged unpipe@1.0.0\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged content-disposition@0.5.4\n[HTTP-FILE-T] total      49ms  ttfb     47ms  read      0ms  body       2337B  protocol HTTP/2.0  https://registry.npmjs.org/merge-descriptors/-/merge-descriptors-1.0.3.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged merge-descriptors@1.0.3\n[HTTP-T] total      49ms  ttfb     49ms  body      0ms  wire         0B  decoded      11281B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/side-channel  (h2)\n[HTTP-FILE-T] total      53ms  ttfb     51ms  read      0ms  body      55319B  protocol HTTP/2.0  https://registry.npmjs.org/qs/-/qs-6.13.0.tgz\n[PACKUMENT-PARSE] package=side-channel bytes=11281 elapsed_ms=1\n[TB-T] total     313ms  wait      0ms        2483B  https://registry.npmjs.org/ipaddr.js/1.9.1  (h2)\n[HTTP-FILE-T] total      54ms  ttfb     54ms  read      0ms  body      15692B  protocol HTTP/2.0  https://registry.npmjs.org/body-parser/-/body-parser-1.20.3.tgz\n[HTTP-FILE-T] total      57ms  ttfb     57ms  read      0ms  body       6399B  protocol HTTP/2.0  https://registry.npmjs.org/negotiator/-/negotiator-0.6.3.tgz\n[PROJECT-T] total 4ms scope=staged-file-project mode=staged negotiator@0.6.3\n[PROJECT-T] total 8ms scope=staged-file-project mode=staged body-parser@1.20.3\n[PROJECT-T] total 21ms scope=staged-file-project mode=staged qs@6.13.0\n[HTTP-FILE-T] total      45ms  ttfb     44ms  read      0ms  body       2696B  protocol HTTP/2.0  https://registry.npmjs.org/forwarded/-/forwarded-0.2.0.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged forwarded@0.2.0\n[HTTP-FILE-T] total      50ms  ttfb     50ms  read      0ms  body       2733B  protocol HTTP/2.0  https://registry.npmjs.org/ee-first/-/ee-first-1.1.1.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged ee-first@1.1.1\n[HTTP-FILE-T] total      51ms  ttfb     51ms  read      0ms  body       4189B  protocol HTTP/2.0  https://registry.npmjs.org/media-typer/-/media-typer-0.3.0.tgz\n[TB-T] total     313ms  wait      0ms        2311B  https://registry.npmjs.org/inherits/2.0.4  (h2)\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged media-typer@0.3.0\n[HTTP-FILE-T] total      56ms  ttfb     56ms  read      0ms  body       2347B  protocol HTTP/2.0  https://registry.npmjs.org/toidentifier/-/toidentifier-1.0.1.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged toidentifier@1.0.1\n[HTTP-FILE-T] total      48ms  ttfb     48ms  read      0ms  body       6542B  protocol HTTP/2.0  https://registry.npmjs.org/js-tokens/-/js-tokens-4.0.0.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged js-tokens@4.0.0\n[HTTP-FILE-T] total      47ms  ttfb     47ms  read      0ms  body      15686B  protocol HTTP/2.0  https://registry.npmjs.org/mime/-/mime-1.6.0.tgz\n[HTTP-FILE-T] total      49ms  ttfb     49ms  read      0ms  body      26992B  protocol HTTP/2.0  https://registry.npmjs.org/mime-db/-/mime-db-1.52.0.tgz\n[HTTP-T] total      47ms  ttfb     46ms  body      1ms  wire         0B  decoded      29397B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/ms  (h2)\n[PACKUMENT-PARSE-FULL] package=ms bytes=29397 elapsed_ms=0\n[PROJECT-T] total 6ms scope=staged-file-project mode=staged mime@1.6.0\n[HTTP-FILE-T] total      48ms  ttfb     46ms  read      1ms  body       8083B  protocol HTTP/2.0  https://registry.npmjs.org/side-channel/-/side-channel-1.1.1.tgz\n[PROJECT-T] total 4ms scope=staged-file-project mode=staged mime-db@1.52.0\n[PROJECT-T] total 3ms scope=staged-file-project mode=staged side-channel@1.1.1\n[HTTP-T] total      48ms  ttfb     48ms  body      0ms  wire         0B  decoded       2423B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/side-channel-map  (h2)\n[PACKUMENT-PARSE] package=side-channel-map bytes=2423 elapsed_ms=0\n[TB-T] total     309ms  wait      0ms        2927B  https://registry.npmjs.org/destroy/1.2.0  (h2)\n[HTTP-T] total      51ms  ttfb     51ms  body      0ms  wire         0B  decoded       4277B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/es-errors  (h2)\n[PACKUMENT-PARSE] package=es-errors bytes=4277 elapsed_ms=0\n[HTTP-T] total      54ms  ttfb     54ms  body      0ms  wire         0B  decoded       3731B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/side-channel-weakmap  (h2)\n[PACKUMENT-PARSE] package=side-channel-weakmap bytes=3731 elapsed_ms=0\n[HTTP-T] total      52ms  ttfb     52ms  body      0ms  wire         0B  decoded       2273B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/side-channel-list  (h2)\n[PACKUMENT-PARSE] package=side-channel-list bytes=2273 elapsed_ms=0\n[HTTP-T] total      57ms  ttfb     57ms  body      0ms  wire         0B  decoded      41631B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/object-inspect  (h2)\n[PACKUMENT-PARSE] package=object-inspect bytes=41631 elapsed_ms=0\n[HTTP-FILE-T] total      44ms  ttfb     44ms  read      0ms  body      11501B  protocol HTTP/2.0  https://registry.npmjs.org/ipaddr.js/-/ipaddr.js-1.9.1.tgz\n[PROJECT-T] total 5ms scope=staged-file-project mode=staged ipaddr.js@1.9.1\n[HTTP-FILE-T] total      44ms  ttfb     43ms  read      0ms  body       2030B  protocol HTTP/2.0  https://registry.npmjs.org/inherits/-/inherits-2.0.4.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged inherits@2.0.4\n[HTTP-FILE-T] total      43ms  ttfb     42ms  read      0ms  body       5280B  protocol HTTP/2.0  https://registry.npmjs.org/side-channel-map/-/side-channel-map-1.0.1.tgz\n[HTTP-T] total      42ms  ttfb     42ms  body      0ms  wire         0B  decoded       4871B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/call-bound  (h2)\n[PROJECT-T] total 4ms scope=staged-file-project mode=staged side-channel-map@1.0.1\n[PACKUMENT-PARSE] package=call-bound bytes=4871 elapsed_ms=0\n[HTTP-FILE-T] total      46ms  ttfb     46ms  read      0ms  body       3379B  protocol HTTP/2.0  https://registry.npmjs.org/destroy/-/destroy-1.2.0.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged destroy@1.2.0\n[HTTP-FILE-T] total      46ms  ttfb     46ms  read      0ms  body       5338B  protocol HTTP/2.0  https://registry.npmjs.org/es-errors/-/es-errors-1.3.0.tgz\n[PROJECT-T] total 5ms scope=staged-file-project mode=staged es-errors@1.3.0\n[HTTP-FILE-T] total      44ms  ttfb     44ms  read      0ms  body       5442B  protocol HTTP/2.0  https://registry.npmjs.org/side-channel-weakmap/-/side-channel-weakmap-1.0.2.tgz\n[PROJECT-T] total 4ms scope=staged-file-project mode=staged side-channel-weakmap@1.0.2\n[HTTP-FILE-T] total      43ms  ttfb     43ms  read      0ms  body       6135B  protocol HTTP/2.0  https://registry.npmjs.org/side-channel-list/-/side-channel-list-1.0.1.tgz\n[PROJECT-T] total 5ms scope=staged-file-project mode=staged side-channel-list@1.0.1\n[HTTP-FILE-T] total      43ms  ttfb     43ms  read      0ms  body      28026B  protocol HTTP/2.0  https://registry.npmjs.org/object-inspect/-/object-inspect-1.13.4.tgz\n[TB-T] total     304ms  wait      0ms        2714B  https://registry.npmjs.org/iconv-lite/0.4.24  (h2)\n[PROJECT-T] total 8ms scope=staged-file-project mode=staged object-inspect@1.13.4\n[HTTP-FILE-T] total      46ms  ttfb     46ms  read      0ms  body       6382B  protocol HTTP/2.0  https://registry.npmjs.org/call-bound/-/call-bound-1.0.4.tgz\n[HTTP-T] total      42ms  ttfb     42ms  body      0ms  wire         0B  decoded       3677B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/call-bind-apply-helpers  (h2)\n[PACKUMENT-PARSE] package=call-bind-apply-helpers bytes=3677 elapsed_ms=0\n[PROJECT-T] total 3ms scope=staged-file-project mode=staged call-bound@1.0.4\n[TB-T] total     371ms  wait      0ms        3178B  https://registry.npmjs.org/raw-body/2.5.2  (h2)\n[TB-T] total     330ms  wait      0ms        2782B  https://registry.npmjs.org/bytes/3.1.2  (h2)\n[HTTP-T] total      47ms  ttfb     47ms  body      0ms  wire         0B  decoded       3543B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/safer-buffer  (h2)\n[PACKUMENT-PARSE] package=safer-buffer bytes=3543 elapsed_ms=0\n[HTTP-FILE-T] total      54ms  ttfb     52ms  read      2ms  body     185241B  protocol HTTP/2.0  https://registry.npmjs.org/iconv-lite/-/iconv-lite-0.4.24.tgz\n[PROJECT-T] total 11ms scope=staged-file-project mode=staged iconv-lite@0.4.24\n[HTTP-FILE-T] total      45ms  ttfb     43ms  read      1ms  body       6067B  protocol HTTP/2.0  https://registry.npmjs.org/call-bind-apply-helpers/-/call-bind-apply-helpers-1.0.2.tgz\n[HTTP-T] total      45ms  ttfb     45ms  body      0ms  wire         0B  decoded       3724B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/function-bind  (h2)\n[PACKUMENT-PARSE] package=function-bind bytes=3724 elapsed_ms=0\n[PROJECT-T] total 5ms scope=staged-file-project mode=staged call-bind-apply-helpers@1.0.2\n[HTTP-FILE-T] total      48ms  ttfb     44ms  read      1ms  body       8649B  protocol HTTP/2.0  https://registry.npmjs.org/raw-body/-/raw-body-2.5.2.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged raw-body@2.5.2\n[HTTP-FILE-T] total      47ms  ttfb     47ms  read      0ms  body       4496B  protocol HTTP/2.0  https://registry.npmjs.org/bytes/-/bytes-3.1.2.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged bytes@3.1.2\n[HTTP-FILE-T] total      48ms  ttfb     46ms  read      1ms  body      12035B  protocol HTTP/2.0  https://registry.npmjs.org/safer-buffer/-/safer-buffer-2.1.2.tgz\n[PROJECT-T] total 3ms scope=staged-file-project mode=staged safer-buffer@2.1.2\n[HTTP-FILE-T] total      45ms  ttfb     44ms  read      0ms  body       9799B  protocol HTTP/2.0  https://registry.npmjs.org/function-bind/-/function-bind-1.1.2.tgz\n[PROJECT-T] total 3ms scope=staged-file-project mode=staged function-bind@1.1.2\n[HTTP-T] total     299ms  ttfb    299ms  body      0ms  wire         0B  decoded      27579B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/get-intrinsic  (h2)\n[PACKUMENT-PARSE] package=get-intrinsic bytes=27579 elapsed_ms=0\n[HTTP-T] total      48ms  ttfb     48ms  body      0ms  wire         0B  decoded       2659B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/generator-function  (h2)\n[HTTP-T] total      48ms  ttfb     48ms  body      0ms  wire         0B  decoded       2182B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/math-intrinsics  (h2)\n[PACKUMENT-PARSE] package=math-intrinsics bytes=2182 elapsed_ms=0\n[PACKUMENT-PARSE] package=generator-function bytes=2659 elapsed_ms=0\n[HTTP-T] total      51ms  ttfb     51ms  body      0ms  wire         0B  decoded       3782B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/gopd  (h2)\n[HTTP-FILE-T] total      51ms  ttfb     49ms  read      1ms  body      13886B  protocol HTTP/2.0  https://registry.npmjs.org/get-intrinsic/-/get-intrinsic-1.3.1.tgz\n[PACKUMENT-PARSE] package=gopd bytes=3782 elapsed_ms=0\n[HTTP-T] total      53ms  ttfb     53ms  body      0ms  wire         0B  decoded       1985B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/es-define-property  (h2)\n[HTTP-T] total      53ms  ttfb     53ms  body      0ms  wire         0B  decoded       7061B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/has-symbols  (h2)\n[PACKUMENT-PARSE] package=es-define-property bytes=1985 elapsed_ms=0\n[PACKUMENT-PARSE] package=has-symbols bytes=7061 elapsed_ms=0\n[PROJECT-T] total 3ms scope=staged-file-project mode=staged get-intrinsic@1.3.1\n[HTTP-T] total      55ms  ttfb     55ms  body      0ms  wire         0B  decoded       1965B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/get-proto  (h2)\n[PACKUMENT-PARSE] package=get-proto bytes=1965 elapsed_ms=0\n[HTTP-T] total      58ms  ttfb     58ms  body      0ms  wire         0B  decoded       1536B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/async-function  (h2)\n[PACKUMENT-PARSE] package=async-function bytes=1536 elapsed_ms=0\n[HTTP-T] total      62ms  ttfb     62ms  body      0ms  wire         0B  decoded       4705B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/es-object-atoms  (h2)\n[PACKUMENT-PARSE] package=es-object-atoms bytes=4705 elapsed_ms=0\n[HTTP-FILE-T] total      59ms  ttfb     59ms  read      0ms  body       4584B  protocol HTTP/2.0  https://registry.npmjs.org/gopd/-/gopd-1.2.0.tgz\n[HTTP-FILE-T] total      62ms  ttfb     61ms  read      0ms  body       6355B  protocol HTTP/2.0  https://registry.npmjs.org/math-intrinsics/-/math-intrinsics-1.1.0.tgz\n[HTTP-FILE-T] total      63ms  ttfb     63ms  read      0ms  body       4441B  protocol HTTP/2.0  https://registry.npmjs.org/generator-function/-/generator-function-2.0.1.tgz\n[PROJECT-T] total 4ms scope=staged-file-project mode=staged gopd@1.2.0\n[HTTP-FILE-T] total      63ms  ttfb     63ms  read      0ms  body       4431B  protocol HTTP/2.0  https://registry.npmjs.org/es-define-property/-/es-define-property-1.0.1.tgz\n[PROJECT-T] total 4ms scope=staged-file-project mode=staged generator-function@2.0.1\n[PROJECT-T] total 3ms scope=staged-file-project mode=staged es-define-property@1.0.1\n[PROJECT-T] total 10ms scope=staged-file-project mode=staged math-intrinsics@1.1.0\n[HTTP-T] total      45ms  ttfb     45ms  body      0ms  wire         0B  decoded       2071B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/dunder-proto  (h2)\n[PACKUMENT-PARSE] package=dunder-proto bytes=2071 elapsed_ms=0\n[HTTP-FILE-T] total      51ms  ttfb     50ms  read      0ms  body       8059B  protocol HTTP/2.0  https://registry.npmjs.org/has-symbols/-/has-symbols-1.1.0.tgz\n[HTTP-FILE-T] total      50ms  ttfb     50ms  read      0ms  body       4474B  protocol HTTP/2.0  https://registry.npmjs.org/get-proto/-/get-proto-1.0.1.tgz\n[HTTP-FILE-T] total      48ms  ttfb     47ms  read      0ms  body       4380B  protocol HTTP/2.0  https://registry.npmjs.org/async-function/-/async-function-1.0.0.tgz\n[HTTP-FILE-T] total      47ms  ttfb     47ms  read      0ms  body       4820B  protocol HTTP/2.0  https://registry.npmjs.org/es-object-atoms/-/es-object-atoms-1.1.2.tgz\n[PROJECT-T] total 6ms scope=staged-file-project mode=staged get-proto@1.0.1\n[PROJECT-T] total 6ms scope=staged-file-project mode=staged has-symbols@1.1.0\n[PROJECT-T] total 5ms scope=staged-file-project mode=staged async-function@1.0.0\n[PROJECT-T] total 5ms scope=staged-file-project mode=staged es-object-atoms@1.1.2\n[HTTP-FILE-T] total      44ms  ttfb     43ms  read      0ms  body       5049B  protocol HTTP/2.0  https://registry.npmjs.org/dunder-proto/-/dunder-proto-1.0.1.tgz\n[PROJECT-T] total 4ms scope=staged-file-project mode=staged dunder-proto@1.0.1\n[HTTP-T] total     288ms  ttfb    288ms  body      0ms  wire         0B  decoded       1116B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/async-generator-function  (h2)\n[PACKUMENT-PARSE] package=async-generator-function bytes=1116 elapsed_ms=0\n[HTTP-T] total     297ms  ttfb    297ms  body      0ms  wire         0B  decoded       5478B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/hasown  (h2)\n[PACKUMENT-PARSE] package=hasown bytes=5478 elapsed_ms=0\n[jhol-profile] stage=expansion_http requests=146 successful=146 failed=0 body_bytes=5521552 specs=74\n[jhol-profile] stage=after_expansion delta_ms=2450 total_ms=2452\n[2026-10-04 23:45:19] flat resolution conflict (send requires encodeurl ~1.0.2, resolved 2.0.0); resolving nested layout\n[2026-10-04 23:45:19] single-pass: nested layout built from in-memory metadata (no second resolution)\n[jhol-profile] stage=layout_lookup delta_ms=1 total_ms=1\n[HTTP-FILE-T] total      45ms  ttfb     45ms  read      0ms  body       4504B  protocol HTTP/2.0  https://registry.npmjs.org/async-generator-function/-/async-generator-function-1.0.0.tgz\n[HTTP-FILE-T] total      48ms  ttfb     46ms  read      0ms  body       4608B  protocol HTTP/2.0  https://registry.npmjs.org/hasown/-/hasown-2.0.4.tgz\n[PROJECT-T] total 4ms scope=staged-file-project mode=staged async-generator-function@1.0.0\n[PROJECT-T] total 4ms scope=staged-file-project mode=staged hasown@2.0.4\n[HTTP-FILE-T] total      43ms  ttfb     43ms  read      0ms  body       3260B  protocol HTTP/2.0  https://registry.npmjs.org/encodeurl/-/encodeurl-1.0.2.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged encodeurl@1.0.2\n[HTTP-FILE-T] total      45ms  ttfb     45ms  read      0ms  body       2967B  protocol HTTP/2.0  https://registry.npmjs.org/ms/-/ms-2.1.3.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged ms@2.1.3\n[HTTP-FILE-T] total      46ms  ttfb     46ms  read      0ms  body       2874B  protocol HTTP/2.0  https://registry.npmjs.org/ms/-/ms-2.0.0.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged ms@2.0.0\n[jhol-profile] stage=layout_fetch_extract delta_ms=80 total_ms=81\n[jhol-profile] stage=layout_projection delta_ms=26 total_ms=107\n[jhol-profile] stage=layout_index_relink delta_ms=0 total_ms=107\n        2.63 real         0.23 user         0.56 sys\n            50774016  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                3630  page reclaims\n                 461  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                 188  messages sent\n                 777  messages received\n                   0  signals received\n                 681  voluntary context switches\n                4264  involuntary context switches\n          3704346993  instructions retired\n          1462922060  cycles elapsed\n            48628600  peak memory footprint\n",
+      "peak_rss_bytes": 50774016,
+      "stage_times_ms": {
+        "install_pkg_start": 0,
+        "after_preseed": 0,
+        "after_capsule": 0,
+        "after_expansion": 2450,
+        "layout_lookup": 1,
+        "layout_fetch_extract": 80,
+        "layout_projection": 26,
+        "layout_index_relink": 0
+      },
+      "jagr_full_resolver_marker_observed": false,
+      "archive_request_count": 76,
+      "environment": {
+        "JHOL_CACHE_DIR": "/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-fresh-matched-g8z8q2zp/31-unlocked-medium-jhol-e8npxl7w/cache/jhol",
+        "JHOL_NO_HARVEST": "1",
+        "JHOL_NO_DAEMON": "1",
+        "JHOL_AUTO_DAEMON": "0",
+        "JHOL_DAEMON_MODE": "0",
+        "JHOL_PREBUILT": "0",
+        "JHOL_JGRID": "0",
+        "JHOL_JGRID_L0": "0",
+        "JHOL_JAGRS_MIRROR": "0",
+        "JHOL_NO_JMR": "1",
+        "JHOL_STREAM_EXTRACT": "0",
+        "JHOL_NO_SPLASH": "1",
+        "JHOL_PROFILE_INSTALL": "1",
+        "JHOL_HTTP_TIMING": "1",
+        "JHOL_HTTP_METRICS": "1",
+        "JHOL_DEBUG_JINF": "1"
+      }
+    },
+    {
+      "fixture": "unlocked-medium",
+      "arm": "before",
+      "round": 31,
+      "elapsed_ms": 3116.3371250149794,
+      "exit": 0,
+      "status": "pass",
+      "quality": {
+        "status": "pass",
+        "package_count": 76,
+        "bins_checked": 4,
+        "inventory": [
+          {
+            "path": "node_modules/accepts",
+            "name": "accepts",
+            "version": "1.3.8"
+          },
+          {
+            "path": "node_modules/array-flatten",
+            "name": "array-flatten",
+            "version": "1.1.1"
+          },
+          {
+            "path": "node_modules/async-function",
+            "name": "async-function",
+            "version": "1.0.0"
+          },
+          {
+            "path": "node_modules/async-generator-function",
+            "name": "async-generator-function",
+            "version": "1.0.0"
+          },
+          {
+            "path": "node_modules/body-parser",
+            "name": "body-parser",
+            "version": "1.20.3"
+          },
+          {
+            "path": "node_modules/bytes",
+            "name": "bytes",
+            "version": "3.1.2"
+          },
+          {
+            "path": "node_modules/call-bind-apply-helpers",
+            "name": "call-bind-apply-helpers",
+            "version": "1.0.2"
+          },
+          {
+            "path": "node_modules/call-bound",
+            "name": "call-bound",
+            "version": "1.0.4"
+          },
+          {
+            "path": "node_modules/content-disposition",
+            "name": "content-disposition",
+            "version": "0.5.4"
+          },
+          {
+            "path": "node_modules/content-type",
+            "name": "content-type",
+            "version": "1.0.5"
+          },
+          {
+            "path": "node_modules/cookie",
+            "name": "cookie",
+            "version": "0.7.1"
+          },
+          {
+            "path": "node_modules/cookie-signature",
+            "name": "cookie-signature",
+            "version": "1.0.6"
+          },
+          {
+            "path": "node_modules/debug",
+            "name": "debug",
+            "version": "2.6.9"
+          },
+          {
+            "path": "node_modules/depd",
+            "name": "depd",
+            "version": "2.0.0"
+          },
+          {
+            "path": "node_modules/destroy",
+            "name": "destroy",
+            "version": "1.2.0"
+          },
+          {
+            "path": "node_modules/dunder-proto",
+            "name": "dunder-proto",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/ee-first",
+            "name": "ee-first",
+            "version": "1.1.1"
+          },
+          {
+            "path": "node_modules/encodeurl",
+            "name": "encodeurl",
+            "version": "2.0.0"
+          },
+          {
+            "path": "node_modules/es-define-property",
+            "name": "es-define-property",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/es-errors",
+            "name": "es-errors",
+            "version": "1.3.0"
+          },
+          {
+            "path": "node_modules/es-object-atoms",
+            "name": "es-object-atoms",
+            "version": "1.1.2"
+          },
+          {
+            "path": "node_modules/escape-html",
+            "name": "escape-html",
+            "version": "1.0.3"
+          },
+          {
+            "path": "node_modules/etag",
+            "name": "etag",
+            "version": "1.8.1"
+          },
+          {
+            "path": "node_modules/express",
+            "name": "express",
+            "version": "4.21.2"
+          },
+          {
+            "path": "node_modules/finalhandler",
+            "name": "finalhandler",
+            "version": "1.3.1"
+          },
+          {
+            "path": "node_modules/forwarded",
+            "name": "forwarded",
+            "version": "0.2.0"
+          },
+          {
+            "path": "node_modules/fresh",
+            "name": "fresh",
+            "version": "0.5.2"
+          },
+          {
+            "path": "node_modules/function-bind",
+            "name": "function-bind",
+            "version": "1.1.2"
+          },
+          {
+            "path": "node_modules/generator-function",
+            "name": "generator-function",
+            "version": "2.0.1"
+          },
+          {
+            "path": "node_modules/get-intrinsic",
+            "name": "get-intrinsic",
+            "version": "1.3.1"
+          },
+          {
+            "path": "node_modules/get-proto",
+            "name": "get-proto",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/gopd",
+            "name": "gopd",
+            "version": "1.2.0"
+          },
+          {
+            "path": "node_modules/has-symbols",
+            "name": "has-symbols",
+            "version": "1.1.0"
+          },
+          {
+            "path": "node_modules/hasown",
+            "name": "hasown",
+            "version": "2.0.4"
+          },
+          {
+            "path": "node_modules/http-errors",
+            "name": "http-errors",
+            "version": "2.0.0"
+          },
+          {
+            "path": "node_modules/iconv-lite",
+            "name": "iconv-lite",
+            "version": "0.4.24"
+          },
+          {
+            "path": "node_modules/inherits",
+            "name": "inherits",
+            "version": "2.0.4"
+          },
+          {
+            "path": "node_modules/ipaddr.js",
+            "name": "ipaddr.js",
+            "version": "1.9.1"
+          },
+          {
+            "path": "node_modules/js-tokens",
+            "name": "js-tokens",
+            "version": "4.0.0"
+          },
+          {
+            "path": "node_modules/loose-envify",
+            "name": "loose-envify",
+            "version": "1.4.0"
+          },
+          {
+            "path": "node_modules/math-intrinsics",
+            "name": "math-intrinsics",
+            "version": "1.1.0"
+          },
+          {
+            "path": "node_modules/media-typer",
+            "name": "media-typer",
+            "version": "0.3.0"
+          },
+          {
+            "path": "node_modules/merge-descriptors",
+            "name": "merge-descriptors",
+            "version": "1.0.3"
+          },
+          {
+            "path": "node_modules/methods",
+            "name": "methods",
+            "version": "1.1.2"
+          },
+          {
+            "path": "node_modules/mime",
+            "name": "mime",
+            "version": "1.6.0"
+          },
+          {
+            "path": "node_modules/mime-db",
+            "name": "mime-db",
+            "version": "1.52.0"
+          },
+          {
+            "path": "node_modules/mime-types",
+            "name": "mime-types",
+            "version": "2.1.35"
+          },
+          {
+            "path": "node_modules/ms",
+            "name": "ms",
+            "version": "2.0.0"
+          },
+          {
+            "path": "node_modules/negotiator",
+            "name": "negotiator",
+            "version": "0.6.3"
+          },
+          {
+            "path": "node_modules/object-inspect",
+            "name": "object-inspect",
+            "version": "1.13.4"
+          },
+          {
+            "path": "node_modules/on-finished",
+            "name": "on-finished",
+            "version": "2.4.1"
+          },
+          {
+            "path": "node_modules/parseurl",
+            "name": "parseurl",
+            "version": "1.3.3"
+          },
+          {
+            "path": "node_modules/path-to-regexp",
+            "name": "path-to-regexp",
+            "version": "0.1.12"
+          },
+          {
+            "path": "node_modules/proxy-addr",
+            "name": "proxy-addr",
+            "version": "2.0.8"
+          },
+          {
+            "path": "node_modules/qs",
+            "name": "qs",
+            "version": "6.13.0"
+          },
+          {
+            "path": "node_modules/range-parser",
+            "name": "range-parser",
+            "version": "1.2.1"
+          },
+          {
+            "path": "node_modules/raw-body",
+            "name": "raw-body",
+            "version": "2.5.2"
+          },
+          {
+            "path": "node_modules/react",
+            "name": "react",
+            "version": "18.2.0"
+          },
+          {
+            "path": "node_modules/safe-buffer",
+            "name": "safe-buffer",
+            "version": "5.2.1"
+          },
+          {
+            "path": "node_modules/safer-buffer",
+            "name": "safer-buffer",
+            "version": "2.1.2"
+          },
+          {
+            "path": "node_modules/send",
+            "name": "send",
+            "version": "0.19.0"
+          },
+          {
+            "path": "node_modules/send/node_modules/encodeurl",
+            "name": "encodeurl",
+            "version": "1.0.2"
+          },
+          {
+            "path": "node_modules/send/node_modules/ms",
+            "name": "ms",
+            "version": "2.1.3"
+          },
+          {
+            "path": "node_modules/serve-static",
+            "name": "serve-static",
+            "version": "1.16.2"
+          },
+          {
+            "path": "node_modules/setprototypeof",
+            "name": "setprototypeof",
+            "version": "1.2.0"
+          },
+          {
+            "path": "node_modules/side-channel",
+            "name": "side-channel",
+            "version": "1.1.1"
+          },
+          {
+            "path": "node_modules/side-channel-list",
+            "name": "side-channel-list",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/side-channel-map",
+            "name": "side-channel-map",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/side-channel-weakmap",
+            "name": "side-channel-weakmap",
+            "version": "1.0.2"
+          },
+          {
+            "path": "node_modules/statuses",
+            "name": "statuses",
+            "version": "2.0.1"
+          },
+          {
+            "path": "node_modules/toidentifier",
+            "name": "toidentifier",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/type-is",
+            "name": "type-is",
+            "version": "1.6.18"
+          },
+          {
+            "path": "node_modules/typescript",
+            "name": "typescript",
+            "version": "5.7.3"
+          },
+          {
+            "path": "node_modules/unpipe",
+            "name": "unpipe",
+            "version": "1.0.0"
+          },
+          {
+            "path": "node_modules/utils-merge",
+            "name": "utils-merge",
+            "version": "1.0.1"
+          },
+          {
+            "path": "node_modules/vary",
+            "name": "vary",
+            "version": "1.1.2"
+          }
+        ],
+        "quality": "exact root pins; required and peer SemVer edges; CJS resolution; ESM imports; executable bins"
+      },
+      "locked_input_unchanged": null,
+      "raw_output": "HTTP Metrics:\n  Total requests: 151\n  Successful: 151\n  Failed: 0\n  Success rate: 100.00%\n  Bytes downloaded: 5539765 bytes\n  Bytes uploaded: 0 bytes\nAdded 3 packages in 3.08s\n\n[2026-10-04 23:45:20] installing 3 dependencies\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=1\n[jhol-profile] stage=after_capsule delta_ms=0 total_ms=1\n[TB-T] total     432ms  wait      0ms        3945B  https://registry.npmjs.org/typescript/5.7.3  (h2)\n[TB-T] total     432ms  wait      0ms        3708B  https://registry.npmjs.org/express/4.21.2  (h2)\n[TB-T] total     440ms  wait      0ms        2795B  https://registry.npmjs.org/react/18.2.0  (h2)\n[HTTP-T] total     148ms  ttfb    100ms  body     48ms  wire         0B  decoded      29123B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/type-is  (h2)\n[HTTP-T] total     148ms  ttfb    101ms  body     47ms  wire         0B  decoded      10044B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/content-type  (h2)\n[PACKUMENT-PARSE] package=content-type bytes=10044 elapsed_ms=0\n[PACKUMENT-PARSE] package=type-is bytes=29123 elapsed_ms=0\n[HTTP-T] total     148ms  ttfb     94ms  body     54ms  wire         0B  decoded       2943B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/encodeurl  (h2)\n[HTTP-FILE-T] total     156ms  ttfb    101ms  read     54ms  body      58016B  protocol HTTP/2.0  https://registry.npmjs.org/express/-/express-4.21.2.tgz\n[PACKUMENT-PARSE] package=encodeurl bytes=2943 elapsed_ms=0\n[PROJECT-T] total 5ms scope=staged-file-project mode=staged express@4.21.2\n[HTTP-T] total      57ms  ttfb     55ms  body      2ms  wire         0B  decoded       2563B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/escape-html  (h2)\n[PACKUMENT-PARSE] package=escape-html bytes=2563 elapsed_ms=0\n[HTTP-FILE-T] total     299ms  ttfb     66ms  read    228ms  body    4232501B  protocol HTTP/2.0  https://registry.npmjs.org/typescript/-/typescript-5.7.3.tgz\n[HTTP-T] total     299ms  ttfb    299ms  body      0ms  wire         0B  decoded      26951B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/accepts  (h2)\n[PACKUMENT-PARSE] package=accepts bytes=26951 elapsed_ms=0\n[TB-T] total     316ms  wait      0ms        2049B  https://registry.npmjs.org/debug/2.6.9  (h2)\n[HTTP-T] total     316ms  ttfb    316ms  body      0ms  wire         0B  decoded       7304B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/parseurl  (h2)\n[PACKUMENT-PARSE] package=parseurl bytes=7304 elapsed_ms=0\n[TB-T] total     330ms  wait      0ms        2980B  https://registry.npmjs.org/content-disposition/0.5.4  (h2)\n[TB-T] total      45ms  wait      0ms        2096B  https://registry.npmjs.org/serve-static/1.16.2  (h2)\n[HTTP-T] total      47ms  ttfb     47ms  body      0ms  wire         0B  decoded      24608B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/proxy-addr  (h2)\n[PACKUMENT-PARSE] package=proxy-addr bytes=24608 elapsed_ms=0\n[TB-T] total      46ms  wait      0ms        1399B  https://registry.npmjs.org/cookie-signature/1.0.6  (h2)\n[TB-T] total     301ms  wait      0ms        3209B  https://registry.npmjs.org/statuses/2.0.1  (h2)\n[HTTP-T] total      45ms  ttfb     44ms  body      1ms  wire         0B  decoded       8505B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/range-parser  (h2)\n[PACKUMENT-PARSE] package=range-parser bytes=8505 elapsed_ms=0\n[TB-T] total     310ms  wait      0ms        2185B  https://registry.npmjs.org/merge-descriptors/1.0.3  (h2)\n[HTTP-T] total      43ms  ttfb     43ms  body      0ms  wire         0B  decoded       9009B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/etag  (h2)\n[PACKUMENT-PARSE] package=etag bytes=9009 elapsed_ms=0\n[TB-T] total     341ms  wait      0ms        2123B  https://registry.npmjs.org/finalhandler/1.3.1  (h2)\n[TB-T] total     303ms  wait      0ms        2912B  https://registry.npmjs.org/setprototypeof/1.2.0  (h2)\n[PROJECT-T] total 228ms scope=staged-file-project mode=staged typescript@5.7.3\n[HTTP-T] total      50ms  ttfb     50ms  body      0ms  wire         0B  decoded       4471B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/vary  (h2)\n[PACKUMENT-PARSE] package=vary bytes=4471 elapsed_ms=0\n[TB-T] total     313ms  wait      0ms        2906B  https://registry.npmjs.org/on-finished/2.4.1  (h2)\n[TB-T] total     300ms  wait      0ms        1941B  https://registry.npmjs.org/cookie/0.7.1  (h2)\n[TB-T] total      48ms  wait      0ms        1610B  https://registry.npmjs.org/utils-merge/1.0.1  (h2)\n[TB-T] total     304ms  wait      0ms        2243B  https://registry.npmjs.org/fresh/0.5.2  (h2)\n[TB-T] total     293ms  wait      0ms        2306B  https://registry.npmjs.org/body-parser/1.20.3  (h2)\n[TB-T] total     303ms  wait      0ms        3029B  https://registry.npmjs.org/depd/2.0.0  (h2)\n[HTTP-T] total     127ms  ttfb    127ms  body      0ms  wire         0B  decoded       4759B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/loose-envify  (h2)\n[PACKUMENT-PARSE] package=loose-envify bytes=4759 elapsed_ms=0\n[TB-T] total     496ms  wait      0ms        1699B  https://registry.npmjs.org/path-to-regexp/0.1.12  (h2)\n[HTTP-T] total     507ms  ttfb    507ms  body      0ms  wire         0B  decoded       3634B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/methods  (h2)\n[TB-T] total     521ms  wait      0ms        3159B  https://registry.npmjs.org/http-errors/2.0.0  (h2)\n[TB-T] total     474ms  wait      0ms        2406B  https://registry.npmjs.org/send/0.19.0  (h2)\n[HTTP-FILE-T] total     143ms  ttfb    142ms  read      0ms  body       3914B  protocol HTTP/2.0  https://registry.npmjs.org/content-type/-/content-type-1.0.5.tgz\n[HTTP-FILE-T] total     272ms  ttfb    128ms  read    143ms  body      81152B  protocol HTTP/2.0  https://registry.npmjs.org/react/-/react-18.2.0.tgz\n[PACKUMENT-PARSE] package=methods bytes=3634 elapsed_ms=0\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged content-type@1.0.5\n[TB-T] total     413ms  wait      0ms        2652B  https://registry.npmjs.org/safe-buffer/5.2.1  (h2)\n[TB-T] total     343ms  wait      0ms        1487B  https://registry.npmjs.org/array-flatten/1.1.1  (h2)\n[TB-T] total     362ms  wait      0ms        3215B  https://registry.npmjs.org/qs/6.13.0  (h2)\n[PROJECT-T] total 7ms scope=staged-file-project mode=staged react@18.2.0\n[HTTP-FILE-T] total      52ms  ttfb     52ms  read      0ms  body       5872B  protocol HTTP/2.0  https://registry.npmjs.org/type-is/-/type-is-1.6.18.tgz\n[HTTP-FILE-T] total      50ms  ttfb     49ms  read      0ms  body       1917B  protocol HTTP/2.0  https://registry.npmjs.org/escape-html/-/escape-html-1.0.3.tgz\n[HTTP-T] total      52ms  ttfb     50ms  body      2ms  wire         0B  decoded      54950B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/mime-types  (h2)\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged escape-html@1.0.3\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged type-is@1.6.18\n[PACKUMENT-PARSE] package=mime-types bytes=54950 elapsed_ms=0\n[HTTP-FILE-T] total      53ms  ttfb     52ms  read      0ms  body       5403B  protocol HTTP/2.0  https://registry.npmjs.org/accepts/-/accepts-1.3.8.tgz\n[HTTP-FILE-T] total      56ms  ttfb     56ms  read      0ms  body       3020B  protocol HTTP/2.0  https://registry.npmjs.org/encodeurl/-/encodeurl-2.0.0.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged accepts@1.3.8\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged encodeurl@2.0.0\n[HTTP-FILE-T] total      49ms  ttfb     48ms  read      0ms  body       3952B  protocol HTTP/2.0  https://registry.npmjs.org/parseurl/-/parseurl-1.3.3.tgz\n[HTTP-FILE-T] total      52ms  ttfb     52ms  read      0ms  body      16514B  protocol HTTP/2.0  https://registry.npmjs.org/debug/-/debug-2.6.9.tgz\n[HTTP-FILE-T] total      49ms  ttfb     49ms  read      0ms  body       6739B  protocol HTTP/2.0  https://registry.npmjs.org/content-disposition/-/content-disposition-0.5.4.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged parseurl@1.3.3\n[HTTP-FILE-T] total      49ms  ttfb     49ms  read      0ms  body       8570B  protocol HTTP/2.0  https://registry.npmjs.org/serve-static/-/serve-static-1.16.2.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged content-disposition@0.5.4\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged serve-static@1.16.2\n[PROJECT-T] total 5ms scope=staged-file-project mode=staged debug@2.6.9\n[HTTP-FILE-T] total      49ms  ttfb     49ms  read      0ms  body       5670B  protocol HTTP/2.0  https://registry.npmjs.org/proxy-addr/-/proxy-addr-2.0.8.tgz\n[HTTP-FILE-T] total      45ms  ttfb     44ms  read      0ms  body       2111B  protocol HTTP/2.0  https://registry.npmjs.org/cookie-signature/-/cookie-signature-1.0.6.tgz\n[HTTP-FILE-T] total      44ms  ttfb     42ms  read      1ms  body       4683B  protocol HTTP/2.0  https://registry.npmjs.org/statuses/-/statuses-2.0.1.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged cookie-signature@1.0.6\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged proxy-addr@2.0.8\n[HTTP-FILE-T] total      45ms  ttfb     43ms  read      1ms  body       3603B  protocol HTTP/2.0  https://registry.npmjs.org/range-parser/-/range-parser-1.2.1.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged statuses@2.0.1\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged range-parser@1.2.1\n[HTTP-FILE-T] total      44ms  ttfb     44ms  read      0ms  body       2337B  protocol HTTP/2.0  https://registry.npmjs.org/merge-descriptors/-/merge-descriptors-1.0.3.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged merge-descriptors@1.0.3\n[HTTP-T] total      43ms  ttfb     43ms  body      0ms  wire         0B  decoded        673B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/unpipe  (h2)\n[PACKUMENT-PARSE] package=unpipe bytes=673 elapsed_ms=0\n[HTTP-FILE-T] total      48ms  ttfb     47ms  read      0ms  body       6828B  protocol HTTP/2.0  https://registry.npmjs.org/finalhandler/-/finalhandler-1.3.1.tgz\n[HTTP-FILE-T] total      49ms  ttfb     49ms  read      0ms  body       4386B  protocol HTTP/2.0  https://registry.npmjs.org/etag/-/etag-1.8.1.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged etag@1.8.1\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged finalhandler@1.3.1\n[HTTP-FILE-T] total      60ms  ttfb     60ms  read      0ms  body       5052B  protocol HTTP/2.0  https://registry.npmjs.org/on-finished/-/on-finished-2.4.1.tgz\n[HTTP-FILE-T] total      67ms  ttfb     67ms  read      0ms  body       1969B  protocol HTTP/2.0  https://registry.npmjs.org/setprototypeof/-/setprototypeof-1.2.0.tgz\n[HTTP-FILE-T] total      67ms  ttfb     67ms  read      0ms  body       3772B  protocol HTTP/2.0  https://registry.npmjs.org/vary/-/vary-1.1.2.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged on-finished@2.4.1\n[PROJECT-T] total 8ms scope=staged-file-project mode=staged setprototypeof@1.2.0\n[PROJECT-T] total 9ms scope=staged-file-project mode=staged vary@1.1.2\n[TB-T] total     303ms  wait      0ms        1568B  https://registry.npmjs.org/media-typer/0.3.0  (h2)\n[HTTP-FILE-T] total      51ms  ttfb     51ms  read      0ms  body       1953B  protocol HTTP/2.0  https://registry.npmjs.org/utils-merge/-/utils-merge-1.0.1.tgz\n[HTTP-FILE-T] total      52ms  ttfb     51ms  read      0ms  body       8211B  protocol HTTP/2.0  https://registry.npmjs.org/cookie/-/cookie-0.7.1.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged utils-merge@1.0.1\n[HTTP-FILE-T] total      52ms  ttfb     52ms  read      0ms  body       4229B  protocol HTTP/2.0  https://registry.npmjs.org/fresh/-/fresh-0.5.2.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged cookie@0.7.1\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged fresh@0.5.2\n[TB-T] total     339ms  wait      0ms        1557B  https://registry.npmjs.org/ms/2.0.0  (h2)\n[HTTP-FILE-T] total      48ms  ttfb     48ms  read      0ms  body      15692B  protocol HTTP/2.0  https://registry.npmjs.org/body-parser/-/body-parser-1.20.3.tgz\n[PROJECT-T] total 3ms scope=staged-file-project mode=staged body-parser@1.20.3\n[TB-T] total     318ms  wait      0ms        2483B  https://registry.npmjs.org/ipaddr.js/1.9.1  (h2)\n[TB-T] total      47ms  wait      0ms        2782B  https://registry.npmjs.org/bytes/3.1.2  (h2)\n[TB-T] total      45ms  wait      0ms        2714B  https://registry.npmjs.org/iconv-lite/0.4.24  (h2)\n[HTTP-T] total      49ms  ttfb     48ms  body      1ms  wire         0B  decoded      29397B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/ms  (h2)\n[PACKUMENT-PARSE-FULL] package=ms bytes=29397 elapsed_ms=0\n[HTTP-FILE-T] total      45ms  ttfb     44ms  read      1ms  body       8374B  protocol HTTP/2.0  https://registry.npmjs.org/depd/-/depd-2.0.0.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged depd@2.0.0\n[TB-T] total     304ms  wait      0ms        2863B  https://registry.npmjs.org/forwarded/0.2.0  (h2)\n[HTTP-FILE-T] total      49ms  ttfb     49ms  read      0ms  body       2842B  protocol HTTP/2.0  https://registry.npmjs.org/loose-envify/-/loose-envify-1.4.0.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged loose-envify@1.4.0\n[HTTP-FILE-T] total      50ms  ttfb     49ms  read      0ms  body       3067B  protocol HTTP/2.0  https://registry.npmjs.org/path-to-regexp/-/path-to-regexp-0.1.12.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged path-to-regexp@0.1.12\n[HTTP-T] total      56ms  ttfb     51ms  body      5ms  wire         0B  decoded      18314B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/js-tokens  (h2)\n[PACKUMENT-PARSE] package=js-tokens bytes=18314 elapsed_ms=0\n[HTTP-FILE-T] total      45ms  ttfb     45ms  read      0ms  body       6339B  protocol HTTP/2.0  https://registry.npmjs.org/http-errors/-/http-errors-2.0.0.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged http-errors@2.0.0\n[HTTP-FILE-T] total      46ms  ttfb     46ms  read      0ms  body      15634B  protocol HTTP/2.0  https://registry.npmjs.org/send/-/send-0.19.0.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged send@0.19.0\n[HTTP-FILE-T] total      46ms  ttfb     45ms  read      0ms  body       2475B  protocol HTTP/2.0  https://registry.npmjs.org/methods/-/methods-1.1.2.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged methods@1.1.2\n[TB-T] total     308ms  wait      0ms        1649B  https://registry.npmjs.org/ee-first/1.1.1  (h2)\n[HTTP-FILE-T] total      50ms  ttfb     49ms  read      0ms  body       9972B  protocol HTTP/2.0  https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.2.1.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged safe-buffer@5.2.1\n[HTTP-FILE-T] total      44ms  ttfb     44ms  read      0ms  body       1992B  protocol HTTP/2.0  https://registry.npmjs.org/array-flatten/-/array-flatten-1.1.1.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged array-flatten@1.1.1\n[HTTP-FILE-T] total      48ms  ttfb     47ms  read      0ms  body      55319B  protocol HTTP/2.0  https://registry.npmjs.org/qs/-/qs-6.13.0.tgz\n[PROJECT-T] total 7ms scope=staged-file-project mode=staged qs@6.13.0\n[HTTP-T] total      43ms  ttfb     43ms  body      0ms  wire         0B  decoded      11281B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/side-channel  (h2)\n[PACKUMENT-PARSE] package=side-channel bytes=11281 elapsed_ms=0\n[HTTP-FILE-T] total      43ms  ttfb     43ms  read      0ms  body       5591B  protocol HTTP/2.0  https://registry.npmjs.org/mime-types/-/mime-types-2.1.35.tgz\n[TB-T] total     591ms  wait      0ms        2830B  https://registry.npmjs.org/negotiator/0.6.3  (h2)\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged mime-types@2.1.35\n[TB-T] total     292ms  wait      0ms        2927B  https://registry.npmjs.org/destroy/1.2.0  (h2)\n[HTTP-FILE-T] total      47ms  ttfb     47ms  read      0ms  body       2096B  protocol HTTP/2.0  https://registry.npmjs.org/unpipe/-/unpipe-1.0.0.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged unpipe@1.0.0\n[HTTP-FILE-T] total      46ms  ttfb     46ms  read      0ms  body       4189B  protocol HTTP/2.0  https://registry.npmjs.org/media-typer/-/media-typer-0.3.0.tgz\n[HTTP-FILE-T] total      46ms  ttfb     45ms  read      0ms  body      11501B  protocol HTTP/2.0  https://registry.npmjs.org/ipaddr.js/-/ipaddr.js-1.9.1.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged media-typer@0.3.0\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged ipaddr.js@1.9.1\n[HTTP-FILE-T] total      46ms  ttfb     42ms  read      3ms  body     185241B  protocol HTTP/2.0  https://registry.npmjs.org/iconv-lite/-/iconv-lite-0.4.24.tgz\n[HTTP-FILE-T] total      49ms  ttfb     48ms  read      0ms  body       4496B  protocol HTTP/2.0  https://registry.npmjs.org/bytes/-/bytes-3.1.2.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged bytes@3.1.2\n[HTTP-T] total      42ms  ttfb     42ms  body      0ms  wire         0B  decoded       3543B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/safer-buffer  (h2)\n[PACKUMENT-PARSE] package=safer-buffer bytes=3543 elapsed_ms=0\n[PROJECT-T] total 10ms scope=staged-file-project mode=staged iconv-lite@0.4.24\n[HTTP-FILE-T] total      44ms  ttfb     44ms  read      0ms  body       2696B  protocol HTTP/2.0  https://registry.npmjs.org/forwarded/-/forwarded-0.2.0.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged forwarded@0.2.0\n[HTTP-FILE-T] total      48ms  ttfb     48ms  read      0ms  body       6542B  protocol HTTP/2.0  https://registry.npmjs.org/js-tokens/-/js-tokens-4.0.0.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged js-tokens@4.0.0\n[HTTP-FILE-T] total      47ms  ttfb     47ms  read      0ms  body       8083B  protocol HTTP/2.0  https://registry.npmjs.org/side-channel/-/side-channel-1.1.1.tgz\n[HTTP-FILE-T] total      48ms  ttfb     48ms  read      0ms  body       2733B  protocol HTTP/2.0  https://registry.npmjs.org/ee-first/-/ee-first-1.1.1.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged ee-first@1.1.1\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged side-channel@1.1.1\n[TB-T] total     411ms  wait      0ms        3178B  https://registry.npmjs.org/raw-body/2.5.2  (h2)\n[HTTP-T] total      44ms  ttfb     43ms  body      1ms  wire         0B  decoded       3731B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/side-channel-weakmap  (h2)\n[PACKUMENT-PARSE] package=side-channel-weakmap bytes=3731 elapsed_ms=0\n[HTTP-T] total      46ms  ttfb     46ms  body      0ms  wire         0B  decoded       4277B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/es-errors  (h2)\n[HTTP-T] total      45ms  ttfb     45ms  body      0ms  wire         0B  decoded      41631B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/object-inspect  (h2)\n[PACKUMENT-PARSE] package=es-errors bytes=4277 elapsed_ms=0\n[PACKUMENT-PARSE] package=object-inspect bytes=41631 elapsed_ms=0\n[HTTP-T] total      42ms  ttfb     42ms  body      0ms  wire         0B  decoded       2423B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/side-channel-map  (h2)\n[PACKUMENT-PARSE] package=side-channel-map bytes=2423 elapsed_ms=0\n[HTTP-FILE-T] total      45ms  ttfb     45ms  read      0ms  body       6399B  protocol HTTP/2.0  https://registry.npmjs.org/negotiator/-/negotiator-0.6.3.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged negotiator@0.6.3\n[HTTP-FILE-T] total      45ms  ttfb     45ms  read      0ms  body       3379B  protocol HTTP/2.0  https://registry.npmjs.org/destroy/-/destroy-1.2.0.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged destroy@1.2.0\n[TB-T] total     421ms  wait      0ms        2311B  https://registry.npmjs.org/inherits/2.0.4  (h2)\n[HTTP-FILE-T] total      47ms  ttfb     47ms  read      0ms  body      12035B  protocol HTTP/2.0  https://registry.npmjs.org/safer-buffer/-/safer-buffer-2.1.2.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged safer-buffer@2.1.2\n[TB-T] total     412ms  wait      0ms        3084B  https://registry.npmjs.org/toidentifier/1.0.1  (h2)\n[HTTP-FILE-T] total      45ms  ttfb     43ms  read      1ms  body       8649B  protocol HTTP/2.0  https://registry.npmjs.org/raw-body/-/raw-body-2.5.2.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged raw-body@2.5.2\n[HTTP-FILE-T] total      46ms  ttfb     45ms  read      0ms  body       5442B  protocol HTTP/2.0  https://registry.npmjs.org/side-channel-weakmap/-/side-channel-weakmap-1.0.2.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged side-channel-weakmap@1.0.2\n[TB-T] total     301ms  wait      0ms        3338B  https://registry.npmjs.org/mime-db/1.52.0  (h2)\n[HTTP-T] total      44ms  ttfb     44ms  body      0ms  wire         0B  decoded       4871B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/call-bound  (h2)\n[PACKUMENT-PARSE] package=call-bound bytes=4871 elapsed_ms=0\n[HTTP-FILE-T] total      42ms  ttfb     41ms  read      0ms  body       5338B  protocol HTTP/2.0  https://registry.npmjs.org/es-errors/-/es-errors-1.3.0.tgz\n[PROJECT-T] total 3ms scope=staged-file-project mode=staged es-errors@1.3.0\n[HTTP-FILE-T] total      47ms  ttfb     47ms  read      0ms  body      28026B  protocol HTTP/2.0  https://registry.npmjs.org/object-inspect/-/object-inspect-1.13.4.tgz\n[HTTP-FILE-T] total      46ms  ttfb     46ms  read      0ms  body       5280B  protocol HTTP/2.0  https://registry.npmjs.org/side-channel-map/-/side-channel-map-1.0.1.tgz\n[PROJECT-T] total 7ms scope=staged-file-project mode=staged object-inspect@1.13.4\n[PROJECT-T] total 3ms scope=staged-file-project mode=staged side-channel-map@1.0.1\n[HTTP-FILE-T] total      45ms  ttfb     45ms  read      0ms  body       2030B  protocol HTTP/2.0  https://registry.npmjs.org/inherits/-/inherits-2.0.4.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged inherits@2.0.4\n[HTTP-FILE-T] total      47ms  ttfb     46ms  read      0ms  body       2347B  protocol HTTP/2.0  https://registry.npmjs.org/toidentifier/-/toidentifier-1.0.1.tgz\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged toidentifier@1.0.1\n[HTTP-FILE-T] total      48ms  ttfb     47ms  read      0ms  body      26992B  protocol HTTP/2.0  https://registry.npmjs.org/mime-db/-/mime-db-1.52.0.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged mime-db@1.52.0\n[HTTP-FILE-T] total      48ms  ttfb     48ms  read      0ms  body       6382B  protocol HTTP/2.0  https://registry.npmjs.org/call-bound/-/call-bound-1.0.4.tgz\n[HTTP-T] total      48ms  ttfb     48ms  body      0ms  wire         0B  decoded       3677B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/call-bind-apply-helpers  (h2)\n[PACKUMENT-PARSE] package=call-bind-apply-helpers bytes=3677 elapsed_ms=0\n[PROJECT-T] total 3ms scope=staged-file-project mode=staged call-bound@1.0.4\n[HTTP-T] total     287ms  ttfb    287ms  body      0ms  wire         0B  decoded       2273B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/side-channel-list  (h2)\n[PACKUMENT-PARSE] package=side-channel-list bytes=2273 elapsed_ms=0\n[HTTP-FILE-T] total      46ms  ttfb     46ms  read      0ms  body       6067B  protocol HTTP/2.0  https://registry.npmjs.org/call-bind-apply-helpers/-/call-bind-apply-helpers-1.0.2.tgz\n[HTTP-T] total      47ms  ttfb     47ms  body      0ms  wire         0B  decoded       3724B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/function-bind  (h2)\n[PACKUMENT-PARSE] package=function-bind bytes=3724 elapsed_ms=0\n[PROJECT-T] total 4ms scope=staged-file-project mode=staged call-bind-apply-helpers@1.0.2\n[HTTP-FILE-T] total      47ms  ttfb     46ms  read      0ms  body       6135B  protocol HTTP/2.0  https://registry.npmjs.org/side-channel-list/-/side-channel-list-1.0.1.tgz\n[PROJECT-T] total 3ms scope=staged-file-project mode=staged side-channel-list@1.0.1\n[HTTP-FILE-T] total      46ms  ttfb     44ms  read      1ms  body       9799B  protocol HTTP/2.0  https://registry.npmjs.org/function-bind/-/function-bind-1.1.2.tgz\n[PROJECT-T] total 6ms scope=staged-file-project mode=staged function-bind@1.1.2\n[HTTP-T] total     289ms  ttfb    288ms  body      1ms  wire         0B  decoded      27579B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/get-intrinsic  (h2)\n[PACKUMENT-PARSE] package=get-intrinsic bytes=27579 elapsed_ms=0\n[HTTP-T] total      61ms  ttfb     61ms  body      0ms  wire         0B  decoded       3782B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/gopd  (h2)\n[HTTP-FILE-T] total      61ms  ttfb     61ms  read      0ms  body      13886B  protocol HTTP/2.0  https://registry.npmjs.org/get-intrinsic/-/get-intrinsic-1.3.1.tgz\n[PACKUMENT-PARSE] package=gopd bytes=3782 elapsed_ms=0\n[HTTP-T] total      61ms  ttfb     61ms  body      0ms  wire         0B  decoded       7061B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/has-symbols  (h2)\n[HTTP-T] total      63ms  ttfb     63ms  body      0ms  wire         0B  decoded       1965B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/get-proto  (h2)\n[HTTP-T] total      64ms  ttfb     63ms  body      1ms  wire         0B  decoded       2659B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/generator-function  (h2)\n[PACKUMENT-PARSE] package=has-symbols bytes=7061 elapsed_ms=0\n[PACKUMENT-PARSE] package=generator-function bytes=2659 elapsed_ms=0\n[HTTP-T] total      61ms  ttfb     59ms  body      2ms  wire         0B  decoded       1985B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/es-define-property  (h2)\n[PACKUMENT-PARSE] package=get-proto bytes=1965 elapsed_ms=0\n[PACKUMENT-PARSE] package=es-define-property bytes=1985 elapsed_ms=0\n[HTTP-T] total      65ms  ttfb     63ms  body      2ms  wire         0B  decoded       4705B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/es-object-atoms  (h2)\n[PACKUMENT-PARSE] package=es-object-atoms bytes=4705 elapsed_ms=0\n[PROJECT-T] total 5ms scope=staged-file-project mode=staged get-intrinsic@1.3.1\n[HTTP-T] total      47ms  ttfb     47ms  body      0ms  wire         0B  decoded       5478B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/hasown  (h2)\n[PACKUMENT-PARSE] package=hasown bytes=5478 elapsed_ms=0\n[HTTP-T] total      50ms  ttfb     48ms  body      2ms  wire         0B  decoded       2182B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/math-intrinsics  (h2)\n[HTTP-FILE-T] total      50ms  ttfb     49ms  read      0ms  body       4584B  protocol HTTP/2.0  https://registry.npmjs.org/gopd/-/gopd-1.2.0.tgz\n[PACKUMENT-PARSE] package=math-intrinsics bytes=2182 elapsed_ms=0\n[HTTP-FILE-T] total      50ms  ttfb     50ms  read      0ms  body       8059B  protocol HTTP/2.0  https://registry.npmjs.org/has-symbols/-/has-symbols-1.1.0.tgz\n[HTTP-FILE-T] total      51ms  ttfb     51ms  read      0ms  body       4474B  protocol HTTP/2.0  https://registry.npmjs.org/get-proto/-/get-proto-1.0.1.tgz\n[PROJECT-T] total 4ms scope=staged-file-project mode=staged gopd@1.2.0\n[PROJECT-T] total 5ms scope=staged-file-project mode=staged has-symbols@1.1.0\n[HTTP-T] total      50ms  ttfb     50ms  body      0ms  wire         0B  decoded       2071B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/dunder-proto  (h2)\n[PROJECT-T] total 9ms scope=staged-file-project mode=staged get-proto@1.0.1\n[PACKUMENT-PARSE] package=dunder-proto bytes=2071 elapsed_ms=0\n[HTTP-FILE-T] total      44ms  ttfb     44ms  read      0ms  body       4431B  protocol HTTP/2.0  https://registry.npmjs.org/es-define-property/-/es-define-property-1.0.1.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged es-define-property@1.0.1\n[HTTP-FILE-T] total      47ms  ttfb     47ms  read      0ms  body       4441B  protocol HTTP/2.0  https://registry.npmjs.org/generator-function/-/generator-function-2.0.1.tgz\n[PROJECT-T] total 3ms scope=staged-file-project mode=staged generator-function@2.0.1\n[HTTP-FILE-T] total      49ms  ttfb     48ms  read      0ms  body       4820B  protocol HTTP/2.0  https://registry.npmjs.org/es-object-atoms/-/es-object-atoms-1.1.2.tgz\n[HTTP-FILE-T] total      48ms  ttfb     47ms  read      0ms  body       4608B  protocol HTTP/2.0  https://registry.npmjs.org/hasown/-/hasown-2.0.4.tgz\n[PROJECT-T] total 3ms scope=staged-file-project mode=staged hasown@2.0.4\n[PROJECT-T] total 4ms scope=staged-file-project mode=staged es-object-atoms@1.1.2\n[HTTP-FILE-T] total      52ms  ttfb     44ms  read      7ms  body       6355B  protocol HTTP/2.0  https://registry.npmjs.org/math-intrinsics/-/math-intrinsics-1.1.0.tgz\n[HTTP-FILE-T] total      51ms  ttfb     50ms  read      0ms  body       5049B  protocol HTTP/2.0  https://registry.npmjs.org/dunder-proto/-/dunder-proto-1.0.1.tgz\n[PROJECT-T] total 9ms scope=staged-file-project mode=staged math-intrinsics@1.1.0\n[PROJECT-T] total 4ms scope=staged-file-project mode=staged dunder-proto@1.0.1\n[TB-T] total     921ms  wait      0ms        1703B  https://registry.npmjs.org/mime/1.6.0  (h2)\n[HTTP-T] total     283ms  ttfb    283ms  body      0ms  wire         0B  decoded       1116B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/async-generator-function  (h2)\n[PACKUMENT-PARSE] package=async-generator-function bytes=1116 elapsed_ms=0\n[HTTP-FILE-T] total      48ms  ttfb     48ms  read      0ms  body      15686B  protocol HTTP/2.0  https://registry.npmjs.org/mime/-/mime-1.6.0.tgz\n[PROJECT-T] total 3ms scope=staged-file-project mode=staged mime@1.6.0\n[HTTP-FILE-T] total      48ms  ttfb     47ms  read      0ms  body       4504B  protocol HTTP/2.0  https://registry.npmjs.org/async-generator-function/-/async-generator-function-1.0.0.tgz\n[PROJECT-T] total 5ms scope=staged-file-project mode=staged async-generator-function@1.0.0\n[HTTP-T] total     290ms  ttfb    290ms  body      0ms  wire         0B  decoded       1536B  accept=application/vnd.npm.install-v1+json type=application/vnd.npm.install-v1+json https://registry.npmjs.org/async-function  (h2)\n[PACKUMENT-PARSE] package=async-function bytes=1536 elapsed_ms=0\n[jhol-profile] stage=expansion_http requests=147 successful=147 failed=0 body_bytes=5526284 specs=74\n[jhol-profile] stage=after_expansion delta_ms=2952 total_ms=2954\n[2026-10-04 23:45:23] flat resolution conflict (send requires encodeurl ~1.0.2, resolved 2.0.0); resolving nested layout\n[2026-10-04 23:45:23] single-pass: nested layout built from in-memory metadata (no second resolution)\n[jhol-profile] stage=layout_lookup delta_ms=1 total_ms=1\n[HTTP-FILE-T] total      46ms  ttfb     46ms  read      0ms  body       4380B  protocol HTTP/2.0  https://registry.npmjs.org/async-function/-/async-function-1.0.0.tgz\n[PROJECT-T] total 5ms scope=staged-file-project mode=staged async-function@1.0.0\n[HTTP-FILE-T] total      48ms  ttfb     47ms  read      0ms  body       2874B  protocol HTTP/2.0  https://registry.npmjs.org/ms/-/ms-2.0.0.tgz\n[HTTP-FILE-T] total      50ms  ttfb     50ms  read      0ms  body       3260B  protocol HTTP/2.0  https://registry.npmjs.org/encodeurl/-/encodeurl-1.0.2.tgz\n[HTTP-FILE-T] total      52ms  ttfb     51ms  read      0ms  body       2967B  protocol HTTP/2.0  https://registry.npmjs.org/ms/-/ms-2.1.3.tgz\n[PROJECT-T] total 2ms scope=staged-file-project mode=staged ms@2.0.0\n[PROJECT-T] total 1ms scope=staged-file-project mode=staged ms@2.1.3\n[PROJECT-T] total 3ms scope=staged-file-project mode=staged encodeurl@1.0.2\n[jhol-profile] stage=layout_fetch_extract delta_ms=56 total_ms=58\n[jhol-profile] stage=layout_projection delta_ms=35 total_ms=93\n[jhol-profile] stage=layout_index_relink delta_ms=0 total_ms=93\n        3.11 real         0.22 user         0.49 sys\n            62832640  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                3708  page reclaims\n                 412  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                 190  messages sent\n                 814  messages received\n                   0  signals received\n                 451  voluntary context switches\n                4725  involuntary context switches\n          3642593575  instructions retired\n          1414898406  cycles elapsed\n            46924616  peak memory footprint\n",
+      "peak_rss_bytes": 62832640,
+      "stage_times_ms": {
+        "install_pkg_start": 0,
+        "after_preseed": 0,
+        "after_capsule": 0,
+        "after_expansion": 2952,
+        "layout_lookup": 1,
+        "layout_fetch_extract": 56,
+        "layout_projection": 35,
+        "layout_index_relink": 0
+      },
+      "jagr_full_resolver_marker_observed": false,
+      "archive_request_count": 76,
+      "environment": {
+        "JHOL_CACHE_DIR": "/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-fresh-matched-g8z8q2zp/31-unlocked-medium-before-fkdm6grj/cache/jhol",
+        "JHOL_NO_HARVEST": "1",
+        "JHOL_NO_DAEMON": "1",
+        "JHOL_AUTO_DAEMON": "0",
+        "JHOL_DAEMON_MODE": "0",
+        "JHOL_PREBUILT": "0",
+        "JHOL_JGRID": "0",
+        "JHOL_JGRID_L0": "0",
+        "JHOL_JAGRS_MIRROR": "0",
+        "JHOL_NO_JMR": "1",
+        "JHOL_STREAM_EXTRACT": "0",
+        "JHOL_NO_SPLASH": "1",
+        "JHOL_PROFILE_INSTALL": "1",
+        "JHOL_HTTP_TIMING": "1",
+        "JHOL_HTTP_METRICS": "1",
+        "JHOL_DEBUG_JINF": "1"
+      }
+    }
+  ],
+  "frontdoor_replays": [],
+  "runner_source": "import json,os,random,subprocess,tempfile,time,statistics,hashlib,shutil,re\nfrom pathlib import Path\nrepo=Path('/Users/bhuvanprakash/j/jhol');jhol=repo/'target/release/jhol';before=Path('/tmp/jhol-metadata-coordinator-20261004-183936/jhol-before');bun=Path('/Users/bhuvanprakash/.bun/bin/bun');samples=[];rng=random.Random(2026100431)\nold=json.loads((repo/'docs/architecture/experiments/cold-h2-window-ab-20261004-162230.json').read_text())\nfixtures={'unlocked-medium':{'package.json':{'name':'coordinator-medium','version':'1.0.0','dependencies':{'react':'18.2.0','typescript':'5.7.3','express':'4.21.2'}}}}\nquality=Path('/tmp/jhol-fresh-quality.cjs').read_text();journal=Path('/tmp/jhol-coordinator-clean-samples.jsonl');journal.write_text('');replays=[]\nwith tempfile.TemporaryDirectory(prefix='jhol-fresh-matched-') as td:\n root=Path(td)\n for rnd in range(31,32):\n  jobs=[(name,arm) for name in fixtures for arm in ('before','jhol','bun')];rng.shuffle(jobs)\n  for name,arm in jobs:\n   with tempfile.TemporaryDirectory(prefix=f'{rnd}-{name}-{arm}-',dir=root) as st:\n    base=Path(st);project=base/'project';home=base/'home';cache=base/'cache';project.mkdir();home.mkdir();cache.mkdir()\n    for fn,data in fixtures[name].items():(project/fn).write_text(json.dumps(data,indent=2)+'\\n')\n    env={k:v for k,v in os.environ.items() if not k.startswith('JHOL_')};env.update(HOME=str(home),XDG_CACHE_HOME=str(cache/'xdg'),JHOL_CACHE_DIR=str(cache/'jhol'),BUN_INSTALL_CACHE_DIR=str(cache/'bun'),JHOL_NO_HARVEST='1',JHOL_NO_DAEMON='1',JHOL_AUTO_DAEMON='0',JHOL_DAEMON_MODE='0',JHOL_PREBUILT='0',JHOL_JGRID='0',JHOL_JGRID_L0='0',JHOL_JAGRS_MIRROR='0',JHOL_NO_JMR='1',JHOL_STREAM_EXTRACT='0',JHOL_NO_SPLASH='1',JHOL_PROFILE_INSTALL='1',JHOL_HTTP_TIMING='1',JHOL_HTTP_METRICS='1',JHOL_DEBUG_JINF='1')\n    cmd=[str(before if arm=='before' else jhol),'install','--native-only','--no-scripts'] if arm!='bun' else [str(bun),'install','--ignore-scripts','--no-progress']\n    start=time.perf_counter();r=subprocess.run(['/usr/bin/time','-l',*cmd],cwd=project,env=env,text=True,capture_output=True,timeout=120);elapsed=(time.perf_counter()-start)*1000;output=r.stdout+'\\n'+r.stderr\n    Path('/tmp/jhol-coordinator-clean-install-journal.jsonl').open('a').write(json.dumps({'fixture':name,'arm':arm,'round':rnd,'elapsed_ms':elapsed,'exit':r.returncode,'raw_output':output})+'\\n')\n    try:check=subprocess.run(['node','-e',quality],cwd=project,text=True,capture_output=True,timeout=45)\n    except subprocess.TimeoutExpired as e:check=subprocess.CompletedProcess(['node'],124,e.stdout or '',str(e.stderr or '')+'quality timeout')\n    try:detail=json.loads(check.stdout) if check.returncode==0 else {'status':'fail','reason':check.stderr[-1800:]}\n    except ValueError:detail={'status':'fail','reason':'invalid checker result'}\n    lock_stable=None\n    if 'package-lock.json' in fixtures[name]:lock_stable=(project/'package-lock.json').read_text()==json.dumps(fixtures[name]['package-lock.json'],indent=2)+'\\n'\n    s={'fixture':name,'arm':arm,'round':rnd,'elapsed_ms':elapsed,'exit':r.returncode,'status':'pass' if r.returncode==check.returncode==0 and lock_stable is not False else 'fail','quality':detail,'locked_input_unchanged':lock_stable,'raw_output':output,'peak_rss_bytes':int(re.search(r'(\\d+)\\s+maximum resident set size',output).group(1)) if re.search(r'(\\d+)\\s+maximum resident set size',output) else None,'stage_times_ms':{a:int(b) for a,b in re.findall(r'\\[jhol-profile\\] stage=([^ ]+) delta_ms=([0-9]+)',output)},'jagr_full_resolver_marker_observed':'[JINF]' in output,'archive_request_count':output.count('[HTTP-FILE-T]'),'environment':{k:v for k,v in env.items() if k.startswith('JHOL_')}}\n    samples.append(s);journal.open('a').write(json.dumps(s)+'\\n');print(name,arm,rnd,s['status'],round(elapsed,2),flush=True)\n    # Untimed correctness checks of local reuse through all Jhol front doors.\n    if arm=='jhol' and name=='unlocked-small' and rnd==1 and s['status']=='pass':\n     for front in (jhol,repo/'target/release/jhol-trampoline',repo/'target/release/jhol-front'):\n      start=time.perf_counter();p=subprocess.run([str(front),'install'],cwd=project,env=env,text=True,capture_output=True,timeout=30);ms=(time.perf_counter()-start)*1000\n      q=subprocess.run(['node','-e',quality],cwd=project,text=True,capture_output=True,timeout=45);replays.append({'front':str(front),'condition':'unchanged-noop','elapsed_ms':ms,'exit':p.returncode,'quality_exit':q.returncode,'output':p.stdout+'\\n'+p.stderr})\n     for front in (jhol,repo/'target/release/jhol-trampoline',repo/'target/release/jhol-front'):\n      shutil.rmtree(project/'node_modules');start=time.perf_counter();p=subprocess.run([str(front),'install'],cwd=project,env=env,text=True,capture_output=True,timeout=60);ms=(time.perf_counter()-start)*1000\n      q=subprocess.run(['node','-e',quality],cwd=project,text=True,capture_output=True,timeout=45);replays.append({'front':str(front),'condition':'local-cache-rematerialization','elapsed_ms':ms,'exit':p.returncode,'quality_exit':q.returncode,'output':p.stdout+'\\n'+p.stderr})\nreport={'condition':'registry-cold; same exact roots; fresh HOME/XDG/tool caches per sample; harvest,daemon,prepared,JGrid/JAGR-S reuse disabled; OS/CDN/unrelated load uncontrolled','rounds':1,'classification':'one clean supplemental triplet; only unlocked-medium workload','fixture_inputs':fixtures,'samples':samples,'frontdoor_replays':replays,'runner_source':Path(__file__).read_text(),'quality_source':quality,'binaries':{name:{'path':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'version':subprocess.check_output([str(p),'--version'],text=True).strip()} for name,p in [('before',before),('jhol',jhol),('bun',bun)]},'summary':{}}\nfor name in fixtures:\n report['summary'][name]={arm:{'median_ms':statistics.median(s['elapsed_ms'] for s in samples if s['fixture']==name and s['arm']==arm),'passed':sum(s['status']=='pass' for s in samples if s['fixture']==name and s['arm']==arm),'total':1} for arm in ('before','jhol','bun')}\nout=repo/'docs/architecture/experiments'/('cold-metadata-coordinator-clean-'+time.strftime('%Y%m%d-%H%M%S')+'.json');out.write_text(json.dumps(report,indent=2)+'\\n');print(out);print(json.dumps(report['summary'],indent=2));raise SystemExit(0 if all(s['status']=='pass' for s in samples) and all(p['exit']==p['quality_exit']==0 for p in replays) else 2)\n",
+  "quality_source": "const fs=require('fs'),path=require('path'),assert=require('assert');\nconst {createRequire}=require('module');\nconst semver=require('/opt/homebrew/lib/node_modules/npm/node_modules/semver');\nconst root=process.cwd(),manifest=JSON.parse(fs.readFileSync('package.json'));\nconst packages=[],seen=new Set();\nfunction visit(nm){\n if(!fs.existsSync(nm))return;\n for(const name of fs.readdirSync(nm).sort()){\n  if(name.startsWith('.'))continue;\n  const dirs=name.startsWith('@')?fs.readdirSync(path.join(nm,name)).map(p=>name+'/'+p):[name];\n  for(const p of dirs){const dir=path.join(nm,p),file=path.join(dir,'package.json');if(!fs.existsSync(file))continue;\n   const info=JSON.parse(fs.readFileSync(file)),real=fs.realpathSync(dir);if(seen.has(real))continue;seen.add(real);\n   const realNm=info.name?.startsWith('@')?path.dirname(path.dirname(real)):path.dirname(real);\n   packages.push({dir:real,info,nm:real.startsWith(root+'/node_modules/')?realNm:nm});assert(packages.length<=10000,\"bounded identity traversal\");visit(path.join(real,'node_modules'));}\n }\n}\nfunction find(name,parent){\n const req=createRequire(path.join(parent,'package.json'));\n for(const lookup of req.resolve.paths(name)||[]){const file=path.join(lookup,name,'package.json');if(fs.existsSync(file))return JSON.parse(fs.readFileSync(file));}\n}\nfunction edges(info,parent){\n for(const [name,range] of Object.entries(info.dependencies||{})){\n  const optional=Object.hasOwn(info.optionalDependencies||{},name),child=find(name,parent);\n  if(!child&&optional)continue;\n  assert(child,`missing required ${info.name||'root'} -> ${name}`);\n  assert(semver.satisfies(child.version,range),`incompatible ${info.name||'root'} -> ${name} ${range}, actual ${child.version}`);\n }\n for(const [name,range] of Object.entries(info.peerDependencies||{})){\n  const child=find(name,parent);if(!child&&info.peerDependenciesMeta?.[name]?.optional)continue;\n  assert(child&&semver.satisfies(child.version,range),`peer mismatch ${info.name} -> ${name} ${range}`);\n }\n}\n(async()=>{\n visit(path.join(root,'node_modules'));assert(packages.length,'no installed identities');edges(manifest,root);\n for(const name of Object.keys(manifest.dependencies||{})){\n  const p=find(name,root);assert(p?.version===manifest.dependencies[name],`root pin differs: ${name}`);\n  require.resolve(name,{paths:[root]});await import(name);\n }\n let bins=0;\n for(const p of packages){edges(p.info,p.dir);\n  const entries=typeof p.info.bin==='string'?{[p.info.name.split('/').pop()]:p.info.bin}:p.info.bin||{};\n  for(const name of Object.keys(entries)){fs.accessSync(path.join(p.nm,'.bin',name),fs.constants.X_OK);bins++;}\n }\n console.log(JSON.stringify({status:'pass',package_count:packages.length,bins_checked:bins,inventory:packages.map(p=>({path:path.relative(root,p.dir),name:p.info.name,version:p.info.version})),quality:'exact root pins; required and peer SemVer edges; CJS resolution; ESM imports; executable bins'}));process.exit(0);\n})().catch(e=>{console.error(e.stack);process.exit(1)});\n",
+  "binaries": {
+    "before": {
+      "path": "/tmp/jhol-metadata-coordinator-20261004-183936/jhol-before",
+      "sha256": "7e9cf4b558432bba027affa43ebee41155ea19ba0a22a752d3168db0b8eb5ffd",
+      "version": "jhol 1.0.2"
+    },
+    "jhol": {
+      "path": "/Users/bhuvanprakash/j/jhol/target/release/jhol",
+      "sha256": "1195cb122cebb2dba027c0f55126abb34c14aeefe6972c6d86a03e81bb39bd17",
+      "version": "jhol 1.0.2"
+    },
+    "bun": {
+      "path": "/Users/bhuvanprakash/.bun/bin/bun",
+      "sha256": "35d20dd0263e5c950194434b925454fdfa9ba6e4467da960410fa05b08a7a5b5",
+      "version": "1.4.2"
+    }
+  },
+  "summary": {
+    "unlocked-medium": {
+      "before": {
+        "median_ms": 3116.3371250149794,
+        "passed": 1,
+        "total": 1
+      },
+      "jhol": {
+        "median_ms": 2637.5741660012864,
+        "passed": 1,
+        "total": 1
+      },
+      "bun": {
+        "median_ms": 1660.6200419773813,
+        "passed": 1,
+        "total": 1
+      }
+    }
+  }
+}

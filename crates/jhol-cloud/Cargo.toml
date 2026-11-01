@@ -1,0 +1,16 @@
+[package]
+name = "jhol-cloud"
+version = "0.1.0"
+edition = "2021"
+description = "Offline control-plane domain model for optional Jhol remote services"
+license-file = "../../LICENSE"
+publish = false
+
+[dependencies]
+rand = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+hex = "0.4"
+thiserror = "1.0"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }

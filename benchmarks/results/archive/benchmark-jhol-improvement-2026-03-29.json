@@ -1,0 +1,26 @@
+{
+  "date": "2026-03-29",
+  "fixture": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "next": "15.1.0",
+    "typescript": "5.7.2",
+    "express": "4.21.2"
+  },
+  "default": {
+    "cold_s": 11.395251000009011,
+    "cold_code": 0,
+    "warm_s": 0.024393500003498048,
+    "warm_code": 0,
+    "cold_err": "[2026-03-29 12:32:46] Installing dependencies from package.json\n",
+    "warm_err": "[2026-03-29 12:32:56] Installing dependencies from package.json\n"
+  },
+  "no_binary_pkgs": {
+    "cold_s": 0.17536824999842793,
+    "cold_code": 0,
+    "warm_s": 0.023946542001795024,
+    "warm_code": 0,
+    "cold_err": "[2026-03-29 12:32:56] Installing dependencies from package.json\n",
+    "warm_err": "[2026-03-29 12:32:56] Installing dependencies from package.json\n"
+  }
+}

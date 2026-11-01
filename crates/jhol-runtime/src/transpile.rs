@@ -306,4 +306,43 @@ mod tests {
         let out = fast_strip_ts(src, "test.js").unwrap();
         assert_eq!(out, src);
     }
+
+    // Regression: the shipped transpiler must remove type annotations.
+    // The regex fallback cannot, so `const n: number = 5` used to reach the
+    // engine verbatim and fail as a syntax error. These tests pin the real
+    // (swc) backend, which is now a default feature.
+    #[test]
+    fn transpile_strips_type_annotations() {
+        let out = transpile("const n: number = 5; console.log(n)", "t.ts").unwrap();
+        assert!(!out.contains(": number"), "annotation leaked: {out}");
+        assert!(out.contains("const n = 5"), "declaration lost: {out}");
+    }
+
+    #[test]
+    fn transpile_strips_interfaces_and_generics() {
+        let out = transpile(
+            "interface A { x: number }\nconst a: A = { x: 1 };\nconsole.log(a.x)",
+            "t.ts",
+        )
+        .unwrap();
+        assert!(!out.contains("interface"), "interface leaked: {out}");
+        assert!(!out.contains(": A"), "annotation leaked: {out}");
+    }
+
+    #[test]
+    fn transpile_strips_function_annotations() {
+        let out = transpile("function f(x: number): number { return x }", "t.ts").unwrap();
+        assert!(!out.contains(": number"), "annotation leaked: {out}");
+        assert!(out.contains("function f(x)"), "signature wrong: {out}");
+    }
+
+    #[test]
+    fn transpile_jsx() {
+        let out = transpile("const el = <div id=\"a\">hi</div>;", "t.jsx").unwrap();
+        assert!(
+            out.contains("createElement") || out.contains("jsx"),
+            "jsx not handled: {out}"
+        );
+        assert!(!out.contains("<div"), "raw jsx leaked: {out}");
+    }
 }

@@ -1,13 +1,13 @@
 [package]
 name = "jhol-runtime"
-version = "1.0.2"
+version = "2.0.0"
 edition = "2021"
 description = "Jhol JavaScript runtime — Node.js compatible, TypeScript & JSX built-in, hot reload"
 license-file = "../../LICENSE"
 repository = "https://github.com/bhuvanprakash/jhol"
 
 [features]
-default = ["native-engine", "mimalloc"]
+default = ["native-engine", "mimalloc", "swc-transpile"]
 native-engine = ["dep:quickjs-rusty"]
 jsc-engine = ["dep:javascriptcore"]
 # JholVM: Jhol's own from-scratch JS engine (lexer/parser/compiler/VM/GC).

@@ -1,0 +1,110 @@
+{
+  "summary": {
+    "jhol_seconds": 32.867,
+    "bun_seconds": 41.466,
+    "jhol_exit": 0,
+    "bun_exit": 0
+  },
+  "results": {
+    "timestamp": "2026-03-12T01:25:21+0530",
+    "root": "/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-bun-bench-hyzwahre",
+    "order": [
+      "jhol_no_bundle",
+      "bun"
+    ],
+    "jhol": {
+      "name": "jhol_no_bundle",
+      "cmd": [
+        "/Users/bhuvanprakash/j/jhol/target/release/jhol",
+        "install",
+        "--native-only"
+      ],
+      "cwd": "/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-bun-bench-hyzwahre/jhol-proj",
+      "elapsed_seconds": 32.867,
+      "exit_code": 0,
+      "stdout_tail": [],
+      "stderr_tail": [
+        "[2026-03-12 01:25:52] Installed mime@1.6.0 (native)",
+        "[2026-03-12 01:25:52] Installed safe-buffer@5.2.1 (native)",
+        "[2026-03-12 01:25:52] Installed ms@2.0.0 (native)",
+        "[2026-03-12 01:25:52] Installed send@0.19.0 (native)",
+        "[2026-03-12 01:25:52] Installed safer-buffer@2.1.2 (native)",
+        "[2026-03-12 01:25:52] Installed setprototypeof@1.2.0 (native)",
+        "[2026-03-12 01:25:52] Installed serve-static@1.16.2 (native)",
+        "[2026-03-12 01:25:52] Installed raw-body@2.5.2 (native)",
+        "[2026-03-12 01:25:52] Installed side-channel-list@1.0.0 (native)",
+        "[2026-03-12 01:25:52] Installed react@18.3.1 (native)",
+        "[2026-03-12 01:25:52] Installed side-channel-weakmap@1.0.2 (native)",
+        "[2026-03-12 01:25:52] Installed simple-swizzle@0.2.4 (native)",
+        "[2026-03-12 01:25:52] Installed nanoid@3.3.11 (native)",
+        "[2026-03-12 01:25:52] Installed iconv-lite@0.4.24 (native)",
+        "[2026-03-12 01:25:52] Installed streamsearch@1.1.0 (native)",
+        "[2026-03-12 01:25:52] Installed statuses@2.0.1 (native)",
+        "[2026-03-12 01:25:52] Installed scheduler@0.23.2 (native)",
+        "[2026-03-12 01:25:52] Installed toidentifier@1.0.1 (native)",
+        "[2026-03-12 01:25:52] Installed side-channel-map@1.0.1 (native)",
+        "[2026-03-12 01:25:52] Installed source-map-js@1.2.1 (native)",
+        "[2026-03-12 01:25:52] Installed side-channel@1.1.0 (native)",
+        "[2026-03-12 01:25:52] Installed unpipe@1.0.0 (native)",
+        "[2026-03-12 01:25:52] Installed utils-merge@1.0.1 (native)",
+        "[2026-03-12 01:25:52] Installed vary@1.1.2 (native)",
+        "[2026-03-12 01:25:52] Installed type-is@1.6.18 (native)",
+        "[2026-03-12 01:25:52] Installed math-intrinsics@1.1.0 (native)",
+        "[2026-03-12 01:25:52] Installed tslib@2.8.1 (native)",
+        "[2026-03-12 01:25:52] Installed postcss@8.4.31 (native)",
+        "[2026-03-12 01:25:52] Installed styled-jsx@5.1.6 (native)",
+        "[2026-03-12 01:25:52] Installed sharp@0.33.5 (native)",
+        "[2026-03-12 01:25:52] Installed semver@7.7.4 (native)",
+        "[2026-03-12 01:25:52] Installed react-dom@18.3.1 (native)",
+        "[2026-03-12 01:25:52] Installed @img/sharp-libvips-darwin-arm64@1.0.4 (native)",
+        "[2026-03-12 01:25:53] Installed typescript@5.7.2 (native)",
+        "[2026-03-12 01:25:53] Installed @swc/helpers@0.5.15 (native)",
+        "[2026-03-12 01:25:54] Installed caniuse-lite@1.0.30001777 (native)",
+        "[2026-03-12 01:25:54] Installed next@15.1.0 (native)",
+        "[2026-03-12 01:25:54] Installed @next/swc-darwin-arm64@15.1.0 (native)",
+        "[jhol-native-link] 2787ms",
+        "[2026-03-12 01:25:54] [jhol-profile] stage=download_unpack_install_cold delta_ms=18275 total_ms=32372"
+      ],
+      "interesting_stderr": [
+        "[2026-03-12 01:25:36] [jhol-profile] stage=resolved_specs_ready delta_ms=14086 total_ms=14086",
+        "[2026-03-12 01:25:36] [jhol-profile] stage=saved_daemon_snapshot delta_ms=1 total_ms=14088",
+        "[2026-03-12 01:25:36] [jhol-profile] stage=classify_cache_vs_fetch delta_ms=8 total_ms=14096",
+        "[2026-03-12 01:25:36] [jhol-profile] stage=install_from_cache delta_ms=0 total_ms=14096",
+        "[2026-03-12 01:25:36] [jhol-profile] stage=resolve_cold_specs delta_ms=0 total_ms=14096",
+        "[jhol-native-download] 15485ms",
+        "[jhol-native-link] 2787ms",
+        "[2026-03-12 01:25:54] [jhol-profile] stage=download_unpack_install_cold delta_ms=18275 total_ms=32372"
+      ]
+    },
+    "bun": {
+      "name": "bun",
+      "cmd": [
+        "bun",
+        "install"
+      ],
+      "cwd": "/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-bun-bench-hyzwahre/bun-proj",
+      "elapsed_seconds": 41.466,
+      "exit_code": 0,
+      "stdout_tail": [
+        "bun install v1.3.4 (5eb2145b)",
+        "",
+        "+ express@4.21.2 (v5.2.1 available)",
+        "+ next@15.1.0 (v16.1.6 available)",
+        "+ react@18.3.1 (v19.2.4 available)",
+        "+ react-dom@18.3.1 (v19.2.4 available)",
+        "+ typescript@5.7.2 (v5.9.3 available)",
+        "",
+        "101 packages installed [41.11s]"
+      ],
+      "stderr_tail": [
+        "Resolving dependencies",
+        "Resolved, downloaded and extracted [452]",
+        "Saved lockfile"
+      ],
+      "interesting_stderr": [
+        "Resolved, downloaded and extracted [452]",
+        "Saved lockfile"
+      ]
+    }
+  }
+}

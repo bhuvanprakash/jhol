@@ -1,0 +1,83 @@
+{
+  "note": "Full jhol install (resolver=jagr, L1=Knot auto) vs bun. Isolated HOME+cache. Express fixture. Link+transitive BFS fixes.",
+  "knot": "Fully wired as JAGR3 Layer 1 (knot.rs + jagr_resolver).",
+  "jhol_bin": "/Users/bhuvanprakash/j/jhol/target/release/jhol",
+  "runs": [
+    {
+      "label": "jhol-cold-1",
+      "tool": "jhol",
+      "mode": "cold",
+      "seconds": 4.024,
+      "exit": 0,
+      "nm_top": 96,
+      "express": true,
+      "body_parser": true
+    },
+    {
+      "label": "jhol-warm-1",
+      "tool": "jhol",
+      "mode": "warm",
+      "seconds": 0.094,
+      "exit": 0,
+      "nm_top": 96,
+      "express": true,
+      "body_parser": true
+    },
+    {
+      "label": "jhol-cold-2",
+      "tool": "jhol",
+      "mode": "cold",
+      "seconds": 4.022,
+      "exit": 0,
+      "nm_top": 96,
+      "express": true,
+      "body_parser": true
+    },
+    {
+      "label": "jhol-warm-2",
+      "tool": "jhol",
+      "mode": "warm",
+      "seconds": 0.104,
+      "exit": 0,
+      "nm_top": 96,
+      "express": true,
+      "body_parser": true
+    },
+    {
+      "label": "bun-cold-1",
+      "tool": "bun",
+      "mode": "cold",
+      "seconds": 3.436,
+      "exit": 0,
+      "nm_top": 95,
+      "express": true
+    },
+    {
+      "label": "bun-warm-1",
+      "tool": "bun",
+      "mode": "warm",
+      "seconds": 0.046,
+      "exit": 0,
+      "nm_top": 95,
+      "express": true
+    },
+    {
+      "label": "bun-cold-2",
+      "tool": "bun",
+      "mode": "cold",
+      "seconds": 2.67,
+      "exit": 0,
+      "nm_top": 95,
+      "express": true
+    },
+    {
+      "label": "bun-warm-2",
+      "tool": "bun",
+      "mode": "warm",
+      "seconds": 0.044,
+      "exit": 0,
+      "nm_top": 95,
+      "express": true
+    }
+  ]
+}

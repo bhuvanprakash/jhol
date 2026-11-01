@@ -1,0 +1,6 @@
+{
+  "case": "required locked package absent; future fresh marker",
+  "expected_delegate_exit": 71,
+  "actual_exit": 0,
+  "false_success": true
+}

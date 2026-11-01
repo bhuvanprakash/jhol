@@ -574,6 +574,178 @@ mod tests {
             .contains("symlink"));
     }
 
+    #[cfg(unix)]
+    fn minimal_plan(root: &std::path::Path) -> AdapterPlan {
+        AdapterPlan {
+            adapter: AdapterIdentity {
+                id: "test".into(),
+                version: "1.0.0".into(),
+                ecosystem: "test".into(),
+            },
+            project_root: root.to_path_buf(),
+            declared_inputs: vec![],
+            expected_writes: vec!["out.txt".into()],
+            expected_outputs: vec!["out.txt".into()],
+            actions: vec![NativeCommand {
+                program: "/bin/sh".into(),
+                args: vec!["-c".into(), "printf x > out.txt".into()],
+                version_args: vec![],
+            }],
+            cancellation: "none".into(),
+            network_access: false,
+            script_execution_possible: true,
+            permissions: vec![Capability::ProcessLaunch],
+            cacheable: false,
+            limitations: vec![],
+            human_summary: "test".into(),
+        }
+    }
+
+    #[test]
+    fn planned_writes_reject_absolute_and_traversal_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut plan = minimal_plan(dir.path());
+        plan.expected_writes = vec!["/etc/passwd".into()];
+        assert!(validate_planned_writes(&plan)
+            .unwrap_err()
+            .to_string()
+            .contains("escapes"));
+        plan.expected_writes = vec!["../outside.txt".into()];
+        assert!(validate_planned_writes(&plan)
+            .unwrap_err()
+            .to_string()
+            .contains("escapes"));
+    }
+
+    #[test]
+    fn execution_rejects_identity_mismatch_missing_capability_and_bad_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = minimal_plan(dir.path());
+        // Wrong adapter version.
+        let other = AdapterIdentity {
+            version: "9.9.9".into(),
+            ..plan.adapter.clone()
+        };
+        assert!(execute_approved_plan(
+            &other,
+            &ApprovedPlan::authorize(plan.clone(), &open_policy()).unwrap()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("another adapter version"));
+        // Missing capability: policy without ProcessLaunch.
+        let mut denied = jhol_policy::Policy::deny_all();
+        denied.allow(Capability::ReadOnlyInspect);
+        assert!(ApprovedPlan::authorize(plan.clone(), &denied).is_err());
+        // Root not a directory.
+        let file_root = tempfile::tempdir().unwrap();
+        let file = file_root.path().join("f");
+        fs::write(&file, "x").unwrap();
+        let mut bad_root = minimal_plan(&file);
+        bad_root.project_root = file.clone();
+        assert!(execute_approved_plan(
+            &bad_root.adapter.clone(),
+            &ApprovedPlan::authorize(bad_root.clone(), &open_policy()).unwrap()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("not a directory"));
+        // No actions.
+        let mut no_actions = minimal_plan(dir.path());
+        no_actions.actions = vec![];
+        assert!(execute_approved_plan(
+            &no_actions.adapter.clone(),
+            &ApprovedPlan::authorize(no_actions.clone(), &open_policy()).unwrap()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("no executable action"));
+    }
+
+    #[cfg(unix)]
+    fn open_policy() -> jhol_policy::Policy {
+        let mut p = jhol_policy::Policy::deny_all();
+        p.allow(Capability::ReadOnlyInspect);
+        p.allow(Capability::ProcessLaunch);
+        p
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn execution_runs_actions_and_verifies_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = minimal_plan(dir.path());
+        let approved = ApprovedPlan::authorize(plan.clone(), &open_policy()).unwrap();
+        let receipt = execute_approved_plan(&plan.adapter, &approved).unwrap();
+        assert_eq!(receipt.exit_status, 0);
+        assert_eq!(receipt.outputs.len(), 1);
+        assert!(verify_receipt(&plan.adapter, &receipt).ok);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn execution_rejects_escaping_or_missing_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut plan = minimal_plan(dir.path());
+        plan.expected_outputs = vec!["../evil.txt".into()];
+        assert!(execute_approved_plan(
+            &plan.adapter,
+            &ApprovedPlan::authorize(plan.clone(), &open_policy()).unwrap()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("escapes project root"));
+        let mut missing = minimal_plan(dir.path());
+        missing.expected_outputs = vec!["never-created.txt".into()];
+        assert!(execute_approved_plan(
+            &missing.adapter,
+            &ApprovedPlan::authorize(missing.clone(), &open_policy()).unwrap()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("was not created"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verify_receipt_flags_tampering() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = minimal_plan(dir.path());
+        let approved = ApprovedPlan::authorize(plan.clone(), &open_policy()).unwrap();
+        let mut receipt = execute_approved_plan(&plan.adapter, &approved).unwrap();
+        // Tamper with the recorded digest.
+        receipt.outputs[0].digest = "0".repeat(64);
+        let v = verify_receipt(&plan.adapter, &receipt);
+        assert!(!v.ok);
+        assert!(v.notes.iter().any(|n| n.contains("digest")));
+        // Wrong adapter identity is flagged too.
+        let other = AdapterIdentity {
+            id: "other".into(),
+            ..plan.adapter.clone()
+        };
+        let receipt2 = execute_approved_plan(&plan.adapter, &approved).unwrap();
+        let v2 = verify_receipt(&other, &receipt2);
+        assert!(!v2.ok);
+        assert!(v2.notes.iter().any(|n| n.contains("identity")));
+        // Nonzero exit is flagged.
+        let mut failed = minimal_plan(dir.path());
+        failed.actions = vec![NativeCommand {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), "exit 1".into()],
+            version_args: vec![],
+        }];
+        let err = execute_approved_plan(
+            &failed.adapter,
+            &ApprovedPlan::authorize(failed.clone(), &open_policy()).unwrap(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("exited with status"),
+            "unexpected error: {err}"
+        );
+    }
+
     #[test]
     fn empty_js_manifest_does_not_require_an_absent_lock_output() {
         let dir = tempfile::tempdir().unwrap();

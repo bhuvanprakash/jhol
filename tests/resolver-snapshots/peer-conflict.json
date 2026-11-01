@@ -1,0 +1,27 @@
+{
+  "fixture": "peer-conflict",
+  "expectedStatus": "fail",
+  "notes": "known peer dependency conflict fixture",
+  "expectedGraph": {
+    "root": {
+      "name": "jhol-fixture-peer-conflict",
+      "version": "1.0.0"
+    },
+    "edges": [
+      {
+        "from": "$root",
+        "to": "eslint",
+        "spec": "9.0.0",
+        "type": "dependencies"
+      },
+      {
+        "from": "$root",
+        "to": "eslint-plugin-react",
+        "spec": "7.33.2",
+        "type": "dependencies"
+      }
+    ],
+    "overrides": {},
+    "workspaces": []
+  }
+}

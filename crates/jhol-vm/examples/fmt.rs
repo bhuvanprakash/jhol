@@ -9,6 +9,12 @@ fn main() {
 
 #[test]
 fn instr_size() {
-    println!("Instr = {} bytes", std::mem::size_of::<jhol_vm::bytecode::Instr>());
-    println!("Op    = {} bytes", std::mem::size_of::<jhol_vm::bytecode::Op>());
+    println!(
+        "Instr = {} bytes",
+        std::mem::size_of::<jhol_vm::bytecode::Instr>()
+    );
+    println!(
+        "Op    = {} bytes",
+        std::mem::size_of::<jhol_vm::bytecode::Op>()
+    );
 }

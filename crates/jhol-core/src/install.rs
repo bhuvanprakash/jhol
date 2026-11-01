@@ -113,6 +113,7 @@ fn trans_expansion_cache_key_hash(key: &str) -> String {
 }
 
 fn trans_expansion_cache_key(
+    registry_identity: &str,
     max_depth: usize,
     packages: &[&str],
     offline: bool,
@@ -131,10 +132,10 @@ fn trans_expansion_cache_key(
     optional_dependencies.sort();
 
     // Version the serialized identity; older cache entries omitted inputs that
-    // affect package selection and did not retain cross-platform optional deps.
+    // affect package selection, scoped registry/auth identity, and optional deps.
     serde_json::to_string(&(
-        3u8,
-        crate::registry::registry_url(),
+        4u8,
+        registry_identity,
         std::env::var("JHOL_STRICT_PEER_DEPS")
             .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
         max_depth,
@@ -198,15 +199,24 @@ fn flat_constraint_conflict(
 mod tests {
     #[test]
     fn transitive_expansion_cache_key_tracks_resolution_inputs() {
+        let registry_identity = "registry-identity-a";
         let packages = ["left@^1.0.0", "right@~2.0.0"];
         let overrides = HashMap::from([("shared".to_string(), "3.4.0".to_string())]);
         let optional = HashSet::from(["native-addon".to_string()]);
-        let key =
-            super::trans_expansion_cache_key(32, &packages, false, false, &overrides, &optional);
+        let key = super::trans_expansion_cache_key(
+            registry_identity,
+            32,
+            &packages,
+            false,
+            false,
+            &overrides,
+            &optional,
+        );
 
         assert_eq!(
             key,
             super::trans_expansion_cache_key(
+                registry_identity,
                 32,
                 &["right@~2.0.0", "left@^1.0.0"],
                 false,
@@ -218,6 +228,7 @@ mod tests {
         assert_ne!(
             key,
             super::trans_expansion_cache_key(
+                registry_identity,
                 32,
                 &packages,
                 false,
@@ -229,6 +240,7 @@ mod tests {
         assert_ne!(
             key,
             super::trans_expansion_cache_key(
+                registry_identity,
                 32,
                 &packages,
                 false,
@@ -239,15 +251,85 @@ mod tests {
         );
         assert_ne!(
             key,
-            super::trans_expansion_cache_key(32, &packages, true, false, &overrides, &optional)
+            super::trans_expansion_cache_key(
+                registry_identity,
+                32,
+                &packages,
+                true,
+                false,
+                &overrides,
+                &optional,
+            )
         );
         assert_ne!(
             key,
-            super::trans_expansion_cache_key(32, &packages, false, true, &overrides, &optional)
+            super::trans_expansion_cache_key(
+                registry_identity,
+                32,
+                &packages,
+                false,
+                true,
+                &overrides,
+                &optional,
+            )
         );
         assert_ne!(
             key,
-            super::trans_expansion_cache_key(64, &packages, false, false, &overrides, &optional)
+            super::trans_expansion_cache_key(
+                registry_identity,
+                64,
+                &packages,
+                false,
+                false,
+                &overrides,
+                &optional,
+            )
+        );
+        assert_ne!(
+            key,
+            super::trans_expansion_cache_key(
+                "registry-identity-b",
+                32,
+                &packages,
+                false,
+                false,
+                &overrides,
+                &optional,
+            )
+        );
+    }
+
+    #[test]
+    fn transitive_expansion_identity_tracks_scoped_origin_and_auth() {
+        fn write_npmrc(path: &std::path::Path, scoped_registry: &str, scoped_token: &str) {
+            std::fs::write(
+                path.join(".npmrc"),
+                format!(
+                    "registry=https://default.example/\n//default.example/:_authToken=default-token\n@private:registry={scoped_registry}/\n//{}/:_authToken={scoped_token}\n",
+                    scoped_registry.trim_start_matches("https://")
+                ),
+            )
+            .unwrap();
+        }
+
+        let first = tempfile::tempdir().unwrap();
+        let other_token = tempfile::tempdir().unwrap();
+        let other_origin = tempfile::tempdir().unwrap();
+        write_npmrc(first.path(), "https://private-a.example", "token-a");
+        write_npmrc(other_token.path(), "https://private-a.example", "token-b");
+        write_npmrc(other_origin.path(), "https://private-b.example", "token-a");
+
+        let baseline = crate::registry::registry_configuration_fingerprint(first.path());
+        assert!(!baseline.contains("token-a"));
+        assert_ne!(
+            baseline,
+            crate::registry::registry_configuration_fingerprint(other_token.path()),
+            "scoped credentials must change the expansion cache identity"
+        );
+        assert_ne!(
+            baseline,
+            crate::registry::registry_configuration_fingerprint(other_origin.path()),
+            "scoped registry origin must change the expansion cache identity"
         );
     }
 
@@ -886,7 +968,7 @@ impl ColdResolveStrategy for ManifestThenPackumentStrategy {
 
             match result {
                 Ok(Some((version, url, integrity))) => {
-                    crate::lattice_cache::remember(&base, &version_req, &version);
+                    registry::remember_lattice_for_current_identity(&base, &version_req, &version);
                     resolved_work.push(ResolvedFetch {
                         pkg,
                         url,
@@ -906,9 +988,7 @@ impl ColdResolveStrategy for ManifestThenPackumentStrategy {
             let mut zero_copy_hits: Vec<(String, ResolvedFetch)> = Vec::new();
             let mut still_needed: Vec<(String, String, String)> = Vec::new();
             for (pkg, base, version_req) in &pending_packument {
-                if let Some(meta) =
-                    crate::zero_copy_metadata::MmapMetadataStore::lookup_packument(base)
-                {
+                if let Some(meta) = registry::lookup_zero_copy_packument(base) {
                     if let Some(version) =
                         crate::soul_path::resolve_version_from_meta(version_req, &meta)
                     {
@@ -918,7 +998,11 @@ impl ColdResolveStrategy for ManifestThenPackumentStrategy {
                         } else {
                             meta.dist.tarball_url.clone()
                         };
-                        crate::lattice_cache::remember(base, version_req, &version_str);
+                        registry::remember_lattice_for_current_identity(
+                            base,
+                            version_req,
+                            &version_str,
+                        );
                         zero_copy_hits.push((
                             base.clone(),
                             ResolvedFetch {
@@ -979,7 +1063,11 @@ impl ColdResolveStrategy for ManifestThenPackumentStrategy {
                                 .and_then(|d| d.get("integrity"))
                                 .and_then(|i| i.as_str())
                                 .map(|s| s.to_string());
-                            crate::lattice_cache::remember(&base, &version_req, ver);
+                            registry::remember_lattice_for_current_identity(
+                                &base,
+                                &version_req,
+                                ver,
+                            );
                             resolved_work.push(ResolvedFetch {
                                 pkg,
                                 url,
@@ -1011,7 +1099,7 @@ impl ColdResolveStrategy for ManifestThenPackumentStrategy {
                 };
 
                 if let Some((version, url, integrity)) = resolved {
-                    crate::lattice_cache::remember(&base, &version_req, &version);
+                    registry::remember_lattice_for_current_identity(&base, &version_req, &version);
                     resolved_work.push(ResolvedFetch {
                         pkg,
                         url,
@@ -1036,7 +1124,7 @@ impl ColdResolveStrategy for ManifestThenPackumentStrategy {
                             .and_then(|d| d.get("integrity"))
                             .and_then(|i| i.as_str())
                             .map(|s| s.to_string());
-                        crate::lattice_cache::remember(&base, &version_req, ver);
+                        registry::remember_lattice_for_current_identity(&base, &version_req, ver);
                         resolved_work.push(ResolvedFetch {
                             pkg: pkg.clone(),
                             url,
@@ -1053,7 +1141,11 @@ impl ColdResolveStrategy for ManifestThenPackumentStrategy {
                             if let Some(url) = registry::get_tarball_url(&fresh_meta, &version) {
                                 let integrity =
                                     registry::get_integrity_for_version(&fresh_meta, &version);
-                                crate::lattice_cache::remember(&base, &version_req, &version);
+                                registry::remember_lattice_for_current_identity(
+                                    &base,
+                                    &version_req,
+                                    &version,
+                                );
                                 resolved_work.push(ResolvedFetch {
                                     pkg: pkg.clone(),
                                     url,
@@ -1301,7 +1393,10 @@ fn field_allows_current(value: Option<&serde_json::Value>, current: &str) -> boo
     positives.is_empty() || positives.contains(&current)
 }
 
-pub(crate) fn version_supported_on_current_platform(metadata: &serde_json::Value, version: &str) -> bool {
+pub(crate) fn version_supported_on_current_platform(
+    metadata: &serde_json::Value,
+    version: &str,
+) -> bool {
     let Some(versions) = metadata.get("versions").and_then(|v| v.as_object()) else {
         return true;
     };
@@ -1670,7 +1765,9 @@ fn expand_with_transitive_dependencies(
         }
     }
     let optional_direct = optional_dependency_names();
+    let registry_identity = registry::registry_configuration_fingerprint(Path::new("."));
     let cache_key = trans_expansion_cache_key(
+        &registry_identity,
         max_depth,
         packages,
         offline,
@@ -1883,8 +1980,16 @@ fn expand_with_transitive_dependencies(
                 let pkg_constraints = effective(&name, &constraints);
 
                 if !metadata_cache.contains_key(&name) {
-                    if let Some(binary_version) =
-                        registry::best_binary_version_matching(&name, &pkg_constraints)
+                    // Snapshot-backed pre-selection (machine-local binary store and
+                    // the remembered-resolution lattice) may only commit a version
+                    // where the freshness contract allows it: offline, exact pins,
+                    // or JHOL_PREFER_BUNDLED=1. Otherwise a range falls through to
+                    // live metadata, so the newest satisfying version wins as in
+                    // npm/bun.
+                    let snapshot_ok = registry::bundled_index_allowed(&pkg_constraints);
+                    if let Some(binary_version) = snapshot_ok
+                        .then(|| registry::best_binary_version_matching(&name, &pkg_constraints))
+                        .flatten()
                     {
                         if depth >= max_depth {
                             selected.insert(name.clone(), binary_version);
@@ -1909,9 +2014,9 @@ fn expand_with_transitive_dependencies(
 
                     // Lattice cache: skip metadata fetch ONLY IF a remembered version
                     // satisfies ALL known constraints for this package AND we can satisfy its dependencies.
-                    if let Some(c) = pkg_constraints.first() {
+                    if let Some(c) = pkg_constraints.first().filter(|_| snapshot_ok) {
                         if let Some(lattice_version) =
-                            crate::lattice_cache::lookup_lattice(&name, c)
+                            registry::lookup_lattice_for_current_identity(&name, c)
                         {
                             if pkg_constraints
                                 .iter()
@@ -1968,11 +2073,7 @@ fn expand_with_transitive_dependencies(
                         // index is a build-time snapshot, so it may answer only offline
                         // or for an exact pin — never for a live range (it would pin an
                         // outdated version).
-                        let bundled_ok = registry::offline_mode()
-                            || (!pkg_constraints.is_empty()
-                                && pkg_constraints
-                                    .iter()
-                                    .all(|c| registry::is_exact_version_pin(c)));
+                        let bundled_ok = registry::bundled_index_allowed(&pkg_constraints);
                         if let Some(synth) = if bundled_ok {
                             registry::synthesize_packument_from_bundled_index(
                                 &name,
@@ -2061,12 +2162,11 @@ fn expand_with_transitive_dependencies(
                         in_flight += 1;
                         let tx = tx.clone();
                         s.spawn(move |_| {
-                            let result = std::panic::catch_unwind(
-                                std::panic::AssertUnwindSafe(|| {
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                     registry::fetch_metadata_full_packument(&name)
-                                }),
-                            )
-                            .unwrap_or_else(|_| Err("metadata fetch panicked".to_string()));
+                                }))
+                                .unwrap_or_else(|_| Err("metadata fetch panicked".to_string()));
                             let _ = tx.send((name, depth, result));
                         });
                     }
@@ -2308,12 +2408,7 @@ fn expand_with_transitive_dependencies(
             continue;
         };
         let pkg_constraints: Vec<String> = effective(name, &constraints);
-        let seeded = pkg_constraints
-            .first()
-            .and_then(|c| crate::lattice_cache::lookup_lattice(name, c));
-        let version = if let Some(v) = seeded {
-            v
-        } else {
+        let version = {
             let peer_constraints: &[String] =
                 peer_specs.get(name).map(|v| v.as_slice()).unwrap_or(&[]);
             match resolve_preferring_peers(&metadata, &pkg_constraints, peer_constraints) {
@@ -2806,14 +2901,8 @@ fn existing_lockfile_entries(node_modules: &Path) -> HashMap<String, ExistingLoc
         let Some(version) = info.version else {
             continue;
         };
-        let resolved = info
-            .resolved
-            .filter(|s| !s.is_empty())
-            .map(str::to_string);
-        let integrity = info
-            .integrity
-            .filter(|s| !s.is_empty())
-            .map(str::to_string);
+        let resolved = info.resolved.filter(|s| !s.is_empty()).map(str::to_string);
+        let integrity = info.integrity.filter(|s| !s.is_empty()).map(str::to_string);
         out.insert(
             name.to_string(),
             ExistingLockfileEntry {
@@ -2984,32 +3073,111 @@ fn safe_lockfile_install_path(value: &str) -> bool {
         && components.next().is_some()
 }
 
-/// Remove whatever is at `path` — file, directory, or symlink. Best-effort.
-fn remove_any_path(path: &Path) {
+/// Remove a file, directory, or symlink without following links.
+fn remove_any_path(path: &Path) -> std::io::Result<()> {
     match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
-            let _ = std::fs::remove_file(path);
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => std::fs::remove_file(path),
+        Ok(_) => std::fs::remove_dir_all(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Restore a package moved aside by a process interrupted during publication.
+/// Only backups carrying this target's filename are considered; ambiguous or
+/// unexpected backup entries fail closed and remain untouched.
+fn recover_interrupted_package_publish(target: &Path) -> Result<(), String> {
+    let parent = target
+        .parent()
+        .ok_or("package install path has no parent")?;
+    let package_name = target
+        .file_name()
+        .ok_or("package install path has no name")?
+        .to_string_lossy();
+    let backup_prefix = format!(".jhol-old-{package_name}-");
+
+    match std::fs::symlink_metadata(target) {
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("inspect package install path: {error}")),
+    }
+
+    let entries = match std::fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("inspect package recovery directory: {error}")),
+    };
+    let mut backups = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("read package recovery entry: {error}"))?;
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(&backup_prefix)
+        {
+            continue;
         }
-        Ok(_) => {
-            let _ = std::fs::remove_dir_all(path);
+        let backup = entry.path();
+        let metadata = match std::fs::symlink_metadata(&backup) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("inspect package backup {backup:?}: {error}")),
+        };
+        if !metadata.is_dir() && !metadata.file_type().is_symlink() {
+            return Err(format!(
+                "refusing to recover unexpected package backup type at {backup:?}"
+            ));
         }
-        Err(_) => {}
+        backups.push(backup);
+    }
+
+    match backups.as_slice() {
+        [] => Ok(()),
+        [backup] => {
+            match std::fs::symlink_metadata(target) {
+                Ok(_) => {
+                    return Err(format!(
+                        "package output appeared during recovery; previous output remains at {backup:?}"
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("inspect package install path: {error}")),
+            }
+            std::fs::rename(backup, target)
+                .map_err(|error| format!("restore interrupted package output: {error}"))
+        }
+        _ => Err(format!(
+            "multiple interrupted package outputs match {target:?}; leaving all backups untouched"
+        )),
     }
 }
 
 fn publish_extracted_package(candidate: &Path, target: &Path) -> Result<(), String> {
+    recover_interrupted_package_publish(target)?;
+    publish_extracted_package_with_hook(candidate, target, || {})
+}
+
+fn publish_extracted_package_with_hook(
+    candidate: &Path,
+    target: &Path,
+    before_publish: impl FnOnce(),
+) -> Result<(), String> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
     let parent = target
         .parent()
         .ok_or("package install path has no parent")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("create package parent: {e}"))?;
+    let package_name = target
+        .file_name()
+        .ok_or("package install path has no name")?
+        .to_string_lossy();
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
     let backup = parent.join(format!(
-        ".jhol-old-{}-{}-{nonce}",
+        ".jhol-old-{package_name}-{}-{}-{nonce}",
         std::process::id(),
         NEXT_ID.fetch_add(1, Ordering::Relaxed)
     ));
@@ -3017,35 +3185,29 @@ fn publish_extracted_package(candidate: &Path, target: &Path) -> Result<(), Stri
     if had_target {
         std::fs::rename(target, &backup).map_err(|e| format!("preserve current package: {e}"))?;
     }
+    before_publish();
     if let Err(error) = std::fs::rename(candidate, target) {
-        // A nested entry publishes *through* the parent's symlink into a shared
-        // store dir, which another materialization may be touching at the same
-        // moment — so `target` can appear between the `had_target` check above
-        // and this rename (EINVAL / ENOTEMPTY). Clear the destination and retry
-        // once; the retry is safe because the source is the same extracted tree.
-        remove_any_path(target);
-        if let Some(parent) = target.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Err(retry) = std::fs::rename(candidate, target) {
-            if had_target {
-                let _ = std::fs::rename(&backup, target);
+        if had_target && target.symlink_metadata().is_err() {
+            if let Err(restore) = std::fs::rename(&backup, target) {
+                return Err(format!(
+                    "publish extracted package: {error}; restore previous package: {restore}; previous output remains at {backup:?}"
+                ));
             }
             return Err(format!(
-                "publish extracted package: {retry} (first attempt: {error})"
+                "publish extracted package: {error}; previous output restored"
             ));
         }
+        if had_target {
+            return Err(format!(
+                "publish extracted package: {error}; competing output preserved at {target:?}; previous output remains at {backup:?}"
+            ));
+        }
+        return Err(format!(
+            "publish extracted package: {error}; existing output, if any, was preserved at {target:?}"
+        ));
     }
     if had_target {
-        let result = if std::fs::symlink_metadata(&backup)
-            .map(|meta| meta.file_type().is_symlink())
-            .unwrap_or(false)
-        {
-            std::fs::remove_file(&backup)
-        } else {
-            std::fs::remove_dir_all(&backup)
-        };
-        if let Err(error) = result {
+        if let Err(error) = remove_any_path(&backup) {
             // The new target is already valid. A stale owned backup is safe to
             // remove later; do not roll back a completed publication here.
             crate::utils::log(&format!(
@@ -3396,13 +3558,13 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
         }
     }
 
-    let installed_layout_trusted = crate::instant_lock_proof::prepared_tree_is_valid(Path::new("."));
+    let installed_layout_trusted =
+        crate::instant_lock_proof::prepared_tree_is_valid(Path::new("."));
     let entries: Vec<_> = entries
         .into_iter()
         .map(|entry| {
-            let installed = installed_layout_trusted && entry_is_already_installed(
-                Path::new("."), &entry.install_path, &entry.version,
-            );
+            let installed = installed_layout_trusted
+                && entry_is_already_installed(Path::new("."), &entry.install_path, &entry.version);
             (entry, installed)
         })
         .collect();
@@ -3430,7 +3592,11 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
         let parent_replaced = Path::new(&entry.install_path)
             .ancestors()
             .skip(1)
-            .any(|parent| parent.to_str().is_some_and(|path| replacements.contains(path)));
+            .any(|parent| {
+                parent
+                    .to_str()
+                    .is_some_and(|path| replacements.contains(path))
+            });
         if installed && !parent_replaced {
             if debug_layout {
                 crate::utils::log(&format!(
@@ -3660,9 +3826,14 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
                 ));
             }
         } else {
-            unique_inputs.insert(entry.spec.clone(), (
-                entry.spec.clone(), entry.resolved.clone(), entry.integrity.clone(),
-            ));
+            unique_inputs.insert(
+                entry.spec.clone(),
+                (
+                    entry.spec.clone(),
+                    entry.resolved.clone(),
+                    entry.integrity.clone(),
+                ),
+            );
         }
     }
     let cache_dir_clone = cache_dir.clone();
@@ -3670,20 +3841,23 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
         unique_inputs.into_values().collect(),
         concurrency,
         1,
-        move |(spec, resolved, integrity)| {
-            match registry::download_tarball_to_store_hash_only(
-                &resolved, &cache_dir_clone, &spec, integrity.as_deref(),
-            ) {
-                Ok(hash) => Ok((spec, hash)),
-                Err(error) => Err(format!("{spec}: {error}")),
-            }
+        move |(spec, resolved, integrity)| match registry::download_tarball_to_store_hash_only(
+            &resolved,
+            &cache_dir_clone,
+            &spec,
+            integrity.as_deref(),
+        ) {
+            Ok(hash) => Ok((spec, hash)),
+            Err(error) => Err(format!("{spec}: {error}")),
         },
     );
     profiler.mark("layout_fetch_extract");
     for result in results {
         let (spec, hash) = result.map_err(|error| {
             crate::error_handling::utils::application_error(
-                "install_lockfile_layout_fetch", Some("download_failed"), &error,
+                "install_lockfile_layout_fetch",
+                Some("download_failed"),
+                &error,
             )
         })?;
         index_batch.insert(spec, hash);
@@ -3691,7 +3865,9 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
     for entry in to_fetch {
         let hash = index_batch.get(&entry.spec).ok_or_else(|| {
             crate::error_handling::utils::application_error(
-                "install_lockfile_layout_fetch", Some("missing_source"), &entry.spec,
+                "install_lockfile_layout_fetch",
+                Some("missing_source"),
+                &entry.spec,
             )
         })?;
         let path = crate::content::tarball_path(&cache_dir, hash);
@@ -3702,8 +3878,12 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
         if let Some(sri) = entry.integrity.as_deref() {
             if !sri.trim().is_empty() && !verify_store_tarball_sri(tarball_path, sri) {
                 return Err(crate::error_handling::utils::application_error(
-                    "install_lockfile_layout_integrity", Some("integrity_failed"),
-                    &format!("Integrity check failed for {}: cached tarball differs from lockfile", entry.spec),
+                    "install_lockfile_layout_integrity",
+                    Some("integrity_failed"),
+                    &format!(
+                        "Integrity check failed for {}: cached tarball differs from lockfile",
+                        entry.spec
+                    ),
                 ));
             }
         }
@@ -3718,7 +3898,8 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
         level.par_iter().try_for_each(|(entry, tarball_path)| {
             install_entry(entry, tarball_path).map_err(|error| {
                 crate::error_handling::utils::application_error(
-                    "install_lockfile_layout_projection", Some("extract_failed"),
+                    "install_lockfile_layout_projection",
+                    Some("extract_failed"),
                     &format!("{} -> {error}", entry.spec),
                 )
             })
@@ -3908,10 +4089,7 @@ fn variant_name_is_foreign_platform(dep: &str) -> bool {
         &["linux", "musl"][..],
         &["win32", "windows"][..],
     ];
-    let arch_tokens = [
-        &["arm64", "aarch64"][..],
-        &["x64", "x86_64", "amd64"][..],
-    ];
+    let arch_tokens = [&["arm64", "aarch64"][..], &["x64", "x86_64", "amd64"][..]];
     let has_foreign_os = os_tokens.iter().any(|toks| {
         toks.iter().any(|t| name.contains(t)) && !cur_os.iter().any(|c| toks.contains(c))
     });
@@ -4019,7 +4197,9 @@ pub fn install_lockfile_only(_backend: Backend) -> Result<(), JholError> {
     let t = std::time::Instant::now();
     let tree = crate::lockfile_write::resolve_full_tree(pj)
         .map_err(|e| crate::error_handling::utils::config_error("resolve_full_tree", None, &e))?;
-    if dbg_lo { eprintln!("[lockonly] resolve_full_tree in {:?}", t.elapsed()); }
+    if dbg_lo {
+        eprintln!("[lockonly] resolve_full_tree in {:?}", t.elapsed());
+    }
     let lock_path = Path::new("package-lock.json");
     crate::lockfile_write::write_package_lock(lock_path, pj, &tree).map_err(|e| {
         crate::error_handling::utils::io_error(
@@ -4028,22 +4208,30 @@ pub fn install_lockfile_only(_backend: Backend) -> Result<(), JholError> {
             std::io::Error::other(e.to_string()),
         )
     })?;
-    if dbg_lo { eprintln!("[lockonly] write_package_lock in {:?}", t.elapsed()); }
+    if dbg_lo {
+        eprintln!("[lockonly] write_package_lock in {:?}", t.elapsed());
+    }
     // Cross-platform portability: record the other-platform variants of every
     // optional dependency, exactly as the full install path does, so this
     // lockfile also drives `ci` on Linux/Windows (npm parity).
     let variants = collect_optional_variants(&tree);
     append_optional_variants_to_lockfile(lock_path, &variants);
-    if dbg_lo { eprintln!("[lockonly] variants+append in {:?}", t.elapsed()); }
+    if dbg_lo {
+        eprintln!("[lockonly] variants+append in {:?}", t.elapsed());
+    }
     // Provenance: append one chained entry for this install (IPL).
     crate::origin::log_install(lock_path);
-    if dbg_lo { eprintln!("[lockonly] log_install in {:?}", t.elapsed()); }
+    if dbg_lo {
+        eprintln!("[lockonly] log_install in {:?}", t.elapsed());
+    }
     // Soul Path: record resolution in JMR + GRM + lattice
     let fp = crate::resolution_mirror::fingerprint_deps(
         &lockfile::read_package_json_deps(pj).unwrap_or_default(),
     );
     crate::resolution_mirror::record_resolution(fp, &tree);
-    if dbg_lo { eprintln!("[lockonly] record_resolution in {:?}", t.elapsed()); }
+    if dbg_lo {
+        eprintln!("[lockonly] record_resolution in {:?}", t.elapsed());
+    }
     crate::soul_path::remember_all_packages(&tree);
     // The integrity promise, in this lane too: the lockfile we just wrote gets
     // SRI from every byte source jhol owns (local store + bundled store — see
@@ -4051,7 +4239,9 @@ pub fn install_lockfile_only(_backend: Backend) -> Result<(), JholError> {
     // leaving synth-served entries permanently integrity-less and `ci`/`--frozen`
     // dead-ended on them.
     backfill_lockfile_integrity_after_install();
-    if dbg_lo { eprintln!("[lockonly] integrity backfill in {:?}", t.elapsed()); }
+    if dbg_lo {
+        eprintln!("[lockonly] integrity backfill in {:?}", t.elapsed());
+    }
     Ok(())
 }
 
@@ -4209,30 +4399,32 @@ pub fn fast_direct_warm_install() -> Option<Result<(), String>> {
 
     // 2. Parallel clone using Rayon
     use rayon::prelude::*;
-    let clone_err = tasks.par_iter().find_map_any(|(src, dest, pkg_name, top_level)| {
-        if let Ok(meta) = std::fs::symlink_metadata(dest) {
-            if meta.file_type().is_dir() {
-                let _ = std::fs::remove_dir_all(dest);
-            } else {
-                let _ = std::fs::remove_file(dest);
+    let clone_err = tasks
+        .par_iter()
+        .find_map_any(|(src, dest, pkg_name, top_level)| {
+            if let Ok(meta) = std::fs::symlink_metadata(dest) {
+                if meta.file_type().is_dir() {
+                    let _ = std::fs::remove_dir_all(dest);
+                } else {
+                    let _ = std::fs::remove_file(dest);
+                }
             }
-        }
-        #[cfg(feature = "pipeline")]
-        if let Err(e) = crate::jgrid::materialize::Cloner::clone_directory(src, dest) {
-            return Some(e);
-        }
-        #[cfg(not(feature = "pipeline"))]
-        if let Err(e) = crate::materialize::place(src, dest) {
-            return Some(e);
-        }
-
-        if *top_level {
-            if let Err(e) = crate::materialize::finish(Path::new("node_modules"), pkg_name) {
+            #[cfg(feature = "pipeline")]
+            if let Err(e) = crate::jgrid::materialize::Cloner::clone_directory(src, dest) {
                 return Some(e);
             }
-        }
-        None
-    });
+            #[cfg(not(feature = "pipeline"))]
+            if let Err(e) = crate::materialize::place(src, dest) {
+                return Some(e);
+            }
+
+            if *top_level {
+                if let Err(e) = crate::materialize::finish(Path::new("node_modules"), pkg_name) {
+                    return Some(e);
+                }
+            }
+            None
+        });
 
     if let Some(err) = clone_err {
         return Some(Err(err));
@@ -4260,6 +4452,96 @@ fn can_reuse_lockfile_for_requested(packages: &[&str]) -> Option<Vec<String>> {
 /// Project it and restore that lockfile: identical reuse contract to a committed
 /// lockfile — same staleness rule, and the same validation invariant (every
 /// direct range must be satisfied by the bundled resolution) is re-checked here.
+/// Count the package directories present in `root/node_modules`, including
+/// nested copies and `@scope` children — what the installer really
+/// materialized, as opposed to the requested set. Shared by the CLI summary
+/// and the pre-clap up-to-date lane. Symlinks are counted but not descended
+/// (loop safety); scan depth is capped as a defensive bound.
+pub fn count_installed_packages(root: &Path) -> usize {
+    fn walk(dir: &Path, depth: usize, out: &mut usize) {
+        if depth > 32 {
+            return;
+        }
+        let entries = match std::fs::read_dir(dir) {
+            Ok(rd) => rd,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let is_symlink = entry.file_type().map(|t| t.is_symlink()).unwrap_or(false);
+            let path = entry.path();
+            if std::env::var("JHOL_DEBUG_COUNT").is_ok() {
+                eprintln!(
+                    "[count] d{depth} entry {:?} symlink={}",
+                    entry.file_name(),
+                    is_symlink
+                );
+            }
+            let name = entry.file_name();
+            let name = name.to_string_lossy().into_owned();
+            if name == ".bin" || name.starts_with('.') {
+                continue;
+            }
+            if name.starts_with('@') {
+                // Scope container; its children are the actual packages.
+                walk(&path, depth + 1, out);
+                continue;
+            }
+            if path.join("package.json").is_file() {
+                *out += 1;
+                if !is_symlink {
+                    let nested = path.join("node_modules");
+                    if nested.is_dir() {
+                        walk(&nested, depth + 1, out);
+                    }
+                }
+            }
+        }
+    }
+    let nm = root.join("node_modules");
+    if !nm.is_dir() {
+        return 0;
+    }
+    let mut n = 0;
+    walk(&nm, 0, &mut n);
+    n
+}
+
+#[cfg(test)]
+mod package_count_tests {
+    use super::*;
+
+    #[test]
+    fn counts_nested_copies_and_scope_children_skips_symlink_walk() {
+        let dir =
+            std::env::temp_dir().join(format!("jhol-count-{}-{}", std::process::id(), line!()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let nm = dir.join("node_modules");
+        for p in ["a", "@x/y", "b", "b/node_modules/c"] {
+            let full = nm.join(p);
+            std::fs::create_dir_all(&full).unwrap();
+            std::fs::write(full.join("package.json"), b"{}").unwrap();
+        }
+        std::fs::create_dir_all(nm.join(".bin")).unwrap();
+        // A symlinked package counts once but is not descended.
+        let link_src = nm.join("a");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&link_src, nm.join("linked")).unwrap();
+
+        let expected = if cfg!(unix) { 5 } else { 4 };
+        assert_eq!(count_installed_packages(&dir), expected);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_node_modules_is_zero() {
+        let dir = std::env::temp_dir().join(format!("jhol-count-missing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(count_installed_packages(&dir), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 pub fn try_fresh_project_bundle_replay(root: &Path) -> bool {
     use crate::jgrid::{BundleCache, Cloner};
 
@@ -4298,6 +4580,12 @@ pub fn try_fresh_project_bundle_replay(root: &Path) -> bool {
     let Some(bundle_dir) = source.parent().map(|p| p.to_path_buf()) else {
         return false;
     };
+    // No lockfile here, so this replay is the only thing standing between a
+    // `^` range and the registry. A bundle older than the metadata TTL may hold
+    // superseded picks: fall through to a real (conditional-GET) resolution.
+    if !crate::origin::within_metadata_ttl(&bundle_dir.join(".jhol-complete")) {
+        return false;
+    }
     let Ok(lock_bytes) = std::fs::read(bundle_dir.join("package-lock.json")) else {
         return false; // bundle predates lockfile carriage — fall through
     };
@@ -4619,8 +4907,8 @@ fn dssc_first_install(
             }
 
             // Fall back to selective extract from tarball
-            let ok = selective_extract::extract_selective(&tarball_path, node_modules, &name)
-                .is_ok();
+            let ok =
+                selective_extract::extract_selective(&tarball_path, node_modules, &name).is_ok();
             (spec.clone(), ok)
         })
         .collect();
@@ -5277,9 +5565,16 @@ fn package_json_has_special_deps(path: &Path) -> bool {
 fn try_jgrid_install(packages: &[String], options: &InstallOptions) -> Result<bool, JholError> {
     use crate::jgrid::{BundleCache, JGridPipeline, LayoutPackage, ResolvedPackage};
 
-    if packages.is_empty() || options.strict_lockfile || !options.no_scripts
-        || options.strict_peer_deps || options.lockfile_only || options.no_cache
-        || matches!(std::env::var("JHOL_JGRID").as_deref(), Ok("0") | Ok("false") | Ok("no"))
+    if packages.is_empty()
+        || options.strict_lockfile
+        || !options.no_scripts
+        || options.strict_peer_deps
+        || options.lockfile_only
+        || options.no_cache
+        || matches!(
+            std::env::var("JHOL_JGRID").as_deref(),
+            Ok("0") | Ok("false") | Ok("no")
+        )
     {
         return Ok(false);
     }
@@ -5307,7 +5602,12 @@ fn try_jgrid_install(packages: &[String], options: &InstallOptions) -> Result<bo
         .unwrap_or(false);
     let has_bundles = grid_dir.join("bundles").is_dir();
     if let Some(identity) = crate::instant_lock_proof::project_identity(Path::new(".")) {
-        if !has_bundles || matches!(std::env::var("JHOL_JGRID_L0").as_deref(), Ok("0") | Ok("false") | Ok("no")) {
+        if !has_bundles
+            || matches!(
+                std::env::var("JHOL_JGRID_L0").as_deref(),
+                Ok("0") | Ok("false") | Ok("no")
+            )
+        {
             return Ok(false);
         }
         let bundles = BundleCache::new(&grid_dir);
@@ -5318,15 +5618,26 @@ fn try_jgrid_install(packages: &[String], options: &InstallOptions) -> Result<bo
             return Ok(false);
         }
         let nm = Path::new("node_modules");
-        let _lock = crate::file_lock::FileLock::lock(nm)
-            .map_err(|error| crate::error_handling::utils::application_error("jgrid_publication", None, &error.to_string()))?;
+        let _lock = crate::file_lock::FileLock::lock(nm).map_err(|error| {
+            crate::error_handling::utils::application_error(
+                "jgrid_publication",
+                None,
+                &error.to_string(),
+            )
+        })?;
         let candidate = crate::jgrid::materialize::unique_path(Path::new("."), "node_modules")
-            .map_err(|error| crate::error_handling::utils::application_error("jgrid_candidate", None, &error))?;
+            .map_err(|error| {
+                crate::error_handling::utils::application_error("jgrid_candidate", None, &error)
+            })?;
         let result = crate::jgrid::Cloner::clone_directory(&source, &candidate)
             .and_then(|()| crate::jgrid::materialize::publish_directory(&candidate, nm));
         if let Err(error) = result {
             let _ = std::fs::remove_dir_all(&candidate);
-            return Err(crate::error_handling::utils::application_error("jgrid_projection", None, &error));
+            return Err(crate::error_handling::utils::application_error(
+                "jgrid_projection",
+                None,
+                &error,
+            ));
         }
         crate::jgrid::materialize::emit_route("L0-verified");
         return Ok(true);
@@ -5339,7 +5650,7 @@ fn try_jgrid_install(packages: &[String], options: &InstallOptions) -> Result<bo
                 if !name.is_empty() {
                     let resolved_version =
                         if version == "latest" || version == "*" || version.is_empty() {
-                            crate::lattice_cache::lookup_lattice(name, "latest")
+                            registry::lookup_lattice_for_current_identity(name, "latest")
                                 .unwrap_or_else(|| version.to_string())
                         } else {
                             version.to_string()
@@ -5351,7 +5662,7 @@ fn try_jgrid_install(packages: &[String], options: &InstallOptions) -> Result<bo
                     };
                 }
             }
-            let resolved_version = crate::lattice_cache::lookup_lattice(s, "latest")
+            let resolved_version = registry::lookup_lattice_for_current_identity(s, "latest")
                 .unwrap_or_else(|| "latest".to_string());
             LayoutPackage {
                 name: s.clone(),
@@ -5500,7 +5811,10 @@ fn post_install_jgrid_ingest(
     use crate::jgrid::{JGridPipeline, PackageIngest, ResolvedPackage};
     use std::time::Instant;
 
-    if matches!(std::env::var("JHOL_JGRID").as_deref(), Ok("0") | Ok("false") | Ok("no")) {
+    if matches!(
+        std::env::var("JHOL_JGRID").as_deref(),
+        Ok("0") | Ok("false") | Ok("no")
+    ) {
         return;
     }
     let prepared_identity = crate::instant_lock_proof::project_identity(Path::new("."));
@@ -5552,7 +5866,12 @@ fn post_install_jgrid_ingest(
             .iter()
             .map(|(n, info)| (n.clone(), info.version.clone()))
             .collect();
-        match crate::jgrid::materialize::publish_l0_from_node_modules(&pairs, nm, &bundles, prepared_identity.as_deref()) {
+        match crate::jgrid::materialize::publish_l0_from_node_modules(
+            &pairs,
+            nm,
+            &bundles,
+            prepared_identity.as_deref(),
+        ) {
             Ok(published) => {
                 if published && (route || std::env::var("JHOL_VERBOSE").is_ok()) {
                     crate::utils::log(&format!(
@@ -5605,41 +5924,45 @@ fn post_install_jgrid_ingest(
                 }
 
                 // Legacy aliases remain only for projects without authoritative locks.
-                if prepared_identity.is_none() { if let Some(deps) = lockfile::read_package_json_deps(Path::new("package.json")) {
-                    // 1. Root spec hash (e.g. [("react", "latest"), ("typescript", "latest"), ...])
-                    let root_spec_refs: Vec<(&str, &str)> = deps
-                        .iter()
-                        .map(|(n, v)| {
-                            (n.as_str(), if v.is_empty() { "latest" } else { v.as_str() })
-                        })
-                        .collect();
-                    let root_spec_hash = BundleCache::compute_dep_set_hash(&root_spec_refs);
-                    let _ = bundles.alias_bundle(&full_hash, &root_spec_hash);
+                if prepared_identity.is_none() {
+                    if let Some(deps) = lockfile::read_package_json_deps(Path::new("package.json"))
+                    {
+                        // 1. Root spec hash (e.g. [("react", "latest"), ("typescript", "latest"), ...])
+                        let root_spec_refs: Vec<(&str, &str)> = deps
+                            .iter()
+                            .map(|(n, v)| {
+                                (n.as_str(), if v.is_empty() { "latest" } else { v.as_str() })
+                            })
+                            .collect();
+                        let root_spec_hash = BundleCache::compute_dep_set_hash(&root_spec_refs);
+                        let _ = bundles.alias_bundle(&full_hash, &root_spec_hash);
 
-                    // 2. Root resolved hash (e.g. [("react", "19.0.0"), ("typescript", "5.8.2"), ...])
-                    let root_resolved_pairs: Vec<(String, String)> = deps
-                        .iter()
-                        .map(|(n, _)| {
-                            let ver = packages
-                                .get(n)
-                                .map(|info| info.version.clone())
-                                .unwrap_or_else(|| "latest".to_string());
-                            (n.clone(), ver)
-                        })
-                        .collect();
-                    let root_resolved_refs: Vec<(&str, &str)> = root_resolved_pairs
-                        .iter()
-                        .map(|(n, v)| (n.as_str(), v.as_str()))
-                        .collect();
-                    let root_resolved_hash = BundleCache::compute_dep_set_hash(&root_resolved_refs);
-                    let _ = bundles.alias_bundle(&full_hash, &root_resolved_hash);
+                        // 2. Root resolved hash (e.g. [("react", "19.0.0"), ("typescript", "5.8.2"), ...])
+                        let root_resolved_pairs: Vec<(String, String)> = deps
+                            .iter()
+                            .map(|(n, _)| {
+                                let ver = packages
+                                    .get(n)
+                                    .map(|info| info.version.clone())
+                                    .unwrap_or_else(|| "latest".to_string());
+                                (n.clone(), ver)
+                            })
+                            .collect();
+                        let root_resolved_refs: Vec<(&str, &str)> = root_resolved_pairs
+                            .iter()
+                            .map(|(n, v)| (n.as_str(), v.as_str()))
+                            .collect();
+                        let root_resolved_hash =
+                            BundleCache::compute_dep_set_hash(&root_resolved_refs);
+                        let _ = bundles.alias_bundle(&full_hash, &root_resolved_hash);
 
-                    // 3. Manifest hash alias
-                    if let Ok(mh) = crate::capsule::compute_manifest_hash(Path::new(".")) {
-                        let mh_str = format!("{:016x}", u64::from_le_bytes(mh));
-                        let _ = bundles.alias_bundle(&full_hash, &mh_str);
+                        // 3. Manifest hash alias
+                        if let Ok(mh) = crate::capsule::compute_manifest_hash(Path::new(".")) {
+                            let mh_str = format!("{:016x}", u64::from_le_bytes(mh));
+                            let _ = bundles.alias_bundle(&full_hash, &mh_str);
+                        }
                     }
-                } }
+                }
             }
             Err(error) => {
                 if route || std::env::var("JHOL_VERBOSE").is_ok() {
@@ -6369,8 +6692,11 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                 // A special is never in the registry expansion, so it always looked
                 // "dropped" and forced this nested fallback — which then handed the
                 // raw `github:` spec to the resolver as if it were a version range.
-                .filter(|n| !present.contains(n.as_str())
-                    && !special_names.contains(n.as_str()) && !optional.contains(n.as_str()))
+                .filter(|n| {
+                    !present.contains(n.as_str())
+                        && !special_names.contains(n.as_str())
+                        && !optional.contains(n.as_str())
+                })
                 .cloned()
                 .collect();
             if !dropped.is_empty() || expansion_conflict.is_some() {
@@ -7298,7 +7624,8 @@ mod install_materialization_tests {
     use super::{
         can_reuse_prepared_layout, can_use_instant_lock_proof, entry_is_already_installed,
         lockfile_link_root_for_install_path, materialize_downloaded_package,
-        publish_extracted_package, safe_lockfile_install_path, InstallOptions,
+        publish_extracted_package, publish_extracted_package_with_hook, safe_lockfile_install_path,
+        InstallOptions,
     };
     use flate2::write::GzEncoder;
     use flate2::Compression;
@@ -7414,6 +7741,193 @@ mod install_materialization_tests {
         assert!(publish_extracted_package(&missing_candidate, &target).is_err());
         assert_eq!(
             std::fs::read_to_string(target.join("old.txt")).unwrap(),
+            "old"
+        );
+    }
+
+    #[test]
+    fn interrupted_package_publish_leaves_previous_output_recoverable() {
+        const CHILD: &str = "JHOL_TEST_PACKAGE_PUBLISH_INTERRUPTED_CHILD";
+        const ROOT: &str = "JHOL_TEST_PACKAGE_PUBLISH_INTERRUPTED_ROOT";
+        if std::env::var_os(CHILD).is_some() {
+            let root = std::path::PathBuf::from(std::env::var_os(ROOT).expect("test root"));
+            let parent = root.join("node_modules");
+            let target = parent.join("demo");
+            let candidate = parent.join(".stage-demo");
+            publish_extracted_package_with_hook(&candidate, &target, || {
+                std::fs::write(root.join("publication-paused"), b"ready").unwrap();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+            })
+            .expect("the parent test terminates this publication");
+            unreachable!("publication should remain paused until terminated");
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("node_modules");
+        let target = parent.join("demo");
+        let candidate = parent.join(".stage-demo");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("old.txt"), "old").unwrap();
+        std::fs::create_dir_all(&candidate).unwrap();
+        std::fs::write(candidate.join("new.txt"), "new").unwrap();
+
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "install::install_materialization_tests::interrupted_package_publish_leaves_previous_output_recoverable",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env(ROOT, temp.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let ready = temp.path().join("publication-paused");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !ready.exists() {
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!("child exited before publication pause: {status}");
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child did not reach the publication interruption point"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        child.kill().unwrap();
+        assert!(!child.wait().unwrap().success());
+        assert!(
+            !target.exists(),
+            "old target was moved before the interruption"
+        );
+        let backup = std::fs::read_dir(&parent)
+            .unwrap()
+            .map(Result::unwrap)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(".jhol-old-demo-"))
+            })
+            .expect("previous package remains at its recoverable backup path");
+        assert_eq!(
+            std::fs::read_to_string(backup.join("old.txt")).unwrap(),
+            "old"
+        );
+        assert_eq!(
+            std::fs::read_to_string(candidate.join("new.txt")).unwrap(),
+            "new",
+            "verified candidate remains available after interruption"
+        );
+        super::recover_interrupted_package_publish(&target).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(target.join("old.txt")).unwrap(),
+            "old",
+            "interrupted publication restores the prior package on the next install"
+        );
+        assert!(!backup.exists());
+    }
+
+    #[test]
+    fn package_publish_recovers_interrupted_backup_before_replacing_output() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("node_modules");
+        std::fs::create_dir_all(&parent).unwrap();
+        let target = parent.join("demo");
+        let backup = parent.join(".jhol-old-demo-abandoned");
+        let candidate = parent.join(".stage-demo");
+        std::fs::create_dir_all(&backup).unwrap();
+        std::fs::write(backup.join("old.txt"), "old").unwrap();
+        std::fs::create_dir_all(&candidate).unwrap();
+        std::fs::write(candidate.join("new.txt"), "new").unwrap();
+
+        publish_extracted_package(&candidate, &target).unwrap();
+
+        assert!(!backup.exists(), "recovered backup must not be orphaned");
+        assert_eq!(
+            std::fs::read_to_string(target.join("new.txt")).unwrap(),
+            "new"
+        );
+    }
+
+    #[test]
+    fn package_publish_recovery_preserves_competing_and_ambiguous_outputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("node_modules");
+        std::fs::create_dir_all(&parent).unwrap();
+        let target = parent.join("demo");
+        let first_backup = parent.join(".jhol-old-demo-first");
+        let second_backup = parent.join(".jhol-old-demo-second");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("other.txt"), "competing").unwrap();
+        std::fs::create_dir_all(&first_backup).unwrap();
+        std::fs::write(first_backup.join("old.txt"), "old one").unwrap();
+        std::fs::create_dir_all(&second_backup).unwrap();
+        std::fs::write(second_backup.join("old.txt"), "old two").unwrap();
+
+        super::recover_interrupted_package_publish(&target).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(target.join("other.txt")).unwrap(),
+            "competing"
+        );
+        std::fs::remove_dir_all(&target).unwrap();
+
+        assert!(super::recover_interrupted_package_publish(&target).is_err());
+        assert!(!target.exists());
+        assert_eq!(
+            std::fs::read_to_string(first_backup.join("old.txt")).unwrap(),
+            "old one"
+        );
+        assert_eq!(
+            std::fs::read_to_string(second_backup.join("old.txt")).unwrap(),
+            "old two"
+        );
+    }
+
+    #[test]
+    fn racing_package_publish_preserves_competing_output_and_previous_backup() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("node_modules");
+        let target = parent.join("demo");
+        let candidate = parent.join(".stage-demo");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("old.txt"), "old").unwrap();
+        std::fs::create_dir_all(&candidate).unwrap();
+        std::fs::write(candidate.join("new.txt"), "new").unwrap();
+
+        let error = publish_extracted_package_with_hook(&candidate, &target, || {
+            std::fs::create_dir_all(&target).unwrap();
+            std::fs::write(target.join("other-writer.txt"), "other writer").unwrap();
+        })
+        .expect_err("publication must report a competing target");
+
+        assert!(error.contains("competing output preserved"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(target.join("other-writer.txt")).unwrap(),
+            "other writer"
+        );
+        assert_eq!(
+            std::fs::read_to_string(candidate.join("new.txt")).unwrap(),
+            "new",
+            "failed publication keeps the verified candidate available"
+        );
+        let backup = std::fs::read_dir(&parent)
+            .unwrap()
+            .map(Result::unwrap)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(".jhol-old-"))
+            })
+            .expect("previous target is retained at its recovery path");
+        assert_eq!(
+            std::fs::read_to_string(backup.join("old.txt")).unwrap(),
             "old"
         );
     }

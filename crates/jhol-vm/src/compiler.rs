@@ -34,7 +34,6 @@
 use crate::arena;
 use crate::ast::*;
 use crate::bytecode::*;
-use crate::errors::VmError;
 use crate::objects::PropKey;
 use crate::value::Value;
 
@@ -83,7 +82,10 @@ struct UpvalDesc {
     index: u32,
 }
 
+#[allow(dead_code)]
 struct FnState {
+    /// Exception handlers belong to this function, never its lexical parent.
+    handler_stack: Vec<u32>,
     proto: FnProto,
     scopes: Vec<Scope>,
     parent: Option<usize>,
@@ -112,6 +114,7 @@ struct FnState {
 }
 
 impl FnState {
+    #[allow(dead_code)]
     fn is_root(&self) -> bool {
         self.parent.is_none()
     }
@@ -120,15 +123,33 @@ impl FnState {
 pub struct Compiler {
     states: Vec<FnState>,
     protos: Vec<FnProto>,
-    /// Number of handlers currently live in the enclosing function.
-    handler_stack: Vec<u32>,
     /// A label handed down to the next loop construct, so `continue <label>`
     /// reaches the loop's own continue point rather than its end.
     pending_label: Option<String>,
+    /// Hidden binding names of the classes being compiled, innermost last, each
+    /// with whether the member being compiled is `static`. `super.x` resolves
+    /// through the *home* class (`Home.prototype.__proto__`, or `Home.__proto__`
+    /// for statics) instead of the receiver's `__proto__`: the latter is the
+    /// most-derived class and recursed forever in any method that calls
+    /// `super.m()` (found 2026-10-24; broken at HEAD too).
+    home_stack: Vec<(String, bool)>,
+    class_serial: u32,
+    /// Binding name offered to the *directly* initialising anonymous function,
+    /// arrow or class (`const f = () => 1` names it "f"). Consumed by the first
+    /// such expression compiled and cleared on any other expression, so it
+    /// cannot leak into a nested function.
+    name_hint: Option<String>,
 }
 
 pub fn compile(prog: &Func, name: &str) -> Result<Module, String> {
-    let mut c = Compiler { states: Vec::new(), protos: Vec::new(), pending_label: None, handler_stack: Vec::new() };
+    let mut c = Compiler {
+        states: Vec::new(),
+        protos: Vec::new(),
+        pending_label: None,
+        home_stack: Vec::new(),
+        class_serial: 0,
+        name_hint: None,
+    };
     c.push_fn(prog, FnCtx::Script, Some(name.to_string()));
     let mut hoisted: Vec<String> = Vec::new();
     c.collect_vars(&prog.body, &mut hoisted);
@@ -138,7 +159,7 @@ pub fn compile(prog: &Func, name: &str) -> Result<Module, String> {
             c.emit(Op::LoadUndefined, s, 0, 0);
         }
     }
-    c.hoist_functions(&prog.body);
+    c.hoist_functions(&prog.body)?;
     // The value of a script is the value of its last expression statement, so
     // that one is compiled into a dedicated completion register.
     let last_expr = prog
@@ -160,7 +181,11 @@ pub fn compile(prog: &Func, name: &str) -> Result<Module, String> {
     // top-level proto is always the last one.
     let entry = (c.protos.len() - 1) as u32;
     let protos: Vec<_> = c.protos.into_iter().map(std::sync::Arc::new).collect();
-    Ok(Module { protos, entry, name: name.to_string() })
+    Ok(Module {
+        protos,
+        entry,
+        name: name.to_string(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -238,11 +263,13 @@ impl Compiler {
         if fs.scopes.is_empty() {
             fs.scopes.push(Scope::default());
         }
-        fs.scopes
-            .last_mut()
-            .unwrap()
-            .names
-            .push((name.to_string(), Binding { slot, captured: false }));
+        fs.scopes.last_mut().unwrap().names.push((
+            name.to_string(),
+            Binding {
+                slot,
+                captured: false,
+            },
+        ));
         slot
     }
 
@@ -279,7 +306,10 @@ impl Compiler {
                     ps.cellified.resize(b.slot as usize + 1, false);
                 }
                 ps.captured[b.slot as usize] = true;
-                let newb = Binding { slot: b.slot, captured: true };
+                let newb = Binding {
+                    slot: b.slot,
+                    captured: true,
+                };
                 for sc in ps.scopes.iter_mut().rev() {
                     let mut done = false;
                     for (n, bb) in sc.names.iter_mut().rev() {
@@ -303,14 +333,25 @@ impl Compiler {
     }
 
     fn push_upval(&mut self, fs_idx: usize, index: u32, from_local: bool) -> u32 {
+        // Reads and writes of one captured binding share one descriptor/cell.
+        if let Some(slot) = self.states[fs_idx]
+            .upvals
+            .iter()
+            .position(|up| up.index == index && up.from_local == from_local)
+        {
+            return slot as u32;
+        }
         let idx = self.states[fs_idx].upvals.len() as u32;
-        self.states[fs_idx].upvals.push(UpvalDesc { from_local, index });
+        self.states[fs_idx]
+            .upvals
+            .push(UpvalDesc { from_local, index });
         idx
     }
 
     fn push_fn(&mut self, f: &Func, ctx: FnCtx, name: Option<String>) {
         let parent = self.states.len().checked_sub(1);
         let mut fs = FnState {
+            handler_stack: Vec::new(),
             proto: FnProto::new(name.as_deref().unwrap_or("")),
             scopes: Vec::new(),
             parent,
@@ -334,8 +375,20 @@ impl Compiler {
         if !f.is_arrow {
             fs.scopes.push(Scope {
                 names: vec![
-                    ("\u{0}this".into(), Binding { slot: THIS_SLOT, captured: false }),
-                    ("\u{0}newtarget".into(), Binding { slot: NEWTARGET_SLOT, captured: false }),
+                    (
+                        "\u{0}this".into(),
+                        Binding {
+                            slot: THIS_SLOT,
+                            captured: false,
+                        },
+                    ),
+                    (
+                        "\u{0}newtarget".into(),
+                        Binding {
+                            slot: NEWTARGET_SLOT,
+                            captured: false,
+                        },
+                    ),
                 ],
             });
             fs.locals_top = 2;
@@ -348,7 +401,12 @@ impl Compiler {
     fn finish_fn(&mut self) {
         let fs = self.states.pop().unwrap();
         let mut proto = fs.proto;
-        proto.local_cells = fs.captured.iter().enumerate().filter_map(|(i,&captured)| captured.then_some(i as u32)).collect();
+        proto.local_cells = fs
+            .captured
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &captured)| captured.then_some(i as u32))
+            .collect();
         proto.nslots = fs.max_slots.max(fs.locals_top).max(fs.temps_top).max(2);
         proto.nparams = fs.nparams;
         proto.nupvals = fs.upvals.len();
@@ -359,7 +417,7 @@ impl Compiler {
     /// Emit `CreateCell` for every local of the current frame that a nested
     /// closure captured and that has not been boxed yet.
     fn cellify_pending(&mut self) {
-        let mut fs = self.states.last_mut().unwrap();
+        let fs = self.states.last_mut().unwrap();
         let n = fs.captured.len();
         let mut ops: Vec<u32> = Vec::new();
         for slot in 0..n {
@@ -375,7 +433,16 @@ impl Compiler {
     }
 
     /// Compile a nested function and return its index in the module's proto list.
-    fn compile_fn(&mut self, f: &Func, ctx: FnCtx, name: Option<String>) -> u32 {
+    fn compile_fn(&mut self, f: &Func, ctx: FnCtx, name: Option<String>) -> Result<u32, String> {
+        // There is no Promise or microtask queue in this runtime, so an async
+        // function cannot be modelled correctly. Failing here is better than
+        // running it synchronously and pretending it returned a promise.
+        if f.is_async {
+            return Err(
+                "SyntaxError: async functions are not supported: JholVM has no Promise/microtask support"
+                    .into(),
+            );
+        }
         self.push_fn(f, ctx, name);
         let base: u32 = if f.is_arrow { 0 } else { 2 };
         // Reserve one slot per parameter, in order.
@@ -389,7 +456,10 @@ impl Compiler {
             if let Target::Simple(n) = &p.target {
                 self.cur().scopes.last_mut().unwrap().names.push((
                     n.clone(),
-                    Binding { slot, captured: false },
+                    Binding {
+                        slot,
+                        captured: false,
+                    },
                 ));
             }
         }
@@ -404,7 +474,7 @@ impl Compiler {
                 self.emit(Op::StrictEq, cmp, cur, und);
                 let skip = self.emit(Op::JumpIfFalse, cmp, 0, 0);
                 let dv = self.alloc_temp();
-                let _ = self.expr(def, dv);
+                self.expr(def, dv)?;
                 self.emit(Op::SetLocal, slot, dv, 0);
                 self.free_temps_to(cur);
                 let after = self.here();
@@ -424,7 +494,10 @@ impl Compiler {
             if let Target::Simple(n) = &p.target {
                 self.cur().scopes.last_mut().unwrap().names.push((
                     n.clone(),
-                    Binding { slot, captured: false },
+                    Binding {
+                        slot,
+                        captured: false,
+                    },
                 ));
             }
         }
@@ -436,7 +509,7 @@ impl Compiler {
             let slot = base + i as u32;
             let t = self.alloc_temp();
             self.emit(Op::GetLocal, t, slot, 0);
-            let _ = self.bind(&p.target, t);
+            self.bind(&p.target, t)?;
             self.free_temps_to(t);
         }
 
@@ -448,35 +521,64 @@ impl Compiler {
                 self.emit(Op::LoadUndefined, s, 0, 0);
             }
         }
-        let _ = self.hoist_functions(&f.body);
+        self.hoist_functions(&f.body)?;
         match &f.expr_body {
             Some(e) => {
                 let t = self.alloc_temp();
-                let _ = self.expr(e, t);
+                self.expr(e, t)?;
                 self.emit(Op::Return, t, 0, 0);
                 self.free_temps_to(t);
             }
             None => {
                 for st in &f.body {
-                    let _ = self.stmt(st);
+                    self.stmt(st)?;
                 }
-                self.emit(Op::Return, THIS_SLOT, 0, 0);
+                // An explicit `return` already left the function. A second
+                // `Return this` is dead and keeps the self-recursion compiler
+                // from seeing a numeric body.
+                let already = self
+                    .cur()
+                    .proto
+                    .code
+                    .last()
+                    .is_some_and(|i| i.op == Op::Return);
+                if !already {
+                    self.emit(Op::Return, THIS_SLOT, 0, 0);
+                }
             }
         }
         self.finish_fn();
-        self.protos.len() as u32 - 1
+        Ok(self.protos.len() as u32 - 1)
     }
 
-    fn new_closure(&mut self, f: &Func, ctx: FnCtx, name: Option<String>, dst: u32) {
+    fn new_closure(
+        &mut self,
+        f: &Func,
+        ctx: FnCtx,
+        name: Option<String>,
+        dst: u32,
+    ) -> Result<(), String> {
         self.cellify_pending();
-        let pidx = self.compile_fn(f, ctx, name);
+        let pidx = self.compile_fn(f, ctx, name)?;
         let k = self.const_fn(pidx);
         self.emit(Op::NewClosure, dst, k, 0);
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
     // constants
     // -----------------------------------------------------------------------
+
+    fn const_empty(&mut self) -> u32 {
+        let fs = self.states.last_mut().unwrap();
+        for (i, c) in fs.proto.consts.iter().enumerate() {
+            if matches!(c, ConstVal::Empty) {
+                return i as u32;
+            }
+        }
+        fs.proto.consts.push(ConstVal::Empty);
+        (fs.proto.consts.len() - 1) as u32
+    }
 
     fn const_num(&mut self, n: f64) -> u32 {
         let fs = self.states.last_mut().unwrap();
@@ -519,7 +621,9 @@ impl Compiler {
     /// `Op::NewObjectLit`.
     fn const_keys(&mut self, keys: Vec<PropKey>) -> u32 {
         let fs = self.states.last_mut().unwrap();
-        fs.proto.consts.push(ConstVal::Keys(keys.into_boxed_slice()));
+        fs.proto
+            .consts
+            .push(ConstVal::Keys(keys.into_boxed_slice()));
         fs.proto.consts.len() as u32 - 1
     }
 
@@ -551,7 +655,7 @@ impl Compiler {
         &mut self,
         slot: u32,
         value: &Expr,
-        tmp: u32,
+        _tmp: u32,
     ) -> Result<bool, String> {
         match value {
             Expr::Num(n) => {
@@ -637,9 +741,7 @@ impl Compiler {
     /// back to `expr`, which routes through `load_name` and the buffer).
     fn try_discard_update(&mut self, e: &Expr) -> Result<bool, String> {
         match e {
-            Expr::Assign(op, target, value)
-                if *op == crate::ast::AssignOp::AddAssign =>
-            {
+            Expr::Assign(op, target, value) if *op == crate::ast::AssignOp::AddAssign => {
                 let name = match target.as_ref() {
                     Target::Simple(n) => n,
                     _ => return Ok(false),
@@ -785,6 +887,11 @@ impl Compiler {
                     }
                 }
             }
+            Stmt::With(..) => {
+                return Err(
+                    "SyntaxError: `with` is not supported: JholVM has no dynamic scope".into(),
+                )
+            }
             Stmt::While(c, body) => {
                 let lbl = self.pending_label.take();
                 self.push_label(lbl);
@@ -876,8 +983,16 @@ impl Compiler {
                     self.push_scope();
                     for (name, _slot, sr) in shadow.iter() {
                         let n = self.states.len() - 1;
-                        let binding = Binding { slot: *sr, captured: false };
-                        self.states[n].scopes.last_mut().unwrap().names.push((name.clone(), binding));
+                        let binding = Binding {
+                            slot: *sr,
+                            captured: false,
+                        };
+                        self.states[n]
+                            .scopes
+                            .last_mut()
+                            .unwrap()
+                            .names
+                            .push((name.clone(), binding));
                     }
                     // Fold `x += 1; jump top` into one instruction when the
                     // update is a plain local increment — which is exactly the
@@ -910,7 +1025,12 @@ impl Compiler {
                 self.close_label(end, cont);
                 self.pop_scope();
             }
-            Stmt::ForInOf { kind, decl, expr, body } => self.for_in_of(*kind, decl.as_ref(), expr, body)?,
+            Stmt::ForInOf {
+                kind,
+                decl,
+                expr,
+                body,
+            } => self.for_in_of(*kind, decl.as_ref(), expr, body)?,
             Stmt::Return(e) => match e {
                 Some(e) => {
                     let t = self.alloc_temp();
@@ -939,7 +1059,11 @@ impl Compiler {
                 self.free_temps_to(t);
             }
             Stmt::Try(body, catch, finally) => {
-                self.try_stmt(std::slice::from_ref(body.as_ref()), catch.as_ref(), finally.as_deref())?;
+                self.try_stmt(
+                    std::slice::from_ref(body.as_ref()),
+                    catch.as_ref(),
+                    finally.as_deref(),
+                )?;
             }
             Stmt::Func(_) => {}
             Stmt::Class(c) => {
@@ -983,7 +1107,7 @@ impl Compiler {
     fn emit_return_with_handlers(&mut self, src: u32) {
         // Pop only the handlers that are still live *right here*; a try body's
         // `return` has already popped its own.
-        let live = self.handler_stack.len();
+        let live = self.cur().handler_stack.len();
         for _ in 0..live {
             self.emit(Op::PopTry, 0, 0, 0);
         }
@@ -1025,9 +1149,8 @@ impl Compiler {
             if !stmt_captures(&n, body) {
                 continue;
             }
-            if let Some(mut b) = self.find_binding(&n) {
+            if let Some(b) = self.find_binding(&n) {
                 if !b.captured {
-                    b.captured = true;
                     self.mark_captured(&n);
                 }
             }
@@ -1051,7 +1174,12 @@ impl Compiler {
     }
 
     fn push_label(&mut self, name: Option<String>) {
-        self.cur().labels.push(LabelCtx { name, breaks: Vec::new(), continues: Vec::new(), cont_ip: 0 });
+        self.cur().labels.push(LabelCtx {
+            name,
+            breaks: Vec::new(),
+            continues: Vec::new(),
+            cont_ip: 0,
+        });
     }
 
     fn find_label(&mut self, name: Option<&str>) -> usize {
@@ -1104,14 +1232,14 @@ impl Compiler {
         let exn = self.alloc_temp();
         self.free_temps_to(exn);
         let catch_ip = self.emit(Op::PushTry, 0, exn, 0);
-        self.handler_stack.push(catch_ip as u32);
+        self.cur().handler_stack.push(catch_ip as u32);
         self.push_scope();
         for s in body {
             self.stmt(s)?;
         }
         self.pop_scope();
         self.emit(Op::PopTry, 0, 0, 0);
-        self.handler_stack.pop();
+        self.cur().handler_stack.pop();
         run_finally(self)?;
         let end_ip = self.emit(Op::Jump, 0, 0, 0);
 
@@ -1138,7 +1266,11 @@ impl Compiler {
         Ok(())
     }
 
-    fn switch_stmt(&mut self, disc: &Expr, cases: &[(Option<Expr>, Vec<Stmt>)]) -> Result<(), String> {
+    fn switch_stmt(
+        &mut self,
+        disc: &Expr,
+        cases: &[(Option<Expr>, Vec<Stmt>)],
+    ) -> Result<(), String> {
         let d = self.alloc_temp();
         self.expr(disc, d)?;
         self.push_label(None);
@@ -1191,10 +1323,90 @@ impl Compiler {
         Ok(())
     }
 
+    /// `yield* expr`: delegate to another iterator, forwarding each
+    /// `next(sent)` value. The expression value is the delegate's final
+    /// `.value` once it reports `done`.
+    fn compile_yield_star(&mut self, inner: &Expr, dst: u32) -> Result<(), String> {
+        let obj = self.alloc_temp();
+        self.expr(inner, obj)?;
+        let iter = self.emit_get_iterator(obj)?;
+        let sent = self.alloc_temp();
+        self.emit(Op::LoadUndefined, sent, 0, 0);
+        let top = self.here();
+        self.push_label(None);
+        // `CallThis` layout: `[this, callee, args...]`.
+        let base = self.alloc_temp();
+        let callee = self.alloc_temp();
+        let arg = self.alloc_temp();
+        let res = self.alloc_temp();
+        self.emit(Op::Move, base, iter, 0);
+        let next_key = self.key_of("next");
+        let nk = self.const_str("next");
+        let nip = self.emit(Op::GetProp, callee, iter, nk);
+        self.set_ic_key(nip, next_key);
+        self.emit(Op::Move, arg, sent, 0);
+        self.emit(Op::CallThis, res, base, 1);
+        let done = self.alloc_temp();
+        let done_key = self.key_of("done");
+        let dk = self.const_str("done");
+        let dip = self.emit(Op::GetProp, done, res, dk);
+        self.set_ic_key(dip, done_key);
+        let exit = self.emit(Op::JumpIfTrue, done, 0, 0);
+        let val = self.alloc_temp();
+        let value_key = self.key_of("value");
+        let vk = self.const_str("value");
+        let vip = self.emit(Op::GetProp, val, res, vk);
+        self.set_ic_key(vip, value_key);
+        // After resume the VM puts the caller's sent value in `val`'s slot.
+        self.emit(Op::Yield, val, 0, 0);
+        self.emit(Op::Move, sent, val, 0);
+        self.emit(Op::Jump, 0, 0, top as u32);
+        let end = self.here();
+        self.patch_to(exit, end);
+        self.close_label(end, top);
+        let out = self.alloc_temp();
+        let outk = self.const_str("value");
+        let oip = self.emit(Op::GetProp, out, res, outk);
+        self.set_ic_key(oip, value_key);
+        self.emit(Op::Move, dst, out, 0);
+        self.free_temps_to(obj);
+        Ok(())
+    }
+
+    /// `obj[Symbol.iterator]()` or the legacy `values()` fallback. Leaves
+    /// `iter` as the top live temp.
+    fn emit_get_iterator(&mut self, obj: u32) -> Result<u32, String> {
+        let it_fn = self.alloc_temp();
+        let iter_key = self.key_of(ITER_KEY);
+        let ik = self.const_str(ITER_KEY);
+        let ip = self.emit(Op::GetProp, it_fn, obj, ik);
+        self.set_ic_key(ip, iter_key);
+        let undef = self.alloc_temp();
+        self.emit(Op::LoadUndefined, undef, 0, 0);
+        let _eq = self.emit(Op::StrictEq, undef, it_fn, undef);
+        let skip = self.emit(Op::JumpIfFalse, undef, 0, 0);
+        let vk = self.const_str(VALUES);
+        self.emit(Op::GetGlobal, it_fn, vk, 0);
+        let joined = self.here();
+        // Only the conditional jump is a branch. Patching the `StrictEq`
+        // above would overwrite one of its register operands with this
+        // jump target, and the VM would then read a bogus register.
+        self.patch_to(skip, joined);
+
+        let base = self.alloc_temp();
+        let callee = self.alloc_temp();
+        let iter = self.alloc_temp();
+        self.emit(Op::Move, base, obj, 0);
+        self.emit(Op::Move, callee, it_fn, 0);
+        self.emit(Op::CallThis, iter, base, 0);
+        self.free_temps_to(iter + 1);
+        Ok(iter)
+    }
+
     fn for_in_of(
         &mut self,
         kind: ForKind,
-        decl: Option<&(VarKind, Target)>,
+        decl: Option<&(Option<VarKind>, Target)>,
         expr: &Expr,
         body: &Stmt,
     ) -> Result<(), String> {
@@ -1214,32 +1426,7 @@ impl Compiler {
                 }
                 let obj = self.alloc_temp();
                 self.expr(expr, obj)?;
-                let it_fn = self.alloc_temp();
-                let iter_key = self.key_of(ITER_KEY);
-                let ik = self.const_str(ITER_KEY);
-                let ip = self.emit(Op::GetProp, it_fn, obj, ik);
-                self.set_ic_key(ip, iter_key);
-                let undef = self.alloc_temp();
-                self.emit(Op::LoadUndefined, undef, 0, 0);
-                let eq = self.emit(Op::StrictEq, undef, it_fn, undef);
-                let skip = self.emit(Op::JumpIfFalse, undef, 0, 0);
-                let vk = self.const_str(VALUES);
-                self.emit(Op::GetGlobal, it_fn, vk, 0);
-                let joined = self.here();
-                // Only the conditional jump is a branch. Patching the `StrictEq`
-                // above would overwrite one of its register operands with this
-                // jump target, and the VM would then read a bogus register.
-                self.patch_to(skip, joined);
-
-                let base = self.alloc_temp(); // this
-                let callee = self.alloc_temp();
-                let iter = self.alloc_temp();
-                self.emit(Op::Move, base, obj, 0);
-                self.emit(Op::Move, callee, it_fn, 0);
-                self.emit(Op::CallThis, iter, base, 0);
-                // Hold the iterator's register for the whole loop: the loop body
-                // allocates above it.
-                self.free_temps_to(iter + 1);
+                let iter = self.emit_get_iterator(obj)?;
 
                 self.push_label(None);
                 let top = self.here();
@@ -1286,9 +1473,11 @@ impl Compiler {
                 // loop state on the first `SetLocal`.
                 self.push_scope();
                 let mut loop_var_slot: Option<u32> = None;
-                if let Some((kind, Target::Simple(name))) = decl {
+                if let Some((Some(kind), Target::Simple(name))) = decl {
                     loop_var_slot = Some(if *kind == VarKind::Var {
-                        self.find_binding(name).map(|b| b.slot).unwrap_or_else(|| self.add_local(name))
+                        self.find_binding(name)
+                            .map(|b| b.slot)
+                            .unwrap_or_else(|| self.add_local(name))
                     } else {
                         self.add_local(name)
                     });
@@ -1349,6 +1538,7 @@ impl Compiler {
 
     /// Reserve the slot a simple loop variable will bind to, without emitting
     /// a store. Used when the slot has to exist before other registers.
+    #[allow(dead_code)]
     fn bind_loop_slot(&mut self, decl: Option<&(VarKind, Target)>) -> u32 {
         match decl {
             Some((_, Target::Simple(name))) => self.add_local(name),
@@ -1356,21 +1546,30 @@ impl Compiler {
         }
     }
 
-    fn bind_loop_var(&mut self, decl: Option<&(VarKind, Target)>, src: u32) -> Result<(), String> {
+    fn bind_loop_var(
+        &mut self,
+        decl: Option<&(Option<VarKind>, Target)>,
+        src: u32,
+    ) -> Result<(), String> {
         match decl {
-            None => {
-                // `for (x of e)` — the parser puts the LHS in `expr`; assign to it.
+            None => Ok(()),
+            // Bare `for (x of e)`: assign through normal target resolution so
+            // an existing binding is updated instead of shadowed.
+            Some((None, target)) => self.bind(target, src),
+            Some((Some(VarKind::Var), Target::Simple(name))) => {
+                let slot = self
+                    .find_binding(name)
+                    .map(|b| b.slot)
+                    .unwrap_or_else(|| self.add_local(name));
+                self.emit(Op::SetLocal, slot, src, 0);
                 Ok(())
             }
-            Some((_, target)) => {
-                if let Target::Simple(name) = target {
-                    let slot = self.add_local(name);
-                    self.emit(Op::SetLocal, slot, src, 0);
-                    Ok(())
-                } else {
-                    self.bind(target, src)
-                }
+            Some((Some(_), Target::Simple(name))) => {
+                let slot = self.add_local(name);
+                self.emit(Op::SetLocal, slot, src, 0);
+                Ok(())
             }
+            Some((_, target)) => self.bind(target, src),
         }
     }
 
@@ -1379,7 +1578,11 @@ impl Compiler {
         // references to declarations initialized later in this block.
         for st in stmts {
             if let Stmt::Var(kind, decls) = st {
-                if *kind != VarKind::Var { for (target,_) in decls { self.declare_pattern(*kind,target); } }
+                if *kind != VarKind::Var {
+                    for (target, _) in decls {
+                        self.declare_pattern(*kind, target);
+                    }
+                }
             }
         }
         // Bindings first, so a function can be called before its declaration line.
@@ -1405,11 +1608,14 @@ impl Compiler {
         };
         let dst = self.alloc_temp();
         self.cellify_pending();
-        let pidx = self.compile_fn(f, FnCtx::Func, Some(name.clone()));
+        let pidx = self.compile_fn(f, FnCtx::Func, Some(name.clone()))?;
         let k = self.const_fn(pidx);
         self.emit(Op::NewClosure, dst, k, 0);
         let slot = self.find_binding(&name).map(|b| b.slot).unwrap_or(u32::MAX);
-        let captured = self.find_binding(&name).map(|b| b.captured).unwrap_or(false);
+        let captured = self
+            .find_binding(&name)
+            .map(|b| b.captured)
+            .unwrap_or(false);
         if slot != u32::MAX {
             // If the body referenced this declaration, the slot already holds a
             // `JCell` (created when the closure captured it), so the binding has
@@ -1444,7 +1650,9 @@ impl Compiler {
                         self.collect_vars(std::slice::from_ref(b.as_ref()), out);
                     }
                 }
-                Stmt::While(_, b) => self.collect_vars(std::slice::from_ref(b.as_ref()), out),
+                Stmt::While(_, b) | Stmt::With(_, b) => {
+                    self.collect_vars(std::slice::from_ref(b.as_ref()), out)
+                }
                 Stmt::DoWhile(b, _) => self.collect_vars(std::slice::from_ref(b.as_ref()), out),
                 Stmt::For(i, _, _, b) => {
                     if let Some(i) = i {
@@ -1453,7 +1661,7 @@ impl Compiler {
                     self.collect_vars(std::slice::from_ref(b.as_ref()), out);
                 }
                 Stmt::ForInOf { decl, body, .. } => {
-                    if let Some((VarKind::Var, target)) = decl {
+                    if let Some((Some(VarKind::Var), target)) = decl {
                         collect_pattern_names(target, out);
                     }
                     self.collect_vars(std::slice::from_ref(body.as_ref()), out);
@@ -1515,7 +1723,16 @@ impl Compiler {
         match target {
             Target::Simple(n) => {
                 if (kind == VarKind::Var && self.find_binding(n).is_none())
-                    || (kind != VarKind::Var && !self.cur().scopes.last().unwrap().names.iter().any(|(name,_)|name==n)) {
+                    || (kind != VarKind::Var
+                        && !self
+                            .cur()
+                            .scopes
+                            .last()
+                            .unwrap()
+                            .names
+                            .iter()
+                            .any(|(name, _)| name == n))
+                {
                     self.add_local(n);
                 }
             }
@@ -1531,7 +1748,16 @@ impl Compiler {
                         None => {
                             if let MemberKey::Dot(n) = &f.key {
                                 if (kind == VarKind::Var && self.find_binding(n).is_none())
-                    || (kind != VarKind::Var && !self.cur().scopes.last().unwrap().names.iter().any(|(name,_)|name==n)) {
+                                    || (kind != VarKind::Var
+                                        && !self
+                                            .cur()
+                                            .scopes
+                                            .last()
+                                            .unwrap()
+                                            .names
+                                            .iter()
+                                            .any(|(name, _)| name == n))
+                                {
                                     self.add_local(n);
                                 }
                             }
@@ -1545,7 +1771,12 @@ impl Compiler {
         }
     }
 
-    fn declare(&mut self, kind: VarKind, target: &Target, init: &Option<Expr>) -> Result<(), String> {
+    fn declare(
+        &mut self,
+        kind: VarKind,
+        target: &Target,
+        init: &Option<Expr>,
+    ) -> Result<(), String> {
         self.declare_pattern(kind, target);
         // A string-literal initializer makes the local eligible for the
         // `+=` string accumulator. Anything else keeps the generic path, so
@@ -1560,7 +1791,19 @@ impl Compiler {
         match init {
             Some(e) => {
                 let t = self.alloc_temp();
+                // NamedEvaluation: only a bare anonymous function/arrow/class
+                // initialiser takes the binding's name.
+                self.name_hint = match (target, e) {
+                    (Target::Simple(n), Expr::Func(f)) | (Target::Simple(n), Expr::Arrow(f))
+                        if f.name.is_none() =>
+                    {
+                        Some(n.clone())
+                    }
+                    (Target::Simple(n), Expr::Class(c)) if c.name.is_none() => Some(n.clone()),
+                    _ => None,
+                };
                 self.expr(e, t)?;
+                self.name_hint = None;
                 self.bind(target, t)?;
                 self.free_temps_to(t);
             }
@@ -1619,7 +1862,7 @@ impl Compiler {
                 let exn = self.alloc_temp();
                 self.free_temps_to(exn);
                 let catch_ip = self.emit(Op::PushTry, 0, exn, 0);
-                self.handler_stack.push(catch_ip as u32);
+                self.cur().handler_stack.push(catch_ip as u32);
                 self.push_scope();
                 // `body` is normally a Block; unwrap it so the *last* clause is
                 // the one whose value becomes the statement's completion value.
@@ -1638,7 +1881,7 @@ impl Compiler {
                 }
                 self.pop_scope();
                 self.emit(Op::PopTry, 0, 0, 0);
-                self.handler_stack.pop();
+                self.cur().handler_stack.pop();
                 let end_ip = self.emit(Op::Jump, 0, 0, 0);
                 let handler = self.here();
                 self.patch_to(catch_ip, handler);
@@ -1656,13 +1899,19 @@ impl Compiler {
                 Ok(produced)
             }
             Stmt::Block(b) => {
-                self.push_scope(); self.hoist_functions(b)?;
-                let result=if let Some((last,prefix))=b.split_last() {
-                    for st in prefix {self.stmt(st)?;}
-                    self.completion_value(last,dst)?
-                } else {false};
-                self.pop_scope(); Ok(result)
-            },
+                self.push_scope();
+                self.hoist_functions(b)?;
+                let result = if let Some((last, prefix)) = b.split_last() {
+                    for st in prefix {
+                        self.stmt(st)?;
+                    }
+                    self.completion_value(last, dst)?
+                } else {
+                    false
+                };
+                self.pop_scope();
+                Ok(result)
+            }
             _ => {
                 self.stmt(s)?;
                 Ok(false)
@@ -1696,7 +1945,7 @@ impl Compiler {
                 self.store_local(name, src);
             }
             Target::Member(e) => {
-                self.assign_to(e, src);
+                self.assign_to(e, src)?;
             }
             Target::Array(items) => {
                 for (i, item) in items.iter().enumerate() {
@@ -1888,12 +2137,32 @@ fn method_key(name: &str, is_get: bool, is_set: bool) -> String {
 
 impl Compiler {
     fn class_def(&mut self, c: &ClassDef, dst: u32) -> Result<(), String> {
+        self.class_def_named(c, dst, None)
+    }
+
+    /// `display`: the name an anonymous class expression takes from its binding.
+    fn class_def_named(
+        &mut self,
+        c: &ClassDef,
+        dst: u32,
+        display: Option<String>,
+    ) -> Result<(), String> {
+        // Hidden *global* naming this class, so `super.x` in any member can reach
+        // its home class from any closure (see `home_stack`). A global, not a
+        // local: `class_def` is entered with `dst` already allocated, and a local
+        // declared here would be handed that live temp's slot. Unique per class,
+        // so nesting and repetition cannot collide. Assigned once the class
+        // object exists.
+        self.class_serial += 1;
+        let home_alias = format!("\u{0}home{}", self.class_serial);
+        self.home_stack.push((home_alias.clone(), false));
         // `sup_proto` ends up holding the *superclass's prototype object*, which
         // becomes the class prototype's `__proto__`. Reading `.prototype` off
         // `null` for a base class would be a TypeError, so it is taken from
         // `Object.prototype` instead.
         let sup_proto = self.alloc_temp();
         let derived = c.superclass.is_some();
+        let mut sup_reg: Option<u32> = None;
         let proto_key = self.key_of("prototype");
         let pkc = self.const_str("prototype");
         match &c.superclass {
@@ -1909,7 +2178,9 @@ impl Compiler {
                 }
                 let ip = self.emit(Op::GetProp, sup_proto, sup, pkc);
                 self.set_ic_key(ip, proto_key);
-                self.free_temps_to(sup);
+                // Keep `sup` live: the constructor's own [[Prototype]] is bound
+                // to it below. Everything from `sup_proto` is freed at the end.
+                sup_reg = Some(sup);
             }
             None => {
                 let g = self.alloc_temp();
@@ -1937,14 +2208,10 @@ impl Compiler {
         // and it keeps accessor/field ordering right.
         let mut field_inits: Vec<Stmt> = Vec::new();
         for m in &c.members {
-            let (init, _static) = match &m.kind {
-                ClassMemberKind::Field(e) => (Some(e), false),
-                ClassMemberKind::StaticField(e) => (Some(e), true),
-                _ => (None, false),
-            };
-            let init = match init {
-                Some(i) => i,
-                None => continue,
+            // Static fields run once on the class below; adding them here
+            // would repeat their side effects and install them on instances.
+            let ClassMemberKind::Field(init) = &m.kind else {
+                continue;
             };
             // Public fields keep their plain name; `#name` stays private.
             let key = match &m.key {
@@ -1952,7 +2219,11 @@ impl Compiler {
                 ClassKey::Private(n) => MemberKey::Dot(format!("#{}", n)),
                 ClassKey::Computed(e) => MemberKey::Computed(Box::new(e.as_ref().clone())),
             };
-            let lhs = Expr::Member { obj: Box::new(Expr::This), key, optional: false };
+            let lhs = Expr::Member {
+                obj: Box::new(Expr::This),
+                key,
+                optional: false,
+            };
             field_inits.push(Stmt::Expr(Expr::Assign(
                 AssignOp::Assign,
                 Box::new(Target::Member(Box::new(lhs))),
@@ -1969,13 +2240,20 @@ impl Compiler {
             }
             None => {
                 let params = if derived {
-                    vec![Param { target: Target::Simple("args".into()), default: None, rest: true }]
+                    vec![Param {
+                        target: Target::Simple("args".into()),
+                        default: None,
+                        rest: true,
+                    }]
                 } else {
                     Vec::new()
                 };
                 let mut body = field_inits;
                 if derived {
-                    body.insert(0, super_call(vec![Expr::Spread(Box::new(Expr::Ident("args".into())))]));
+                    body.insert(
+                        0,
+                        super_call(vec![Expr::Spread(Box::new(Expr::Ident("args".into())))]),
+                    );
                 }
                 Func {
                     name: Some("constructor".into()),
@@ -1990,10 +2268,27 @@ impl Compiler {
         };
 
         self.cellify_pending();
-        let ctx = if derived { FnCtx::DerivedCtor } else { FnCtx::Ctor };
-        let pidx = self.compile_fn(&ctor, ctx, Some("constructor".into()));
+        let ctx = if derived {
+            FnCtx::DerivedCtor
+        } else {
+            FnCtx::Ctor
+        };
+        // The class's `.name` is the class name (or empty for an anonymous
+        // expression), not the literal "constructor".
+        let pidx = self.compile_fn(
+            &ctor,
+            ctx,
+            Some(c.name.clone().or(display).unwrap_or_default()),
+        )?;
         let k = self.const_fn(pidx);
         self.emit(Op::NewClosure, dst, k, 0);
+        if let Some(sup) = sup_reg {
+            self.emit(Op::SetProto, dst, sup, 0);
+        }
+        {
+            let gk = self.const_str(&home_alias);
+            self.emit(Op::DefGlobal, gk, dst, 0);
+        }
 
         let proto = self.alloc_temp();
         self.emit(Op::NewObject, proto, 0, 0);
@@ -2028,38 +2323,127 @@ impl Compiler {
                         (f, false, false, *s)
                     }
                 }
-                ClassMemberKind::Field(_) | ClassMemberKind::StaticField(_) => continue,
+                ClassMemberKind::Field(_)
+                | ClassMemberKind::StaticField(_)
+                | ClassMemberKind::StaticBlock(_) => continue,
             };
             let target = if is_static { dst } else { proto };
-            let t = self.alloc_temp();
-            self.cellify_pending();
-            let pidx = self.compile_fn(f, FnCtx::Method, Some(class_key_name(&m.key)));
-            let kk = self.const_fn(pidx);
-            self.emit(Op::NewClosure, t, kk, 0);
-            let name = method_key(&class_key_name(&m.key), is_get, is_set);
-            let name_key = self.key_of(&name);
-            let kc = self.const_str(&name);
-            let ip = self.emit(Op::DefProp, target, kc, t);
-            self.set_ic_key(ip, name_key);
-            self.free_temps_to(t);
-        }
-
-        // Static field initialisers run against the constructor itself.
-        for m in &c.members {
-            let init = match &m.kind {
-                ClassMemberKind::StaticField(e) => e,
-                _ => continue,
+            // `[expr]() {}`: the key expression is evaluated once while the
+            // class is being defined, before the method closure is created.
+            let computed_key = match &m.key {
+                ClassKey::Computed(e) => {
+                    let k = self.alloc_temp();
+                    self.expr(e, k)?;
+                    Some(k)
+                }
+                _ => None,
             };
             let t = self.alloc_temp();
-            self.expr(init, t)?;
-            let name = class_key_name(&m.key);
-            let name_key = self.key_of(&name);
-            let kc = self.const_str(&name);
-            let ip = self.emit(Op::SetProp, dst, kc, t);
-            self.set_ic_key(ip, name_key);
-            self.free_temps_to(t);
+            self.cellify_pending();
+            if let Some(h) = self.home_stack.last_mut() {
+                h.1 = is_static;
+            }
+            let pidx = self.compile_fn(f, FnCtx::Method, Some(class_key_name(&m.key)))?;
+            let kk = self.const_fn(pidx);
+            self.emit(Op::NewClosure, t, kk, 0);
+            match computed_key {
+                Some(k) => {
+                    let k = if is_get || is_set {
+                        let pref = self.alloc_temp();
+                        let pc = self.const_str(if is_get { "#get:" } else { "#set:" });
+                        self.emit(Op::LoadK, pref, pc, 0);
+                        let joined = self.alloc_temp();
+                        self.emit(Op::Add, joined, pref, k);
+                        joined
+                    } else {
+                        k
+                    };
+                    self.emit(Op::SetIndex, target, k, t);
+                    self.free_temps_to(t);
+                }
+                None => {
+                    let name = method_key(&class_key_name(&m.key), is_get, is_set);
+                    let name_key = self.key_of(&name);
+                    let kc = self.const_str(&name);
+                    let ip = self.emit(Op::DefProp, target, kc, t);
+                    self.set_ic_key(ip, name_key);
+                    self.free_temps_to(t);
+                }
+            }
         }
 
+        // Static field initialisers and static blocks run against the
+        // constructor itself, in source order — a later static block can read
+        // what an earlier one wrote.
+        for m in &c.members {
+            match &m.kind {
+                ClassMemberKind::StaticField(init) => {
+                    let computed_key = match &m.key {
+                        ClassKey::Computed(e) => {
+                            let k = self.alloc_temp();
+                            self.expr(e, k)?;
+                            Some(k)
+                        }
+                        _ => None,
+                    };
+                    // A static field's `this` is the class, so its initialiser
+                    // runs inside a thunk called with `dst` as receiver.
+                    let this_slot = self.alloc_temp();
+                    self.emit(Op::Move, this_slot, dst, 0);
+                    let callee = self.alloc_temp();
+                    self.cellify_pending();
+                    if let Some(h) = self.home_stack.last_mut() {
+                        h.1 = true;
+                    }
+                    let thunk = Func {
+                        name: None,
+                        params: Vec::new(),
+                        body: Vec::new(),
+                        is_arrow: false,
+                        is_async: false,
+                        is_generator: false,
+                        expr_body: Some(init.clone()),
+                    };
+                    let pidx = self.compile_fn(&thunk, FnCtx::Method, None)?;
+                    let k = self.const_fn(pidx);
+                    self.emit(Op::NewClosure, callee, k, 0);
+                    let val = self.alloc_temp();
+                    self.emit(Op::CallThis, val, this_slot, 0);
+                    match computed_key {
+                        Some(k) => {
+                            self.emit(Op::SetIndex, dst, k, val);
+                        }
+                        None => {
+                            let name = class_key_name(&m.key);
+                            let name_key = self.key_of(&name);
+                            let kc = self.const_str(&name);
+                            let ip = self.emit(Op::DefProp, dst, kc, val);
+                            self.set_ic_key(ip, name_key);
+                        }
+                    }
+                    self.free_temps_to(this_slot);
+                }
+                ClassMemberKind::StaticBlock(f) => {
+                    // `CallThis` layout: `[this, callee, args...]`.
+                    let this_slot = self.alloc_temp();
+                    self.emit(Op::Move, this_slot, dst, 0);
+                    let callee = self.alloc_temp();
+                    self.cellify_pending();
+                    if let Some(h) = self.home_stack.last_mut() {
+                        h.1 = true;
+                    }
+                    let pidx = self.compile_fn(f, FnCtx::Method, Some("static".into()))?;
+                    let k = self.const_fn(pidx);
+                    self.emit(Op::NewClosure, callee, k, 0);
+                    let r = self.alloc_temp();
+                    self.emit(Op::CallThis, r, this_slot, 0);
+                    self.free_temps_to(this_slot);
+                }
+                _ => {}
+            }
+        }
+
+        self.home_stack.pop();
         self.free_temps_to(sup_proto);
         Ok(())
     }
@@ -2090,12 +2474,22 @@ fn flatten<'a>(e: &'a Expr, segs: &mut Vec<Seg>) -> &'a Expr {
                 MemberKey::Dot(n) => SegKind::Dot(n.clone()),
                 MemberKey::Computed(e) => SegKind::Computed((**e).clone()),
             };
-            segs.push(Seg { kind, optional: *optional });
+            segs.push(Seg {
+                kind,
+                optional: *optional,
+            });
             base
         }
-        Expr::Call { callee, args, optional } => {
+        Expr::Call {
+            callee,
+            args,
+            optional,
+        } => {
             let base = flatten(callee, segs);
-            segs.push(Seg { kind: SegKind::Call(args.clone()), optional: *optional });
+            segs.push(Seg {
+                kind: SegKind::Call(args.clone()),
+                optional: *optional,
+            });
             base
         }
         Expr::OptionalChain(inner) => flatten(inner, segs),
@@ -2104,6 +2498,7 @@ fn flatten<'a>(e: &'a Expr, segs: &mut Vec<Seg>) -> &'a Expr {
 }
 
 impl Compiler {
+    #[allow(dead_code)]
     fn peek_temp(&self) -> u32 {
         let fs = self.states.last().unwrap();
         fs.temps_top.max(fs.locals_top) as u32
@@ -2217,7 +2612,11 @@ impl Compiler {
             match item {
                 Some(e) => self.expr(e, t)?,
                 None => {
-                    self.emit(Op::LoadUndefined, t, 0, 0);
+                    // Elisions are holes, not undefined-valued slots: a
+                    // shared `Empty` constant keeps `[1, , 3]` a 3-length
+                    // array with a missing middle for `in` and for-in.
+                    let ec = self.const_empty();
+                    self.emit(Op::LoadK, t, ec, 0);
                 }
             }
             self.free_temps_to(elem + n32);
@@ -2264,13 +2663,32 @@ impl Compiler {
             Expr::This | Expr::Super | Expr::NewTarget => {
                 if matches!(e, Expr::Super) {
                     let t = self.alloc_temp();
-                    self.load_name("\u{0}this", t)?;
-                    let p = self.alloc_temp();
-                    let k = self.const_str("__proto__");
-                    let ip = self.emit(Op::GetProp, p, t, k);
-                    let __k = self.key_of("__proto__");
-                    self.set_ic_key(ip, __k);
-                    self.emit(Op::Move, dst, p, 0);
+                    let home = self.home_stack.last().cloned();
+                    let pk = self.key_of("__proto__");
+                    let kc = self.const_str("__proto__");
+                    if let Some((alias, is_static)) = home {
+                        // Home.prototype.__proto__ (instance side) or
+                        // Home.__proto__ (static side).
+                        self.load_global(&alias, t)?;
+                        if !is_static {
+                            let prk = self.key_of("prototype");
+                            let prc = self.const_str("prototype");
+                            let ip = self.emit(Op::GetProp, t, t, prc);
+                            self.set_ic_key(ip, prk);
+                        }
+                        let p = self.alloc_temp();
+                        let ip = self.emit(Op::GetProp, p, t, kc);
+                        self.set_ic_key(ip, pk);
+                        self.emit(Op::Move, dst, p, 0);
+                    } else {
+                        // Outside a class (object-literal method): the receiver's
+                        // prototype, as before.
+                        self.load_name("\u{0}this", t)?;
+                        let p = self.alloc_temp();
+                        let ip = self.emit(Op::GetProp, p, t, kc);
+                        self.set_ic_key(ip, pk);
+                        self.emit(Op::Move, dst, p, 0);
+                    }
                     self.free_temps_to(t);
                 } else if matches!(e, Expr::NewTarget) {
                     self.load_name("\u{0}newtarget", dst)?;
@@ -2280,31 +2698,49 @@ impl Compiler {
             }
             Expr::Template(parts) => self.template(parts, dst)?,
             Expr::TaggedTemplate { tag, parts } => {
-                // A tagged template calls `tag(strings, ...values)`. The callee
-                // register has to sit directly below the two argument registers.
+                // A tagged template calls `tag(strings, ...values)`: the values
+                // are spread, so each one needs its own adjacent argument
+                // register. Layout: `[callee, strings, value0, value1, ...]`.
                 let callee = self.alloc_temp();
                 let strings = self.alloc_temp();
-                let vals = self.alloc_temp();
+                let val_parts: Vec<&Expr> = parts
+                    .iter()
+                    .filter_map(|p| match p {
+                        TplPart::Expr(e) => Some(e.as_ref()),
+                        _ => None,
+                    })
+                    .collect();
+                let nvals = val_parts.len() as u32;
+                let arg_base = if nvals > 0 {
+                    self.alloc_temps(nvals)
+                } else {
+                    0
+                };
                 let str_parts: Vec<Option<Expr>> = parts
                     .iter()
                     .filter_map(|p| match p {
-                        TplPart::Str(t) => Some(Some(Expr::Str(t.clone()))),
+                        TplPart::Str { cooked, .. } => Some(Some(Expr::Str(cooked.clone()))),
+                        _ => None,
+                    })
+                    .collect();
+                let raw_parts: Vec<Option<Expr>> = parts
+                    .iter()
+                    .filter_map(|p| match p {
+                        TplPart::Str { raw, .. } => Some(Some(Expr::Str(raw.clone()))),
                         _ => None,
                     })
                     .collect();
                 let sr = self.new_array_lit(&str_parts)?;
-                self.emit(Op::Move, strings, sr, 0);
-                let val_parts: Vec<Option<Expr>> = parts
-                    .iter()
-                    .filter_map(|p| match p {
-                        TplPart::Expr(e) => Some(Some((**e).clone())),
-                        _ => None,
-                    })
-                    .collect();
-                let vr = self.new_array_lit(&val_parts)?;
-                self.emit(Op::Move, vals, vr, 0);
+                let rr = self.new_array_lit(&raw_parts)?;
+                let tstr = self.emit_native("__jhol_tagged_template", &[sr, rr]);
+                self.emit(Op::Move, strings, tstr, 0);
+                for (i, e) in val_parts.iter().enumerate() {
+                    self.expr(e, arg_base + i as u32)?;
+                    self.free_temps_to(arg_base + nvals);
+                }
                 self.expr(tag, callee)?;
-                self.emit(Op::Call, dst, callee, 2);
+                self.emit(Op::Call, dst, callee, nvals + 1);
+                self.free_temps_to(callee);
             }
             Expr::Regex(body, flags) => {
                 let b = self.alloc_temp();
@@ -2338,6 +2774,15 @@ impl Compiler {
                 self.emit(Op::NewObject, dst, hint, 0);
                 for p in props {
                     match p {
+                        ObjProp::Init(MemberKey::Dot(n), val) if n == "__proto__" => {
+                            // Object-literal `__proto__: value` (non-computed,
+                            // non-shorthand) sets [[Prototype]] rather than
+                            // defining a property. Non-object values are ignored.
+                            let t = self.alloc_temp();
+                            self.expr(val, t)?;
+                            self.emit(Op::SetProto, dst, t, 0);
+                            self.free_temps_to(t);
+                        }
                         ObjProp::Init(key, val) => {
                             let t = self.alloc_temp();
                             self.expr(val, t)?;
@@ -2361,7 +2806,7 @@ impl Compiler {
                             let is_set = *kind == MethodKind::Set;
                             let t = self.alloc_temp();
                             self.cellify_pending();
-                            let pidx = self.compile_fn(func, FnCtx::Method, Some(String::new()));
+                            let pidx = self.compile_fn(func, FnCtx::Method, Some(String::new()))?;
                             let kk = self.const_fn(pidx);
                             self.emit(Op::NewClosure, t, kk, 0);
                             let name = match key {
@@ -2374,9 +2819,18 @@ impl Compiler {
                     }
                 }
             }
-            Expr::Func(f) => self.new_closure(f, FnCtx::Func, f.name.clone(), dst),
-            Expr::Arrow(f) => self.new_closure(f, FnCtx::Arrow, f.name.clone(), dst),
-            Expr::Class(c) => self.class_def(c, dst)?,
+            Expr::Func(f) => {
+                let n = f.name.clone().or_else(|| self.name_hint.take());
+                self.new_closure(f, FnCtx::Func, n, dst)?;
+            }
+            Expr::Arrow(f) => {
+                let n = f.name.clone().or_else(|| self.name_hint.take());
+                self.new_closure(f, FnCtx::Arrow, n, dst)?;
+            }
+            Expr::Class(c) => {
+                let hint = self.name_hint.take();
+                self.class_def_named(c, dst, hint)?
+            }
             Expr::Unary(op, inner) => self.unary(*op, inner, dst)?,
             // `is_prefix` picks the yielded value; both forms write the new
             // value back to the target, and the recorded operator decides
@@ -2413,7 +2867,7 @@ impl Compiler {
                     UpdOp::Inc => self.emit(Op::Add, nv, t, one),
                     UpdOp::Dec => self.emit(Op::Sub, nv, t, one),
                 };
-                self.assign_to(inner, nv);
+                self.assign_to(inner, nv)?;
                 self.emit(Op::Move, dst, if *is_prefix { nv } else { t }, 0);
                 self.free_temps_to(t);
             }
@@ -2493,16 +2947,23 @@ impl Compiler {
             // threaded back through the same register on resume.
             Expr::Yield(inner, delegate) => {
                 if *delegate {
-                    return Err("SyntaxError: generator delegation (yield*) is not supported".into());
-                }
-                let t = self.alloc_temp();
-                match inner {
-                    Some(e) => self.expr(e, t)?,
-                    None => {
-                        self.emit(Op::LoadUndefined, t, 0, 0);
+                    let inner = inner
+                        .as_ref()
+                        .ok_or("SyntaxError: yield* needs an operand")?;
+                    self.compile_yield_star(inner, dst)?;
+                } else {
+                    let t = self.alloc_temp();
+                    match inner {
+                        Some(e) => self.expr(e, t)?,
+                        None => {
+                            self.emit(Op::LoadUndefined, t, 0, 0);
+                        }
                     }
+                    self.emit(Op::Yield, t, 0, 0);
+                    // On resume the VM writes the sent value back into `t`; move
+                    // it to the expression destination so `const x = yield 1` works.
+                    self.emit(Op::Move, dst, t, 0);
                 }
-                self.emit(Op::Yield, t, 0, 0);
             }
             Expr::Spread(_) => {
                 return Err("SyntaxError: unsupported expression in this position".into())
@@ -2591,6 +3052,8 @@ impl Compiler {
         let mut keys: Vec<PropKey> = Vec::with_capacity(props.len());
         for p in props {
             match p {
+                // `{ __proto__: p }` sets the prototype; the general path does that.
+                ObjProp::Init(MemberKey::Dot(n), _) if n == "__proto__" => return Ok(false),
                 ObjProp::Init(MemberKey::Dot(n), _) => keys.push(self.key_of(n)),
                 ObjProp::Shorthand(n) => keys.push(self.key_of(n)),
                 _ => return Ok(false),
@@ -2604,7 +3067,11 @@ impl Compiler {
                 return Ok(false);
             }
         }
-        let base = if n == 0 { 0 } else { self.alloc_temps(n as u32) };
+        let base = if n == 0 {
+            0
+        } else {
+            self.alloc_temps(n as u32)
+        };
         for (i, p) in props.iter().enumerate() {
             match p {
                 ObjProp::Init(_, val) => self.expr(val, base + i as u32)?,
@@ -2644,7 +3111,7 @@ impl Compiler {
                         self.free_temps_to(cur + 1);
                     }
                 }
-                TplPart::Str(s) => {
+                TplPart::Str { cooked: s, .. } => {
                     if first {
                         let k = self.const_str(s);
                         self.emit(Op::LoadK, cur, k, 0);
@@ -2709,8 +3176,14 @@ impl Compiler {
                 let n = self.emit_native("__jhol_tonum", &[t]);
                 self.emit(Op::Move, dst, n, 0);
             }
-            UnOp::Void | UnOp::Await => {
+            UnOp::Void => {
                 self.emit(Op::LoadUndefined, dst, 0, 0);
+            }
+            UnOp::Await => {
+                return Err(
+                    "SyntaxError: await is not supported: JholVM has no Promise/microtask support"
+                        .into(),
+                );
             }
             UnOp::Delete => {
                 if let Expr::Member { obj, key, .. } = inner {
@@ -2726,7 +3199,7 @@ impl Compiler {
                         MemberKey::Computed(e) => {
                             let kt = self.alloc_temp();
                             self.expr(e, kt)?;
-                            self.emit(Op::DeleteProp, dst, ot, kt);
+                            self.emit(Op::DeleteIndex, dst, ot, kt);
                             self.free_temps_to(kt);
                         }
                     }
@@ -2886,7 +3359,9 @@ impl Compiler {
             Target::Simple(n) => Some(n.clone()),
             _ => None,
         };
-        let is_member = expr_target.as_ref().map(|e| matches!(e, Expr::Member { .. }));
+        let is_member = expr_target
+            .as_ref()
+            .map(|e| matches!(e, Expr::Member { .. }));
 
         if !matches!(op, AssignOp::AddAssign) {
             if let Some(name) = &simple {
@@ -2973,7 +3448,7 @@ impl Compiler {
                 self.expr(value, v)?;
                 self.emit_arith(bop, cur, cur, v);
                 if let Some(e) = &expr_target {
-                    self.assign_to(e, cur);
+                    self.assign_to(e, cur)?;
                 } else if let Some(n) = &simple {
                     self.store_local(n, cur);
                 }
@@ -2996,7 +3471,7 @@ impl Compiler {
                     let v = self.alloc_temp();
                     self.expr(value, v)?;
                     if let Some(e) = &expr_target {
-                        self.assign_to(e, v);
+                        self.assign_to(e, v)?;
                     } else if let Some(n) = &simple {
                         self.store_local(n, v);
                     }
@@ -3009,7 +3484,7 @@ impl Compiler {
                 None => {
                     if let Some(e) = &expr_target {
                         self.expr(value, dst)?;
-                        self.assign_to(e, dst);
+                        self.assign_to(e, dst)?;
                     } else {
                         self.expr(value, dst)?;
                         if let Some(n) = &simple {
@@ -3113,7 +3588,18 @@ impl Compiler {
                     self.set_ic_key(ip, __k);
                     // The value being read becomes the receiver for a following
                     // method call: `a.b.c()` calls `c` with `this = a.b`.
-                    recv = val;
+                    //
+                    // Exception: `super.m()` looks `m` up on the parent prototype
+                    // but must run it with the *current* `this`. Using the parent
+                    // prototype as the receiver made the callee's own `this`
+                    // (and so its `super.x`) resolve from the wrong object.
+                    if base_is_super && si == 0 {
+                        let th = self.alloc_temp();
+                        self.emit(Op::LoadThis, th, 0, 0);
+                        recv = th;
+                    } else {
+                        recv = val;
+                    }
                     val = r;
                     after_prop = true;
                     if seg.optional {
@@ -3250,6 +3736,13 @@ impl Compiler {
                     self.emit(Op::Move, arr, r, 0);
                 }
             }
+            if op == Op::ConstructSuper {
+                // The callee register is only a placeholder for `super`; the
+                // parent is found at runtime, so `new`-applying it cannot work.
+                let r = self.alloc_temp();
+                self.emit(Op::ConstructSuperSpread, r, arr, 0);
+                return Ok(r);
+            }
             let r = self.emit_native("__jhol_apply_new", &[callee_reg, arr]);
             return Ok(r);
         }
@@ -3327,7 +3820,7 @@ fn stmt_captures(name: &str, s: &Stmt) -> bool {
                 || stmt_captures(name, a)
                 || b.as_ref().is_some_and(|b| stmt_captures(name, b))
         }
-        Stmt::While(c, b) => expr_captures(name, c) || stmt_captures(name, b),
+        Stmt::While(c, b) | Stmt::With(c, b) => expr_captures(name, c) || stmt_captures(name, b),
         Stmt::DoWhile(b, c) => stmt_captures(name, b) || expr_captures(name, c),
         Stmt::For(i, t, u, b) => {
             i.as_ref().is_some_and(|i| stmt_captures(name, i))
@@ -3335,9 +3828,7 @@ fn stmt_captures(name: &str, s: &Stmt) -> bool {
                 || u.as_ref().is_some_and(|u| expr_captures(name, u))
                 || stmt_captures(name, b)
         }
-        Stmt::ForInOf { expr, body, .. } => {
-            expr_captures(name, expr) || stmt_captures(name, body)
-        }
+        Stmt::ForInOf { expr, body, .. } => expr_captures(name, expr) || stmt_captures(name, body),
         Stmt::Return(Some(e)) | Stmt::Throw(e) => expr_captures(name, e),
         Stmt::Try(b, c, f) => {
             stmt_captures(name, b)
@@ -3371,14 +3862,17 @@ fn expr_captures(name: &str, e: &Expr) -> bool {
                     || expr_captures(name, v)
             }
             ObjProp::Shorthand(n) => n == name,
-            ObjProp::Spread(e) | ObjProp::Init(_, e) => expr_captures(name, e),
+            ObjProp::Spread(e) => expr_captures(name, e),
             ObjProp::Method { key, func, .. } => {
                 matches!(key, MemberKey::Computed(e) if expr_captures(name, e))
                     || func_mentions(name, func)
             }
         }),
-        Expr::Unary(_, e) | Expr::Update(.., e) | Expr::Spread(e)
-        | Expr::Yield(Some(e), _) | Expr::OptionalChain(e) => expr_captures(name, e),
+        Expr::Unary(_, e)
+        | Expr::Update(.., e)
+        | Expr::Spread(e)
+        | Expr::Yield(Some(e), _)
+        | Expr::OptionalChain(e) => expr_captures(name, e),
         Expr::Yield(None, _) => false,
         Expr::Binary(_, l, r) | Expr::Logical(_, l, r) => {
             expr_captures(name, l) || expr_captures(name, r)
@@ -3413,7 +3907,7 @@ fn stmt_mentions(name: &str, s: &Stmt) -> bool {
                 || stmt_mentions(name, a)
                 || b.as_ref().is_some_and(|b| stmt_mentions(name, b))
         }
-        Stmt::While(c, b) => expr_mentions(name, c) || stmt_mentions(name, b),
+        Stmt::While(c, b) | Stmt::With(c, b) => expr_mentions(name, c) || stmt_mentions(name, b),
         Stmt::DoWhile(b, c) => stmt_mentions(name, b) || expr_mentions(name, c),
         Stmt::For(i, t, u, b) => {
             i.as_ref().is_some_and(|i| stmt_mentions(name, i))
@@ -3430,10 +3924,10 @@ fn stmt_mentions(name: &str, s: &Stmt) -> bool {
         }
         Stmt::Switch(d, cases) => {
             expr_mentions(name, d)
-                || cases
-                    .iter()
-                    .any(|(t, b)| t.as_ref().is_some_and(|t| expr_mentions(name, t))
-                        || b.iter().any(|s| stmt_mentions(name, s)))
+                || cases.iter().any(|(t, b)| {
+                    t.as_ref().is_some_and(|t| expr_mentions(name, t))
+                        || b.iter().any(|s| stmt_mentions(name, s))
+                })
         }
         Stmt::Labeled(_, b) => stmt_mentions(name, b),
         Stmt::Func(f) => func_mentions(name, f),
@@ -3443,10 +3937,10 @@ fn stmt_mentions(name: &str, s: &Stmt) -> bool {
 }
 
 fn func_mentions(name: &str, f: &Func) -> bool {
-    let params = f
-        .params
-        .iter()
-        .any(|p| target_mentions(name, &p.target) || p.default.as_ref().is_some_and(|d| expr_mentions(name, d)));
+    let params = f.params.iter().any(|p| {
+        target_mentions(name, &p.target)
+            || p.default.as_ref().is_some_and(|d| expr_mentions(name, d))
+    });
     if let Some(e) = &f.expr_body {
         return params || expr_mentions(name, e);
     }
@@ -3469,7 +3963,9 @@ fn target_mentions(name: &str, t: &Target) -> bool {
 }
 
 fn class_mentions(name: &str, c: &ClassDef) -> bool {
-    c.superclass.as_ref().is_some_and(|s| expr_mentions(name, s))
+    c.superclass
+        .as_ref()
+        .is_some_and(|s| expr_mentions(name, s))
         || c.members.iter().any(|m| match &m.kind {
             ClassMemberKind::Method(f, _) => {
                 func_mentions(name, f)
@@ -3479,19 +3975,31 @@ fn class_mentions(name: &str, c: &ClassDef) -> bool {
                     }
             }
             ClassMemberKind::Field(e) | ClassMemberKind::StaticField(e) => expr_mentions(name, e),
+            ClassMemberKind::StaticBlock(f) => func_mentions(name, f),
         })
 }
 
 fn expr_mentions(name: &str, e: &Expr) -> bool {
     match e {
         Expr::Ident(n) => n == name,
-        Expr::This | Expr::Super | Expr::NewTarget | Expr::Num(_) | Expr::Str(_) | Expr::Str16(_) | Expr::Bool(_)
-        | Expr::Null | Expr::Undefined | Expr::BigInt(_) | Expr::Regex(_, _) => false,
-        Expr::Template(parts) | Expr::TaggedTemplate { parts, .. } => parts.iter().any(|p| match p {
-            TplPart::Str(_) => false,
-            TplPart::Raw(_) => false,
-            TplPart::Expr(e) => expr_mentions(name, e),
-        }),
+        Expr::This
+        | Expr::Super
+        | Expr::NewTarget
+        | Expr::Num(_)
+        | Expr::Str(_)
+        | Expr::Str16(_)
+        | Expr::Bool(_)
+        | Expr::Null
+        | Expr::Undefined
+        | Expr::BigInt(_)
+        | Expr::Regex(_, _) => false,
+        Expr::Template(parts) | Expr::TaggedTemplate { parts, .. } => {
+            parts.iter().any(|p| match p {
+                TplPart::Str { .. } => false,
+                TplPart::Raw(_) => false,
+                TplPart::Expr(e) => expr_mentions(name, e),
+            })
+        }
         Expr::Array(items) => items.iter().flatten().any(|e| expr_mentions(name, e)),
         Expr::Object(props) => props.iter().any(|p| match p {
             ObjProp::Init(k, v) => {
@@ -3499,20 +4007,25 @@ fn expr_mentions(name: &str, e: &Expr) -> bool {
                     || expr_mentions(name, v)
             }
             ObjProp::Shorthand(n) => n == name,
-            ObjProp::Spread(e) | ObjProp::Init(_, e) => expr_mentions(name, e),
+            ObjProp::Spread(e) => expr_mentions(name, e),
             ObjProp::Method { key, func, .. } => {
                 matches!(key, MemberKey::Computed(e) if expr_mentions(name, e))
                     || func_mentions(name, func)
             }
         }),
-        Expr::Unary(_, e) | Expr::Update(.., e) | Expr::Spread(e)
-        | Expr::Yield(Some(e), _) | Expr::OptionalChain(e) => expr_mentions(name, e),
+        Expr::Unary(_, e)
+        | Expr::Update(.., e)
+        | Expr::Spread(e)
+        | Expr::Yield(Some(e), _)
+        | Expr::OptionalChain(e) => expr_mentions(name, e),
         Expr::Yield(None, _) => false,
         Expr::Binary(_, l, r) | Expr::Logical(_, l, r) => {
             expr_mentions(name, l) || expr_mentions(name, r)
         }
         Expr::Assign(_, _t, r) => expr_mentions(name, r),
-        Expr::Cond(c, a, b) => expr_mentions(name, c) || expr_mentions(name, a) || expr_mentions(name, b),
+        Expr::Cond(c, a, b) => {
+            expr_mentions(name, c) || expr_mentions(name, a) || expr_mentions(name, b)
+        }
         Expr::Call { callee, args, .. } => {
             expr_mentions(name, callee) || args.iter().any(|a| expr_mentions(name, a))
         }

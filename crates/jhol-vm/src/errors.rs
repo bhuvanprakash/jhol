@@ -11,7 +11,10 @@ pub struct Thrown {
 
 impl Thrown {
     pub fn new(value: Value) -> Self {
-        Thrown { value, stack: Vec::new() }
+        Thrown {
+            value,
+            stack: Vec::new(),
+        }
     }
 }
 

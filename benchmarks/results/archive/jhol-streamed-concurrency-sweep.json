@@ -1,0 +1,44 @@
+[
+  {
+    "download": 24,
+    "network": 24,
+    "seconds": 41.812,
+    "exit": 0,
+    "stderr": "[jhol-native-download] 29812ms\n[jhol-native-link] 39ms\n"
+  },
+  {
+    "download": 32,
+    "network": 32,
+    "seconds": 65.874,
+    "exit": 0,
+    "stderr": "[jhol-native-download] 61452ms\n[jhol-native-link] 50ms\n"
+  },
+  {
+    "download": 32,
+    "network": 48,
+    "seconds": 34.315,
+    "exit": -9,
+    "stderr": ""
+  },
+  {
+    "download": 48,
+    "network": 48,
+    "seconds": 38.491,
+    "exit": 1,
+    "stderr": "[jhol-native-download] 32288ms\n[jhol-native-link] 70ms\nApplication error in native_only_install: Native-only: install failed for: @next/swc-darwin-arm64@15.1.0. Run without --native-only to use Bun/npm fallback. (details: install_failed)\n"
+  },
+  {
+    "download": 64,
+    "network": 32,
+    "seconds": 37.534,
+    "exit": 0,
+    "stderr": "[jhol-native-download] 31321ms\n[jhol-native-link] 219ms\n"
+  },
+  {
+    "download": 64,
+    "network": 64,
+    "seconds": 47.542,
+    "exit": 0,
+    "stderr": "[jhol-native-download] 41650ms\n[jhol-native-link] 103ms\n"
+  }
+]

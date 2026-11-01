@@ -22,19 +22,34 @@ fn create_realistic_packument(name: &str, n_versions: usize) -> serde_json::Valu
     for i in 0..n_versions {
         let version = format!("{}.{}.{}", i / 100, (i / 10) % 10, i % 10);
         let mut pkg = serde_json::Map::new();
-        pkg.insert("name".to_string(), serde_json::Value::String(name.to_string()));
-        pkg.insert("version".to_string(), serde_json::Value::String(version.clone()));
+        pkg.insert(
+            "name".to_string(),
+            serde_json::Value::String(name.to_string()),
+        );
+        pkg.insert(
+            "version".to_string(),
+            serde_json::Value::String(version.clone()),
+        );
 
         // Add dependencies (realistic: 0-5 deps per version)
         let mut deps = serde_json::Map::new();
         if i % 3 == 0 {
-            deps.insert("lodash".to_string(), serde_json::Value::String("^4.17.0".to_string()));
+            deps.insert(
+                "lodash".to_string(),
+                serde_json::Value::String("^4.17.0".to_string()),
+            );
         }
         if i % 5 == 0 {
-            deps.insert("chalk".to_string(), serde_json::Value::String("^4.1.0".to_string()));
+            deps.insert(
+                "chalk".to_string(),
+                serde_json::Value::String("^4.1.0".to_string()),
+            );
         }
         if i % 7 == 0 {
-            deps.insert("axios".to_string(), serde_json::Value::String("^1.0.0".to_string()));
+            deps.insert(
+                "axios".to_string(),
+                serde_json::Value::String("^1.0.0".to_string()),
+            );
         }
         if !deps.is_empty() {
             pkg.insert("dependencies".to_string(), serde_json::Value::Object(deps));
@@ -44,7 +59,10 @@ fn create_realistic_packument(name: &str, n_versions: usize) -> serde_json::Valu
         let mut dist = serde_json::Map::new();
         dist.insert(
             "tarball".to_string(),
-            serde_json::Value::String(format!("https://registry.npmjs.org/{}/-/{}-{}.tgz", name, name, version)),
+            serde_json::Value::String(format!(
+                "https://registry.npmjs.org/{}/-/{}-{}.tgz",
+                name, name, version
+            )),
         );
         dist.insert(
             "integrity".to_string(),
@@ -56,13 +74,22 @@ fn create_realistic_packument(name: &str, n_versions: usize) -> serde_json::Valu
     }
 
     let mut packument = serde_json::Map::new();
-    packument.insert("name".to_string(), serde_json::Value::String(name.to_string()));
+    packument.insert(
+        "name".to_string(),
+        serde_json::Value::String(name.to_string()),
+    );
     packument.insert("versions".to_string(), serde_json::Value::Object(versions));
 
     // Add dist-tags
     let mut dist_tags = serde_json::Map::new();
-    dist_tags.insert("latest".to_string(), serde_json::Value::String(format!("{}.0.0", n_versions / 100)));
-    packument.insert("dist-tags".to_string(), serde_json::Value::Object(dist_tags));
+    dist_tags.insert(
+        "latest".to_string(),
+        serde_json::Value::String(format!("{}.0.0", n_versions / 100)),
+    );
+    packument.insert(
+        "dist-tags".to_string(),
+        serde_json::Value::Object(dist_tags),
+    );
 
     serde_json::Value::Object(packument)
 }
@@ -258,12 +285,18 @@ mod tests {
         // Create a realistic packument (50 versions, like express)
         let packument = create_realistic_packument("express", 50);
         let json_size = serde_json::to_vec(&packument).unwrap().len();
-        println!("Test packument: express with 50 versions ({} bytes JSON)", json_size);
+        println!(
+            "Test packument: express with 50 versions ({} bytes JSON)",
+            json_size
+        );
         println!();
 
         // Baseline
         let (baseline_time, baseline_size) = baseline_json_gzip(&packument);
-        println!("Baseline (JSON + gzip): {} μs, {} bytes on disk", baseline_time, baseline_size);
+        println!(
+            "Baseline (JSON + gzip): {} μs, {} bytes on disk",
+            baseline_time, baseline_size
+        );
         println!();
 
         // Idea 1: Prefetch
@@ -280,8 +313,11 @@ mod tests {
         println!("Idea 2: Binary packument format (bincode)");
         println!("  JSON:    {} μs, {} bytes", json_time, json_size);
         println!("  Bincode: {} μs, {} bytes", bincode_time, bincode_size);
-        println!("  Speedup: {:.1}x ({}% smaller)", json_time as f64 / bincode_time as f64,
-            (100.0 * (json_size - bincode_size) as f64 / json_size as f64) as usize);
+        println!(
+            "  Speedup: {:.1}x ({}% smaller)",
+            json_time as f64 / bincode_time as f64,
+            (100.0 * (json_size - bincode_size) as f64 / json_size as f64) as usize
+        );
         println!();
 
         // Idea 3: zstd compression
@@ -289,8 +325,11 @@ mod tests {
         println!("Idea 3: zstd compression");
         println!("  Gzip: {} μs, {} bytes", gzip_time, gzip_size);
         println!("  zstd: {} μs, {} bytes", zstd_time, zstd_size);
-        println!("  Speedup: {:.1}x ({}% smaller)", gzip_time as f64 / zstd_time as f64,
-            (100.0 * (gzip_size - zstd_size) as f64 / gzip_size as f64) as usize);
+        println!(
+            "  Speedup: {:.1}x ({}% smaller)",
+            gzip_time as f64 / zstd_time as f64,
+            (100.0 * (gzip_size - zstd_size) as f64 / gzip_size as f64) as usize
+        );
         println!();
 
         // Idea 4: In-memory cache
@@ -303,11 +342,23 @@ mod tests {
 
         // Summary
         println!("=== Summary ===");
-        println!("Idea 1 (Prefetch):       {:.1}x speedup (parallel fetch)", seq_time as f64 / par_time as f64);
-        println!("Idea 2 (Binary format):  {:.1}x speedup, {}% smaller", json_time as f64 / bincode_time as f64,
-            (100.0 * (json_size - bincode_size) as f64 / json_size as f64) as usize);
-        println!("Idea 3 (zstd):           {:.1}x speedup, {}% smaller", gzip_time as f64 / zstd_time as f64,
-            (100.0 * (gzip_size - zstd_size) as f64 / gzip_size as f64) as usize);
-        println!("Idea 4 (In-memory):      {:.0}x speedup (warm cache)", disk_time as f64 / mem_time as f64);
+        println!(
+            "Idea 1 (Prefetch):       {:.1}x speedup (parallel fetch)",
+            seq_time as f64 / par_time as f64
+        );
+        println!(
+            "Idea 2 (Binary format):  {:.1}x speedup, {}% smaller",
+            json_time as f64 / bincode_time as f64,
+            (100.0 * (json_size - bincode_size) as f64 / json_size as f64) as usize
+        );
+        println!(
+            "Idea 3 (zstd):           {:.1}x speedup, {}% smaller",
+            gzip_time as f64 / zstd_time as f64,
+            (100.0 * (gzip_size - zstd_size) as f64 / gzip_size as f64) as usize
+        );
+        println!(
+            "Idea 4 (In-memory):      {:.0}x speedup (warm cache)",
+            disk_time as f64 / mem_time as f64
+        );
     }
 }

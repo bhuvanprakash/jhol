@@ -8,6 +8,26 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+fn lookup_version<'a>(
+    package: Option<&'a PreResolvedPackage>,
+    version_req: &str,
+) -> Option<&'a PreResolvedPackage> {
+    let pkg = package?;
+    let req = version_req.trim();
+    if req.is_empty() || req == "latest" || req == "*" {
+        return Some(pkg);
+    }
+    if let Ok(exact) = Version::parse(req) {
+        let latest = Version::parse(&pkg.version).ok()?;
+        return (latest == exact).then_some(pkg);
+    }
+    if let Ok(parsed_req) = VersionReq::parse(req) {
+        let latest = Version::parse(&pkg.version).ok()?;
+        return parsed_req.matches(&latest).then_some(pkg);
+    }
+    None
+}
+
 /// Pre-resolved package entry
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PreResolvedPackage {
@@ -29,8 +49,12 @@ pub struct PreResolvedPackage {
 
 /// Pre-resolved package index (bundled with JHOL)
 pub struct PackageIndex {
-    /// Package name -> PreResolvedPackage
+    /// Embedded public-registry packages.
     packages: HashMap<String, PreResolvedPackage>,
+    /// User entries partitioned by registry identity.
+    user_packages: HashMap<String, PreResolvedPackage>,
+    /// Old entries have no origin. Retain them on disk, but do not use as proof.
+    legacy_user_packages: HashMap<String, PreResolvedPackage>,
     /// Index file path
     index_path: PathBuf,
 }
@@ -40,6 +64,8 @@ impl PackageIndex {
     pub fn new(index_path: PathBuf) -> Self {
         let mut index = Self {
             packages: HashMap::new(),
+            user_packages: HashMap::new(),
+            legacy_user_packages: HashMap::new(),
             index_path,
         };
 
@@ -81,8 +107,13 @@ impl PackageIndex {
                 if let Ok(user_packages) =
                     serde_json::from_str::<HashMap<String, PreResolvedPackage>>(&content)
                 {
-                    // User index overrides bundled index
-                    self.packages.extend(user_packages);
+                    for (key, package) in user_packages {
+                        if key.starts_with("metadata-v2:") && key.contains('|') {
+                            self.user_packages.insert(key, package);
+                        } else {
+                            self.legacy_user_packages.insert(key, package);
+                        }
+                    }
                 }
             }
         }
@@ -92,7 +123,9 @@ impl PackageIndex {
     pub fn save_user_index(&self) -> Result<(), String> {
         let user_path = self.index_path.join("user-index.json");
 
-        let content = serde_json::to_string(&self.packages)
+        let mut persisted = self.legacy_user_packages.clone();
+        persisted.extend(self.user_packages.clone());
+        let content = serde_json::to_string(&persisted)
             .map_err(|e| format!("Failed to serialize index: {}", e))?;
 
         fs::write(&user_path, content).map_err(|e| format!("Failed to write index: {}", e))?;
@@ -117,29 +150,34 @@ impl PackageIndex {
     /// Lookup package in index.
     /// Only returns when the *latest indexed version* satisfies `version_req`.
     pub fn lookup(&self, package: &str, version_req: &str) -> Option<&PreResolvedPackage> {
-        let pkg = self.packages.get(package)?;
-        let req = version_req.trim();
+        lookup_version(self.packages.get(package), version_req)
+    }
 
-        if req.is_empty() || req == "latest" || req == "*" {
-            return Some(pkg);
-        }
-
-        if let Ok(exact) = Version::parse(req) {
-            let latest = Version::parse(&pkg.version).ok()?;
-            return (latest == exact).then_some(pkg);
-        }
-
-        if let Ok(parsed_req) = VersionReq::parse(req) {
-            let latest = Version::parse(&pkg.version).ok()?;
-            return parsed_req.matches(&latest).then_some(pkg);
-        }
-
-        None
+    pub(crate) fn lookup_for_origin(
+        &self,
+        package: &str,
+        version_req: &str,
+        origin_key: &str,
+        allow_embedded: bool,
+    ) -> Option<&PreResolvedPackage> {
+        let key = format!("{origin_key}|{package}");
+        let user = self.user_packages.get(&key);
+        let embedded = if allow_embedded {
+            self.packages.get(package)
+        } else {
+            None
+        };
+        lookup_version(user.or(embedded), version_req)
     }
 
     /// Add package to index
     pub fn add_package(&mut self, pkg: PreResolvedPackage) {
         self.packages.insert(pkg.name.clone(), pkg);
+    }
+
+    pub(crate) fn add_package_for_origin(&mut self, pkg: PreResolvedPackage, origin_key: &str) {
+        self.user_packages
+            .insert(format!("{origin_key}|{}", pkg.name), pkg);
     }
 
     /// Check if package exists in index
@@ -236,6 +274,61 @@ pub fn build_index_entry(name: &str, metadata: &serde_json::Value) -> Option<Pre
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn indexed(name: &str, version: &str) -> PreResolvedPackage {
+        PreResolvedPackage {
+            name: name.to_string(),
+            version: version.to_string(),
+            versions: vec![version.to_string()],
+            tarball_url: format!("https://example.test/{name}-{version}.tgz"),
+            integrity: "sha512-fixture".to_string(),
+            dependencies: HashMap::new(),
+            resolved_at: 0,
+        }
+    }
+
+    #[test]
+    fn user_index_reuse_is_partitioned_by_origin_and_legacy_entries_are_misses() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let old_key = "legacy-private";
+        let old_entry = indexed(old_key, "9.0.0");
+        std::fs::write(
+            temp_dir.path().join("user-index.json"),
+            serde_json::to_vec(&HashMap::from([(old_key, old_entry)])).unwrap(),
+        )
+        .unwrap();
+
+        let mut index = PackageIndex::new(temp_dir.path().to_path_buf());
+        let first_origin = "metadata-v2:origin-a";
+        let second_origin = "metadata-v2:origin-b";
+        index.add_package_for_origin(indexed("private-pkg", "1.2.0"), first_origin);
+        index.add_package_for_origin(indexed("private-pkg", "2.3.0"), second_origin);
+
+        assert_eq!(
+            index
+                .lookup_for_origin("private-pkg", "*", first_origin, false)
+                .map(|pkg| pkg.version.as_str()),
+            Some("1.2.0")
+        );
+        assert_eq!(
+            index
+                .lookup_for_origin("private-pkg", "*", second_origin, false)
+                .map(|pkg| pkg.version.as_str()),
+            Some("2.3.0")
+        );
+        assert!(index
+            .lookup_for_origin("legacy-private", "*", first_origin, false)
+            .is_none());
+
+        index.save_user_index().unwrap();
+        let saved: HashMap<String, PreResolvedPackage> = serde_json::from_slice(
+            &std::fs::read(temp_dir.path().join("user-index.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(saved.contains_key(old_key));
+        assert!(saved.contains_key("metadata-v2:origin-a|private-pkg"));
+        assert!(saved.contains_key("metadata-v2:origin-b|private-pkg"));
+    }
 
     #[test]
     fn test_package_index() {

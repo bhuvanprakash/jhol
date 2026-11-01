@@ -104,7 +104,7 @@ pub use config::{
 pub use doctor::{check_dependencies, explain_project_health, fix_dependencies, native_outdated};
 pub use exec::{exec_binary, find_binary_in_node_modules};
 pub use install::{
-    backfill_lockfile_integrity_after_install, fast_direct_warm_install,
+    backfill_lockfile_integrity_after_install, count_installed_packages, fast_direct_warm_install,
     install_lockfile_only, install_package, resolve_install_from_package_json,
     try_fresh_project_bundle_replay, write_install_markers, InstallOptions,
 };
@@ -132,34 +132,11 @@ pub use workspaces::list_workspace_roots;
 pub use prefetch::prefetch_from_lockfile;
 pub use utils::{log, set_output_silenced};
 
-/// Check whether the current lockfile + package.json fingerprint matches
-/// the last-recorded install fingerprint (fast no-op path).
+/// Check whether the current project proof and recorded filesystem state still match.
 pub fn lockfile_fingerprint_matches() -> bool {
     let cwd = std::path::Path::new(".");
-    let nm = cwd.join("node_modules");
-    if !nm.exists() {
-        return false;
-    }
-    let fp_path = nm.join(".nm_fingerprint");
-    let Ok(stored) = std::fs::read(&fp_path) else {
-        return false;
-    };
-    if stored.len() < 8 {
-        return false;
-    }
-    let mut stored_arr = [0u8; 8];
-    stored_arr.copy_from_slice(&stored[..8]);
-
-    let computed = crate::capsule::compute_manifest_hash(cwd).unwrap_or_else(|_| {
-        // Fallback when there is no lockfile: hash package.json alone.
-        let bytes = std::fs::read(cwd.join("package.json")).unwrap_or_default();
-        xxhash_rust::xxh3::xxh3_64(&bytes).to_le_bytes()
-    });
-    // The fingerprint records only the manifest hash, so on its own it says nothing about
-    // the tree: a deleted package directory would be reported as "Already up-to-date" and
-    // never repaired. Require the recorded filesystem state (package.json,
-    // package-lock.json, and the node_modules entry count) to match as well.
-    stored_arr == computed && crate::daemon_cache::can_skip_install_for_dir(cwd)
+    crate::instant_lock_proof::prepared_tree_is_valid(cwd)
+        && crate::daemon_cache::can_skip_install_for_dir(cwd)
 }
 
 /// Check whether an installable lockfile exists.
@@ -176,6 +153,71 @@ pub fn has_jhol_lockfile(project_dir: &std::path::Path) -> bool {
 
 #[cfg(test)]
 mod lockfile_presence_tests {
+    #[test]
+    fn fingerprint_shortcut_rejects_missing_locked_package_manifest() {
+        const CHILD: &str = "JHOL_TEST_FINGERPRINT_LAYOUT_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let root = std::path::Path::new(".");
+            let package_dir = root.join("node_modules/victim");
+            std::fs::create_dir_all(&package_dir).unwrap();
+            std::fs::write(
+                root.join("package.json"),
+                r#"{"name":"fixture","version":"1.0.0","dependencies":{"victim":"1.0.0"}}"#,
+            )
+            .unwrap();
+            std::fs::write(
+                root.join("package-lock.json"),
+                r#"{"lockfileVersion":3,"packages":{"":{"name":"fixture","version":"1.0.0","dependencies":{"victim":"1.0.0"}},"node_modules/victim":{"name":"victim","version":"1.0.0"}}}"#,
+            )
+            .unwrap();
+            std::fs::write(
+                package_dir.join("package.json"),
+                r#"{"name":"victim","version":"1.0.0"}"#,
+            )
+            .unwrap();
+
+            let identity = crate::instant_lock_proof::project_identity(root).unwrap();
+            std::fs::write(root.join("node_modules/.jhol-ok"), identity).unwrap();
+            let hash = crate::capsule::compute_manifest_hash(root).unwrap();
+            std::fs::write(root.join("node_modules/.nm_fingerprint"), hash).unwrap();
+            crate::daemon_cache::write_status(hash, root);
+            assert!(crate::instant_lock_proof::prepared_tree_is_valid(root));
+
+            std::fs::remove_file(package_dir.join("package.json")).unwrap();
+            assert!(crate::daemon_cache::can_skip_install_for_dir(root));
+            assert!(
+                !super::lockfile_fingerprint_matches(),
+                "fingerprint shortcut accepted a missing locked package manifest"
+            );
+            return;
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "lockfile_presence_tests::fingerprint_shortcut_rejects_missing_locked_package_manifest",
+                "--nocapture",
+            ])
+            .current_dir(project)
+            .env(CHILD, "1")
+            .env("HOME", home)
+            .env_remove("USERPROFILE")
+            .env_remove("JHOL_SCRIPT_ALLOWLIST")
+            .env("JHOL_STATUS_FILE", temp.path().join("status.bin"))
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "isolated proof probe failed:\n{}",
+            String::from_utf8_lossy(&child.stderr)
+        );
+    }
+
     #[test]
     fn npm_lockfile_is_authoritative_without_jhol_marker() {
         let temp = tempfile::tempdir().unwrap();

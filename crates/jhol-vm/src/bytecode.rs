@@ -12,7 +12,7 @@
 //! `CellSet`.
 
 use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicU8};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::value::Value;
 
@@ -204,11 +204,24 @@ pub enum Op {
 
     /// Placeholder for superinstructions emitted by the finaliser.
     Nop,
+    /// `dst = delete obj[regs[c]]` — computed-key delete. The key comes from a
+    /// register (like GetIndex/SetIndex), unlike `DeleteProp` (dot syntax),
+    /// whose key is baked into the inline cache at compile time.
+    DeleteIndex,
+    /// `dst = super(...locals[b])` — `ConstructSuper` for a call with spread
+    /// arguments: `locals[b]` is the array the compiler built from them. Appended
+    /// at the end of the enum so existing opcode numbers do not move.
+    ConstructSuperSpread,
 }
 
 #[derive(Clone, Debug)]
 pub enum ConstVal {
     Undefined,
+    /// An array-literal elision slot: materialises `Value::EMPTY`, which
+    /// reads back as `undefined` but keeps the slot a *hole* for `in` and
+    /// `for-in`. JIT const loading rejects this and deopts to the
+    /// interpreter, which is the safe default.
+    Empty,
     Null,
     True,
     False,
@@ -287,6 +300,22 @@ pub struct Ic {
     pub arr_shape: u32,
     pub arr_slot: u32,
     pub has_arr: bool,
+    /// Primitive receivers (numbers and booleans) share `Number.prototype` and
+    /// own no property bag. Mirrors the string/array entries: record where the
+    /// prototype keeps the key and validate against its shape, so
+    /// `(i % 10).toString()` does not walk `Number.prototype` on every call.
+    pub num_shape: u32,
+    pub num_slot: u32,
+    pub has_num: bool,
+    /// Store site: the receiver's prototype identity and the property epoch
+    /// for which this site last saw "no setter can intercept". Re-checking
+    /// `setter_can_intercept` rebuilt a tuple and hashed it on every write; the
+    /// per-site entry compares two words instead. Any accessor installed
+    /// anywhere bumps the epoch, and changing the prototype changes the bits,
+    /// so both invalidations are caught.
+    pub store_proto: u64,
+    pub store_epoch: u64,
+    pub store_seen: bool,
     /// Compiled counted-loop code for this site (JIT). Null when absent.
     pub jit_code: *const u8,
     /// Instruction the VM continues at when the compiled loop completes.
@@ -334,6 +363,12 @@ impl Default for Ic {
             arr_shape: 0,
             arr_slot: 0,
             has_arr: false,
+            num_shape: 0,
+            num_slot: 0,
+            has_num: false,
+            store_proto: 0,
+            store_epoch: 0,
+            store_seen: false,
             jit_code: std::ptr::null(),
             jit_exit: 0,
             jit_state: 0,
@@ -352,6 +387,11 @@ pub struct FnProto {
     pub nslots: usize,
     pub nparams: usize,
     pub nupvals: usize,
+    /// Lazily classified simple callback shape for the native fast path.
+    /// 0 = not yet classified; otherwise `(kind << 1) | 1`, where a set low bit
+    /// means "classified" and the rest names the operation. Cached on the proto
+    /// so the body is inspected once, not once per call.
+    pub simple_cb: std::sync::atomic::AtomicU8,
     /// Proto indices of functions nested inside this one.
     pub nested: Vec<u32>,
     pub is_arrow: bool,
@@ -371,13 +411,21 @@ pub struct FnProto {
     pub entry_file: Option<String>,
     /// Native entry point of the whole-function JIT (null until compiled).
     pub jit_entry: AtomicPtr<u8>,
+    /// Own executable storage until the last closure/frame releases this proto.
+    pub(crate) jit_mapping: OnceLock<(usize, usize)>,
     /// Interpreted calls seen so far — the compile trigger.
     pub jit_calls: AtomicU32,
-    /// Deopts observed since compilation; the code is dropped past the limit.
+    /// Deopts observed since compilation; native entry is disabled past the limit.
     pub jit_deopts: AtomicU32,
     /// 1 when the compiled function writes no upvalue, so a native caller may
     /// invoke it without risking a repeated side effect on deopt.
     pub jit_pure: AtomicU8,
+    /// Leaf proof: every guard precedes writes, and success returns an Smi.
+    /// Regions resume at individual instructions, so committed cell writes
+    /// are safe there; whole-function callers still require `jit_pure`.
+    pub(crate) jit_region_safe: AtomicU8,
+    /// 1 = `return p0 + p1`, 2 = `return p0 * p1`. 0 = not that shape.
+    pub(crate) jit_fold: AtomicU8,
 }
 
 impl FnProto {
@@ -390,6 +438,7 @@ impl FnProto {
             nslots: 0,
             nparams: 0,
             nupvals: 0,
+            simple_cb: AtomicU8::new(0),
             nested: Vec::new(),
             is_arrow: false,
             is_strict: false,
@@ -400,9 +449,12 @@ impl FnProto {
             lines: Vec::new(),
             entry_file: None,
             jit_entry: AtomicPtr::new(std::ptr::null_mut()),
+            jit_mapping: OnceLock::new(),
             jit_calls: AtomicU32::new(0),
             jit_deopts: AtomicU32::new(0),
             jit_pure: AtomicU8::new(0),
+            jit_region_safe: AtomicU8::new(0),
+            jit_fold: AtomicU8::new(0),
         }
     }
 
@@ -424,6 +476,14 @@ impl FnProto {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.code.is_empty()
+    }
+}
+
+impl Drop for FnProto {
+    fn drop(&mut self) {
+        if let Some(&(address, len)) = self.jit_mapping.get() {
+            unsafe { crate::jit::release_exec(address as *mut u8, len) };
+        }
     }
 }
 

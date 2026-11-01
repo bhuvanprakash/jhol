@@ -1,0 +1,16 @@
+[
+  {
+    "tool": "jhol_no_bundle",
+    "seconds": 29.616,
+    "exit_code": 1,
+    "stdout_tail": "",
+    "stderr_tail": "[2026-03-12 02:41:06] Installing dependencies from package.json\n[2026-03-12 02:41:24] warning: JAGR-3 resolver failed, falling back to pubgrub-v2: Dependency conflict: Dependency conflict for encodeurl (constraints: ~1.0.2, ~2.0.0); Dependency conflict for ms (constraints: 2.0.0, 2.1.3).\nConfiguration error in resolve_full_graph: JAGR-3 failed: Dependency conflict: Dependency conflict for encodeurl (constraints: ~1.0.2, ~2.0.0); Dependency conflict for ms (constraints: 2.0.0, 2.1.3).; pubgrub-v2 failed: Dependency conflict: send requires encodeurl ~1.0.2, resolved 2.0.0; send requires ms 2.1.3, resolved 2.0.0 (field: package.json)\n"
+  },
+  {
+    "tool": "bun",
+    "seconds": 2.347,
+    "exit_code": 0,
+    "stdout_tail": "bun install v1.3.4 (5eb2145b)\n\n+ express@4.21.2\n+ next@15.1.0\n+ react@18.3.1\n+ react-dom@18.3.1\n+ typescript@5.7.2\n\n101 packages installed [2.31s]\n",
+    "stderr_tail": "Resolving dependencies\nResolved, downloaded and extracted [51]\nSaved lockfile\n"
+  }
+]

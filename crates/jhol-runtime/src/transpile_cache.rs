@@ -6,7 +6,10 @@ use xxhash_rust::xxh3::xxh3_64;
 
 use crate::errors::{RuntimeError, RuntimeResult};
 
-const CACHE_VERSION: u32 = 1;
+// v2: entries under v1 were written by the regex fallback that never stripped
+// type annotations (`const n: number = 5` came back verbatim and then failed to
+// execute). Bump so every stale entry misses instead of serving broken JS.
+const CACHE_VERSION: u32 = 2;
 const CACHE_DIR_NAME: &str = "runtime-transpile-v1";
 
 fn cache_dir() -> PathBuf {

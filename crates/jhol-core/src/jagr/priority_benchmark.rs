@@ -40,10 +40,32 @@ fn build_realistic_graph() -> DepGraph {
     let mut deps: HashMap<String, Vec<String>> = HashMap::new();
 
     let express_deps = vec![
-        "accepts", "body-parser", "cookie", "debug", "encodeurl", "escape-html", "etag",
-        "finalhandler", "fresh", "http-errors", "merge-descriptors", "methods", "on-finished",
-        "parseurl", "path-to-regexp", "proxy-addr", "qs", "range-parser", "safe-buffer", "send",
-        "serve-static", "setprototypeof", "statuses", "toidentifier", "type-is", "utils-merge",
+        "accepts",
+        "body-parser",
+        "cookie",
+        "debug",
+        "encodeurl",
+        "escape-html",
+        "etag",
+        "finalhandler",
+        "fresh",
+        "http-errors",
+        "merge-descriptors",
+        "methods",
+        "on-finished",
+        "parseurl",
+        "path-to-regexp",
+        "proxy-addr",
+        "qs",
+        "range-parser",
+        "safe-buffer",
+        "send",
+        "serve-static",
+        "setprototypeof",
+        "statuses",
+        "toidentifier",
+        "type-is",
+        "utils-merge",
         "vary",
     ];
     deps.insert(
@@ -108,15 +130,60 @@ fn build_realistic_graph() -> DepGraph {
     );
 
     let extra = vec![
-        "array-flatten", "asynckit", "bytes", "call-bind", "combined-stream",
-        "content-disposition", "content-type", "cookie-signature", "debug", "depd", "destroy",
-        "ee-first", "encodeurl", "escape-html", "etag", "finalhandler", "forwarded", "fresh",
-        "function-bind", "get-intrinsic", "has-flag", "has-symbols", "http-errors",
-        "iconv-lite", "inherits", "ipaddr.js", "is-function", "media-typer", "merge-descriptors",
-        "methods", "mime", "mime-db", "ms", "negotiator", "object-inspect", "on-finished",
-        "parseurl", "path-to-regexp", "proxy-addr", "qs", "range-parser", "raw-body",
-        "safe-buffer", "safer-buffer", "send", "serve-static", "setprototypeof", "side-channel",
-        "statuses", "toidentifier", "type-is", "unpipe", "utils-merge", "vary",
+        "array-flatten",
+        "asynckit",
+        "bytes",
+        "call-bind",
+        "combined-stream",
+        "content-disposition",
+        "content-type",
+        "cookie-signature",
+        "debug",
+        "depd",
+        "destroy",
+        "ee-first",
+        "encodeurl",
+        "escape-html",
+        "etag",
+        "finalhandler",
+        "forwarded",
+        "fresh",
+        "function-bind",
+        "get-intrinsic",
+        "has-flag",
+        "has-symbols",
+        "http-errors",
+        "iconv-lite",
+        "inherits",
+        "ipaddr.js",
+        "is-function",
+        "media-typer",
+        "merge-descriptors",
+        "methods",
+        "mime",
+        "mime-db",
+        "ms",
+        "negotiator",
+        "object-inspect",
+        "on-finished",
+        "parseurl",
+        "path-to-regexp",
+        "proxy-addr",
+        "qs",
+        "range-parser",
+        "raw-body",
+        "safe-buffer",
+        "safer-buffer",
+        "send",
+        "serve-static",
+        "setprototypeof",
+        "side-channel",
+        "statuses",
+        "toidentifier",
+        "type-is",
+        "unpipe",
+        "utils-merge",
+        "vary",
     ];
     all_packages.extend(extra.iter().map(|s| s.to_string()));
     for e in extra {
@@ -169,11 +236,20 @@ fn create_packument_for(name: &str) -> serde_json::Value {
     for i in 0..n_versions {
         let version = format!("{}.{}.{}", i / 100, (i / 10) % 10, i % 10);
         let mut pkg = serde_json::Map::new();
-        pkg.insert("name".to_string(), serde_json::Value::String(name.to_string()));
-        pkg.insert("version".to_string(), serde_json::Value::String(version.clone()));
+        pkg.insert(
+            "name".to_string(),
+            serde_json::Value::String(name.to_string()),
+        );
+        pkg.insert(
+            "version".to_string(),
+            serde_json::Value::String(version.clone()),
+        );
         if i % 3 == 0 {
             let mut d = serde_json::Map::new();
-            d.insert("lodash".to_string(), serde_json::Value::String("^4.17.0".to_string()));
+            d.insert(
+                "lodash".to_string(),
+                serde_json::Value::String("^4.17.0".to_string()),
+            );
             pkg.insert("dependencies".to_string(), serde_json::Value::Object(d));
         }
         let mut dist = serde_json::Map::new();
@@ -193,11 +269,20 @@ fn create_packument_for(name: &str) -> serde_json::Value {
     }
 
     let mut packument = serde_json::Map::new();
-    packument.insert("name".to_string(), serde_json::Value::String(name.to_string()));
+    packument.insert(
+        "name".to_string(),
+        serde_json::Value::String(name.to_string()),
+    );
     packument.insert("versions".to_string(), serde_json::Value::Object(versions));
     let mut dist_tags = serde_json::Map::new();
-    dist_tags.insert("latest".to_string(), serde_json::Value::String("1.0.0".to_string()));
-    packument.insert("dist-tags".to_string(), serde_json::Value::Object(dist_tags));
+    dist_tags.insert(
+        "latest".to_string(),
+        serde_json::Value::String("1.0.0".to_string()),
+    );
+    packument.insert(
+        "dist-tags".to_string(),
+        serde_json::Value::Object(dist_tags),
+    );
     serde_json::Value::Object(packument)
 }
 
@@ -248,7 +333,10 @@ fn run_pipeline(graph: &DepGraph, config: &PipelineConfig) -> (u128, u128, u128,
         } else {
             gzip_bytes(&json_bytes)
         };
-        let _ = std::fs::write(tmp_dir.join(format!("{}.c", name.replace('/', "_"))), &bytes);
+        let _ = std::fs::write(
+            tmp_dir.join(format!("{}.c", name.replace('/', "_"))),
+            &bytes,
+        );
         cache_acc.fetch_add(c.elapsed().as_micros() as u64, Ordering::Relaxed);
 
         packument
@@ -370,11 +458,46 @@ mod tests {
         );
 
         let configs: Vec<(&str, PipelineConfig)> = vec![
-            ("baseline", PipelineConfig { use_in_memory_cache: false, use_parallel_fetch: false, use_binary_format: false }),
-            ("idea1_memory", PipelineConfig { use_in_memory_cache: true, use_parallel_fetch: false, use_binary_format: false }),
-            ("idea2_parallel", PipelineConfig { use_in_memory_cache: false, use_parallel_fetch: true, use_binary_format: false }),
-            ("idea3_binary", PipelineConfig { use_in_memory_cache: false, use_parallel_fetch: false, use_binary_format: true }),
-            ("combined", PipelineConfig { use_in_memory_cache: true, use_parallel_fetch: true, use_binary_format: true }),
+            (
+                "baseline",
+                PipelineConfig {
+                    use_in_memory_cache: false,
+                    use_parallel_fetch: false,
+                    use_binary_format: false,
+                },
+            ),
+            (
+                "idea1_memory",
+                PipelineConfig {
+                    use_in_memory_cache: true,
+                    use_parallel_fetch: false,
+                    use_binary_format: false,
+                },
+            ),
+            (
+                "idea2_parallel",
+                PipelineConfig {
+                    use_in_memory_cache: false,
+                    use_parallel_fetch: true,
+                    use_binary_format: false,
+                },
+            ),
+            (
+                "idea3_binary",
+                PipelineConfig {
+                    use_in_memory_cache: false,
+                    use_parallel_fetch: false,
+                    use_binary_format: true,
+                },
+            ),
+            (
+                "combined",
+                PipelineConfig {
+                    use_in_memory_cache: true,
+                    use_parallel_fetch: true,
+                    use_binary_format: true,
+                },
+            ),
         ];
 
         let rounds = 7usize;
@@ -399,14 +522,20 @@ mod tests {
         }
 
         let base = median(totals["baseline"].clone());
-        println!("{:<16} {:>10} {:>10} {:>10} {:>12} {:>10}", "config", "total", "parse", "cache", "speedup", "reduction");
+        println!(
+            "{:<16} {:>10} {:>10} {:>10} {:>12} {:>10}",
+            "config", "total", "parse", "cache", "speedup", "reduction"
+        );
         for (name, _) in &configs {
             let t = median(totals[name].clone());
             let p = median(parses[name].clone());
             let c = median(caches[name].clone());
             let speedup = base as f64 / t as f64;
             let reduction = 100.0 * (base as f64 - t as f64) / base as f64;
-            println!("{:<16} {:>10} {:>10} {:>10} {:>11.2}x {:>9.1}%", name, t, p, c, speedup, reduction);
+            println!(
+                "{:<16} {:>10} {:>10} {:>10} {:>11.2}x {:>9.1}%",
+                name, t, p, c, speedup, reduction
+            );
         }
 
         println!("\n=== Individual contribution (μs saved vs baseline) ===");
@@ -414,7 +543,10 @@ mod tests {
             let t = median(totals[name].clone());
             let saved = base as i64 - t as i64;
             let pct = 100.0 * saved as f64 / base as f64;
-            println!("{:<16} {:>8} μs saved ({:>5.1}% of baseline)", name, saved, pct);
+            println!(
+                "{:<16} {:>8} μs saved ({:>5.1}% of baseline)",
+                name, saved, pct
+            );
         }
 
         // Interaction: does combining beat the sum of parts?
@@ -422,7 +554,11 @@ mod tests {
         let i2 = base as i64 - median(totals["idea2_parallel"].clone()) as i64;
         let i3 = base as i64 - median(totals["idea3_binary"].clone()) as i64;
         let all = base as i64 - median(totals["combined"].clone()) as i64;
-        println!("\nSum of individual savings: {} μs; actual combined: {} μs", i1 + i2 + i3, all);
+        println!(
+            "\nSum of individual savings: {} μs; actual combined: {} μs",
+            i1 + i2 + i3,
+            all
+        );
         println!("(combined < sum means the ideas overlap on the same time)");
     }
 }

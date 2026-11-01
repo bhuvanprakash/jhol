@@ -1,0 +1,1892 @@
+{
+  "schema": 1,
+  "condition": "registry-cold",
+  "fixture": "/private/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-stage-baseline-yaab98_z/fixture",
+  "rounds": 3,
+  "seed": 20260930,
+  "jhol": "/private/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-cold-goal-before-mmx48lua/baseline-jhol",
+  "jhol_sha256": "4934d65c010c5ec0f2dc5cbccc96574d25b308551da8d1238e05e683f93daac1",
+  "bun": "/Users/bhuvanprakash/.bun/bin/bun",
+  "bun_version": "1.4.2",
+  "node_version": "v26.10.0",
+  "python_version": "3.14.7",
+  "host": {
+    "system": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "processor": "arm"
+  },
+  "fixture_lock_sha256": "224cffe8383cde2189050c3b07559437e086e8ead049d09e7655db024f38d6f5",
+  "seed_cache_coverage": {},
+  "summary": {
+    "harvest": {
+      "passing_samples": 3,
+      "required_samples": 3,
+      "invalid_samples": 0,
+      "failed_samples": 0,
+      "resolver_drift_samples": 0,
+      "median_ms": 1523.2414590136614,
+      "p95_ms": 1834.6032919944264,
+      "median_95pct_ci_ms": [
+        1431.7871669918532,
+        1834.6032919944264
+      ],
+      "bun_over_jhol_median": 0.47180744834267213,
+      "bun_over_jhol_lower_95pct": 0.39173409811432297
+    },
+    "jgrid": {
+      "passing_samples": 0,
+      "required_samples": 3,
+      "invalid_samples": 0,
+      "failed_samples": 0,
+      "resolver_drift_samples": 0,
+      "median_ms": null,
+      "p95_ms": null,
+      "median_95pct_ci_ms": null,
+      "bun_over_jhol_median": null,
+      "bun_over_jhol_lower_95pct": null
+    },
+    "jagrs": {
+      "passing_samples": 0,
+      "required_samples": 3,
+      "invalid_samples": 0,
+      "failed_samples": 0,
+      "resolver_drift_samples": 0,
+      "median_ms": null,
+      "p95_ms": null,
+      "median_95pct_ci_ms": null,
+      "bun_over_jhol_median": null,
+      "bun_over_jhol_lower_95pct": null
+    },
+    "jgrid+jagrs": {
+      "passing_samples": 0,
+      "required_samples": 3,
+      "invalid_samples": 0,
+      "failed_samples": 0,
+      "resolver_drift_samples": 0,
+      "median_ms": null,
+      "p95_ms": null,
+      "median_95pct_ci_ms": null,
+      "bun_over_jhol_median": null,
+      "bun_over_jhol_lower_95pct": null
+    },
+    "combined": {
+      "passing_samples": 0,
+      "required_samples": 3,
+      "invalid_samples": 0,
+      "failed_samples": 0,
+      "resolver_drift_samples": 0,
+      "median_ms": null,
+      "p95_ms": null,
+      "median_95pct_ci_ms": null,
+      "bun_over_jhol_median": null,
+      "bun_over_jhol_lower_95pct": null
+    },
+    "bun": {
+      "passing_samples": 3,
+      "required_samples": 3,
+      "invalid_samples": 0,
+      "failed_samples": 0,
+      "resolver_drift_samples": 0,
+      "median_ms": 718.6766659870045,
+      "p95_ms": 1045.7921249908395,
+      "median_95pct_ci_ms": [
+        604.4811659958214,
+        1045.7921249908395
+      ]
+    }
+  },
+  "measurement_valid": true,
+  "speed_gate_4x": "red",
+  "samples": [
+    {
+      "arm": "harvest",
+      "round": 1,
+      "condition": "registry-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 1834.6032919944264,
+      "cpu_user_seconds": 0.8262569999999999,
+      "cpu_system_seconds": 0.576434,
+      "peak_process_tree_rss_bytes": 30670848,
+      "cache_bytes_after": 54824439,
+      "downloaded_bytes": 7610763,
+      "package_layout_sha256": "7d8d29dd4618726478918b990f068bb97aa938dd71c517a41a43dad53443ad95",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.64.0"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.64.0"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.2"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "mode:755",
+        "loose-envify": "mode:755",
+        "nanoid": "mode:755",
+        "rollup": "mode:755",
+        "vite": "mode:755"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "224cffe8383cde2189050c3b07559437e086e8ead049d09e7655db024f38d6f5",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "> node_modules/nanoid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/4e371b71e3d5081fa0052356d5c1904e7a60e049864c26f0724cfd32dc303849.tgz\n[2026-10-03 23:35:19] [layout]   MATERIALIZE postcss@8.5.28 -> node_modules/postcss via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/f63d6d9bce28989cd083add85af717c0264e44323d35c909ae99ac934e9641a6.tgz\n[2026-10-03 23:35:19] [layout]   MATERIALIZE source-map-js@1.2.2 -> node_modules/source-map-js via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/05c8cf8e7c3a6b56cada7668fe9342b10f4b625efc92aba9ba05b9e8fe4d71a3.tgz\n[2026-10-03 23:35:19] [layout]   MATERIALIZE vite@5.0.0 -> node_modules/vite via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/de76095362f298ac15399cea3af028b6cdee5886bfcec13be21adebe5b2cf535.tgz\n[jhol-profile] stage=layout_projection delta_ms=8 total_ms=961\n[2026-10-03 23:35:19] [collect] 16 names, 16 instances; debug -> None\n[jhol-profile] stage=layout_index_relink delta_ms=201 total_ms=1163\n[jhol-profile] stage=layout_complete delta_ms=1163 total_ms=1165\n[jhol-profile] stage=layout_capsule_markers delta_ms=22 total_ms=1187\n[JGRID] L0-publish\n[2026-10-03 23:35:19] JGrid: published L0 bundle (16 packages) in 16.433375ms\n[jhol-profile] stage=layout_l0_publish delta_ms=16 total_ms=1204\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "before_jgrid_early_lane": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 1,
+        "before_jgrid_early": 0,
+        "layout_lookup": 2,
+        "layout_cached_projection": 0,
+        "layout_fetch_extract": 950,
+        "layout_projection": 8,
+        "layout_index_relink": 201,
+        "layout_complete": 1163,
+        "layout_capsule_markers": 22,
+        "layout_l0_publish": 16
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0"
+      },
+      "seed_cache_sha256": null,
+      "full_output": "HTTP Metrics:\n  Total requests: 16\n  Successful: 16\n  Failed: 0\n  Success rate: 100.00%\n  Bytes downloaded: 7610763 bytes\n  Bytes uploaded: 0 bytes\n\n[2026-10-03 23:35:18] skipped 47 packages for other platforms (@esbuild/aix-ppc64@0.19.12, @esbuild/android-arm64@0.19.12, @esbuild/android-arm@0.19.12, @esbuild/android-x64@0.19.12, @esbuild/darwin-x64@0.19.12, @esbuild/freebsd-arm64@0.19.12, @esbuild/freebsd-x64@0.19.12, @esbuild/linux-arm64@0.19.12) \u00b7 this host is darwin-arm64\n[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=1 total_ms=2\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=2\n[2026-10-03 23:35:18] [layout] 16 entries from the lockfile\n[2026-10-03 23:35:18] [layout]   @esbuild/darwin-arm64@0.19.12 install_path=node_modules/@esbuild/darwin-arm64 top_level=true resolved=https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-ar\n[2026-10-03 23:35:18] [layout]   @rollup/rollup-darwin-arm64@4.64.0 install_path=node_modules/@rollup/rollup-darwin-arm64 top_level=true resolved=https://registry.npmjs.org/@rollup/rollup-darwin-arm64/-/rol\n[2026-10-03 23:35:18] [layout]   @types/estree@1.0.9 install_path=node_modules/@types/estree top_level=true resolved=https://registry.npmjs.org/@types/estree/-/estree-1.0.9.tgz\n[2026-10-03 23:35:18] [layout]   esbuild@0.19.12 install_path=node_modules/esbuild top_level=true resolved=https://registry.npmjs.org/esbuild/-/esbuild-0.19.12.tgz\n[2026-10-03 23:35:18] [layout]   fsevents@2.3.3 install_path=node_modules/fsevents top_level=true resolved=https://registry.npmjs.org/fsevents/-/fsevents-2.3.3.tgz\n[2026-10-03 23:35:18] [layout]   js-tokens@4.0.0 install_path=node_modules/js-tokens top_level=true resolved=https://registry.npmjs.org/js-tokens/-/js-tokens-4.0.0.tgz\n[2026-10-03 23:35:18] [layout]   loose-envify@1.4.0 install_path=node_modules/loose-envify top_level=true resolved=https://registry.npmjs.org/loose-envify/-/loose-envify-1.4.0\n[2026-10-03 23:35:18] [layout]   nanoid@3.3.19 install_path=node_modules/nanoid top_level=true resolved=https://registry.npmjs.org/nanoid/-/nanoid-3.3.19.tgz\n[2026-10-03 23:35:18] [layout]   picocolors@1.1.1 install_path=node_modules/picocolors top_level=true resolved=https://registry.npmjs.org/picocolors/-/picocolors-1.1.1.tgz\n[2026-10-03 23:35:18] [layout]   postcss@8.5.28 install_path=node_modules/postcss top_level=true resolved=https://registry.npmjs.org/postcss/-/postcss-8.5.28.tgz\n[2026-10-03 23:35:18] [layout]   react@18.2.0 install_path=node_modules/react top_level=true resolved=https://registry.npmjs.org/react/-/react-18.2.0.tgz\n[2026-10-03 23:35:18] [layout]   react-dom@18.2.0 install_path=node_modules/react-dom top_level=true resolved=https://registry.npmjs.org/react-dom/-/react-dom-18.2.0.tgz\n[2026-10-03 23:35:18] [layout]   rollup@4.64.0 install_path=node_modules/rollup top_level=true resolved=https://registry.npmjs.org/rollup/-/rollup-4.64.0.tgz\n[2026-10-03 23:35:18] [layout]   scheduler@0.23.2 install_path=node_modules/scheduler top_level=true resolved=https://registry.npmjs.org/scheduler/-/scheduler-0.23.2.tgz\n[2026-10-03 23:35:18] [layout]   source-map-js@1.2.2 install_path=node_modules/source-map-js top_level=true resolved=https://registry.npmjs.org/source-map-js/-/source-map-js-1.2\n[2026-10-03 23:35:18] [layout]   vite@5.0.0 install_path=node_modules/vite top_level=true resolved=https://registry.npmjs.org/vite/-/vite-5.0.0.tgz\n[jhol-profile] stage=layout_lookup delta_ms=2 total_ms=2\n[jhol-profile] stage=layout_cached_projection delta_ms=0 total_ms=2\n[jhol-profile] stage=layout_fetch_extract delta_ms=950 total_ms=952\n[2026-10-03 23:35:19] [layout]   MATERIALIZE @esbuild/darwin-arm64@0.19.12 -> node_modules/@esbuild/darwin-arm64 via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/e1eda9c52309e725e1c8e8190b04a5aa1cc9ba4b6a2fabe04ad68fe6c312b653.tgz\n[2026-10-03 23:35:19] [layout]   MATERIALIZE @types/estree@1.0.9 -> node_modules/@types/estree via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/ec8f3c0dfb21497db5a3480c45a6cf6f9b18d3b337b2ea4d03e3ef2a9c2bb358.tgz\n[2026-10-03 23:35:19] [layout]   MATERIALIZE loose-envify@1.4.0 -> node_modules/loose-envify via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/1218830a93538a4f730d530138e945ea6a65b45e099ee7a9ea538a05141babdc.tgz\n[2026-10-03 23:35:19] [layout]   MATERIALIZE @rollup/rollup-darwin-arm64@4.64.0 -> node_modules/@rollup/rollup-darwin-arm64 via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/1d471bfcec2c605a1dc0cb53f7892163a290a5f2fc2adcfcfcbe369551ef24ab.tgz\n[2026-10-03 23:35:19] [layout]   MATERIALIZE rollup@4.64.0 -> node_modules/rollup via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/b74f9bd6010a0887f05796457b13346178d8574106158cbf66bdf8e37d45fd39.tgz\n[2026-10-03 23:35:19] [layout]   MATERIALIZE fsevents@2.3.3 -> node_modules/fsevents via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/c77e7a5d5ff31dd7acea7c44d4a0455e0528cdacbd24a8cb6c82b66d239b587e.tgz\n[2026-10-03 23:35:19] [layout]   MATERIALIZE picocolors@1.1.1 -> node_modules/picocolors via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/d3aedb2807967b7eb37fd11b03b7e3701e725af79c650d0812ff7213f8f882d9.tgz\n[2026-10-03 23:35:19] [layout]   MATERIALIZE js-tokens@4.0.0 -> node_modules/js-tokens via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/d884c7a2d8adb5568c1272d92b4f9c62707f4226cf9e7b22e7b957c7361e3c53.tgz\n[2026-10-03 23:35:19] [layout]   MATERIALIZE react@18.2.0 -> node_modules/react via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/a151f7caec911760e42b7a6f6f1dfcaba141fd11ff49e2af901a2eee0366297c.tgz\n[2026-10-03 23:35:19] [layout]   MATERIALIZE esbuild@0.19.12 -> node_modules/esbuild via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/cdbd0cba6bd625d07f480f4cfa4105935c7ec606f52861862a93cfd255ea8fbc.tgz\n[2026-10-03 23:35:19] [layout]   MATERIALIZE react-dom@18.2.0 -> node_modules/react-dom via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/20a71e86b691f860c781f3732a85c7b3c63c4d3d9a803dca9dfe6ed0eb30e2ef.tgz\n[2026-10-03 23:35:19] [layout]   MATERIALIZE scheduler@0.23.2 -> node_modules/scheduler via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/e4f1d8fe63a9ab93ef66c92b0ad1af9c1326adbf7f1bd5e9053cac0fee6f26ae.tgz\n[2026-10-03 23:35:19] [layout]   MATERIALIZE nanoid@3.3.19 -> node_modules/nanoid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/4e371b71e3d5081fa0052356d5c1904e7a60e049864c26f0724cfd32dc303849.tgz\n[2026-10-03 23:35:19] [layout]   MATERIALIZE postcss@8.5.28 -> node_modules/postcss via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/f63d6d9bce28989cd083add85af717c0264e44323d35c909ae99ac934e9641a6.tgz\n[2026-10-03 23:35:19] [layout]   MATERIALIZE source-map-js@1.2.2 -> node_modules/source-map-js via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/05c8cf8e7c3a6b56cada7668fe9342b10f4b625efc92aba9ba05b9e8fe4d71a3.tgz\n[2026-10-03 23:35:19] [layout]   MATERIALIZE vite@5.0.0 -> node_modules/vite via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/001-harvest-1791050717529142000/tool-cache/store/de76095362f298ac15399cea3af028b6cdee5886bfcec13be21adebe5b2cf535.tgz\n[jhol-profile] stage=layout_projection delta_ms=8 total_ms=961\n[2026-10-03 23:35:19] [collect] 16 names, 16 instances; debug -> None\n[jhol-profile] stage=layout_index_relink delta_ms=201 total_ms=1163\n[jhol-profile] stage=layout_complete delta_ms=1163 total_ms=1165\n[jhol-profile] stage=layout_capsule_markers delta_ms=22 total_ms=1187\n[JGRID] L0-publish\n[2026-10-03 23:35:19] JGrid: published L0 bundle (16 packages) in 16.433375ms\n[jhol-profile] stage=layout_l0_publish delta_ms=16 total_ms=1204\n"
+    },
+    {
+      "arm": "bun",
+      "round": 1,
+      "condition": "registry-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 1045.7921249908395,
+      "cpu_user_seconds": 0.683552,
+      "cpu_system_seconds": 0.310449,
+      "peak_process_tree_rss_bytes": 30916608,
+      "cache_bytes_after": 23584089,
+      "downloaded_bytes": null,
+      "package_layout_sha256": "e5224f0893e158c2486df117afe0cf1b6e366a619e5b99462221f6be9525c4ee",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.64.0"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.64.0"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.2"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "../@esbuild/darwin-arm64/bin/esbuild",
+        "loose-envify": "../loose-envify/cli.js",
+        "nanoid": "../nanoid/bin/nanoid.cjs",
+        "rollup": "../rollup/dist/bin/rollup",
+        "vite": "../vite/bin/vite.js"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "224cffe8383cde2189050c3b07559437e086e8ead049d09e7655db024f38d6f5",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "bun install v1.4.2 (744846f84)\n\n+ react@18.2.0\n+ react-dom@18.2.0\n+ vite@5.0.0\n\n16 packages installed [917.00ms]\n\n[21.24ms] migrated lockfile from package-lock.json\nSaved lockfile\n",
+      "stage_times_ms": {},
+      "arm_environment": {},
+      "seed_cache_sha256": null,
+      "full_output": "bun install v1.4.2 (744846f84)\n\n+ react@18.2.0\n+ react-dom@18.2.0\n+ vite@5.0.0\n\n16 packages installed [917.00ms]\n\n[21.24ms] migrated lockfile from package-lock.json\nSaved lockfile\n"
+    },
+    {
+      "arm": "harvest",
+      "round": 2,
+      "condition": "registry-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 1431.7871669918532,
+      "cpu_user_seconds": 0.91502,
+      "cpu_system_seconds": 0.643323,
+      "peak_process_tree_rss_bytes": 24641536,
+      "cache_bytes_after": 54824439,
+      "downloaded_bytes": 7610763,
+      "package_layout_sha256": "3647660adcf9ec75e0b72d1341c12db531f2674cfbcdb8852d5b94a359af2d57",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.64.0"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.64.0"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.2"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "mode:755",
+        "loose-envify": "mode:755",
+        "nanoid": "mode:755",
+        "rollup": "mode:755",
+        "vite": "mode:755"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "224cffe8383cde2189050c3b07559437e086e8ead049d09e7655db024f38d6f5",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "_modules/postcss via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/f63d6d9bce28989cd083add85af717c0264e44323d35c909ae99ac934e9641a6.tgz\n[2026-10-03 23:35:23] [layout]   MATERIALIZE source-map-js@1.2.2 -> node_modules/source-map-js via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/05c8cf8e7c3a6b56cada7668fe9342b10f4b625efc92aba9ba05b9e8fe4d71a3.tgz\n[2026-10-03 23:35:23] [layout]   MATERIALIZE scheduler@0.23.2 -> node_modules/scheduler via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/e4f1d8fe63a9ab93ef66c92b0ad1af9c1326adbf7f1bd5e9053cac0fee6f26ae.tgz\n[2026-10-03 23:35:23] [layout]   MATERIALIZE vite@5.0.0 -> node_modules/vite via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/de76095362f298ac15399cea3af028b6cdee5886bfcec13be21adebe5b2cf535.tgz\n[jhol-profile] stage=layout_projection delta_ms=11 total_ms=962\n[2026-10-03 23:35:23] [collect] 16 names, 16 instances; debug -> None\n[jhol-profile] stage=layout_index_relink delta_ms=389 total_ms=1352\n[jhol-profile] stage=layout_complete delta_ms=1352 total_ms=1353\n[jhol-profile] stage=layout_capsule_markers delta_ms=20 total_ms=1373\n[JGRID] L0-publish\n[2026-10-03 23:35:24] JGrid: published L0 bundle (16 packages) in 20.029958ms\n[jhol-profile] stage=layout_l0_publish delta_ms=22 total_ms=1396\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "before_jgrid_early_lane": 0,
+        "install_pkg_start": 1,
+        "after_preseed": 0,
+        "before_jgrid_early": 0,
+        "layout_lookup": 2,
+        "layout_cached_projection": 0,
+        "layout_fetch_extract": 948,
+        "layout_projection": 11,
+        "layout_index_relink": 389,
+        "layout_complete": 1352,
+        "layout_capsule_markers": 20,
+        "layout_l0_publish": 22
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0"
+      },
+      "seed_cache_sha256": null,
+      "full_output": "HTTP Metrics:\n  Total requests: 16\n  Successful: 16\n  Failed: 0\n  Success rate: 100.00%\n  Bytes downloaded: 7610763 bytes\n  Bytes uploaded: 0 bytes\n\n[2026-10-03 23:35:22] skipped 47 packages for other platforms (@esbuild/aix-ppc64@0.19.12, @esbuild/android-arm64@0.19.12, @esbuild/android-arm@0.19.12, @esbuild/android-x64@0.19.12, @esbuild/darwin-x64@0.19.12, @esbuild/freebsd-arm64@0.19.12, @esbuild/freebsd-x64@0.19.12, @esbuild/linux-arm64@0.19.12) \u00b7 this host is darwin-arm64\n[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=1 total_ms=1\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=1\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=1\n[2026-10-03 23:35:22] [layout] 16 entries from the lockfile\n[2026-10-03 23:35:22] [layout]   @esbuild/darwin-arm64@0.19.12 install_path=node_modules/@esbuild/darwin-arm64 top_level=true resolved=https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-ar\n[2026-10-03 23:35:22] [layout]   @rollup/rollup-darwin-arm64@4.64.0 install_path=node_modules/@rollup/rollup-darwin-arm64 top_level=true resolved=https://registry.npmjs.org/@rollup/rollup-darwin-arm64/-/rol\n[2026-10-03 23:35:22] [layout]   @types/estree@1.0.9 install_path=node_modules/@types/estree top_level=true resolved=https://registry.npmjs.org/@types/estree/-/estree-1.0.9.tgz\n[2026-10-03 23:35:22] [layout]   esbuild@0.19.12 install_path=node_modules/esbuild top_level=true resolved=https://registry.npmjs.org/esbuild/-/esbuild-0.19.12.tgz\n[2026-10-03 23:35:22] [layout]   fsevents@2.3.3 install_path=node_modules/fsevents top_level=true resolved=https://registry.npmjs.org/fsevents/-/fsevents-2.3.3.tgz\n[2026-10-03 23:35:22] [layout]   js-tokens@4.0.0 install_path=node_modules/js-tokens top_level=true resolved=https://registry.npmjs.org/js-tokens/-/js-tokens-4.0.0.tgz\n[2026-10-03 23:35:22] [layout]   loose-envify@1.4.0 install_path=node_modules/loose-envify top_level=true resolved=https://registry.npmjs.org/loose-envify/-/loose-envify-1.4.0\n[2026-10-03 23:35:22] [layout]   nanoid@3.3.19 install_path=node_modules/nanoid top_level=true resolved=https://registry.npmjs.org/nanoid/-/nanoid-3.3.19.tgz\n[2026-10-03 23:35:22] [layout]   picocolors@1.1.1 install_path=node_modules/picocolors top_level=true resolved=https://registry.npmjs.org/picocolors/-/picocolors-1.1.1.tgz\n[2026-10-03 23:35:22] [layout]   postcss@8.5.28 install_path=node_modules/postcss top_level=true resolved=https://registry.npmjs.org/postcss/-/postcss-8.5.28.tgz\n[2026-10-03 23:35:22] [layout]   react@18.2.0 install_path=node_modules/react top_level=true resolved=https://registry.npmjs.org/react/-/react-18.2.0.tgz\n[2026-10-03 23:35:22] [layout]   react-dom@18.2.0 install_path=node_modules/react-dom top_level=true resolved=https://registry.npmjs.org/react-dom/-/react-dom-18.2.0.tgz\n[2026-10-03 23:35:22] [layout]   rollup@4.64.0 install_path=node_modules/rollup top_level=true resolved=https://registry.npmjs.org/rollup/-/rollup-4.64.0.tgz\n[2026-10-03 23:35:22] [layout]   scheduler@0.23.2 install_path=node_modules/scheduler top_level=true resolved=https://registry.npmjs.org/scheduler/-/scheduler-0.23.2.tgz\n[2026-10-03 23:35:22] [layout]   source-map-js@1.2.2 install_path=node_modules/source-map-js top_level=true resolved=https://registry.npmjs.org/source-map-js/-/source-map-js-1.2\n[2026-10-03 23:35:22] [layout]   vite@5.0.0 install_path=node_modules/vite top_level=true resolved=https://registry.npmjs.org/vite/-/vite-5.0.0.tgz\n[jhol-profile] stage=layout_lookup delta_ms=2 total_ms=2\n[jhol-profile] stage=layout_cached_projection delta_ms=0 total_ms=2\n[jhol-profile] stage=layout_fetch_extract delta_ms=948 total_ms=950\n[2026-10-03 23:35:23] [layout]   MATERIALIZE @esbuild/darwin-arm64@0.19.12 -> node_modules/@esbuild/darwin-arm64 via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/e1eda9c52309e725e1c8e8190b04a5aa1cc9ba4b6a2fabe04ad68fe6c312b653.tgz\n[2026-10-03 23:35:23] [layout]   MATERIALIZE fsevents@2.3.3 -> node_modules/fsevents via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/c77e7a5d5ff31dd7acea7c44d4a0455e0528cdacbd24a8cb6c82b66d239b587e.tgz\n[2026-10-03 23:35:23] [layout]   MATERIALIZE @types/estree@1.0.9 -> node_modules/@types/estree via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/ec8f3c0dfb21497db5a3480c45a6cf6f9b18d3b337b2ea4d03e3ef2a9c2bb358.tgz\n[2026-10-03 23:35:23] [layout]   MATERIALIZE @rollup/rollup-darwin-arm64@4.64.0 -> node_modules/@rollup/rollup-darwin-arm64 via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/1d471bfcec2c605a1dc0cb53f7892163a290a5f2fc2adcfcfcbe369551ef24ab.tgz\n[2026-10-03 23:35:23] [layout]   MATERIALIZE rollup@4.64.0 -> node_modules/rollup via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/b74f9bd6010a0887f05796457b13346178d8574106158cbf66bdf8e37d45fd39.tgz\n[2026-10-03 23:35:23] [layout]   MATERIALIZE react@18.2.0 -> node_modules/react via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/a151f7caec911760e42b7a6f6f1dfcaba141fd11ff49e2af901a2eee0366297c.tgz\n[2026-10-03 23:35:23] [layout]   MATERIALIZE esbuild@0.19.12 -> node_modules/esbuild via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/cdbd0cba6bd625d07f480f4cfa4105935c7ec606f52861862a93cfd255ea8fbc.tgz\n[2026-10-03 23:35:23] [layout]   MATERIALIZE loose-envify@1.4.0 -> node_modules/loose-envify via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/1218830a93538a4f730d530138e945ea6a65b45e099ee7a9ea538a05141babdc.tgz\n[2026-10-03 23:35:23] [layout]   MATERIALIZE picocolors@1.1.1 -> node_modules/picocolors via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/d3aedb2807967b7eb37fd11b03b7e3701e725af79c650d0812ff7213f8f882d9.tgz\n[2026-10-03 23:35:23] [layout]   MATERIALIZE nanoid@3.3.19 -> node_modules/nanoid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/4e371b71e3d5081fa0052356d5c1904e7a60e049864c26f0724cfd32dc303849.tgz\n[2026-10-03 23:35:23] [layout]   MATERIALIZE js-tokens@4.0.0 -> node_modules/js-tokens via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/d884c7a2d8adb5568c1272d92b4f9c62707f4226cf9e7b22e7b957c7361e3c53.tgz\n[2026-10-03 23:35:23] [layout]   MATERIALIZE react-dom@18.2.0 -> node_modules/react-dom via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/20a71e86b691f860c781f3732a85c7b3c63c4d3d9a803dca9dfe6ed0eb30e2ef.tgz\n[2026-10-03 23:35:23] [layout]   MATERIALIZE postcss@8.5.28 -> node_modules/postcss via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/f63d6d9bce28989cd083add85af717c0264e44323d35c909ae99ac934e9641a6.tgz\n[2026-10-03 23:35:23] [layout]   MATERIALIZE source-map-js@1.2.2 -> node_modules/source-map-js via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/05c8cf8e7c3a6b56cada7668fe9342b10f4b625efc92aba9ba05b9e8fe4d71a3.tgz\n[2026-10-03 23:35:23] [layout]   MATERIALIZE scheduler@0.23.2 -> node_modules/scheduler via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/e4f1d8fe63a9ab93ef66c92b0ad1af9c1326adbf7f1bd5e9053cac0fee6f26ae.tgz\n[2026-10-03 23:35:23] [layout]   MATERIALIZE vite@5.0.0 -> node_modules/vite via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/002-harvest-1791050722906851000/tool-cache/store/de76095362f298ac15399cea3af028b6cdee5886bfcec13be21adebe5b2cf535.tgz\n[jhol-profile] stage=layout_projection delta_ms=11 total_ms=962\n[2026-10-03 23:35:23] [collect] 16 names, 16 instances; debug -> None\n[jhol-profile] stage=layout_index_relink delta_ms=389 total_ms=1352\n[jhol-profile] stage=layout_complete delta_ms=1352 total_ms=1353\n[jhol-profile] stage=layout_capsule_markers delta_ms=20 total_ms=1373\n[JGRID] L0-publish\n[2026-10-03 23:35:24] JGrid: published L0 bundle (16 packages) in 20.029958ms\n[jhol-profile] stage=layout_l0_publish delta_ms=22 total_ms=1396\n"
+    },
+    {
+      "arm": "bun",
+      "round": 2,
+      "condition": "registry-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 718.6766659870045,
+      "cpu_user_seconds": 0.6867589999999999,
+      "cpu_system_seconds": 0.3014779999999999,
+      "peak_process_tree_rss_bytes": 35323904,
+      "cache_bytes_after": 23584089,
+      "downloaded_bytes": null,
+      "package_layout_sha256": "e5224f0893e158c2486df117afe0cf1b6e366a619e5b99462221f6be9525c4ee",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.64.0"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.64.0"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.2"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "../@esbuild/darwin-arm64/bin/esbuild",
+        "loose-envify": "../loose-envify/cli.js",
+        "nanoid": "../nanoid/bin/nanoid.cjs",
+        "rollup": "../rollup/dist/bin/rollup",
+        "vite": "../vite/bin/vite.js"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "224cffe8383cde2189050c3b07559437e086e8ead049d09e7655db024f38d6f5",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "bun install v1.4.2 (744846f84)\n\n+ react@18.2.0\n+ react-dom@18.2.0\n+ vite@5.0.0\n\n16 packages installed [664.00ms]\n\n[0.98ms] migrated lockfile from package-lock.json\nSaved lockfile\n",
+      "stage_times_ms": {},
+      "arm_environment": {},
+      "seed_cache_sha256": null,
+      "full_output": "bun install v1.4.2 (744846f84)\n\n+ react@18.2.0\n+ react-dom@18.2.0\n+ vite@5.0.0\n\n16 packages installed [664.00ms]\n\n[0.98ms] migrated lockfile from package-lock.json\nSaved lockfile\n"
+    },
+    {
+      "arm": "bun",
+      "round": 3,
+      "condition": "registry-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 604.4811659958214,
+      "cpu_user_seconds": 0.7394720000000001,
+      "cpu_system_seconds": 0.3197730000000003,
+      "peak_process_tree_rss_bytes": 37224448,
+      "cache_bytes_after": 23584089,
+      "downloaded_bytes": null,
+      "package_layout_sha256": "e5224f0893e158c2486df117afe0cf1b6e366a619e5b99462221f6be9525c4ee",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.64.0"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.64.0"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.2"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "../@esbuild/darwin-arm64/bin/esbuild",
+        "loose-envify": "../loose-envify/cli.js",
+        "nanoid": "../nanoid/bin/nanoid.cjs",
+        "rollup": "../rollup/dist/bin/rollup",
+        "vite": "../vite/bin/vite.js"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "224cffe8383cde2189050c3b07559437e086e8ead049d09e7655db024f38d6f5",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "bun install v1.4.2 (744846f84)\n\n+ react@18.2.0\n+ react-dom@18.2.0\n+ vite@5.0.0\n\n16 packages installed [581.00ms]\n\n[0.92ms] migrated lockfile from package-lock.json\nSaved lockfile\n",
+      "stage_times_ms": {},
+      "arm_environment": {},
+      "seed_cache_sha256": null,
+      "full_output": "bun install v1.4.2 (744846f84)\n\n+ react@18.2.0\n+ react-dom@18.2.0\n+ vite@5.0.0\n\n16 packages installed [581.00ms]\n\n[0.92ms] migrated lockfile from package-lock.json\nSaved lockfile\n"
+    },
+    {
+      "arm": "harvest",
+      "round": 3,
+      "condition": "registry-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 1523.2414590136614,
+      "cpu_user_seconds": 0.8989119999999997,
+      "cpu_system_seconds": 0.6508829999999999,
+      "peak_process_tree_rss_bytes": 26230784,
+      "cache_bytes_after": 54824439,
+      "downloaded_bytes": 7610763,
+      "package_layout_sha256": "b4b1816243b77fcf4f9f671a66916be3c0ab2697d0349332923952fd892da6f2",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.64.0"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.64.0"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.2"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "mode:755",
+        "loose-envify": "mode:755",
+        "nanoid": "mode:755",
+        "rollup": "mode:755",
+        "vite": "mode:755"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "224cffe8383cde2189050c3b07559437e086e8ead049d09e7655db024f38d6f5",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "@4.0.0 -> node_modules/js-tokens via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/d884c7a2d8adb5568c1272d92b4f9c62707f4226cf9e7b22e7b957c7361e3c53.tgz\n[2026-10-03 23:35:30] [layout]   MATERIALIZE esbuild@0.19.12 -> node_modules/esbuild via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/cdbd0cba6bd625d07f480f4cfa4105935c7ec606f52861862a93cfd255ea8fbc.tgz\n[2026-10-03 23:35:30] [layout]   MATERIALIZE nanoid@3.3.19 -> node_modules/nanoid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/4e371b71e3d5081fa0052356d5c1904e7a60e049864c26f0724cfd32dc303849.tgz\n[2026-10-03 23:35:30] [layout]   MATERIALIZE vite@5.0.0 -> node_modules/vite via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/de76095362f298ac15399cea3af028b6cdee5886bfcec13be21adebe5b2cf535.tgz\n[jhol-profile] stage=layout_projection delta_ms=9 total_ms=1122\n[2026-10-03 23:35:30] [collect] 16 names, 16 instances; debug -> None\n[jhol-profile] stage=layout_index_relink delta_ms=305 total_ms=1428\n[jhol-profile] stage=layout_complete delta_ms=1428 total_ms=1429\n[jhol-profile] stage=layout_capsule_markers delta_ms=22 total_ms=1452\n[JGRID] L0-publish\n[2026-10-03 23:35:31] JGrid: published L0 bundle (16 packages) in 18.943458ms\n[jhol-profile] stage=layout_l0_publish delta_ms=20 total_ms=1472\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "before_jgrid_early_lane": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0,
+        "before_jgrid_early": 0,
+        "layout_lookup": 2,
+        "layout_cached_projection": 0,
+        "layout_fetch_extract": 1110,
+        "layout_projection": 9,
+        "layout_index_relink": 305,
+        "layout_complete": 1428,
+        "layout_capsule_markers": 22,
+        "layout_l0_publish": 20
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0"
+      },
+      "seed_cache_sha256": null,
+      "full_output": "HTTP Metrics:\n  Total requests: 16\n  Successful: 16\n  Failed: 0\n  Success rate: 100.00%\n  Bytes downloaded: 7610763 bytes\n  Bytes uploaded: 0 bytes\n\n[2026-10-03 23:35:29] skipped 47 packages for other platforms (@esbuild/aix-ppc64@0.19.12, @esbuild/android-arm64@0.19.12, @esbuild/android-arm@0.19.12, @esbuild/android-x64@0.19.12, @esbuild/darwin-x64@0.19.12, @esbuild/freebsd-arm64@0.19.12, @esbuild/freebsd-x64@0.19.12, @esbuild/linux-arm64@0.19.12) \u00b7 this host is darwin-arm64\n[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=1\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=1\n[2026-10-03 23:35:29] [layout] 16 entries from the lockfile\n[2026-10-03 23:35:29] [layout]   @esbuild/darwin-arm64@0.19.12 install_path=node_modules/@esbuild/darwin-arm64 top_level=true resolved=https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-ar\n[2026-10-03 23:35:29] [layout]   @rollup/rollup-darwin-arm64@4.64.0 install_path=node_modules/@rollup/rollup-darwin-arm64 top_level=true resolved=https://registry.npmjs.org/@rollup/rollup-darwin-arm64/-/rol\n[2026-10-03 23:35:29] [layout]   @types/estree@1.0.9 install_path=node_modules/@types/estree top_level=true resolved=https://registry.npmjs.org/@types/estree/-/estree-1.0.9.tgz\n[2026-10-03 23:35:29] [layout]   esbuild@0.19.12 install_path=node_modules/esbuild top_level=true resolved=https://registry.npmjs.org/esbuild/-/esbuild-0.19.12.tgz\n[2026-10-03 23:35:29] [layout]   fsevents@2.3.3 install_path=node_modules/fsevents top_level=true resolved=https://registry.npmjs.org/fsevents/-/fsevents-2.3.3.tgz\n[2026-10-03 23:35:29] [layout]   js-tokens@4.0.0 install_path=node_modules/js-tokens top_level=true resolved=https://registry.npmjs.org/js-tokens/-/js-tokens-4.0.0.tgz\n[2026-10-03 23:35:29] [layout]   loose-envify@1.4.0 install_path=node_modules/loose-envify top_level=true resolved=https://registry.npmjs.org/loose-envify/-/loose-envify-1.4.0\n[2026-10-03 23:35:29] [layout]   nanoid@3.3.19 install_path=node_modules/nanoid top_level=true resolved=https://registry.npmjs.org/nanoid/-/nanoid-3.3.19.tgz\n[2026-10-03 23:35:29] [layout]   picocolors@1.1.1 install_path=node_modules/picocolors top_level=true resolved=https://registry.npmjs.org/picocolors/-/picocolors-1.1.1.tgz\n[2026-10-03 23:35:29] [layout]   postcss@8.5.28 install_path=node_modules/postcss top_level=true resolved=https://registry.npmjs.org/postcss/-/postcss-8.5.28.tgz\n[2026-10-03 23:35:29] [layout]   react@18.2.0 install_path=node_modules/react top_level=true resolved=https://registry.npmjs.org/react/-/react-18.2.0.tgz\n[2026-10-03 23:35:29] [layout]   react-dom@18.2.0 install_path=node_modules/react-dom top_level=true resolved=https://registry.npmjs.org/react-dom/-/react-dom-18.2.0.tgz\n[2026-10-03 23:35:29] [layout]   rollup@4.64.0 install_path=node_modules/rollup top_level=true resolved=https://registry.npmjs.org/rollup/-/rollup-4.64.0.tgz\n[2026-10-03 23:35:29] [layout]   scheduler@0.23.2 install_path=node_modules/scheduler top_level=true resolved=https://registry.npmjs.org/scheduler/-/scheduler-0.23.2.tgz\n[2026-10-03 23:35:29] [layout]   source-map-js@1.2.2 install_path=node_modules/source-map-js top_level=true resolved=https://registry.npmjs.org/source-map-js/-/source-map-js-1.2\n[2026-10-03 23:35:29] [layout]   vite@5.0.0 install_path=node_modules/vite top_level=true resolved=https://registry.npmjs.org/vite/-/vite-5.0.0.tgz\n[jhol-profile] stage=layout_lookup delta_ms=2 total_ms=2\n[jhol-profile] stage=layout_cached_projection delta_ms=0 total_ms=2\n[jhol-profile] stage=layout_fetch_extract delta_ms=1110 total_ms=1113\n[2026-10-03 23:35:30] [layout]   MATERIALIZE @esbuild/darwin-arm64@0.19.12 -> node_modules/@esbuild/darwin-arm64 via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/e1eda9c52309e725e1c8e8190b04a5aa1cc9ba4b6a2fabe04ad68fe6c312b653.tgz\n[2026-10-03 23:35:30] [layout]   MATERIALIZE @types/estree@1.0.9 -> node_modules/@types/estree via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/ec8f3c0dfb21497db5a3480c45a6cf6f9b18d3b337b2ea4d03e3ef2a9c2bb358.tgz\n[2026-10-03 23:35:30] [layout]   MATERIALIZE fsevents@2.3.3 -> node_modules/fsevents via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/c77e7a5d5ff31dd7acea7c44d4a0455e0528cdacbd24a8cb6c82b66d239b587e.tgz\n[2026-10-03 23:35:30] [layout]   MATERIALIZE picocolors@1.1.1 -> node_modules/picocolors via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/d3aedb2807967b7eb37fd11b03b7e3701e725af79c650d0812ff7213f8f882d9.tgz\n[2026-10-03 23:35:30] [layout]   MATERIALIZE @rollup/rollup-darwin-arm64@4.64.0 -> node_modules/@rollup/rollup-darwin-arm64 via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/1d471bfcec2c605a1dc0cb53f7892163a290a5f2fc2adcfcfcbe369551ef24ab.tgz\n[2026-10-03 23:35:30] [layout]   MATERIALIZE react@18.2.0 -> node_modules/react via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/a151f7caec911760e42b7a6f6f1dfcaba141fd11ff49e2af901a2eee0366297c.tgz\n[2026-10-03 23:35:30] [layout]   MATERIALIZE rollup@4.64.0 -> node_modules/rollup via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/b74f9bd6010a0887f05796457b13346178d8574106158cbf66bdf8e37d45fd39.tgz\n[2026-10-03 23:35:30] [layout]   MATERIALIZE scheduler@0.23.2 -> node_modules/scheduler via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/e4f1d8fe63a9ab93ef66c92b0ad1af9c1326adbf7f1bd5e9053cac0fee6f26ae.tgz\n[2026-10-03 23:35:30] [layout]   MATERIALIZE source-map-js@1.2.2 -> node_modules/source-map-js via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/05c8cf8e7c3a6b56cada7668fe9342b10f4b625efc92aba9ba05b9e8fe4d71a3.tgz\n[2026-10-03 23:35:30] [layout]   MATERIALIZE postcss@8.5.28 -> node_modules/postcss via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/f63d6d9bce28989cd083add85af717c0264e44323d35c909ae99ac934e9641a6.tgz\n[2026-10-03 23:35:30] [layout]   MATERIALIZE react-dom@18.2.0 -> node_modules/react-dom via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/20a71e86b691f860c781f3732a85c7b3c63c4d3d9a803dca9dfe6ed0eb30e2ef.tgz\n[2026-10-03 23:35:30] [layout]   MATERIALIZE loose-envify@1.4.0 -> node_modules/loose-envify via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/1218830a93538a4f730d530138e945ea6a65b45e099ee7a9ea538a05141babdc.tgz\n[2026-10-03 23:35:30] [layout]   MATERIALIZE js-tokens@4.0.0 -> node_modules/js-tokens via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/d884c7a2d8adb5568c1272d92b4f9c62707f4226cf9e7b22e7b957c7361e3c53.tgz\n[2026-10-03 23:35:30] [layout]   MATERIALIZE esbuild@0.19.12 -> node_modules/esbuild via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/cdbd0cba6bd625d07f480f4cfa4105935c7ec606f52861862a93cfd255ea8fbc.tgz\n[2026-10-03 23:35:30] [layout]   MATERIALIZE nanoid@3.3.19 -> node_modules/nanoid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/4e371b71e3d5081fa0052356d5c1904e7a60e049864c26f0724cfd32dc303849.tgz\n[2026-10-03 23:35:30] [layout]   MATERIALIZE vite@5.0.0 -> node_modules/vite via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-vzntqp7l/003-harvest-1791050729596770000/tool-cache/store/de76095362f298ac15399cea3af028b6cdee5886bfcec13be21adebe5b2cf535.tgz\n[jhol-profile] stage=layout_projection delta_ms=9 total_ms=1122\n[2026-10-03 23:35:30] [collect] 16 names, 16 instances; debug -> None\n[jhol-profile] stage=layout_index_relink delta_ms=305 total_ms=1428\n[jhol-profile] stage=layout_complete delta_ms=1428 total_ms=1429\n[jhol-profile] stage=layout_capsule_markers delta_ms=22 total_ms=1452\n[JGRID] L0-publish\n[2026-10-03 23:35:31] JGrid: published L0 bundle (16 packages) in 18.943458ms\n[jhol-profile] stage=layout_l0_publish delta_ms=20 total_ms=1472\n"
+    }
+  ],
+  "fixture_inputs": {
+    "package.json": {
+      "name": "jhol-fixture-react-app",
+      "version": "1.0.0",
+      "dependencies": {
+        "react": "18.2.0",
+        "react-dom": "18.2.0"
+      },
+      "devDependencies": {
+        "vite": "5.0.0"
+      }
+    },
+    "package-lock.json": {
+      "name": "jhol-fixture-react-app",
+      "version": "1.0.0",
+      "lockfileVersion": 3,
+      "requires": true,
+      "packages": {
+        "": {
+          "name": "jhol-fixture-react-app",
+          "version": "1.0.0",
+          "dependencies": {
+            "react": "18.2.0",
+            "react-dom": "18.2.0"
+          },
+          "devDependencies": {
+            "vite": "5.0.0"
+          }
+        },
+        "node_modules/@esbuild/aix-ppc64": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/aix-ppc64/-/aix-ppc64-0.19.12.tgz",
+          "integrity": "sha512-bmoCYyWdEL3wDQIVbcyzRyeKLgk2WtWLTWz1ZIAZF/EGbNOwSA6ew3PftJ1PqMiOOGu0OyFMzG53L0zqIpPeNA==",
+          "cpu": [
+            "ppc64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "aix"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/android-arm": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/android-arm/-/android-arm-0.19.12.tgz",
+          "integrity": "sha512-qg/Lj1mu3CdQlDEEiWrlC4eaPZ1KztwGJ9B6J+/6G+/4ewxJg7gqj8eVYWvao1bXrqGiW2rsBZFSX3q2lcW05w==",
+          "cpu": [
+            "arm"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "android"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/android-arm64": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/android-arm64/-/android-arm64-0.19.12.tgz",
+          "integrity": "sha512-P0UVNGIienjZv3f5zq0DP3Nt2IE/3plFzuaS96vihvD0Hd6H/q4WXUGpCxD/E8YrSXfNyRPbpTq+T8ZQioSuPA==",
+          "cpu": [
+            "arm64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "android"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/android-x64": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/android-x64/-/android-x64-0.19.12.tgz",
+          "integrity": "sha512-3k7ZoUW6Q6YqhdhIaq/WZ7HwBpnFBlW905Fa4s4qWJyiNOgT1dOqDiVAQFwBH7gBRZr17gLrlFCRzF6jFh7Kew==",
+          "cpu": [
+            "x64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "android"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/darwin-arm64": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-0.19.12.tgz",
+          "integrity": "sha512-B6IeSgZgtEzGC42jsI+YYu9Z3HKRxp8ZT3cqhvliEHovq8HSX2YX8lNocDn79gCKJXOSaEot9MVYky7AKjCs8g==",
+          "cpu": [
+            "arm64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "darwin"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/darwin-x64": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/darwin-x64/-/darwin-x64-0.19.12.tgz",
+          "integrity": "sha512-hKoVkKzFiToTgn+41qGhsUJXFlIjxI/jSYeZf3ugemDYZldIXIxhvwN6erJGlX4t5h417iFuheZ7l+YVn05N3A==",
+          "cpu": [
+            "x64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "darwin"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/freebsd-arm64": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/freebsd-arm64/-/freebsd-arm64-0.19.12.tgz",
+          "integrity": "sha512-4aRvFIXmwAcDBw9AueDQ2YnGmz5L6obe5kmPT8Vd+/+x/JMVKCgdcRwH6APrbpNXsPz+K653Qg8HB/oXvXVukA==",
+          "cpu": [
+            "arm64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "freebsd"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/freebsd-x64": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/freebsd-x64/-/freebsd-x64-0.19.12.tgz",
+          "integrity": "sha512-EYoXZ4d8xtBoVN7CEwWY2IN4ho76xjYXqSXMNccFSx2lgqOG/1TBPW0yPx1bJZk94qu3tX0fycJeeQsKovA8gg==",
+          "cpu": [
+            "x64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "freebsd"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/linux-arm": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/linux-arm/-/linux-arm-0.19.12.tgz",
+          "integrity": "sha512-J5jPms//KhSNv+LO1S1TX1UWp1ucM6N6XuL6ITdKWElCu8wXP72l9MM0zDTzzeikVyqFE6U8YAV9/tFyj0ti+w==",
+          "cpu": [
+            "arm"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/linux-arm64": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/linux-arm64/-/linux-arm64-0.19.12.tgz",
+          "integrity": "sha512-EoTjyYyLuVPfdPLsGVVVC8a0p1BFFvtpQDB/YLEhaXyf/5bczaGeN15QkR+O4S5LeJ92Tqotve7i1jn35qwvdA==",
+          "cpu": [
+            "arm64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/linux-ia32": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/linux-ia32/-/linux-ia32-0.19.12.tgz",
+          "integrity": "sha512-Thsa42rrP1+UIGaWz47uydHSBOgTUnwBwNq59khgIwktK6x60Hivfbux9iNR0eHCHzOLjLMLfUMLCypBkZXMHA==",
+          "cpu": [
+            "ia32"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/linux-loong64": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/linux-loong64/-/linux-loong64-0.19.12.tgz",
+          "integrity": "sha512-LiXdXA0s3IqRRjm6rV6XaWATScKAXjI4R4LoDlvO7+yQqFdlr1Bax62sRwkVvRIrwXxvtYEHHI4dm50jAXkuAA==",
+          "cpu": [
+            "loong64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/linux-mips64el": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/linux-mips64el/-/linux-mips64el-0.19.12.tgz",
+          "integrity": "sha512-fEnAuj5VGTanfJ07ff0gOA6IPsvrVHLVb6Lyd1g2/ed67oU1eFzL0r9WL7ZzscD+/N6i3dWumGE1Un4f7Amf+w==",
+          "cpu": [
+            "mips64el"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/linux-ppc64": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/linux-ppc64/-/linux-ppc64-0.19.12.tgz",
+          "integrity": "sha512-nYJA2/QPimDQOh1rKWedNOe3Gfc8PabU7HT3iXWtNUbRzXS9+vgB0Fjaqr//XNbd82mCxHzik2qotuI89cfixg==",
+          "cpu": [
+            "ppc64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/linux-riscv64": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/linux-riscv64/-/linux-riscv64-0.19.12.tgz",
+          "integrity": "sha512-2MueBrlPQCw5dVJJpQdUYgeqIzDQgw3QtiAHUC4RBz9FXPrskyyU3VI1hw7C0BSKB9OduwSJ79FTCqtGMWqJHg==",
+          "cpu": [
+            "riscv64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/linux-s390x": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/linux-s390x/-/linux-s390x-0.19.12.tgz",
+          "integrity": "sha512-+Pil1Nv3Umes4m3AZKqA2anfhJiVmNCYkPchwFJNEJN5QxmTs1uzyy4TvmDrCRNT2ApwSari7ZIgrPeUx4UZDg==",
+          "cpu": [
+            "s390x"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/linux-x64": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-0.19.12.tgz",
+          "integrity": "sha512-B71g1QpxfwBvNrfyJdVDexenDIt1CiDN1TIXLbhOw0KhJzE78KIFGX6OJ9MrtC0oOqMWf+0xop4qEU8JrJTwCg==",
+          "cpu": [
+            "x64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/netbsd-x64": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/netbsd-x64/-/netbsd-x64-0.19.12.tgz",
+          "integrity": "sha512-3ltjQ7n1owJgFbuC61Oj++XhtzmymoCihNFgT84UAmJnxJfm4sYCiSLTXZtE00VWYpPMYc+ZQmB6xbSdVh0JWA==",
+          "cpu": [
+            "x64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "netbsd"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/openbsd-x64": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/openbsd-x64/-/openbsd-x64-0.19.12.tgz",
+          "integrity": "sha512-RbrfTB9SWsr0kWmb9srfF+L933uMDdu9BIzdA7os2t0TXhCRjrQyCeOt6wVxr79CKD4c+p+YhCj31HBkYcXebw==",
+          "cpu": [
+            "x64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "openbsd"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/sunos-x64": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/sunos-x64/-/sunos-x64-0.19.12.tgz",
+          "integrity": "sha512-HKjJwRrW8uWtCQnQOz9qcU3mUZhTUQvi56Q8DPTLLB+DawoiQdjsYq+j+D3s9I8VFtDr+F9CjgXKKC4ss89IeA==",
+          "cpu": [
+            "x64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "sunos"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/win32-arm64": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/win32-arm64/-/win32-arm64-0.19.12.tgz",
+          "integrity": "sha512-URgtR1dJnmGvX864pn1B2YUYNzjmXkuJOIqG2HdU62MVS4EHpU2946OZoTMnRUHklGtJdJZ33QfzdjGACXhn1A==",
+          "cpu": [
+            "arm64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "win32"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/win32-ia32": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/win32-ia32/-/win32-ia32-0.19.12.tgz",
+          "integrity": "sha512-+ZOE6pUkMOJfmxmBZElNOx72NKpIa/HFOMGzu8fqzQJ5kgf6aTGrcJaFsNiVMH4JKpMipyK+7k0n2UXN7a8YKQ==",
+          "cpu": [
+            "ia32"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "win32"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@esbuild/win32-x64": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/@esbuild/win32-x64/-/win32-x64-0.19.12.tgz",
+          "integrity": "sha512-T1QyPSDCyMXaO3pzBkF96E8xMkiRYbUEZADd29SyPGabqxMViNoii+NcK7eWJAEoU6RZyEm5lVSIjTmcdoB9HA==",
+          "cpu": [
+            "x64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "win32"
+          ],
+          "engines": {
+            "node": ">=12"
+          }
+        },
+        "node_modules/@napi-rs/lzma-linux-x64-gnu": {
+          "version": "1.5.1",
+          "resolved": "https://registry.npmjs.org/@napi-rs/lzma-linux-x64-gnu/-/lzma-linux-x64-gnu-1.5.1.tgz",
+          "integrity": "sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ==",
+          "cpu": [
+            "x64"
+          ],
+          "dev": true,
+          "libc": [
+            "glibc"
+          ],
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ],
+          "engines": {
+            "node": "^22.20 || ^24.12 || >=25"
+          }
+        },
+        "node_modules/@rollup/rollup-android-arm-eabi": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-android-arm-eabi/-/rollup-android-arm-eabi-4.64.0.tgz",
+          "integrity": "sha512-FLLpX941CD/7aBvX3GqLGBM9OvY5PGXTryPJkG5r5/OuBpZpV5k45Uo3RxAvqd35tsyc3hH1bhtz921IKzoIzg==",
+          "cpu": [
+            "arm"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "android"
+          ]
+        },
+        "node_modules/@rollup/rollup-android-arm64": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-android-arm64/-/rollup-android-arm64-4.64.0.tgz",
+          "integrity": "sha512-iI32XM/jnDYJsvx5ai/za/7gWO9XoSeFFtU06/ZCaRgyilfJOjaopD3nOpk2WrTCGOyeDt4hleUiGOAnd5tHNg==",
+          "cpu": [
+            "arm64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "android"
+          ]
+        },
+        "node_modules/@rollup/rollup-darwin-arm64": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-darwin-arm64/-/rollup-darwin-arm64-4.64.0.tgz",
+          "integrity": "sha512-dRBZlbt2sEtF8Mn4MODThze9fIPdDoOhVSlXMAKy5dQbOYK9pOOoPY4Fat3OTtr0+8zbJo5TTZwlsfxY/kDNJg==",
+          "cpu": [
+            "arm64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "darwin"
+          ]
+        },
+        "node_modules/@rollup/rollup-darwin-x64": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-darwin-x64/-/rollup-darwin-x64-4.64.0.tgz",
+          "integrity": "sha512-Y3whrJOMucfkhgNkvcM93M6j8C53iEAMmPMYD99C6G1kUy4ELigLWk9ar2/4aCBSRgsql0zdlOemLgW2m5GZgQ==",
+          "cpu": [
+            "x64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "darwin"
+          ]
+        },
+        "node_modules/@rollup/rollup-freebsd-arm64": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-freebsd-arm64/-/rollup-freebsd-arm64-4.64.0.tgz",
+          "integrity": "sha512-S6S1GEzPjFF6IONYJX3AKt/799+8RgBgCcwRnUo+Ep1IvBxUbw5M51iU0TDdK2NWWVnSvCQ8yi6Em0fGASMOng==",
+          "cpu": [
+            "arm64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "freebsd"
+          ]
+        },
+        "node_modules/@rollup/rollup-freebsd-x64": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-freebsd-x64/-/rollup-freebsd-x64-4.64.0.tgz",
+          "integrity": "sha512-Ed1DPoFENkXj4IGzSB12SesV40iP6LxCCrbTIkSGIQBpOOxpBM+0kj62lmaeIHfMWTDoddqTOtqc7s8LYfn+Pw==",
+          "cpu": [
+            "x64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "freebsd"
+          ]
+        },
+        "node_modules/@rollup/rollup-linux-arm-gnueabihf": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-arm-gnueabihf/-/rollup-linux-arm-gnueabihf-4.64.0.tgz",
+          "integrity": "sha512-J/6xhutJPtFyIkmHdf4olOdHHKH5kOJNumojdWn+Elv5ICEYTVOa362Vw27TxsK0BLzb1le3EDlO3UbvFK1lnQ==",
+          "cpu": [
+            "arm"
+          ],
+          "dev": true,
+          "libc": [
+            "glibc"
+          ],
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ]
+        },
+        "node_modules/@rollup/rollup-linux-arm-musleabihf": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-arm-musleabihf/-/rollup-linux-arm-musleabihf-4.64.0.tgz",
+          "integrity": "sha512-G4L/Nnx59d2LvDoV/P4S5lZ7oVLT6hodOHMacqjiq2LL2gts86KbkEBTYL53+fBt0odhf7XPIbIATGoYiJctxg==",
+          "cpu": [
+            "arm"
+          ],
+          "dev": true,
+          "libc": [
+            "musl"
+          ],
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ]
+        },
+        "node_modules/@rollup/rollup-linux-arm64-gnu": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-arm64-gnu/-/rollup-linux-arm64-gnu-4.64.0.tgz",
+          "integrity": "sha512-zF16pvJDEUksGYRbfnXne7pdklAyj2XDmJeYKgP93oq0cUyX9Y8O7lUo1R+IY1GagP/YBvCEDCe7eEcAKpw//g==",
+          "cpu": [
+            "arm64"
+          ],
+          "dev": true,
+          "libc": [
+            "glibc"
+          ],
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ]
+        },
+        "node_modules/@rollup/rollup-linux-arm64-musl": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-arm64-musl/-/rollup-linux-arm64-musl-4.64.0.tgz",
+          "integrity": "sha512-nIggWn8n+w12+R5lsV+PYYoUY8vuObxPAQqJI7WES+9v0qspYuAHoZMfYM0yLxlipasT5BY9ht5W8t5c/rSCkg==",
+          "cpu": [
+            "arm64"
+          ],
+          "dev": true,
+          "libc": [
+            "musl"
+          ],
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ]
+        },
+        "node_modules/@rollup/rollup-linux-loong64-gnu": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-loong64-gnu/-/rollup-linux-loong64-gnu-4.64.0.tgz",
+          "integrity": "sha512-WLOTiHPzszP0dxIMsHpFeDSOSB5I49Mj8K4+yKE3H1X/D0JRG5XZ5jrctJLMjnUc/LUzaKiwq6EHWNJ8pup8PA==",
+          "cpu": [
+            "loong64"
+          ],
+          "dev": true,
+          "libc": [
+            "glibc"
+          ],
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ]
+        },
+        "node_modules/@rollup/rollup-linux-loong64-musl": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-loong64-musl/-/rollup-linux-loong64-musl-4.64.0.tgz",
+          "integrity": "sha512-35RK9aRhh7g7Pmeu5gQ01aCvrhXzj9LoBE6xtUcEH1ns+nyTaSzxSpADmBQINu4QiTDGvmQYwo1j5hlg1rRXFw==",
+          "cpu": [
+            "loong64"
+          ],
+          "dev": true,
+          "libc": [
+            "musl"
+          ],
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ]
+        },
+        "node_modules/@rollup/rollup-linux-ppc64-gnu": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-ppc64-gnu/-/rollup-linux-ppc64-gnu-4.64.0.tgz",
+          "integrity": "sha512-RqTfnpoTjuWfPAmqK5p2edt2AMCDJWm6oTn7sKfmyx+6tRga0ip05SJ977o6udTcIiDeF/CJMUfkaN4gtWt6Aw==",
+          "cpu": [
+            "ppc64"
+          ],
+          "dev": true,
+          "libc": [
+            "glibc"
+          ],
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ]
+        },
+        "node_modules/@rollup/rollup-linux-ppc64-musl": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-ppc64-musl/-/rollup-linux-ppc64-musl-4.64.0.tgz",
+          "integrity": "sha512-RQjZPigjxFvFZDijG6rjlSXxhRaTf9zLYVpGK+lVcga64oMqP1GbgVqCb46eHTTceSIgp89Ja0y5aPe3GFBYHg==",
+          "cpu": [
+            "ppc64"
+          ],
+          "dev": true,
+          "libc": [
+            "musl"
+          ],
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ]
+        },
+        "node_modules/@rollup/rollup-linux-riscv64-gnu": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-riscv64-gnu/-/rollup-linux-riscv64-gnu-4.64.0.tgz",
+          "integrity": "sha512-tjL58mgQcTRnDRpeky+Sth1MKQeYi2Ct6r3Luq9E5aTSjnM/i/JbozqZkKqp9thM5+oDSZxo+05f9kdQedfTGA==",
+          "cpu": [
+            "riscv64"
+          ],
+          "dev": true,
+          "libc": [
+            "glibc"
+          ],
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ]
+        },
+        "node_modules/@rollup/rollup-linux-riscv64-musl": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-riscv64-musl/-/rollup-linux-riscv64-musl-4.64.0.tgz",
+          "integrity": "sha512-ictoRyVaoZ8C67myHef+8hhCa6IplXJJ/xUCkVCxziV4zxMZh+jvhkhGsPBLqj1S72fnqD0QH5zL4lcaa4X7DQ==",
+          "cpu": [
+            "riscv64"
+          ],
+          "dev": true,
+          "libc": [
+            "musl"
+          ],
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ]
+        },
+        "node_modules/@rollup/rollup-linux-s390x-gnu": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-s390x-gnu/-/rollup-linux-s390x-gnu-4.64.0.tgz",
+          "integrity": "sha512-8aVvZ2hfr9RLFzBQkQNmYeHLDja8fLeQAmLt757zdKN/B+8L809KlLJKctQjS22wZotptV8G6o7fVPuAs8S1tQ==",
+          "cpu": [
+            "s390x"
+          ],
+          "dev": true,
+          "libc": [
+            "glibc"
+          ],
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ]
+        },
+        "node_modules/@rollup/rollup-linux-x64-gnu": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-x64-gnu/-/rollup-linux-x64-gnu-4.64.0.tgz",
+          "integrity": "sha512-2dEF8GAcDKwshUfydD+GhosppNyBzhVUHkdFF3CXd3FpOkzj/RZzF5aoEtzklujklT5qFVRU2GK/cFeLaTNKVg==",
+          "cpu": [
+            "x64"
+          ],
+          "dev": true,
+          "libc": [
+            "glibc"
+          ],
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ]
+        },
+        "node_modules/@rollup/rollup-linux-x64-musl": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-x64-musl/-/rollup-linux-x64-musl-4.64.0.tgz",
+          "integrity": "sha512-3XHTvoo2hKkh0MiOfS7SkhHjMaaWF7P4F3drocZZaho/Z8w7h/jpnuBHm91BOQLfvrKHs1yR+zir4E8RI3XzTQ==",
+          "cpu": [
+            "x64"
+          ],
+          "dev": true,
+          "libc": [
+            "musl"
+          ],
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "linux"
+          ]
+        },
+        "node_modules/@rollup/rollup-openbsd-x64": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-openbsd-x64/-/rollup-openbsd-x64-4.64.0.tgz",
+          "integrity": "sha512-HKtkzodL4a3KFWDXDoO61cRynAWTR3LnAE0oGtfG9lcNFpNuVYUFOByxDgNqEvic9rvaQbAj+SFwTEWDptRaIw==",
+          "cpu": [
+            "x64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "openbsd"
+          ]
+        },
+        "node_modules/@rollup/rollup-openharmony-arm64": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-openharmony-arm64/-/rollup-openharmony-arm64-4.64.0.tgz",
+          "integrity": "sha512-JBsxqiY16uyyCujtoC3s7zL+SrYyNElptD7K4V+KUoJ2V8/XG3hPWpheK+SuPwNh1cikJvIZmIdsrYXvD6PLJw==",
+          "cpu": [
+            "arm64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "openharmony"
+          ]
+        },
+        "node_modules/@rollup/rollup-win32-arm64-msvc": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-win32-arm64-msvc/-/rollup-win32-arm64-msvc-4.64.0.tgz",
+          "integrity": "sha512-S5Qrijh37qhnUYQ0ay8WN3LuWeKjow7wTUyCOPMZtnXiBXYXdsZETI6ZLfYnQAKovltckPLBFdNeD61P2rJc7g==",
+          "cpu": [
+            "arm64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "win32"
+          ]
+        },
+        "node_modules/@rollup/rollup-win32-ia32-msvc": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-win32-ia32-msvc/-/rollup-win32-ia32-msvc-4.64.0.tgz",
+          "integrity": "sha512-zbZ6iMmLFEsCtTdc2/y1F/cDFVNNCPF7Ae8PCT/wdPE//hGwYp6r+MyCLMFX+kOeIe09Pz6ASfnnfpSTN1FJQQ==",
+          "cpu": [
+            "ia32"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "win32"
+          ]
+        },
+        "node_modules/@rollup/rollup-win32-x64-gnu": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-win32-x64-gnu/-/rollup-win32-x64-gnu-4.64.0.tgz",
+          "integrity": "sha512-L6Hw69oNpuYaOr1zCG30v0/DqKYCSRwodPGwIcVZ/6f8SOzq9rxtL/xNVI5MO4wjli+Ko0ErK9uHJL3mNPt8wQ==",
+          "cpu": [
+            "x64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "win32"
+          ]
+        },
+        "node_modules/@rollup/rollup-win32-x64-msvc": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/@rollup/rollup-win32-x64-msvc/-/rollup-win32-x64-msvc-4.64.0.tgz",
+          "integrity": "sha512-nl+CTWIgOGszQmUz/kanfgrfFZ4qiwxKIfT/ryl3N3Ewk5tqizmYtNXiqb7Bu/fDtNgu1kyxdFiAUJNur3iysg==",
+          "cpu": [
+            "x64"
+          ],
+          "dev": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "win32"
+          ]
+        },
+        "node_modules/@types/estree": {
+          "version": "1.0.9",
+          "resolved": "https://registry.npmjs.org/@types/estree/-/estree-1.0.9.tgz",
+          "integrity": "sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==",
+          "dev": true,
+          "license": "MIT"
+        },
+        "node_modules/esbuild": {
+          "version": "0.19.12",
+          "resolved": "https://registry.npmjs.org/esbuild/-/esbuild-0.19.12.tgz",
+          "integrity": "sha512-aARqgq8roFBj054KvQr5f1sFu0D65G+miZRCuJyJ0G13Zwx7vRar5Zhn2tkQNzIXcBrNVsv/8stehpj+GAjgbg==",
+          "dev": true,
+          "hasInstallScript": true,
+          "license": "MIT",
+          "bin": {
+            "esbuild": "bin/esbuild"
+          },
+          "engines": {
+            "node": ">=12"
+          },
+          "optionalDependencies": {
+            "@esbuild/aix-ppc64": "0.19.12",
+            "@esbuild/android-arm": "0.19.12",
+            "@esbuild/android-arm64": "0.19.12",
+            "@esbuild/android-x64": "0.19.12",
+            "@esbuild/darwin-arm64": "0.19.12",
+            "@esbuild/darwin-x64": "0.19.12",
+            "@esbuild/freebsd-arm64": "0.19.12",
+            "@esbuild/freebsd-x64": "0.19.12",
+            "@esbuild/linux-arm": "0.19.12",
+            "@esbuild/linux-arm64": "0.19.12",
+            "@esbuild/linux-ia32": "0.19.12",
+            "@esbuild/linux-loong64": "0.19.12",
+            "@esbuild/linux-mips64el": "0.19.12",
+            "@esbuild/linux-ppc64": "0.19.12",
+            "@esbuild/linux-riscv64": "0.19.12",
+            "@esbuild/linux-s390x": "0.19.12",
+            "@esbuild/linux-x64": "0.19.12",
+            "@esbuild/netbsd-x64": "0.19.12",
+            "@esbuild/openbsd-x64": "0.19.12",
+            "@esbuild/sunos-x64": "0.19.12",
+            "@esbuild/win32-arm64": "0.19.12",
+            "@esbuild/win32-ia32": "0.19.12",
+            "@esbuild/win32-x64": "0.19.12"
+          }
+        },
+        "node_modules/fsevents": {
+          "version": "2.3.3",
+          "resolved": "https://registry.npmjs.org/fsevents/-/fsevents-2.3.3.tgz",
+          "integrity": "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==",
+          "dev": true,
+          "hasInstallScript": true,
+          "license": "MIT",
+          "optional": true,
+          "os": [
+            "darwin"
+          ],
+          "engines": {
+            "node": "^8.16.0 || ^10.6.0 || >=11.0.0"
+          }
+        },
+        "node_modules/js-tokens": {
+          "version": "4.0.0",
+          "resolved": "https://registry.npmjs.org/js-tokens/-/js-tokens-4.0.0.tgz",
+          "integrity": "sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==",
+          "license": "MIT"
+        },
+        "node_modules/loose-envify": {
+          "version": "1.4.0",
+          "resolved": "https://registry.npmjs.org/loose-envify/-/loose-envify-1.4.0.tgz",
+          "integrity": "sha512-lyuxPGr/Wfhrlem2CL/UcnUc1zcqKAImBDzukY7Y5F/yQiNdko6+fRLevlw1HgMySw7f611UIY408EtxRSoK3Q==",
+          "license": "MIT",
+          "dependencies": {
+            "js-tokens": "^3.0.0 || ^4.0.0"
+          },
+          "bin": {
+            "loose-envify": "cli.js"
+          }
+        },
+        "node_modules/nanoid": {
+          "version": "3.3.19",
+          "resolved": "https://registry.npmjs.org/nanoid/-/nanoid-3.3.19.tgz",
+          "integrity": "sha512-Y2tUNy4ouw6tq5oDSKeQYGOyhkUBhNOcGV/02KC+6kd9eDGqdZd++mjMiIDilrBYvjEnCYvVtsuHCuP+okSfug==",
+          "dev": true,
+          "funding": [
+            {
+              "type": "github",
+              "url": "https://github.com/sponsors/ai"
+            }
+          ],
+          "license": "MIT",
+          "bin": {
+            "nanoid": "bin/nanoid.cjs"
+          },
+          "engines": {
+            "node": "^10 || ^12 || ^13.7 || ^14 || >=15.0.1"
+          }
+        },
+        "node_modules/picocolors": {
+          "version": "1.1.1",
+          "resolved": "https://registry.npmjs.org/picocolors/-/picocolors-1.1.1.tgz",
+          "integrity": "sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==",
+          "dev": true,
+          "license": "ISC"
+        },
+        "node_modules/postcss": {
+          "version": "8.5.28",
+          "resolved": "https://registry.npmjs.org/postcss/-/postcss-8.5.28.tgz",
+          "integrity": "sha512-RRuzqDtt5Y9h3quz5hWhK+TPnsmVs6WwSU6LkJMeY4HstUEDuYTG8UJSdawMRzmzAtV+KEoG8N3Qg2qLy5vM/A==",
+          "dev": true,
+          "funding": [
+            {
+              "type": "opencollective",
+              "url": "https://opencollective.com/postcss/"
+            },
+            {
+              "type": "tidelift",
+              "url": "https://tidelift.com/funding/github/npm/postcss"
+            },
+            {
+              "type": "github",
+              "url": "https://github.com/sponsors/ai"
+            }
+          ],
+          "license": "MIT",
+          "dependencies": {
+            "nanoid": "^3.3.18",
+            "picocolors": "^1.1.1",
+            "source-map-js": "^1.2.1"
+          },
+          "engines": {
+            "node": "^10 || ^12 || >=14"
+          }
+        },
+        "node_modules/react": {
+          "version": "18.2.0",
+          "resolved": "https://registry.npmjs.org/react/-/react-18.2.0.tgz",
+          "integrity": "sha512-/3IjMdb2L9QbBdWiW5e3P2/npwMBaU9mHCSCUzNln0ZCYbcfTsGbTJrU/kGemdH2IWmB2ioZ+zkxtmq6g09fGQ==",
+          "license": "MIT",
+          "dependencies": {
+            "loose-envify": "^1.1.0"
+          },
+          "engines": {
+            "node": ">=0.10.0"
+          }
+        },
+        "node_modules/react-dom": {
+          "version": "18.2.0",
+          "resolved": "https://registry.npmjs.org/react-dom/-/react-dom-18.2.0.tgz",
+          "integrity": "sha512-6IMTriUmvsjHUjNtEDudZfuDQUoWXVxKHhlEGSk81n4YFS+r/Kl99wXiwlVXtPBtJenozv2P+hxDsw9eA7Xo6g==",
+          "license": "MIT",
+          "dependencies": {
+            "loose-envify": "^1.1.0",
+            "scheduler": "^0.23.0"
+          },
+          "peerDependencies": {
+            "react": "^18.2.0"
+          }
+        },
+        "node_modules/rollup": {
+          "version": "4.64.0",
+          "resolved": "https://registry.npmjs.org/rollup/-/rollup-4.64.0.tgz",
+          "integrity": "sha512-gjA/kFeDfffII8COoPsvLPvE16hWDTEc1+0QKQNKUkuV8iJjqsC4xXs8/FzuL0v9EV39kuxTbAgcFoTRyy2TGQ==",
+          "dev": true,
+          "license": "MIT",
+          "dependencies": {
+            "@types/estree": "1.0.9"
+          },
+          "bin": {
+            "rollup": "dist/bin/rollup"
+          },
+          "engines": {
+            "node": ">=18.0.0",
+            "npm": ">=8.0.0"
+          },
+          "optionalDependencies": {
+            "@napi-rs/lzma-linux-x64-gnu": "1.5.1",
+            "@rollup/rollup-android-arm-eabi": "4.64.0",
+            "@rollup/rollup-android-arm64": "4.64.0",
+            "@rollup/rollup-darwin-arm64": "4.64.0",
+            "@rollup/rollup-darwin-x64": "4.64.0",
+            "@rollup/rollup-freebsd-arm64": "4.64.0",
+            "@rollup/rollup-freebsd-x64": "4.64.0",
+            "@rollup/rollup-linux-arm-gnueabihf": "4.64.0",
+            "@rollup/rollup-linux-arm-musleabihf": "4.64.0",
+            "@rollup/rollup-linux-arm64-gnu": "4.64.0",
+            "@rollup/rollup-linux-arm64-musl": "4.64.0",
+            "@rollup/rollup-linux-loong64-gnu": "4.64.0",
+            "@rollup/rollup-linux-loong64-musl": "4.64.0",
+            "@rollup/rollup-linux-ppc64-gnu": "4.64.0",
+            "@rollup/rollup-linux-ppc64-musl": "4.64.0",
+            "@rollup/rollup-linux-riscv64-gnu": "4.64.0",
+            "@rollup/rollup-linux-riscv64-musl": "4.64.0",
+            "@rollup/rollup-linux-s390x-gnu": "4.64.0",
+            "@rollup/rollup-linux-x64-gnu": "4.64.0",
+            "@rollup/rollup-linux-x64-musl": "4.64.0",
+            "@rollup/rollup-openbsd-x64": "4.64.0",
+            "@rollup/rollup-openharmony-arm64": "4.64.0",
+            "@rollup/rollup-win32-arm64-msvc": "4.64.0",
+            "@rollup/rollup-win32-ia32-msvc": "4.64.0",
+            "@rollup/rollup-win32-x64-gnu": "4.64.0",
+            "@rollup/rollup-win32-x64-msvc": "4.64.0",
+            "fsevents": "~2.3.2"
+          }
+        },
+        "node_modules/scheduler": {
+          "version": "0.23.2",
+          "resolved": "https://registry.npmjs.org/scheduler/-/scheduler-0.23.2.tgz",
+          "integrity": "sha512-UOShsPwz7NrMUqhR6t0hWjFduvOzbtv7toDH1/hIrfRNIDBnnBWd0CwJTGvTpngVlmwGCdP9/Zl/tVrDqcuYzQ==",
+          "license": "MIT",
+          "dependencies": {
+            "loose-envify": "^1.1.0"
+          }
+        },
+        "node_modules/source-map-js": {
+          "version": "1.2.2",
+          "resolved": "https://registry.npmjs.org/source-map-js/-/source-map-js-1.2.2.tgz",
+          "integrity": "sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==",
+          "dev": true,
+          "license": "BSD-3-Clause",
+          "engines": {
+            "node": ">=0.10.0"
+          }
+        },
+        "node_modules/vite": {
+          "version": "5.0.0",
+          "resolved": "https://registry.npmjs.org/vite/-/vite-5.0.0.tgz",
+          "integrity": "sha512-ESJVM59mdyGpsiNAeHQOR/0fqNoOyWPYesFto8FFZugfmhdHx8Fzd8sF3Q/xkVhZsyOxHfdM7ieiVAorI9RjFw==",
+          "dev": true,
+          "license": "MIT",
+          "dependencies": {
+            "esbuild": "^0.19.3",
+            "postcss": "^8.4.31",
+            "rollup": "^4.2.0"
+          },
+          "bin": {
+            "vite": "bin/vite.js"
+          },
+          "engines": {
+            "node": "^18.0.0 || >=20.0.0"
+          },
+          "funding": {
+            "url": "https://github.com/vitejs/vite?sponsor=1"
+          },
+          "optionalDependencies": {
+            "fsevents": "~2.3.3"
+          },
+          "peerDependencies": {
+            "@types/node": "^18.0.0 || >=20.0.0",
+            "less": "*",
+            "lightningcss": "^1.21.0",
+            "sass": "*",
+            "stylus": "*",
+            "sugarss": "*",
+            "terser": "^5.4.0"
+          },
+          "peerDependenciesMeta": {
+            "@types/node": {
+              "optional": true
+            },
+            "less": {
+              "optional": true
+            },
+            "lightningcss": {
+              "optional": true
+            },
+            "sass": {
+              "optional": true
+            },
+            "stylus": {
+              "optional": true
+            },
+            "sugarss": {
+              "optional": true
+            },
+            "terser": {
+              "optional": true
+            }
+          }
+        }
+      }
+    }
+  }
+}

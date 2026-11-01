@@ -112,9 +112,103 @@ pub fn is_exact_version_pin(spec: &str) -> bool {
 /// hit/miss behaviour, one fewer full copy of the metadata set. Public API
 /// unchanged (`in_packument_cache`, `get_cached_packument`, `cache_packument`).
 
+/// Registry and credential identity captured for one metadata operation.
+/// Token stays in memory only; cache-key helpers hash it before persistence.
+#[derive(Clone)]
+pub(crate) struct RegistryIdentity {
+    pub(crate) registry: String,
+    pub(crate) token: Option<String>,
+}
+
+impl RegistryIdentity {
+    pub(crate) fn for_package(package: &str) -> Self {
+        Self::for_package_in(Path::new("."), package)
+    }
+
+    pub(crate) fn for_package_in(dir: &Path, package: &str) -> Self {
+        let registry = crate::config::effective_registry_url_for_package(dir, package);
+        let token = crate::config::registry_auth_token_for_url(dir, &registry);
+        Self { registry, token }
+    }
+}
+
+pub(crate) fn metadata_cache_key_for(package: &str, registry: &str, token: Option<&str>) -> String {
+    format!(
+        "metadata-v2:{}",
+        crate::origin::packument_key_for(package, true, registry, token)
+    )
+}
+
+/// Fingerprint the effective default and every configured scoped registry.
+/// Cache keys contain only digests, never registry credentials.
+pub(crate) fn registry_configuration_fingerprint(dir: &Path) -> String {
+    let mut scopes = std::collections::BTreeSet::new();
+    if let Some(config) = crate::config::load_jholrc_registry(dir) {
+        scopes.extend(config.scopes.into_keys());
+    }
+    scopes.extend(crate::config::load_npmrc(dir).scoped_registries.into_keys());
+
+    let mut probes = vec!["__jhol_default_registry_probe__".to_string()];
+    for scope in scopes {
+        let scope = scope.trim_start_matches('@');
+        if !scope.is_empty() {
+            probes.push(format!("@{scope}/__jhol_registry_probe__"));
+        }
+    }
+    probes.sort();
+    probes.dedup();
+
+    let mut hash = Sha256::new();
+    hash.update(b"jhol-registry-configuration-v1\0");
+    for package in probes {
+        let identity = RegistryIdentity::for_package_in(dir, &package);
+        let key = metadata_cache_key_for(&package, &identity.registry, identity.token.as_deref());
+        for field in [package.as_bytes(), key.as_bytes()] {
+            hash.update((field.len() as u64).to_le_bytes());
+            hash.update(field);
+        }
+    }
+    format!("{:x}", hash.finalize())
+}
+
+fn metadata_cache_key(package: &str) -> String {
+    metadata_cache_key_with_identity(package, &RegistryIdentity::for_package(package))
+}
+
+fn metadata_cache_key_with_identity(package: &str, identity: &RegistryIdentity) -> String {
+    metadata_cache_key_for(package, &identity.registry, identity.token.as_deref())
+}
+
+pub(crate) fn lookup_zero_copy_packument(
+    package: &str,
+) -> Option<crate::zero_copy_metadata::PackageMetadata> {
+    let identity = RegistryIdentity::for_package(package);
+    let key = metadata_cache_key_with_identity(package, &identity);
+    crate::zero_copy_metadata::MmapMetadataStore::lookup_packument_for_key(&key)
+}
+
+pub(crate) fn remember_lattice_for_current_identity(
+    package: &str,
+    constraint: &str,
+    version: &str,
+) {
+    let identity = RegistryIdentity::for_package(package);
+    let key = metadata_cache_key_with_identity(package, &identity);
+    crate::lattice_cache::remember_for_key(package, constraint, version, &key);
+}
+
+pub(crate) fn lookup_lattice_for_current_identity(
+    package: &str,
+    constraint: &str,
+) -> Option<String> {
+    let identity = RegistryIdentity::for_package(package);
+    let key = metadata_cache_key_with_identity(package, &identity);
+    crate::lattice_cache::lookup_lattice_for_key(&key, constraint)
+}
+
 /// Check if a packument is already in the read cache (O(1), non-blocking read).
 pub fn in_packument_cache(package: &str) -> bool {
-    let key = format!("metadata:{}", package);
+    let key = metadata_cache_key(package);
     match get_metadata_cache().lock() {
         Ok(mut cache) => cache.get(&key).is_some(),
         Err(_) => false,
@@ -126,9 +220,19 @@ pub fn in_packument_cache(package: &str) -> bool {
 /// Parses the retained body on demand instead of keeping a second `Value` tree
 /// resident (see the note above).
 pub fn get_cached_packument(package: &str) -> Option<serde_json::Value> {
-    let key = format!("metadata:{}", package);
+    get_cached_packument_with_identity(package, &RegistryIdentity::for_package(package))
+}
+
+fn get_cached_packument_with_identity(
+    package: &str,
+    identity: &RegistryIdentity,
+) -> Option<serde_json::Value> {
+    get_cached_packument_for_key(&metadata_cache_key_with_identity(package, identity))
+}
+
+fn get_cached_packument_for_key(key: &str) -> Option<serde_json::Value> {
     let mut cache = get_metadata_cache().lock().ok()?;
-    let entry = cache.get(&key)?;
+    let entry = cache.get(key)?;
     entry.get_pruned().map(|arc| (*arc).clone())
 }
 
@@ -277,7 +381,12 @@ fn synthesize_packument_from_local_archive(package: &str) -> Option<serde_json::
                 Some((best, _)) => {
                     let cand = spec.rsplit_once('@')?.1;
                     let cur = best.rsplit_once('@')?.1;
-                    if cand > cur {
+                    // Semver order, not lexical: "6.9.0" must not beat "6.16.0".
+                    let newer = match (semver::Version::parse(cand), semver::Version::parse(cur)) {
+                        (Ok(a), Ok(b)) => a > b,
+                        _ => cand > cur,
+                    };
+                    if newer {
                         hit = Some((spec.clone(), hash));
                     }
                 }
@@ -336,7 +445,11 @@ pub fn offline_mode() -> bool {
 
 /// Fetch packument bytes via the shared HTTP client (connection pooling).
 /// Supports ETags for conditional requests and abbreviated format.
-fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>, String> {
+fn fetch_packument_with_etag(
+    package: &str,
+    abbreviated: bool,
+    identity: &RegistryIdentity,
+) -> Result<Vec<u8>, String> {
     if offline_mode() {
         // The prepacked archives carry each package's real `package.json`, so an
         // offline miss on a bundled package is servable locally. Measured: without
@@ -379,18 +492,19 @@ fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>
     };
 
     if ttl_secs > 0 {
-        let body_path = crate::origin::packument_path(package, abbreviated);
+        let body_path = crate::origin::packument_path_with_identity(package, abbreviated, identity);
         // Fair cold benches use an empty JHOL_CACHE_DIR. Populate from the
         // login-home packument store *before* the freshness check so a harvest
         // hit never pays an ETag RTT (previously harvest ran only after the
         // miss fell through to the network path).
         if !body_path.exists() {
-            if let Some(raw) = crate::origin::harvest_packument_file(package, abbreviated) {
-                if let Some(parent) = body_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let _ = std::fs::write(&body_path, &raw);
-            }
+            // mtime-preserving: a harvested copy must not look fresher than its origin.
+            let _ = crate::origin::harvest_packument_into_with_identity(
+                package,
+                abbreviated,
+                &body_path,
+                identity,
+            );
         }
         if let Ok(meta) = std::fs::metadata(&body_path) {
             if let Ok(modified) = meta.modified() {
@@ -398,7 +512,11 @@ fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>
                     if age.as_secs() < ttl_secs {
                         // Cache is fresh — read and return without any network I/O.
                         let (cached_body_raw, _) =
-                            crate::origin::read_packument_cache(package, abbreviated);
+                            crate::origin::read_packument_cache_with_identity(
+                                package,
+                                abbreviated,
+                                identity,
+                            );
                         if let Some(body) = cached_body_raw.filter(|b| !b.is_empty()) {
                             if parse_json_pruned(&body).is_ok() {
                                 return Ok(body);
@@ -417,19 +535,19 @@ fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>
     } else {
         package.to_string()
     };
-    let base = registry_url();
+    let base = identity.registry.as_str();
     let url = format!(
         "{}/{}",
         base.trim_end_matches('/'),
         path.trim_start_matches('/')
     );
-    let auth_token = registry_auth_token();
-    let (cached_body_raw, cached_etag) = crate::origin::read_packument_cache(package, abbreviated);
+    let auth_token = identity.token.as_deref();
+    let (cached_body_raw, cached_etag) =
+        crate::origin::read_packument_cache_with_identity(package, abbreviated, identity);
     let cached_body = cached_body_raw.filter(|b| !b.is_empty());
 
     // Build owned strings for header values — &str refs into these live long enough.
     let auth_hdr: Option<String> = auth_token
-        .as_deref()
         .filter(|t| !t.is_empty())
         .map(|t| format!("Bearer {}", t));
 
@@ -475,11 +593,12 @@ fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>
             // Cache missing/corrupt: unconditional refetch without If-None-Match.
             match do_fetch(false) {
                 Ok((_, body, etag)) if !body.is_empty() => {
-                    let _ = crate::origin::write_packument_cache(
+                    let _ = crate::origin::write_packument_cache_with_identity(
                         package,
                         abbreviated,
                         &body,
                         etag.as_deref(),
+                        identity,
                     );
                     Ok(body)
                 }
@@ -513,8 +632,13 @@ fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>
                 }
                 return Err(format!("Invalid packument JSON for {}", package));
             }
-            let _ =
-                crate::origin::write_packument_cache(package, abbreviated, &body, etag.as_deref());
+            let _ = crate::origin::write_packument_cache_with_identity(
+                package,
+                abbreviated,
+                &body,
+                etag.as_deref(),
+                identity,
+            );
             Ok(body)
         }
         Err(e) => {
@@ -531,21 +655,29 @@ fn fetch_packument_with_etag(package: &str, abbreviated: bool) -> Result<Vec<u8>
 /// Fetch a specific version manifest (/<pkg>/latest or /<pkg>/<version>).
 /// Routes through the global shared HTTP client — reuses existing TCP connection.
 pub fn fetch_manifest(package: &str, selector: &str) -> Result<serde_json::Value, String> {
+    let identity = RegistryIdentity::for_package(package);
+    fetch_manifest_with_identity(package, selector, &identity)
+}
+
+fn fetch_manifest_with_identity(
+    package: &str,
+    selector: &str,
+    identity: &RegistryIdentity,
+) -> Result<serde_json::Value, String> {
     let path = if package.starts_with('@') {
         package.replace('/', "%2F")
     } else {
         package.to_string()
     };
-    let base = registry_url();
+    let base = identity.registry.as_str();
     let url = format!(
         "{}/{}/{}",
         base.trim_end_matches('/'),
         path.trim_start_matches('/'),
         selector.trim_start_matches('/')
     );
-    let auth_token = registry_auth_token();
     // Route through http_client (shared Agent) instead of raw ureq::get().
-    let body = crate::http_client::get_bytes_with_bearer(&url, auth_token.as_deref())?;
+    let body = crate::http_client::get_bytes_with_bearer(&url, identity.token.as_deref())?;
     serde_json::from_slice(&body).map_err(|e| e.to_string())
 }
 
@@ -555,8 +687,14 @@ fn resolve_from_index(
     package: &str,
     _version_req: &str,
 ) -> Option<crate::package_index::PreResolvedPackage> {
+    let identity = RegistryIdentity::for_package(package);
+    let origin_key = metadata_cache_key_with_identity(package, &identity);
+    let allow_embedded = identity.registry.trim_end_matches('/') == "https://registry.npmjs.org"
+        && identity.token.is_none();
     let index = PACKAGE_INDEX.lock().ok()?;
-    index.lookup(package, _version_req).cloned()
+    index
+        .lookup_for_origin(package, _version_req, &origin_key, allow_embedded)
+        .cloned()
 }
 
 /// Store-first metadata: the SAME `binary-packages/index.json` that serves
@@ -575,7 +713,7 @@ fn resolve_from_binary_store(
     let c = constraint.trim();
     let unversioned = c.is_empty() || c == "latest" || c == "*";
 
-    let prefix = format!("{package}@" );
+    let prefix = format!("{package}@");
     let mut best: Option<Version> = None;
     for key in index.keys() {
         let Some(ver_str) = key.strip_prefix(&prefix) else {
@@ -601,7 +739,8 @@ fn resolve_from_binary_store(
     let base = package.rsplit('/').next().unwrap_or(package);
     let tarball_url = format!(
         "{}/{}-/{}-{}.tgz",
-        registry_url().trim_end_matches('/'),
+        crate::config::effective_registry_url_for_package(Path::new("."), package)
+            .trim_end_matches('/'),
         package,
         base,
         ver
@@ -650,11 +789,10 @@ pub(crate) fn synthesize_packument_from_bundled_index(
     // dropping these fields would silently disable peer validation and admit
     // foreign-platform optionals: metadata must match what the network
     // packument would have said.
-    let synth_extras: serde_json::Map<String, serde_json::Value> =
-        binary_package_meta_index()
-            .and_then(|m| m.get(&format!("{}@{}", entry.name, entry.version)))
-            .map(|h| h.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-            .unwrap_or_default();
+    let synth_extras: serde_json::Map<String, serde_json::Value> = binary_package_meta_index()
+        .and_then(|m| m.get(&format!("{}@{}", entry.name, entry.version)))
+        .map(|h| h.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        .unwrap_or_default();
 
     let mut versions = serde_json::Map::new();
     let mut saw_satisfying = false;
@@ -740,9 +878,26 @@ pub(crate) fn synthesize_packument_from_bundled_index(
 
 /// Add package to index after fetching from network (for future O(1) lookups)
 pub fn cache_in_index(package: &str, metadata: &serde_json::Value) {
+    let identity = RegistryIdentity::for_package(package);
+    cache_in_index_with_identity(package, metadata, &identity);
+}
+
+fn cache_in_index_with_identity(
+    package: &str,
+    metadata: &serde_json::Value,
+    identity: &RegistryIdentity,
+) {
+    cache_in_index_with_origin_key(
+        package,
+        metadata,
+        &metadata_cache_key_with_identity(package, identity),
+    );
+}
+
+fn cache_in_index_with_origin_key(package: &str, metadata: &serde_json::Value, origin_key: &str) {
     if let Some(entry) = crate::package_index::build_index_entry(package, metadata) {
         if let Ok(mut index) = PACKAGE_INDEX.lock() {
-            index.add_package(entry);
+            index.add_package_for_origin(entry, origin_key);
             // Save user index periodically
             let _ = index.save_user_index();
         }
@@ -756,13 +911,18 @@ pub fn resolve_tarball_via_manifest(
     package: &str,
     version_req: &str,
 ) -> Result<Option<(String, String, Option<String>)>, String> {
-    // FIRST: Try pre-resolved package index (O(1) lookup!)
-    if let Some(resolved) = resolve_from_index(package, version_req) {
-        return Ok(Some((
-            resolved.version,
-            resolved.tarball_url,
-            Some(resolved.integrity),
-        )));
+    // FIRST: Try pre-resolved package index (O(1) lookup!) — but only where the
+    // build-time snapshot is allowed to answer (offline, exact pin, or the
+    // explicit JHOL_PREFER_BUNDLED opt-in). Online ranges and `latest` must see
+    // the live registry, or direct deps install an outdated version.
+    if bundled_index_allowed(&[version_req.to_string()]) {
+        if let Some(resolved) = resolve_from_index(package, version_req) {
+            return Ok(Some((
+                resolved.version,
+                resolved.tarball_url,
+                Some(resolved.integrity),
+            )));
+        }
     }
 
     // SECOND: Try manifest endpoint
@@ -1115,17 +1275,33 @@ pub fn synth_satisfies_all(meta: &serde_json::Value, constraints: &[String]) -> 
 /// snapshot must never win over live metadata for a range. Offline, the bundle is
 /// a legitimate (and the only) source; for an exact pin it either has that version
 /// or it does not, so freshness cannot be affected.
-fn bundled_index_allowed(constraints: &[String]) -> bool {
-    // Cache-first, online OR offline: the bundled store already serves every
-    // tarball without asking the network — its metadata (one fully-known version
-    // per package) may serve ranges too. Safety never lived here: it lives in the
-    // per-call guards — `synthesize_packument_from_bundled_index` refuses a
-    // constraint its version cannot satisfy (`saw_satisfying`), callers re-check
-    // every accumulated constraint (`synth_satisfies_all`), and the expansion
-    // wave refetches the full packument the moment no candidate remains
-    // (`needs_escalation`). Offline mode has always allowed ranges through this
-    // same synth; online now gets the identical store-first treatment.
-    !constraints.is_empty()
+///
+/// Measured regression this guards (2026-10-24, 20-dep fixture vs Bun): with the
+/// gate open for ranges online, `dayjs ^1.11.13` resolved to the store's 1.11.19
+/// (registry: 1.11.23) and `qs ^6.14.0` to 6.16.0 (registry: 6.16.1). The per-call
+/// guards (`saw_satisfying`, `synth_satisfies_all`) only prove the snapshot version
+/// *satisfies* the range, never that it is the *highest* satisfying one.
+///
+/// `JHOL_PREFER_BUNDLED=1` is the explicit opt-in to trade freshness for zero
+/// metadata traffic (air-gapped-ish CI, reproducible-by-store builds).
+pub(crate) fn bundled_index_allowed(constraints: &[String]) -> bool {
+    if offline_mode() {
+        return true;
+    }
+    if constraints.is_empty() {
+        return false;
+    }
+    prefer_bundled() || constraints.iter().all(|c| is_exact_version_pin(c))
+}
+
+fn prefer_bundled() -> bool {
+    static PREFER: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *PREFER.get_or_init(|| {
+        matches!(
+            std::env::var("JHOL_PREFER_BUNDLED").as_deref(),
+            Ok("1") | Ok("true") | Ok("yes")
+        )
+    })
 }
 
 pub fn fetch_metadata_manifest_first(
@@ -1149,6 +1325,7 @@ pub fn fetch_metadata_manifest_first_any<T: MetaRepr>(
     package: &str,
     constraints: &[String],
 ) -> Result<T, String> {
+    let identity = RegistryIdentity::for_package(package);
     if bundled_index_allowed(constraints) {
         if let Some(c) = constraints.first() {
             if let Some(synth) = synthesize_packument_from_bundled_index(package, c) {
@@ -1159,20 +1336,21 @@ pub fn fetch_metadata_manifest_first_any<T: MetaRepr>(
         }
     }
     if constraints.is_empty() {
-        return fetch_metadata_any::<T>(package);
+        return fetch_metadata_any_with_identity::<T>(package, &identity);
     }
     // Zero-network in-memory read cache check: sub-microsecond hit for prefetched packuments
-    if let Some(meta) = T::cached(package) {
+    let cache_key = metadata_cache_key_with_identity(package, &identity);
+    if let Some(meta) = T::cached(package, &cache_key) {
         if meta.satisfies(constraints) {
             return Ok(meta);
         }
     }
     // Zero-network disk cache check: if a fresh packument is already on disk and satisfies constraints,
     // return it directly in 0.1 ms rather than paying network RTT for a single manifest.
-    if crate::origin::packument_fresh(package, true)
-        || crate::origin::packument_fresh(package, false)
+    if crate::origin::packument_fresh_with_identity(package, true, &identity)
+        || crate::origin::packument_fresh_with_identity(package, false, &identity)
     {
-        if let Ok(meta) = fetch_metadata_any::<T>(package) {
+        if let Ok(meta) = fetch_metadata_any_with_identity::<T>(package, &identity) {
             if meta.satisfies(constraints) {
                 return Ok(meta);
             }
@@ -1185,10 +1363,10 @@ pub fn fetch_metadata_manifest_first_any<T: MetaRepr>(
     for c in constraints {
         if crate::registry::is_exact_version_pin(c) {
             let spec = c.trim().trim_start_matches('=').trim_start_matches('v');
-            if let Ok(manifest) = fetch_manifest(package, spec) {
+            if let Ok(manifest) = fetch_manifest_with_identity(package, spec, &identity) {
                 if let Some(synth) = build_manifest_synth(package, &manifest) {
                     if synth_satisfies_all(&synth, constraints) {
-                        crate::lattice_cache::remember(package, "latest", spec);
+                        crate::lattice_cache::remember_for_key(package, "latest", spec, &cache_key);
                         return T::from_value(synth);
                     }
                 }
@@ -1198,12 +1376,12 @@ pub fn fetch_metadata_manifest_first_any<T: MetaRepr>(
     }
     // If latest version is already known from lattice_cache, check if it satisfies all constraints.
     // If it does not, skip the speculative /latest network roundtrip and fetch the packument directly.
-    if let Some(known_latest) = crate::lattice_cache::lookup_lattice(package, "latest") {
+    if let Some(known_latest) = crate::lattice_cache::lookup_lattice_for_key(&cache_key, "latest") {
         if !constraints
             .iter()
             .all(|c| version_satisfies(c, &known_latest))
         {
-            return fetch_metadata_any::<T>(package);
+            return fetch_metadata_any_with_identity::<T>(package, &identity);
         }
     }
 
@@ -1216,14 +1394,14 @@ pub fn fetch_metadata_manifest_first_any<T: MetaRepr>(
         t == "*" || t == "latest" || t.is_empty()
     });
     if allows_latest_speculation {
-        if let Ok(manifest) = fetch_manifest(package, "latest") {
+        if let Ok(manifest) = fetch_manifest_with_identity(package, "latest", &identity) {
             if let Some(synth) = build_manifest_synth(package, &manifest) {
                 if let Some(v) = synth
                     .get("versions")
                     .and_then(|v| v.as_object())
                     .and_then(|o| o.keys().next())
                 {
-                    crate::lattice_cache::remember(package, "latest", v);
+                    crate::lattice_cache::remember_for_key(package, "latest", v, &cache_key);
                 }
                 if synth_satisfies_all(&synth, constraints) {
                     return T::from_value(synth);
@@ -1231,7 +1409,7 @@ pub fn fetch_metadata_manifest_first_any<T: MetaRepr>(
             }
         }
     }
-    fetch_metadata_any::<T>(package)
+    fetch_metadata_any_with_identity::<T>(package, &identity)
 }
 
 struct InFlightPackument {
@@ -1275,13 +1453,13 @@ pub trait MetaRepr: Clone + Send + 'static {
     /// retaining a second copy would give back exactly the duplication E60 removes.
     fn read_cache(&self, package: &str);
     /// Pre-resolved package index (a `Value`-only consumer).
-    fn index(&self, package: &str);
+    fn index(&self, package: &str, origin_key: &str);
     fn prune_constraint(&mut self, constraint: &str);
     fn satisfies(&self, constraints: &[String]) -> bool;
     /// Convert a small synthesized packument. Never used for a full packument —
     /// that is the E67 trap.
     fn from_value(v: serde_json::Value) -> Result<Self, String>;
-    fn cached(package: &str) -> Option<Self>;
+    fn cached(_package: &str, cache_key: &str) -> Option<Self>;
     fn into_any(self) -> Arc<dyn Any + Send + Sync>;
     fn from_any(a: Arc<dyn Any + Send + Sync>) -> Option<Self>;
 }
@@ -1317,8 +1495,8 @@ impl MetaRepr for serde_json::Value {
     fn read_cache(&self, package: &str) {
         cache_packument(package, self);
     }
-    fn index(&self, package: &str) {
-        cache_in_index(package, self);
+    fn index(&self, package: &str, origin_key: &str) {
+        cache_in_index_with_origin_key(package, self, origin_key);
     }
     fn prune_constraint(&mut self, constraint: &str) {
         prune_packument_for_constraint(self, constraint);
@@ -1329,8 +1507,8 @@ impl MetaRepr for serde_json::Value {
     fn from_value(v: serde_json::Value) -> Result<Self, String> {
         Ok(v)
     }
-    fn cached(package: &str) -> Option<Self> {
-        get_cached_packument(package)
+    fn cached(_package: &str, cache_key: &str) -> Option<Self> {
+        get_cached_packument_for_key(cache_key)
     }
     fn into_any(self) -> Arc<dyn Any + Send + Sync> {
         Arc::new(self)
@@ -1364,7 +1542,7 @@ impl MetaRepr for PackumentRecord {
         // (`get_metadata_cache`) is still filled by the shared path, so a later
         // `Value` consumer finds the bytes without a re-download.
     }
-    fn index(&self, _package: &str) {}
+    fn index(&self, _package: &str, _origin_key: &str) {}
     fn prune_constraint(&mut self, constraint: &str) {
         let Some(clean) = exact_pin_clean(constraint) else {
             return;
@@ -1381,7 +1559,7 @@ impl MetaRepr for PackumentRecord {
     fn from_value(v: serde_json::Value) -> Result<Self, String> {
         PackumentRecord::from_value(v)
     }
-    fn cached(_package: &str) -> Option<Self> {
+    fn cached(_package: &str, _cache_key: &str) -> Option<Self> {
         // The record path keeps no second copy; a miss just falls through to the
         // disk-cache check in `fetch_metadata_manifest_first`.
         None
@@ -1394,11 +1572,15 @@ impl MetaRepr for PackumentRecord {
     }
 }
 
-fn fetch_metadata_network_inner<T: MetaRepr>(package: &str, cache_key: &str) -> Result<T, String> {
+fn fetch_metadata_network_inner<T: MetaRepr>(
+    package: &str,
+    cache_key: &str,
+    identity: &RegistryIdentity,
+) -> Result<T, String> {
     // Fetch from network
-    let body = match fetch_packument_with_etag(package, true) {
+    let body = match fetch_packument_with_etag(package, true, identity) {
         Ok(b) => b,
-        Err(_) => fetch_packument_with_etag(package, false)?,
+        Err(_) => fetch_packument_with_etag(package, false, identity)?,
     };
 
     // Parse metadata (with fallback to full packument if abbreviated parse fails)
@@ -1407,7 +1589,7 @@ fn fetch_metadata_network_inner<T: MetaRepr>(package: &str, cache_key: &str) -> 
     let (body, parsed) = match T::parse_raw(&body) {
         Ok(v) => (body, v),
         Err(_) => {
-            let full_body = fetch_packument_with_etag(package, false)?;
+            let full_body = fetch_packument_with_etag(package, false, identity)?;
             let v = T::parse_raw(&full_body)?;
             (full_body, v)
         }
@@ -1423,11 +1605,11 @@ fn fetch_metadata_network_inner<T: MetaRepr>(package: &str, cache_key: &str) -> 
 
     // Record latest in lattice_cache for O(1) decision making
     if let Some(latest) = parsed.latest_tag() {
-        crate::lattice_cache::remember(package, "latest", &latest);
+        crate::lattice_cache::remember_for_key(package, "latest", &latest, cache_key);
     }
 
     // Cache in pre-resolved index for future O(1) lookups
-    parsed.index(package);
+    parsed.index(package, cache_key);
 
     // Check if abbreviated packument is sufficient
     let has_versions = parsed.has_versions();
@@ -1442,12 +1624,12 @@ fn fetch_metadata_network_inner<T: MetaRepr>(package: &str, cache_key: &str) -> 
         // which must not retain a second copy)
         parsed.read_cache(package);
         // Soul Path: propagate to daemon arena for cross-process reuse
-        crate::daemon_cache::DaemonCache::record(package, true, body);
+        crate::daemon_cache::DaemonCache::record_with_identity(package, true, body, identity);
         return Ok(parsed);
     }
 
     // Fall back to full packument
-    let body = fetch_packument_with_etag(package, false)?;
+    let body = fetch_packument_with_etag(package, false, identity)?;
     let v = T::parse_raw(&body)?;
 
     let mut cache = get_metadata_cache()
@@ -1455,7 +1637,7 @@ fn fetch_metadata_network_inner<T: MetaRepr>(package: &str, cache_key: &str) -> 
         .expect("metadata_cache: mutex lock failed (poisoned)");
     cache.insert(cache_key.to_string(), CachedMetadata::new(body.clone()));
     v.read_cache(package);
-    crate::daemon_cache::DaemonCache::record(package, false, body);
+    crate::daemon_cache::DaemonCache::record_with_identity(package, false, body, identity);
 
     Ok(v)
 }
@@ -1473,7 +1655,15 @@ pub fn fetch_metadata_record(package: &str) -> Result<PackumentRecord, String> {
 }
 
 pub fn fetch_metadata_any<T: MetaRepr>(package: &str) -> Result<T, String> {
-    let cache_key = format!("metadata:{}", package);
+    let identity = RegistryIdentity::for_package(package);
+    fetch_metadata_any_with_identity(package, &identity)
+}
+
+fn fetch_metadata_any_with_identity<T: MetaRepr>(
+    package: &str,
+    identity: &RegistryIdentity,
+) -> Result<T, String> {
+    let cache_key = metadata_cache_key_with_identity(package, identity);
 
     // Try cache first
     {
@@ -1494,7 +1684,9 @@ pub fn fetch_metadata_any<T: MetaRepr>(package: &str) -> Result<T, String> {
     }
 
     // Soul Path: try daemon shared memory arena
-    if let Some(cached_bytes) = crate::daemon_cache::DaemonCache::lookup(package, true) {
+    if let Some(cached_bytes) =
+        crate::daemon_cache::DaemonCache::lookup_with_identity(package, true, identity)
+    {
         if let Ok(parsed) = T::parse_cached(&cached_bytes) {
             if parsed.versions_non_empty() {
                 // warm in-mem cache
@@ -1523,12 +1715,12 @@ pub fn fetch_metadata_any<T: MetaRepr>(package: &str) -> Result<T, String> {
     // Check the disk cache BEFORE making any network requests to avoid RTT for packages we've seen before.
     // Try abbreviated first (smaller, faster), fall back to full packument.
     for abbreviated in &[true, false] {
-        if !crate::origin::packument_fresh(package, *abbreviated) {
+        if !crate::origin::packument_fresh_with_identity(package, *abbreviated, identity) {
             continue;
         }
 
         let (cached_body, _cached_etag) =
-            crate::origin::read_packument_cache(package, *abbreviated);
+            crate::origin::read_packument_cache_with_identity(package, *abbreviated, identity);
         if let Some(body) = cached_body.filter(|b| !b.is_empty()) {
             if let Ok(parsed) = T::parse_cached(&body) {
                 if parsed.versions_non_empty() {
@@ -1536,10 +1728,7 @@ pub fn fetch_metadata_any<T: MetaRepr>(package: &str) -> Result<T, String> {
                     let mut cache = get_metadata_cache()
                         .lock()
                         .expect("metadata_cache: mutex lock failed (poisoned)");
-                    cache.insert(
-                        format!("metadata:{}", package),
-                        CachedMetadata::new(body.clone()),
-                    );
+                    cache.insert(cache_key.clone(), CachedMetadata::new(body.clone()));
                     parsed.read_cache(package);
                     return Ok(parsed);
                 }
@@ -1550,14 +1739,14 @@ pub fn fetch_metadata_any<T: MetaRepr>(package: &str) -> Result<T, String> {
     // SingleFlight coordination: deduplicate concurrent network fetches across all threads
     let (in_flight_arc, is_leader) = {
         let mut map = in_flight_packuments().lock();
-        if let Some(existing) = map.get(package).cloned() {
+        if let Some(existing) = map.get(&cache_key).cloned() {
             (existing, false)
         } else {
             let entry = Arc::new(InFlightPackument {
                 res: parking_lot::Mutex::new(None),
                 cond: parking_lot::Condvar::new(),
             });
-            map.insert(package.to_string(), Arc::clone(&entry));
+            map.insert(cache_key.clone(), Arc::clone(&entry));
             (entry, true)
         }
     };
@@ -1575,20 +1764,20 @@ pub fn fetch_metadata_any<T: MetaRepr>(package: &str) -> Result<T, String> {
                 // The single-flight leader fetched the other representation.
                 // Same bytes, so fetch directly for this one: identical result,
                 // one extra fetch in a mixed-representation race.
-                None => fetch_metadata_network_inner::<T>(package, &cache_key),
+                None => fetch_metadata_network_inner::<T>(package, &cache_key, identity),
             },
             Err(e) => Err(e),
         };
     }
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        fetch_metadata_network_inner::<T>(package, &cache_key)
+        fetch_metadata_network_inner::<T>(package, &cache_key, identity)
     }))
     .unwrap_or_else(|_| Err("metadata fetch panicked".to_string()));
 
     {
         let mut map = in_flight_packuments().lock();
-        map.remove(package);
+        map.remove(&cache_key);
         let mut guard = in_flight_arc.res.lock();
         *guard = Some(result.clone().map(MetaRepr::into_any));
         in_flight_arc.cond.notify_all();
@@ -1656,25 +1845,23 @@ pub fn fetch_metadata_record_full_packument(package: &str) -> Result<PackumentRe
 }
 
 pub fn fetch_metadata_full_packument_any<T: MetaRepr>(package: &str) -> Result<T, String> {
-    let cache_key = format!("metadata:{}", package);
+    let identity = RegistryIdentity::for_package(package);
+    let cache_key = metadata_cache_key_with_identity(package, &identity);
 
     // Persistent disk cache first (real, complete packuments only)
     for abbreviated in &[true, false] {
-        if !crate::origin::packument_fresh(package, *abbreviated) {
+        if !crate::origin::packument_fresh_with_identity(package, *abbreviated, &identity) {
             continue;
         }
         let (cached_body, _cached_etag) =
-            crate::origin::read_packument_cache(package, *abbreviated);
+            crate::origin::read_packument_cache_with_identity(package, *abbreviated, &identity);
         if let Some(body) = cached_body.filter(|b| !b.is_empty()) {
             if let Ok(parsed) = T::parse_cached(&body) {
                 if !parsed.is_synth() && parsed.versions_non_empty() {
                     let mut cache = get_metadata_cache()
                         .lock()
                         .expect("metadata_cache: mutex lock failed (poisoned)");
-                    cache.insert(
-                        format!("metadata:{}", package),
-                        CachedMetadata::new(body.clone()),
-                    );
+                    cache.insert(cache_key.clone(), CachedMetadata::new(body.clone()));
                     parsed.read_cache(package);
                     return Ok(parsed);
                 }
@@ -1683,7 +1870,9 @@ pub fn fetch_metadata_full_packument_any<T: MetaRepr>(package: &str) -> Result<T
     }
 
     // Soul Path: try daemon shared memory arena for a complete packument
-    if let Some(cached_bytes) = crate::daemon_cache::DaemonCache::lookup(package, true) {
+    if let Some(cached_bytes) =
+        crate::daemon_cache::DaemonCache::lookup_with_identity(package, true, &identity)
+    {
         if let Ok(parsed) = T::parse_cached(&cached_bytes) {
             if parsed.versions_non_empty() {
                 let mut cache = get_metadata_cache()
@@ -1696,9 +1885,9 @@ pub fn fetch_metadata_full_packument_any<T: MetaRepr>(package: &str) -> Result<T
     }
 
     // Network (no synth fallbacks)
-    let body = match fetch_packument_with_etag(package, true) {
+    let body = match fetch_packument_with_etag(package, true, &identity) {
         Ok(b) => b,
-        Err(_) => fetch_packument_with_etag(package, false)?,
+        Err(_) => fetch_packument_with_etag(package, false, &identity)?,
     };
     let timing = std::env::var_os("JHOL_HTTP_TIMING").is_some();
     let parse_started = timing.then(std::time::Instant::now);
@@ -1712,13 +1901,13 @@ pub fn fetch_metadata_full_packument_any<T: MetaRepr>(package: &str) -> Result<T
         );
     }
 
-    parsed.index(package);
+    parsed.index(package, &cache_key);
     let mut cache = get_metadata_cache()
         .lock()
         .expect("metadata_cache: mutex lock failed (poisoned)");
-    cache.insert(cache_key, CachedMetadata::new(body.clone()));
+    cache.insert(cache_key.clone(), CachedMetadata::new(body.clone()));
     parsed.read_cache(package);
-    crate::daemon_cache::DaemonCache::record(package, true, body);
+    crate::daemon_cache::DaemonCache::record_with_identity(package, true, body, &identity);
 
     Ok(parsed)
 }
@@ -1732,12 +1921,13 @@ pub fn fetch_metadata_fresh(package: &str) -> Result<serde_json::Value, String> 
             package
         ));
     }
-    let body = match fetch_packument_with_etag(package, true) {
+    let identity = RegistryIdentity::for_package(package);
+    let body = match fetch_packument_with_etag(package, true, &identity) {
         Ok(b) => b,
-        Err(_) => fetch_packument_with_etag(package, false)?,
+        Err(_) => fetch_packument_with_etag(package, false, &identity)?,
     };
     let parsed: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
-    cache_in_index(package, &parsed);
+    cache_in_index_with_identity(package, &parsed, &identity);
     // Keep the byte-level cache (what `get_cached_packument` answers from) in
     // step with this fresh fetch — this path does not go through
     // `fetch_metadata_network_inner`.
@@ -1746,7 +1936,7 @@ pub fn fetch_metadata_fresh(package: &str) -> Result<serde_json::Value, String> 
             .lock()
             .expect("metadata_cache: mutex lock failed (poisoned)");
         cache.insert(
-            format!("metadata:{}", package),
+            metadata_cache_key_with_identity(package, &identity),
             CachedMetadata::new(body.clone()),
         );
     }
@@ -1758,12 +1948,19 @@ pub fn fetch_metadata_parallel(
     packages: &[String],
 ) -> Vec<(String, Result<serde_json::Value, String>)> {
     use rayon::prelude::*;
+    let identities: HashMap<String, RegistryIdentity> = packages
+        .iter()
+        .map(|package| (package.clone(), RegistryIdentity::for_package(package)))
+        .collect();
 
     // Check packument read cache first (O(1), non-blocking)
     let mut cached: Vec<(String, Result<serde_json::Value, String>)> = Vec::new();
     let mut to_fetch: Vec<String> = Vec::new();
     for pkg in packages {
-        if let Some(meta) = get_cached_packument(pkg) {
+        if let Some(meta) = get_cached_packument_with_identity(
+            pkg,
+            identities.get(pkg).expect("captured registry identity"),
+        ) {
             cached.push((pkg.clone(), Ok(meta)));
         } else {
             to_fetch.push(pkg.clone());
@@ -1778,7 +1975,8 @@ pub fn fetch_metadata_parallel(
     let fetched: Vec<(String, Result<serde_json::Value, String>)> = to_fetch
         .par_iter()
         .map(|package| {
-            let result = fetch_metadata(package);
+            let identity = identities.get(package).expect("captured registry identity");
+            let result = fetch_metadata_any_with_identity::<serde_json::Value>(package, identity);
             (package.clone(), result)
         })
         .collect();
@@ -1808,14 +2006,20 @@ pub fn fetch_metadata_cached(
     if let Some(cached) = cache.get(package) {
         return Ok(cached.clone());
     }
-    let meta = fetch_metadata(package)?;
+    let identity = RegistryIdentity::for_package(package);
+    let meta = fetch_metadata_any_with_identity::<serde_json::Value>(package, &identity)?;
     cache.insert(package.to_string(), meta.clone());
     // Cache in zero-copy metadata mmap for future cross-project hits
     if let Some(versions) = meta.get("versions").and_then(|v| v.as_object()) {
         for (ver, pkg_data) in versions {
             if let Some(obj) = pkg_data.as_object() {
                 let val: serde_json::Value = serde_json::Value::Object(obj.clone());
-                crate::zero_copy_metadata::cache_packument_metadata(package, ver, &val);
+                crate::zero_copy_metadata::cache_packument_metadata_for_key(
+                    &metadata_cache_key_with_identity(package, &identity),
+                    package,
+                    ver,
+                    &val,
+                );
             }
         }
     }
@@ -1832,6 +2036,13 @@ pub fn parallel_fetch_metadata(
     names: &[String],
     cache: &std::sync::Arc<std::sync::Mutex<HashMap<String, serde_json::Value>>>,
 ) -> Vec<(String, Result<serde_json::Value, String>)> {
+    // Resolve registry/auth identity on the coordinator before any cache or
+    // network workers start. A config reload during this batch cannot split
+    // one resolution across registry identities.
+    let identities: HashMap<String, RegistryIdentity> = names
+        .iter()
+        .map(|name| (name.clone(), RegistryIdentity::for_package(name)))
+        .collect();
     let mut cached_results = Vec::new();
     let mut to_fetch: Vec<String> = Vec::new();
 
@@ -1857,14 +2068,20 @@ pub fn parallel_fetch_metadata(
     // If packument is on disk, we get it without any network RTT.
     // Each name's read+gunzip+parse is independent; this used to run
     // sequentially on the coordinator, making cache-hit metadata CPU-bound.
+    let disk_identities = identities.clone();
     let disk_hits: std::collections::HashMap<String, serde_json::Value> =
-        crate::pool::parallel_map(to_fetch.clone(), packument_concurrency(), 2, |name| {
+        crate::pool::parallel_map(to_fetch.clone(), packument_concurrency(), 2, move |name| {
+            let identity = disk_identities
+                .get(&name)
+                .expect("captured registry identity");
             let mut hit: Option<serde_json::Value> = None;
             for abbreviated in &[true, false] {
-                if !crate::origin::packument_fresh(&name, *abbreviated) {
+                if !crate::origin::packument_fresh_with_identity(&name, *abbreviated, identity) {
                     continue;
                 }
-                if let (Some(body), _) = crate::origin::read_packument_cache(&name, *abbreviated) {
+                if let (Some(body), _) =
+                    crate::origin::read_packument_cache_with_identity(&name, *abbreviated, identity)
+                {
                     if body.is_empty() {
                         continue;
                     }
@@ -1925,9 +2142,16 @@ pub fn parallel_fetch_metadata(
     // `packument_concurrency()` (default: 4x cores, clamped 16..64) rather than
     // the default rayon pool, which is sized to the CPU count and made cold
     // resolution latency-bound.
-    let fetched: Vec<(String, Result<serde_json::Value, String>)> =
-        crate::pool::parallel_map(still_need_network, packument_concurrency(), 4, |name| {
-            let res = fetch_metadata(&name);
+    let network_identities = identities;
+    let fetched: Vec<(String, Result<serde_json::Value, String>)> = crate::pool::parallel_map(
+        still_need_network,
+        packument_concurrency(),
+        4,
+        move |name| {
+            let identity = network_identities
+                .get(&name)
+                .expect("captured registry identity");
+            let res = fetch_metadata_any_with_identity::<serde_json::Value>(&name, identity);
             if let Ok(ref meta) = res {
                 let is_synth = meta.get("_vortex_manifest_synth").is_some()
                     || meta.get("_bundled_index_synth").is_some();
@@ -1937,19 +2161,27 @@ pub fn parallel_fetch_metadata(
                 // packument, causing false "unresolved" for ranged constraints.
                 if !is_synth {
                     let body = serde_json::to_vec(meta).unwrap_or_default();
-                    let _ = crate::origin::write_packument_cache(&name, false, &body, None);
+                    let _ = crate::origin::write_packument_cache_with_identity(
+                        &name, false, &body, None, identity,
+                    );
                 }
                 if let Some(versions) = meta.get("versions").and_then(|v| v.as_object()) {
                     for (ver, pkg_data) in versions {
                         if let Some(obj) = pkg_data.as_object() {
                             let val = serde_json::Value::Object(obj.clone());
-                            crate::zero_copy_metadata::cache_packument_metadata(&name, ver, &val);
+                            crate::zero_copy_metadata::cache_packument_metadata_for_key(
+                                &metadata_cache_key_with_identity(&name, identity),
+                                &name,
+                                ver,
+                                &val,
+                            );
                         }
                     }
                 }
             }
             (name, res)
-        });
+        },
+    );
 
     // Publish network results to in-process cache
     for (name, ref res) in &fetched {
@@ -2356,7 +2588,7 @@ pub fn get_version_peer_dependencies_meta(
 
 /// Download tarball from URL to a file (uses shared HTTP client).
 pub fn download_tarball(url: &str, dest: &Path) -> Result<PathBuf, String> {
-    let token = registry_auth_token();
+    let token = crate::config::registry_auth_token_for_url(Path::new("."), url);
     crate::http_client::get_to_file_with_bearer(url, dest, token.as_deref())?;
     Ok(dest.to_path_buf())
 }
@@ -2385,7 +2617,7 @@ pub fn download_and_extract_streaming(
     let tmp_path = tmp_guard.path().to_path_buf();
 
     // Download with streaming support
-    let token = registry_auth_token();
+    let token = crate::config::registry_auth_token_for_url(Path::new("."), url);
     crate::http_client::get_to_file_with_bearer(url, &tmp_path, token.as_deref())?;
 
     // Verify integrity if provided
@@ -3246,7 +3478,7 @@ fn download_tarball_to_store_hash_only_inner(
         }
     }
 
-    let token = registry_auth_token();
+    let token = crate::config::registry_auth_token_for_url(Path::new("."), url);
     if let Some(sri) = expected_integrity {
         // Prefer a complete unpacked tree already on this machine (login-home
         // store or JHOL_HARVEST_CACHES) — clonefile into this cache, skip gunzip.
@@ -3784,7 +4016,12 @@ fn extract_tar_from_bytes(decompressed: &[u8], dest_dir: &Path) -> Result<(), St
                 link_name_buf.as_deref(),
                 &archive_symlinks,
             )?;
-            (dest_dir.join(rel_str), std::path::PathBuf::from(rel_str), entry_type, link_name_buf)
+            (
+                dest_dir.join(rel_str),
+                std::path::PathBuf::from(rel_str),
+                entry_type,
+                link_name_buf,
+            )
         };
 
         if let Some(parent) = out_path.parent() {
@@ -3847,13 +4084,39 @@ fn extract_tar_from_bytes(decompressed: &[u8], dest_dir: &Path) -> Result<(), St
 
     // 3. Create symlinks sequentially (after targets exist)
     for sym in symlinks {
-        #[cfg(unix)]
-        {
-            if let Some(parent) = sym.out_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
+        let parent = sym
+            .out_path
+            .parent()
+            .ok_or_else(|| format!("Symlink has no parent: {}", sym.out_path.display()))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create symlink parent {}: {e}", parent.display()))?;
+
+        let result = {
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(&sym.target, &sym.out_path)
             }
-            let _ = std::os::unix::fs::symlink(&sym.target, &sym.out_path);
-        }
+            #[cfg(windows)]
+            {
+                let target = parent.join(&sym.target);
+                if std::fs::metadata(&target)
+                    .map(|metadata| metadata.is_dir())
+                    .unwrap_or(false)
+                {
+                    std::os::windows::fs::symlink_dir(&sym.target, &sym.out_path)
+                } else {
+                    std::os::windows::fs::symlink_file(&sym.target, &sym.out_path)
+                }
+            }
+            #[cfg(not(any(unix, windows)))]
+            {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "symlink extraction is unsupported on this platform",
+                ))
+            }
+        };
+        result.map_err(|e| format!("Failed to create symlink {}: {e}", sym.out_path.display()))?;
     }
 
     Ok(())
@@ -4250,4 +4513,85 @@ pub fn is_bundled_spec(spec: &str) -> bool {
     hashes
         .binary_search_by(|(key, _)| key.as_bytes().cmp(spec.as_bytes()))
         .is_ok()
+}
+
+#[cfg(test)]
+#[test]
+fn scoped_registry_identity_routes_packument_and_isolates_cache() {
+    // Run in an isolated process because the registry/cache policy is process-wide.
+    if std::env::var_os("JHOL_SCOPED_REGISTRY_FIXTURE_CHILD").is_none() {
+        let cache = tempfile::tempdir().unwrap();
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "registry::scoped_registry_identity_routes_packument_and_isolates_cache",
+                "--nocapture",
+            ])
+            .env("JHOL_SCOPED_REGISTRY_FIXTURE_CHILD", "1")
+            .env("JHOL_CACHE_DIR", cache.path())
+            .env("JHOL_NO_HARVEST", "1")
+            .env("JHOL_PACKUMENT_CACHE_TTL_SECS", "0")
+            .env_remove("JHOL_OFFLINE")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        return;
+    }
+
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let registry = format!("http://{address}");
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join(".npmrc"),
+        format!("@private:registry={registry}/\n//{address}/:_authToken=local-secret\n"),
+    )
+    .unwrap();
+    let package = "@private/example";
+    let identity = RegistryIdentity::for_package_in(project.path(), package);
+    assert_eq!(identity.registry, registry);
+    assert_eq!(identity.token.as_deref(), Some("local-secret"));
+    let key = metadata_cache_key_for(package, &identity.registry, identity.token.as_deref());
+    let cache_path = crate::origin::packument_path_with_identity(package, true, &identity);
+    assert!(!key.contains("local-secret"));
+    assert!(!cache_path.to_string_lossy().contains("local-secret"));
+
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut chunk = [0u8; 1024];
+        while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+            let count = stream.read(&mut chunk).unwrap();
+            if count == 0 {
+                break;
+            }
+            request.extend_from_slice(&chunk[..count]);
+        }
+        let body = br#"{"name":"@private/example","versions":{"1.0.0":{"name":"@private/example","version":"1.0.0"}}}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        stream.write_all(body).unwrap();
+        String::from_utf8(request).unwrap()
+    });
+
+    let body = fetch_packument_with_etag(package, true, &identity).unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(parsed["versions"].get("1.0.0").is_some());
+    let request = server.join().unwrap().to_ascii_lowercase();
+    assert!(request.starts_with("get /@private%2fexample "), "{request}");
+    assert!(
+        request.contains("authorization: bearer local-secret"),
+        "scoped registry auth header missing"
+    );
 }

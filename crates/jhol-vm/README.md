@@ -22,7 +22,7 @@ source ──lex──▶ tokens ──parse──▶ AST ──compile──▶
 | `arena.rs` | One flat reservation + non-moving mark-sweep collector + interning |
 | `tests.rs` | Unit tests for the encoding, the collector and the object stores |
 
-~12.7k lines of Rust, no interpreter dependency.
+~21k lines of Rust, no interpreter dependency.
 
 ## The five things that make it not-a-clone
 
@@ -119,7 +119,7 @@ cargo test -p jhol-vm --lib -- --test-threads=1
 cargo run -q -p jhol-vm --example run path/to/script.js
 ```
 
-`crates/jhol-vm/tests/js/` holds a 36-file conformance corpus with expected
+`crates/jhol-vm/tests/js/` holds a 40-file conformance corpus with expected
 output captured from node, plus a runner:
 
 ```
@@ -130,17 +130,56 @@ Helpers for building fixtures by hand: `cargo run -q -p jhol-vm --example dis`
 disassembles a file, `--example ast` prints the parsed tree.
 
 Environment: `JHOL_VM_ARENA_BYTES` sets the reservation size,
-`JHOL_VM_HEAP_LIMIT` sets the collection threshold, `JHOL_VM_NO_GC=1` disables
-collection (useful when bisecting collector bugs).
+`JHOL_VM_HEAP_LIMIT` sets the collection budget and `JHOL_VM_NO_GC=1`
+disables collection. The non-moving collector runs at interpreter entry,
+backward branches and call boundaries. Roots include registers, frames,
+globals, function fields/constants, suspended generators, timers and scoped
+Rust callback temporaries. Array/property buffers count toward pressure;
+the next budget adapts to live storage. Native allocation-free code needs no
+internal collection point. Returned host values remain rooted until engine
+shutdown; interned symbols and compiled module metadata also remain engine-owned.
+The budget is a collection trigger, not a hard process-memory limit. Arena
+reservation exhaustion still panics; simultaneous engines on one thread are
+not supported. Use `Vm::collect_garbage` for explicit runtime collection;
+`Arena::collect` alone has no VM generator/timer inventory.
 
 ## Status
 
-**36 of 36** corpus programs produce byte-identical output to node; **18 of 18**
-unit tests pass. Wired into the CLI: `JHOL_RUNTIME_ENGINE=jholvm jhol run
+**40 of 40** corpus programs produce byte-identical output to node; **85 of 85**
+unit tests pass on macOS ARM64. The formatter parses/reparses all 588 JS files under
+`tests/fixtures` and is idempotent on every one. Wired into the CLI: `JHOL_RUNTIME_ENGINE=jholvm jhol run
 script.js` (`cargo build --release --features jholvm`).
 
+Recent runtime work: tagged templates now expose both cooked and raw chunks
+(`String.raw`, `strings.raw`) on real arrays; static class blocks and computed
+method/static-field keys run in source order with `this` bound to the class;
+generator `yield` resumes with sent values, returns its final value, and `yield*`
+delegates through the iterator protocol; primitive `__proto__` reaches the
+wrapper prototypes. Arrays also accept non-index own properties.
+
+Native execution currently targets little-endian ARM64 on macOS/Linux. Numeric
+loops, guarded property/call regions and eligible whole functions share the
+interpreter's value model. `JHOL_JIT_ENABLE=0` disables loop/region compilation;
+`JHOL_NATIVE_OFF=1` disables whole-function compilation. Unsupported hosts use
+the interpreter. Writable code becomes executable only after instruction-cache
+synchronization; mappings are released with their loop or function prototype.
+Arena offsets retain the full value payload width; engine shutdown finalizes
+live Rust-owned objects before releasing the reservation. Windows uses address
+reservation with incremental page commitment. Windows and Linux cross-checks do
+not substitute for runtime platform tests.
+
+Full language conformance and production readiness remain open, including
+async/microtask scheduling, complete generator delegation, exact Unicode
+identifier properties and the remaining JAGR/integration acceptance gates.
+Current raw performance observations live in the existing work-item state;
+no all-workload speed claim is established.
+
+## Historical interpreter baseline
+
+The following table and gap notes describe the earlier interpreter snapshot,
+not current JIT performance. Sources and implementation have since changed.
 Benchmarks (`crates/jhol-vm/bench/`, median wall time, Apple Silicon), output
-verified identical to node for every row:
+verified identical to node for every row in that snapshot:
 
 | bench | JholVM | node | bun | QuickJS | JSC |
 |---|---|---|---|---|---|
@@ -156,13 +195,13 @@ verified identical to node for every row:
 | gc_stress | 1.5s | — | 0.08s | 2.5s | 0.22s |
 | string_build | ~44s | 0.31s | 0.08s | — | — |
 
-Read it honestly: JholVM beats node on recursion, tight loops, closures, method
+In that historical snapshot, JholVM beats node on recursion, tight loops, closures, method
 dispatch and JSON, and beats QuickJS on JSON and GC-heavy allocation. It loses
 to bun everywhere and to JSC on compute-bound work. **An interpreter with inline
 caches is in the right family but the wrong order of magnitude against a tiering
 JIT; closing that needs a register allocator and an arm64 backend.**
 
-Known gaps, in rough order of pain:
+Historical gap notes (the JIT and string paths have since changed):
 
 * **`string_build` is O(n²)**: `s += x` allocates and copies, so 200k appends
   move ~20 GB. Fix: rope/cons strings (one small node per concat, flatten on
@@ -225,6 +264,4 @@ cargo run -q -p jhol-vm --example ast path/to/script.js   # parsed tree
 JHOL_RUNTIME_ENGINE=jholvm jhol run script.js              # via the CLI
 ```
 
-Environment: `JHOL_VM_ARENA_BYTES` sets the reservation size,
-`JHOL_VM_HEAP_LIMIT` sets the collection threshold, `JHOL_VM_NO_GC=1` disables
-collection (useful when bisecting collector bugs).
+Collector configuration and remaining memory limits are documented above.

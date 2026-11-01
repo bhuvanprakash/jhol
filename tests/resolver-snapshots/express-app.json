@@ -1,0 +1,27 @@
+{
+  "fixture": "express-app",
+  "expectedStatus": "pass",
+  "notes": "baseline express dependency graph",
+  "expectedGraph": {
+    "root": {
+      "name": "jhol-fixture-express-app",
+      "version": "1.0.0"
+    },
+    "edges": [
+      {
+        "from": "$root",
+        "to": "express",
+        "spec": "4.18.2",
+        "type": "dependencies"
+      },
+      {
+        "from": "$root",
+        "to": "nodemon",
+        "spec": "3.0.2",
+        "type": "devDependencies"
+      }
+    ],
+    "overrides": {},
+    "workspaces": []
+  }
+}

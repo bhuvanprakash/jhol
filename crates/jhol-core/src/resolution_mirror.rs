@@ -107,7 +107,7 @@ impl Mirror {
             }
         }
         // Lattice fallback
-        if let Some(v) = crate::lattice_cache::lookup_lattice(name, range) {
+        if let Some(v) = crate::registry::lookup_lattice_for_current_identity(name, range) {
             let mut s = self.stats.write();
             s.hits = s.hits.saturating_add(1);
             drop(s);

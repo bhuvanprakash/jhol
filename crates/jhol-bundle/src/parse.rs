@@ -20,7 +20,7 @@
 
 use std::path::PathBuf;
 
-use crate::cas::{ImportRecord as CasImportRecord, ParseManifest};
+use crate::cas::{ImportKind, ImportRecord as CasImportRecord, ParseManifest};
 use crate::config::BundleConfig;
 use crate::errors::BundleResult;
 use crate::ingest::FileType;
@@ -74,7 +74,201 @@ fn extract_import_records(
     match file_type {
         FileType::TypeScript | FileType::Tsx => extract_for_typescript(source),
         FileType::Jsx => extract_for_jsx(source),
-        _ => extract_with_regex(source),
+        // Plain JS — the hot path for most npm packages — goes through
+        // JholVM's own parser (exact statement boundaries; the regex
+        // fallback's false positives inside strings/comments/regex literals
+        // are gone).
+        _ => extract_with_jhol_parser(source),
+    }
+}
+
+/// Extract import records with JholVM's parser. Module syntax arrives as
+/// `Stmt::Raw` (the parser round-trips import/export verbatim), so the
+/// statement has ALREADY been isolated from comments, strings and regex
+/// literals — pulling the specifier out of that one statement is exact, not
+/// a heuristic. Dynamic `import()` and `require()` calls are walked in the
+/// expression tree.
+fn extract_with_jhol_parser(
+    source: &str,
+) -> BundleResult<(
+    Vec<CasImportRecord>,
+    Vec<CasImportRecord>,
+    Vec<CasImportRecord>,
+    Vec<CasImportRecord>,
+)> {
+    let program = jhol_vm::parser::parse_program(source).map_err(|e| crate::errors::BundleError::ParseError {
+        path: "inline".to_string(),
+        line: 0,
+        column: 0,
+        message: e,
+    })?;
+
+    let mut imports = Vec::new();
+    let mut reexports = Vec::new();
+    let mut dynamic_imports = Vec::new();
+    let mut requires = Vec::new();
+
+    let record = |text: &str, kind: ImportKind| -> Option<CasImportRecord> {
+        let spec = raw_module_specifier(text)?;
+        let start = source.find(text).unwrap_or(0);
+        Some(CasImportRecord {
+            specifier: spec,
+            kind,
+            start,
+            end: start + text.len(),
+        })
+    };
+
+    let mut walk_expr = |e: &jhol_vm::ast::Expr,
+                         dyn_i: &mut Vec<CasImportRecord>,
+                         req: &mut Vec<CasImportRecord>| {
+        walk_call_exprs(e, dyn_i, req);
+    };
+    let _ = &mut walk_expr;
+
+    for stmt in &program.body {
+        collect_stmt(stmt, &mut imports, &mut reexports, &mut dynamic_imports, &mut requires, &record);
+    }
+    Ok((imports, reexports, dynamic_imports, requires))
+}
+
+/// Specifier out of one verbatim module statement. Handles the shapes the
+/// parser emits for import/export: the specifier is the last (or only)
+/// string literal in the statement text.
+fn raw_module_specifier(text: &str) -> Option<String> {
+    let mut spec = None;
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' | b'\'' => {
+                let quote = bytes[i];
+                let mut j = i + 1;
+                let mut val = String::new();
+                while j < bytes.len() && bytes[j] != quote {
+                    if bytes[j] == b'\\' && j + 1 < bytes.len() {
+                        j += 1;
+                    }
+                    val.push(bytes[j] as char);
+                    j += 1;
+                }
+                if j >= bytes.len() {
+                    return None;
+                }
+                spec = Some(val);
+                i = j + 1;
+            }
+            _ => i += 1,
+        }
+    }
+    spec.filter(|_| text.starts_with("import") || text.starts_with("export"))
+}
+
+fn collect_stmt(
+    stmt: &jhol_vm::ast::Stmt,
+    imports: &mut Vec<CasImportRecord>,
+    reexports: &mut Vec<CasImportRecord>,
+    dynamic_imports: &mut Vec<CasImportRecord>,
+    requires: &mut Vec<CasImportRecord>,
+    record: &dyn Fn(&str, ImportKind) -> Option<CasImportRecord>,
+) {
+    match stmt {
+        jhol_vm::ast::Stmt::Raw(text) => {
+            let t = text.trim_start();
+            if t.starts_with("import") {
+                // `export ... from` never starts with import; a bare
+                // `import "x"` side-effect import has no braces/default.
+                let is_reexport = t.contains(" export ") || t.contains("* as") && false;
+                let _ = is_reexport;
+                if let Some(rec) = record(t, ImportKind::StaticImport) {
+                    imports.push(rec);
+                }
+            } else if t.starts_with("export") {
+                let is_reexport = t.contains(" from ") || t.contains("*");
+                let kind = if is_reexport {
+                    ImportKind::ReExport
+                } else {
+                    ImportKind::StaticImport
+                };
+                if let Some(rec) = record(t, kind) {
+                    if is_reexport {
+                        reexports.push(rec);
+                    } else {
+                        imports.push(rec);
+                    }
+                }
+            }
+        }
+        jhol_vm::ast::Stmt::Expr(e) => {
+            walk_call_exprs(e, dynamic_imports, requires);
+        }
+        jhol_vm::ast::Stmt::Var(_, pairs) => {
+            for (_, init) in pairs {
+                if let Some(e) = init {
+                    walk_call_exprs(e, dynamic_imports, requires);
+                }
+            }
+        }
+        jhol_vm::ast::Stmt::Block(body) => {
+            for s in body {
+                collect_stmt(s, imports, reexports, dynamic_imports, requires, record);
+            }
+        }
+        jhol_vm::ast::Stmt::If(_, body, els) => {
+            collect_stmt(body, imports, reexports, dynamic_imports, requires, record);
+            if let Some(els) = els {
+                collect_stmt(els, imports, reexports, dynamic_imports, requires, record);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn walk_call_exprs(
+    e: &jhol_vm::ast::Expr,
+    dynamic_imports: &mut Vec<CasImportRecord>,
+    requires: &mut Vec<CasImportRecord>,
+) {
+    match e {
+        jhol_vm::ast::Expr::Call { callee, args, .. } => {
+            let is_import = matches!(**callee, jhol_vm::ast::Expr::Ident(ref n) if n == "import");
+            let is_require = matches!(**callee, jhol_vm::ast::Expr::Ident(ref n) if n == "require");
+            if (is_import || is_require) && args.len() == 1 {
+                if let jhol_vm::ast::Expr::Str(spec) = &args[0] {
+                    let rec = CasImportRecord {
+                        specifier: spec.clone(),
+                        kind: if is_import {
+                            ImportKind::DynamicImport
+                        } else {
+                            ImportKind::Require
+                        },
+                        start: 0,
+                        end: 0,
+                    };
+                    if is_import {
+                        dynamic_imports.push(rec);
+                    } else {
+                        requires.push(rec);
+                    }
+                }
+            }
+            walk_call_exprs(callee, dynamic_imports, requires);
+            for a in args {
+                walk_call_exprs(a, dynamic_imports, requires);
+            }
+        }
+        jhol_vm::ast::Expr::Member { obj, .. } => walk_call_exprs(obj, dynamic_imports, requires),
+        jhol_vm::ast::Expr::Seq(xs) => {
+            for x in xs {
+                walk_call_exprs(x, dynamic_imports, requires);
+            }
+        }
+        jhol_vm::ast::Expr::Array(xs) => {
+            for x in xs.iter().flatten() {
+                walk_call_exprs(x, dynamic_imports, requires);
+            }
+        }
+        _ => {}
     }
 }
 

@@ -20,7 +20,11 @@ fn main() {
     // dev checkouts keep an adjacent `jhol`.
     let mut bin = env::current_exe().unwrap_or_default();
     let mut real = bin.clone();
-    real.set_file_name(if cfg!(windows) { "jhol-bin.exe" } else { "jhol-bin" });
+    real.set_file_name(if cfg!(windows) {
+        "jhol-bin.exe"
+    } else {
+        "jhol-bin"
+    });
     if real.is_file() {
         bin = real;
     } else {
@@ -84,28 +88,40 @@ fn try_instant_trampoline(args: &[String]) -> bool {
 
     // 1. Warm no-op check: valid tree exists
     if proof::prepared_tree_is_valid(Path::new(".")) {
-        if timing { eprintln!("[tramp] lane1 noop hit: {:?}", t0.elapsed()); }
+        if timing {
+            eprintln!("[tramp] lane1 noop hit: {:?}", t0.elapsed());
+        }
         return true;
     }
     let t1 = std::time::Instant::now();
 
     // 2. Direct L0 projection from JGrid bundle cache
     if proof::try_direct_bundle_projection(Path::new(".")) {
-        if timing { eprintln!("[tramp] lane2 projection hit: {:?}", t0.elapsed()); }
+        if timing {
+            eprintln!("[tramp] lane2 projection hit: {:?}", t0.elapsed());
+        }
         return true;
     }
-    if timing { eprintln!("[tramp] after lane1+lane2 checks: {:?}", t1.elapsed()); }
+    if timing {
+        eprintln!("[tramp] after lane1+lane2 checks: {:?}", t1.elapsed());
+    }
     let t2 = std::time::Instant::now();
 
     // 2b. Fresh project (no lockfile): replay the bundle published by a previous
     // byte-identical install — same contract as reusing a committed lockfile.
     if proof::try_fresh_project_bundle_replay(Path::new(".")) {
         if timing {
-            eprintln!("[tramp] lane2b hit: total {:?} | since-lane2-end {:?}", t0.elapsed(), t2.elapsed());
+            eprintln!(
+                "[tramp] lane2b hit: total {:?} | since-lane2-end {:?}",
+                t0.elapsed(),
+                t2.elapsed()
+            );
         }
         return true;
     }
-    if timing { eprintln!("[tramp] all lanes missed: {:?}", t0.elapsed()); }
+    if timing {
+        eprintln!("[tramp] all lanes missed: {:?}", t0.elapsed());
+    }
     false
 }
 
@@ -124,7 +140,10 @@ mod forwarding_tests {
             vec!["i", "--quiet"],
         ] {
             let owned: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
-            assert!(super::plain_install_gate(&owned), "gate must pass: {argv:?}");
+            assert!(
+                super::plain_install_gate(&owned),
+                "gate must pass: {argv:?}"
+            );
         }
         // everything else must reach the real CLI
         for argv in [
@@ -139,7 +158,10 @@ mod forwarding_tests {
             vec!["install", "--quiet", "express"],
         ] {
             let owned: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
-            assert!(!super::plain_install_gate(&owned), "gate must reject: {argv:?}");
+            assert!(
+                !super::plain_install_gate(&owned),
+                "gate must reject: {argv:?}"
+            );
         }
     }
 }

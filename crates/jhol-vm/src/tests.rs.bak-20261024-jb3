@@ -1,0 +1,592 @@
+//! Unit tests for the engine's own primitives.
+//!
+//! These exercise the parts that are easy to break and hard to see from
+//! JavaScript: the value encoding, the arena's block protocol, and the property
+//! store's shape transitions.
+//!
+//! Each `Engine` installs an arena on its own thread, so every test runs in its
+//! own thread to keep per-thread globals apart.
+
+use crate::arena::Arena;
+use crate::objects::{PropKey, TAG_FUNCTION};
+use crate::value::{f64_to_js_string, Value};
+
+fn in_thread<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(f)
+        .expect("spawn test thread")
+        .join()
+        .expect("test thread panicked")
+}
+
+fn eval_str(src: &str) -> String {
+    let mut e = crate::vm::Engine::new();
+    e.ensure_started();
+    let v = e.eval_source(src, "test.js").expect("script threw");
+    e.vm.to_string(v).expect("value has no string form")
+}
+
+fn eval(src: &str) -> Result<Value, crate::errors::VmError> {
+    let mut e = crate::vm::Engine::new();
+    e.ensure_started();
+    e.eval_source(src, "test.js")
+}
+
+// ------------------------- value encoding -------------------------
+
+#[test]
+fn nan_boxing_round_trips_primitives() {
+    in_thread(|| {
+        let leaked = Arena::new();
+        leaked.install();
+        for n in [0i64, 1, -1, 42, 1 << 40, -(1 << 40)] {
+            let v = Value::from_i64(n);
+            assert!(v.is_smi(), "{} should be a Smi", n);
+            assert_eq!(v.as_i64(), n);
+            assert_eq!(v.as_f64(), n as f64);
+            assert!(v.is_number());
+        }
+        for f in [0.5, -0.5, 1e300, f64::MAX, f64::MIN] {
+            let v = Value::from_f64(f);
+            assert!(v.is_double(), "{} should stay a double", f);
+            assert_eq!(v.as_f64(), f);
+        }
+        // The reserved NaN must not be read as a box.
+        assert!(Value::NAN.is_double());
+        assert!(Value::NAN.is_number());
+        assert!(!Value::NAN.is_ptr());
+        // NaNs from arithmetic canonicalise to the same encoding.
+        assert_eq!(Value::from_f64(f64::NAN), Value::from_f64(0.0 / 0.0));
+        // Pointers land inside the arena and come back bit-identical.
+        let s = Value::from_str_owned("abc");
+        assert!(s.is_string());
+        assert_eq!(s.as_str(), Some("abc"));
+    });
+}
+
+#[test]
+fn singletons_and_truthiness() {
+    in_thread(|| {
+        let leaked = Arena::new();
+        leaked.install();
+        assert!(Value::UNDEFINED.is_undefined());
+        assert!(Value::NULL.is_null());
+        assert!(Value::TRUE.as_bool());
+        assert!(!Value::FALSE.as_bool());
+        assert!(!Value::UNDEFINED.to_bool());
+        assert!(!Value::NULL.to_bool());
+        assert!(!Value::from_i64(0).to_bool());
+        assert!(Value::from_i64(7).to_bool());
+        assert!(!Value::NAN.to_bool());
+        assert!(!Value::from_str_owned("").to_bool());
+        assert!(Value::from_str_owned("x").to_bool());
+        assert!(Value::TRUE.to_bool());
+        assert!(!Value::FALSE.to_bool());
+
+        assert_eq!(Value::from_i64(1).type_of(), "number");
+        assert_eq!(Value::from_str_owned("s").type_of(), "string");
+        assert_eq!(Value::TRUE.type_of(), "boolean");
+        assert_eq!(Value::UNDEFINED.type_of(), "undefined");
+        assert_eq!(Value::from_f64(1.0).type_of(), "number");
+    });
+}
+
+#[test]
+fn arithmetic_fast_paths() {
+    in_thread(|| {
+        let leaked = Arena::new();
+        leaked.install();
+        assert_eq!(
+            Value::from_i64(2).try_num_add(&Value::from_i64(3)).unwrap().as_i64(),
+            5
+        );
+        // Overflow out of the Smi range promotes to a double rather than wrapping.
+        let big = Value::from_i64((1 << 43) - 1)
+            .try_num_add(&Value::from_i64(1))
+            .unwrap();
+        assert!(big.is_double());
+        assert_eq!(big.as_f64(), (1i64 << 43) as f64);
+        assert!(Value::from_i64(1)
+            .try_num_add(&Value::from_str_owned("a"))
+            .is_none());
+        assert_eq!(
+            Value::from_f64(1.5)
+                .try_num_add(&Value::from_f64(2.25))
+                .unwrap()
+                .as_f64(),
+            3.75
+        );
+        let a = Value::from_i64(6);
+        let b = Value::from_i64(7);
+        assert_eq!(a.try_num_binop(&b, crate::value::ArithOp::Mul).unwrap().as_i64(), 42);
+    });
+}
+
+#[test]
+fn number_formatting_matches_js() {
+    in_thread(|| {
+        let leaked = Arena::new();
+        leaked.install();
+        assert_eq!(f64_to_js_string(0.0), "0");
+        assert_eq!(f64_to_js_string(-0.0), "0");
+        assert_eq!(f64_to_js_string(3.5), "3.5");
+        assert_eq!(f64_to_js_string(-2.0), "-2");
+        assert_eq!(f64_to_js_string(1024.0), "1024");
+        assert_eq!(f64_to_js_string(f64::NAN), "NaN");
+        assert_eq!(f64_to_js_string(f64::INFINITY), "Infinity");
+        assert_eq!(f64_to_js_string(f64::NEG_INFINITY), "-Infinity");
+    });
+}
+
+// ----------------------------- arena ------------------------------
+
+#[test]
+fn arena_recycles_blocks_without_losing_the_walk() {
+    in_thread(|| {
+        let leaked = Arena::new();
+        leaked.install();
+        let a = crate::arena::active();
+        let sym = a.intern_sym("k");
+        let mut live: Vec<Value> = Vec::new();
+        for i in 0..200u32 {
+            let o = Value::from_ptr(a.alloc_object(0, Value::NULL));
+            let shape = a.shape_for(unsafe { o.as_object() }.shape, PropKey::Sym(sym));
+            {
+                let om = unsafe { o.as_object_mut() };
+                om.shape = shape;
+                om.set(PropKey::Sym(sym), Value::from_i64(i as i64));
+            }
+            live.push(o);
+        }
+        // Object[key=...] in the same order always yields the same shape id.
+        let s0 = unsafe { live[0].as_object() }.shape;
+        let s199 = unsafe { live[199].as_object() }.shape;
+        assert_eq!(s0, s199);
+        assert_eq!(
+            unsafe { live[199].as_object() }.get(PropKey::Sym(sym)).unwrap().as_i64(),
+            199
+        );
+        // Sweeping twice in a row must be idempotent.
+        let roots: Vec<&[Value]> = vec![live.as_slice()];
+        a.collect(&roots);
+        let after = a.live_bytes();
+        a.collect(&roots);
+        assert_eq!(a.live_bytes(), after, "sweep must be idempotent");
+        for (i, o) in live.iter().enumerate() {
+            assert_eq!(
+                unsafe { o.as_object() }.get(PropKey::Sym(sym)).unwrap().as_i64(),
+                i as i64,
+                "live objects survive a collection"
+            );
+        }
+    });
+}
+
+#[test]
+fn arena_symbol_and_accessor_interning() {
+    in_thread(|| {
+        let leaked = Arena::new();
+        leaked.install();
+        let a = crate::arena::active();
+        let name = a.intern_sym("name");
+        assert_eq!(name, a.intern_sym("name"), "interning is stable");
+        assert_ne!(name, a.intern_sym("other"));
+        let g = a.accessor_sym(name, "#get:");
+        assert_eq!(g, a.accessor_sym(name, "#get:"));
+        let s = a.accessor_sym(name, "#set:");
+        assert_ne!(g, s);
+        assert_eq!(a.sym_name(g), "#get:name");
+        assert_eq!(a.sym_name(s), "#set:name");
+    });
+}
+
+#[test]
+fn objects_and_functions_carry_a_property_bag() {
+    in_thread(|| {
+        let mut e = crate::vm::Engine::new();
+        e.ensure_started();
+        let f = e
+            .vm
+            .new_function_native("probe", |_vm, _t, _a| Ok(Value::from_i64(7)), 0);
+        assert!(f.is_function());
+        assert_eq!(unsafe { f.obj_tag() }, Some(TAG_FUNCTION));
+        let ks = e.vm.new_string("answer");
+        let k = e.vm.key_from_value(ks);
+        e.vm.define_prop(f, k, Value::from_i64(42));
+        assert_eq!(e.vm.get_prop(f, k).expect("read from fn").as_i64(), 42);
+    });
+}
+
+// -------------------------- JavaScript ----------------------------
+
+#[test]
+fn evaluates_arithmetic_and_strings() {
+    in_thread(|| {
+        assert_eq!(eval_str("1 + 2 * 3"), "7");
+        assert_eq!(eval_str("(1 + 2) * 3"), "9");
+        assert_eq!(eval_str("2 ** 3 ** 2"), "512");
+        assert_eq!(eval_str("7 - 2 - 1"), "4");
+        assert_eq!(eval_str("100 / 10 / 2"), "5");
+        assert_eq!(eval_str("'a' + 'b' + 1"), "ab1");
+        assert_eq!(eval_str("'n=' + (1 + 1)"), "n=2");
+        assert_eq!(eval_str("10 % 3"), "1");
+        assert_eq!(eval_str("-(2 ** 2)"), "-4");
+    });
+}
+
+#[test]
+fn functions_closures_and_recursion() {
+    in_thread(|| {
+        assert_eq!(
+            eval_str("function f(n){return n<2?n:f(n-1)+f(n-2);} f(15)"),
+            "610"
+        );
+        assert_eq!(
+            eval_str("function mk(){let c=0; return function(){return ++c;};} let f=mk(); f(); f(); f()"),
+            "3"
+        );
+        // Two closures from the same factory keep independent counters.
+        assert_eq!(
+            eval_str("function mk(){let c=0; return function(){return ++c;};} let a=mk(),b=mk(); a();a();b()+''"),
+            "1"
+        );
+    });
+}
+
+#[test]
+fn arrays_objects_and_prototypes() {
+    in_thread(|| {
+        assert_eq!(eval_str("[1,2,3].map(x=>x*2).join(',')"), "2,4,6");
+        assert_eq!(
+            eval_str("[1,2,3,4].filter(x=>x%2===0).reduce((a,b)=>a+b,0)"),
+            "6"
+        );
+        assert_eq!(eval_str("[3,1,2].sort((a,b)=>a-b).join('')"), "123");
+        assert_eq!(eval_str("const o={a:1,b:2}; Object.keys(o).join('+')"), "a+b");
+        assert_eq!(eval_str("const o={a:1}; o.b=2; Object.values(o).join('+')"), "1+2");
+        assert_eq!(
+            eval_str(
+                "function A(n){this.n=n;} A.prototype.hi=function(){return 'hi '+this.n;}; new A('z').hi()"
+            ),
+            "hi z"
+        );
+        assert_eq!(eval_str("new Array(1,2,3).length"), "3");
+        assert_eq!(eval_str("[1,2,3,4].indexOf(3)"), "2");
+        assert_eq!(eval_str("'a,b,c'.split(',').join('-')"), "a-b-c");
+    });
+}
+
+#[test]
+fn classes_constructors_and_static_members() {
+    in_thread(|| {
+        assert_eq!(
+            eval_str("class A{constructor(n){this.n=n;} get d(){return this.n*2;}} new A(4).d"),
+            "8"
+        );
+        assert_eq!(
+            eval_str("class A{ static one(){return 1;} } A.one()"),
+            "1"
+        );
+        // A fused class field initialiser runs before the user constructor body.
+        assert_eq!(
+            eval_str("class B{ x=5; constructor(){this.x+=1;} } new B().x"),
+            "6"
+        );
+    });
+}
+
+#[test]
+fn control_flow_and_loops() {
+    in_thread(|| {
+        assert_eq!(eval_str("let s=0; for(let i=1;i<=5;i++) s+=i; s"), "15");
+        assert_eq!(
+            eval_str("function f(s){switch(s){case 1: return 'one'; case 2: return 'two'; default: return 'x';}} f(2)"),
+            "two"
+        );
+        assert_eq!(eval_str("let i=0,o=[]; while(i<3){o.push(i++);} o.join('')"), "012");
+        assert_eq!(eval_str("let i=0; do { i++; } while(i<4); i"), "4");
+        assert_eq!(eval_str("let t=0; for(const v of [1,2,3]) t+=v; t"), "6");
+        // `continue label` skips the rest of the inner loop only.
+        assert_eq!(
+            eval_str(
+                "let t=0; outer: for(let i=0;i<3;i++){for(let j=0;j<3;j++){if(j===1) continue outer; t++;}} t"
+            ),
+            "3"
+        );
+    });
+}
+
+#[test]
+fn exceptions_unwind_through_calls() {
+    in_thread(|| {
+        assert_eq!(eval_str("try{ throw new Error('x'); }catch(e){ e.message }"), "x");
+        assert_eq!(
+            eval_str("function f(){ try { throw new Error('deep'); } catch(e){ return 'c:'+e.message; } } f()"),
+            "c:deep"
+        );
+        // A rethrow crosses a call boundary and is caught by the outer frame.
+        assert_eq!(
+            eval_str(
+                "function t(){ try { throw new Error('i'); } catch(e){ throw e; } } try { t(); } catch(e){ e.message }"
+            ),
+            "i"
+        );
+    });
+}
+
+#[test]
+fn generators_suspend_and_resume() {
+    in_thread(|| {
+        assert_eq!(
+            eval_str(
+                "function* g(){yield 1; yield 2; yield 3;} const it=g(); it.next().value+','+it.next().value+','+it.next().value+','+it.next().done"
+            ),
+            "1,2,3,true"
+        );
+        assert_eq!(eval_str("function* g(){yield 1; yield 2;} [...g()].join('|')"), "1|2");
+        assert_eq!(
+            eval_str("function* g(){yield 'a'; yield 'b';} let o=''; for(const v of g()) o+=v; o"),
+            "ab"
+        );
+    });
+}
+
+#[test]
+fn json_round_trips() {
+    in_thread(|| {
+        assert_eq!(
+            eval_str("JSON.stringify({a:1,b:[true,null,'x']})"),
+            r#"{"a":1,"b":[true,null,"x"]}"#
+        );
+        assert_eq!(
+            eval_str("const p=JSON.parse('{\"k\":10,\"l\":[1,2]}'); p.k+','+p.l.join('-')"),
+            "10,1-2"
+        );
+    });
+}
+
+#[test]
+fn template_literals_and_optional_chaining() {
+    in_thread(|| {
+        assert_eq!(eval_str("const n='w'; `${n}${1+1}!`"), "w2!");
+        assert_eq!(eval_str("const o={a:{b:1}}; (o?.a?.b) ?? 9"), "1");
+        assert_eq!(eval_str("const o={}; (o?.a?.b) ?? 9"), "9");
+    });
+}
+
+#[test]
+fn destructuring_patterns() {
+    in_thread(|| {
+        assert_eq!(eval_str("const [a,b=9]=[1]; a+'-'+b"), "1-9");
+        assert_eq!(eval_str("const {x=1,y=2}={x:5}; x+','+y"), "5,2");
+        assert_eq!(eval_str("const [,second]=['skip','keep']; second"), "keep");
+        assert_eq!(eval_str("const {a:{b}}={a:{b:7}}; b"), "7");
+        assert_eq!(eval_str("const [h,...t]=[1,2,3]; h+':'+t.join('+')"), "1:2+3");
+    });
+}
+
+#[test]
+fn uncaught_errors_surface_with_a_message() {
+    in_thread(|| {
+        // The message has to be read with the *same* engine: values are offsets
+        // into that engine's arena, so a second engine would read them as
+        // unrelated memory.
+        let mut e = crate::vm::Engine::new();
+        e.ensure_started();
+        match e.eval_source("undefinedFn()", "test.js") {
+            Err(crate::errors::VmError::Exception(t)) => {
+                let msg = e.vm.to_string(t.value).unwrap_or_default();
+                assert!(msg.contains("is not a function"), "got {:?}", msg);
+            }
+            other => panic!("expected a thrown exception, got {:?}", other),
+        }
+    });
+}
+
+
+#[test]
+fn function_var_hoisting_and_for_in_registers() {
+    in_thread(|| {
+        assert_eq!(eval_str("function f(){{var q={x:7};}return q.x;} f()"), "7");
+        assert_eq!(eval_str("function f(x){var x;{var x;}return x;} f(9)"), "9");
+        assert_eq!(eval_str("var x=3;{var x;} x"), "3");
+        assert_eq!(eval_str("let sum=0;const o={a:1,b:2};for(let k in o){sum+=o[k];}sum"), "3");
+        assert_eq!(eval_str("let s='';for(var k in {a:1,b:2}){if(k==='a')continue;s+=k;}s+k"), "bb");
+        assert_eq!(eval_str("let s=0;for(let k in {a:1,b:2}){for(let q in {x:1,y:2}){s++;}}s"), "4");
+    });
+}
+
+
+#[test]
+fn utf16_units_surrogates_and_ascii() {
+    in_thread(|| {
+        assert_eq!(eval_str("'💥'.length+':'+ '💥'.charCodeAt(0)+':'+ '💥'.charCodeAt(1)"), "2:55357:56485");
+        assert_eq!(eval_str("'💥'[0].charCodeAt(0)+':'+ '💥'.at(-1).charCodeAt(0)"), "55357:56485");
+        assert_eq!(eval_str("String.fromCharCode(0xd800).charCodeAt(0)"), "55296");
+        assert_eq!(eval_str("String.fromCharCode(0xd800)===String.fromCharCode(0xfffd)"), "false");
+        assert_eq!(eval_str("(''+String.fromCharCode(0xd800)).charCodeAt(0)"), "55296");
+        assert_eq!(eval_str("'💥'.slice(1).charCodeAt(0)"), "56485");
+        assert_eq!(eval_str("JSON.stringify(String.fromCharCode(0xd800))"), "\"\\ud800\"");
+        assert_eq!(eval_str("'abc'.charCodeAt('1')+':'+ 'abc'.length"), "98:3");
+        assert_eq!(eval_str("String.fromCodePoint(0x1f4a5).codePointAt(0)"), "128165");
+    });
+}
+
+
+#[test]
+fn guarded_native_regions_and_exact_side_exits() {
+    in_thread(|| {
+        let mut e = crate::vm::Engine::new();
+        e.ensure_started();
+        let source = "const o={add(x,y){return x+y;},mul(x,y){return x*y;}};let s=0;for(let i=0;i<1000;i++){if((i&1)===0)s+=o.add(i,3);else s+=o.mul(i,2);}s";
+        let v = e.eval_source(source, "region.js").unwrap();
+        assert_eq!(e.vm.to_string(v).unwrap(), "751000");
+        assert!(e.vm.compiled_loop_count() > 0, "bitwise/call loop must use native region");
+        assert_eq!(eval_str("function f(o){let s=0;for(let i=0;i<1000;i++){s+=o.x;}return s;}const o={x:1};let a=f(o);o.x=3;a+f(o)"), "4000");
+        assert_eq!(eval_str("function f(o){let s=0;for(let i=0;i<1000;i++){s+=o.x;}return s;}const o={x:1};let a=f(o);delete o.x;let p={x:3};Object.setPrototypeOf(o,p);a+f(o)"), "4000");
+        assert_eq!(eval_str("function f(o){let s=0;for(let i=0;i<1000;i++){s+=o.f(i);}return s;}const o={f(x){return x+1;}};let a=f(o);o.f=function(x){return x+2;};a+f(o)"), "1002000");
+        assert_eq!(eval_str("let s=0;for(let i=0;i<1000;i++){s+=(i&1);}s"), "500");
+    });
+}
+
+
+#[test]
+fn numeric_native_boundaries_match_javascript() {
+    in_thread(|| {
+        assert_eq!(eval_str("1/(-0)"), "-Infinity");
+        assert_eq!(eval_str("1/(0*-1)"), "-Infinity");
+        assert_eq!(eval_str("1/(-4%2)"), "-Infinity");
+        assert_eq!(eval_str("-1>>>0"), "4294967295");
+        assert_eq!(eval_str("(4294967297.5|0)+':'+(NaN|0)+':'+(Infinity|0)"), "1:0:0");
+        assert_eq!(eval_str("function m(a,b){return a*b;}let s=0;for(let i=0;i<100;i++){s=m(0,-1);}1/s"), "-Infinity");
+        assert_eq!(eval_str("function m(a,b){return a*b;}let s=0;for(let i=0;i<100;i++){s=m(4294967296,4294967296);}s"), "18446744073709552000");
+    });
+}
+
+#[test]
+fn unicode_literals_and_json_code_units() {
+    in_thread(|| {
+        assert_eq!(eval_str(r#"['\ud83d\udca5'.length,'\ud83d\udca5'.codePointAt(0),'\ud800'.charCodeAt(0),'\ud800' === '\ufffd',JSON.parse('"\\ud800"').charCodeAt(0)].join(',')"#), "2,128165,55296,false,55296");
+    });
+}
+
+#[test]
+fn captured_lexicals_and_exception_completion_run_once() {
+    in_thread(|| {
+        assert_eq!(eval_str("let n=0;function f(i){n++;if(i===777)throw 9;return i;}let s=0;try{for(let i=0;i<1234;i++)s+=f(i);}catch(e){s+=n;}s+':'+n"),"302254:778");
+        assert_eq!(eval_str("let n=0;function f(){n++;}f();n"),"1");
+        assert_eq!(eval_str("let n=0;if(true){n++;n++;}n"),"2");
+    });
+}
+
+#[test]
+fn utf16_payload_survives_forced_collection() {
+    in_thread(|| {
+        let arena=Arena::new().install();
+        let units=[0x61,0xd800,0xd83d,0xdca5,0x62];
+        let value=Value::from_ptr(arena.alloc_string_utf16(&units));
+        let atom=arena.intern_atom_utf16(&[0xdfff]);
+        for _ in 0..3 {
+            for _ in 0..1000 {arena.alloc_string("discard");}
+            arena.collect(&[&[value]]);
+            assert_eq!(unsafe{value.as_string()}.code_units().collect::<Vec<_>>(),units);
+            assert_eq!(unsafe{atom.as_string()}.code_unit(0),Some(0xdfff));
+        }
+    });
+}
+
+#[test]
+fn native_region_roots_survive_forced_collection() {
+    in_thread(|| {
+        let mut e=crate::vm::Engine::new();e.ensure_started();
+        let f=e.eval_source("(function(o){let s=0;for(let i=0;i<733;i++){s+=(i&1);s+=o.x;}return s;})","gc-region.js").unwrap();
+        let o=e.vm.new_object();let k=e.vm.key_from_value(Value::from_str_owned("x"));
+        e.vm.set_prop(o,k,Value::from_i32(7)).unwrap();
+        for _ in 0..3 {
+            let result=e.vm.call_direct_args(f,Value::UNDEFINED,&[o]).unwrap();
+            assert_eq!(result.as_f64(),5497.0);
+            assert!(e.vm.compiled_loop_count()>0);
+            let roots=[f,o,Value::from_ptr(e.vm.globals)];
+            e.vm.arena().collect(&[&roots]);
+        }
+    });
+}
+
+#[test]
+fn mid_region_numeric_guard_preserves_prior_updates() {
+    in_thread(|| {
+        assert_eq!(eval_str("const a=[1,2.5,3];let s=0;for(let i=0;i<1207;i++){s+=(i&1);s+=a[i%3];}s"),"3217");
+    });
+}
+
+#[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+#[test]
+fn native_property_region_completes_without_interpreter_fallback() {
+    in_thread(|| {
+        use crate::bytecode::{Ic, Instr, Op};
+
+        let mut engine = crate::vm::Engine::new();
+        engine.ensure_started();
+        let object = engine.vm.new_object();
+        let key = engine.vm.key_from_value(Value::from_str_owned("x"));
+        engine.vm.set_prop(object, key, Value::from_i32(7)).unwrap();
+        let instructions = [
+            Instr::new(Op::JumpLocalCmp, 0, 0, 4),
+            Instr::new(Op::GetProp, 3, 2, 0),
+            Instr::new(Op::LocalAdd, 1, 3, 0),
+            Instr::new(Op::LocalAddKJ, 0, 1, 0),
+        ];
+        let mut caches = [Ic::default(); 4];
+        let receiver = unsafe { object.as_object() };
+        caches[1] = Ic {
+            key,
+            shape: receiver.shape,
+            slot: receiver.find_index(key).unwrap() as u32,
+            state: 1,
+            ..Ic::default()
+        };
+        let code = crate::jit::try_compile_region(
+            &instructions,
+            0,
+            4,
+            &mut |index| [5.0, 1.0].get(index).copied(),
+            caches.as_ptr(),
+            engine.vm.arena().base() as usize,
+        ).expect("property region must compile");
+        let mut registers = [Value::from_i32(0), Value::from_i32(0), object, Value::UNDEFINED];
+        let status = unsafe { crate::jit::run_raw(code.code, registers.as_mut_ptr(), 0) };
+        assert_eq!(status, 1, "native region must finish, not just compile and deopt");
+        assert_eq!(registers[0].as_f64(), 5.0);
+        assert_eq!(registers[1].as_f64(), 35.0);
+    });
+}
+
+#[test]
+fn computed_member_delete_removes_the_property() {
+    in_thread(|| {
+        // `delete obj[expr]` must actually delete: the computed key lives in a
+        // register, but DeleteProp only read the inline cache (which only
+        // dot-syntax populates), so computed deletes were silently no-ops.
+        assert_eq!(
+            eval_str("const o={a:1,b:2}; delete o['b']; o.b===undefined ? 1 : 0"),
+            "1"
+        );
+        // sequential computed deletes across a wide object (index rebuild path)
+        assert_eq!(
+            eval_str(
+                "const o={}; for(let i=0;i<50;i++) o['k'+i]=i; \
+                 for(let i=0;i<25;i++) delete o['k'+i]; let n=0; for(let k in o) n++; n"
+            ),
+            "25"
+        );
+        // survivors keep their values
+        assert_eq!(
+            eval_str(
+                "const o={}; for(let i=0;i<50;i++) o['k'+i]=i; \
+                 for(let i=0;i<25;i++) delete o['k'+i]; o['k40']"
+            ),
+            "40"
+        );
+    });
+}

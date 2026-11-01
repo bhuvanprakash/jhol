@@ -1,0 +1,66 @@
+[
+  {
+    "args": [
+      "install"
+    ],
+    "exit": 71,
+    "arguments_preserved": true
+  },
+  {
+    "args": [
+      "i"
+    ],
+    "exit": 71,
+    "arguments_preserved": true
+  },
+  {
+    "args": [
+      "install",
+      "--native-only"
+    ],
+    "exit": 71,
+    "arguments_preserved": true
+  },
+  {
+    "args": [
+      "install",
+      "--no-scripts"
+    ],
+    "exit": 71,
+    "arguments_preserved": true
+  },
+  {
+    "args": [
+      "install",
+      "--frozen"
+    ],
+    "exit": 71,
+    "arguments_preserved": true
+  },
+  {
+    "args": [
+      "install",
+      "required@2.0.0"
+    ],
+    "exit": 71,
+    "arguments_preserved": true
+  },
+  {
+    "args": [
+      "ci"
+    ],
+    "exit": 71,
+    "arguments_preserved": true
+  },
+  {
+    "args": [
+      "--version"
+    ],
+    "exit": 71,
+    "arguments_preserved": true
+  },
+  {
+    "fallback_to_cli": true,
+    "exit": 71
+  }
+]

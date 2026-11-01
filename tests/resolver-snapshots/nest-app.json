@@ -1,0 +1,39 @@
+{
+  "fixture": "nest-app",
+  "expectedStatus": "pass",
+  "notes": "framework matrix fixture for Nest",
+  "expectedGraph": {
+    "root": {
+      "name": "jhol-fixture-nest-app",
+      "version": "1.0.0"
+    },
+    "edges": [
+      {
+        "from": "$root",
+        "to": "@nestjs/common",
+        "spec": "10.4.2",
+        "type": "dependencies"
+      },
+      {
+        "from": "$root",
+        "to": "@nestjs/core",
+        "spec": "10.4.2",
+        "type": "dependencies"
+      },
+      {
+        "from": "$root",
+        "to": "reflect-metadata",
+        "spec": "0.2.2",
+        "type": "dependencies"
+      },
+      {
+        "from": "$root",
+        "to": "rxjs",
+        "spec": "7.8.1",
+        "type": "dependencies"
+      }
+    ],
+    "overrides": {},
+    "workspaces": []
+  }
+}

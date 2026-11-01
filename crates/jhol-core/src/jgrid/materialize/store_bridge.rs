@@ -191,7 +191,8 @@ pub(crate) fn publish_l0_from_node_modules(
         .iter()
         .map(|(n, v)| (n.as_str(), v.as_str()))
         .collect();
-    let hash = prepared_identity.map(str::to_owned)
+    let hash = prepared_identity
+        .map(str::to_owned)
         .unwrap_or_else(|| BundleCache::compute_dep_set_hash(&refs));
     if bundle_cache.has_bundle(&hash) {
         return Ok(false);

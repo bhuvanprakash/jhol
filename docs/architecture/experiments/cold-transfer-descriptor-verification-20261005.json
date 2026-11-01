@@ -1,0 +1,52 @@
+{
+  "branch": "main",
+  "deleted_paths": 63,
+  "staged_paths": 0,
+  "binaries": {
+    "release": "a4bf6a1aff16d7adac6c83114d25cc3cfb73dbe4328534b608565dfac0a9c92e",
+    "installed": "8b186ca8a6ca045e82162321fc3cf6e7fe1841aaba2b5268f3c99dc40f79c518"
+  },
+  "paper_hashes": {
+    "docs/engineering/RESEARCH_PAPER_HOLOGRAPHIC_DEPENDENCY_RESOLUTION.md": "4d4c522020267930589aa70948ec07fbbfd2f0b676af7ed66ad749c6319d826c",
+    "docs/engineering/RESEARCH_PAPER_GRM_INSTANT_LOCK.md": "c79ed3645c70f72393f80c74baf10b779ca31e5022eb3e63011b8ea9dd004dca",
+    "docs/engineering/RESEARCH_PAPER_JAGRS_STORAGE.md": "d7d03ce7f0df2a9f9db93b3d147244c303849410ebea3a2de3742ca22fa2c1ca"
+  },
+  "tests": {
+    "core": {
+      "outcomes": [
+        "test result: ok. 546 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 1.25s"
+      ],
+      "completion": [
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 25.59s",
+        "mem_guard: finished (exit 0) - peak memory used 62%"
+      ]
+    },
+    "http1": {
+      "outcomes": [
+        "test result: ok. 520 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 1.37s"
+      ],
+      "completion": [
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 29.12s",
+        "mem_guard: finished (exit 0) - peak memory used 65%"
+      ]
+    },
+    "cli": {
+      "outcomes": [
+        "test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.58s"
+      ],
+      "completion": [
+        "Finished `test` profile [unoptimized + debuginfo] target(s) in 45.94s",
+        "mem_guard: finished (exit 0) - peak memory used 66%"
+      ]
+    },
+    "release": {
+      "outcomes": [],
+      "completion": [
+        "Finished `release` profile [optimized] target(s) in 2m 09s",
+        "mem_guard: finished (exit 0) - peak memory used 67%"
+      ]
+    }
+  },
+  "blueprint_isolated_copy": "PASS: /tmp copy of examples/blueprint; policy, JS/Python/Rust adapters, invalidation, snapshot, db, repeatable AI inference, dev/spawn.",
+  "format_restore": "After release/test checks, restored 21 unrelated rustfmt-only hunks from prechange source archive; remaining install.rs hunks cover descriptor reuse, IO-pool selection and lock metadata only. No logic edited after checks."
+}

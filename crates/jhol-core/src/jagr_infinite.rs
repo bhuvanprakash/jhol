@@ -2209,6 +2209,9 @@ pub mod rvm {
             pub package_count: u32,
             pub scc_count: u32,
             pub chart_id: u64,
+            /// Cache identity for the compiler inputs and bytecode format.
+            /// Old persisted programs without this proof are cache misses.
+            pub cache_key: Option<[u8; 32]>,
             pub lockfile_hash: Option<[u8; 32]>,
             pub compiled_at: u64,
         }
@@ -2264,6 +2267,7 @@ pub mod rvm {
                         package_count: next_pkg_id,
                         scc_count: 1,
                         chart_id: sig_hash,
+                        cache_key: None,
                         lockfile_hash,
                         compiled_at: std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
@@ -2792,24 +2796,59 @@ use crate::lockfile_write::ResolvedPackage;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-/// Main entry point for JAGR-∞ resolver
-/// Set when the current resolution saw single-version bundled synths: those
-/// packuments advertise exactly ONE candidate per package. A global failure can
-/// therefore mean "backtracking was starved" rather than "graph unsatisfiable",
-/// so the outer wrapper retries once with full packuments for the synth-served
-/// set. `take` is a swap so a stale flag can never trigger a second retry.
-static SYNTH_SERVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Main entry point for JAGR-∞ resolver.
 
-pub(crate) fn take_synth_served() -> bool {
-    SYNTH_SERVED.swap(false, std::sync::atomic::Ordering::Relaxed)
+fn expand_synthetic_packuments<F>(
+    synth_pkgs: &[String],
+    packuments: &mut HashMap<String, serde_json::Value>,
+    mut fetch_full: F,
+) -> Result<(), String>
+where
+    F: FnMut(&str) -> Result<serde_json::Value, String>,
+{
+    for name in synth_pkgs {
+        let full = fetch_full(name)
+            .map_err(|error| format!("could not expand metadata domain for {name}: {error}"))?;
+        packuments.insert(name.clone(), full);
+    }
+    Ok(())
 }
 
-pub(crate) fn clear_synth_served() {
-    SYNTH_SERVED.store(false, std::sync::atomic::Ordering::Relaxed);
+fn retry_after_synthetic_metadata<T>(
+    first_result: Result<T, String>,
+    synth_served: bool,
+    retry: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    match first_result {
+        Ok(value) => Ok(value),
+        Err(first_error) if synth_served => retry().map_err(|_| first_error),
+        Err(error) => Err(error),
+    }
 }
 
 pub fn resolve_full_tree_jagr_infinite(
     package_json_path: &Path,
+) -> Result<HashMap<String, ResolvedPackage>, String> {
+    let mut synth_served = false;
+    let first_result = resolve_full_tree_jagr_infinite_with_full_retry(
+        package_json_path,
+        false,
+        &mut synth_served,
+    );
+    retry_after_synthetic_metadata(first_result, synth_served, || {
+        let mut retry_synth_served = false;
+        resolve_full_tree_jagr_infinite_with_full_retry(
+            package_json_path,
+            true,
+            &mut retry_synth_served,
+        )
+    })
+}
+
+pub(crate) fn resolve_full_tree_jagr_infinite_with_full_retry(
+    package_json_path: &Path,
+    full_retry: bool,
+    synth_served: &mut bool,
 ) -> Result<HashMap<String, ResolvedPackage>, String> {
     let t0 = std::time::Instant::now();
 
@@ -2846,7 +2885,6 @@ pub fn resolve_full_tree_jagr_infinite(
 
     // Fetch packuments for the full transitive dependency tree (BFS).
     let fetch_started = std::time::Instant::now();
-    clear_synth_served();
     let mut packuments = fetch_dep_tree(&deps)?;
     if std::env::var("JHOL_DEBUG_JINF").is_ok() {
         eprintln!(
@@ -2861,17 +2899,16 @@ pub fn resolve_full_tree_jagr_infinite(
         .map(|(k, _)| k.clone())
         .collect();
     if !synth_pkgs.is_empty() {
-        SYNTH_SERVED.store(true, std::sync::atomic::Ordering::Relaxed);
+        *synth_served = true;
     }
     // Retry pass (armed by `resolve_full_tree` after a failure): grow every
     // single-version candidate domain to the FULL packument, SAME constraints.
-    if std::env::var_os("JHOL_JINF_FULL_RETRY").is_some() {
-        for name in &synth_pkgs {
-            if let Ok(full) = crate::registry::fetch_metadata_full_packument(name) {
-                packuments.insert(name.clone(), full);
-            }
-        }
-        SYNTH_SERVED.store(false, std::sync::atomic::Ordering::Relaxed);
+    if full_retry {
+        expand_synthetic_packuments(
+            &synth_pkgs,
+            &mut packuments,
+            crate::registry::fetch_metadata_full_packument,
+        )?;
     }
 
     // Keep stable global IDs without materializing per-cluster charts: this
@@ -3069,7 +3106,8 @@ pub fn resolve_full_tree_jagr_infinite(
     atlas.insert_chart(final_chart.clone());
     // P3: reuse a previously compiled program for the same chart signature
     // (compilation is deterministic given the same constraint map).
-    let mut program = try_cached_program(final_chart.id);
+    let cache_key = rvm_program_cache_key(&constraints, &direct_domains);
+    let mut program = try_cached_program(cache_key, final_chart.id, &constraints);
     if program.is_none() {
         let mut compiled = compile(&atlas, &constraints, None)?;
         // The generic compiler hashes interval constraints. Bind its chart load
@@ -3080,7 +3118,8 @@ pub fn resolve_full_tree_jagr_infinite(
             }
         }
         compiled.metadata.chart_id = final_chart.id;
-        persist_cached_program(&compiled, final_chart.id);
+        compiled.metadata.cache_key = Some(cache_key);
+        persist_cached_program(&compiled, cache_key);
         program = Some(compiled);
     }
     let program = program.unwrap();
@@ -3124,7 +3163,7 @@ fn finalize_resolution(
     // Version reconciliation: GreedySCC/homotopy choose candidate ordinals.
     // Law layer re-derives every selected version from real npm semver ranges.
     // Direct deps are included, so exact package.json pins remain exact.
-    reconcile_versions(&mut resolved, packuments, deps, overrides);
+    reconcile_versions(&mut resolved, packuments, deps, overrides)?;
 
     // Orphan sweep: keep only packages reachable from direct deps after final
     // version-specific dependency edges are rebuilt.
@@ -3154,28 +3193,14 @@ fn validate_layout(
     packuments: &HashMap<String, serde_json::Value>,
     deps: &HashMap<String, String>,
 ) -> Result<(), String> {
-    for (name, spec) in deps {
-        let Some(pkg) = layout.get(&format!("node_modules/{}", name)) else {
-            return Err(format!(
-                "JAGR-∞ legality: missing direct dependency {}",
-                name
-            ));
-        };
-        if !crate::registry::version_satisfies(spec, &pkg.version) {
-            return Err(format!(
-                "JAGR-∞ legality: {}@{} violates direct range {}",
-                name, pkg.version, spec
-            ));
-        }
-    }
-
+    validate_resolved_layout(layout, deps, strict_peer_dependencies())?;
     for (node, pkg) in layout {
         let Some(name) = node_key_package_name(node) else {
             continue;
         };
-        let Some(meta) = packuments.get(name) else {
-            continue;
-        };
+        let meta = packuments
+            .get(name)
+            .ok_or_else(|| format!("JAGR-∞ legality: missing registry metadata for {}", name))?;
         let Some(ver_info) = meta
             .get("versions")
             .and_then(|v| v.as_object())
@@ -3206,6 +3231,57 @@ fn validate_layout(
             }
         }
     }
+    Ok(())
+}
+
+fn strict_peer_dependencies() -> bool {
+    std::env::var("JHOL_STRICT_PEER_DEPS").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+}
+
+/// Validate the recorded resolution independently of the solver/cache route.
+/// Fresh resolutions additionally check their declared packument edges above.
+fn validate_resolved_layout(
+    layout: &HashMap<String, ResolvedPackage>,
+    deps: &HashMap<String, String>,
+    strict_peers: bool,
+) -> Result<(), String> {
+    for (name, spec) in deps {
+        let Some(pkg) = layout.get(&format!("node_modules/{}", name)) else {
+            return Err(format!(
+                "JAGR-∞ legality: missing direct dependency {}",
+                name
+            ));
+        };
+        if !crate::registry::version_satisfies(spec, &pkg.version) {
+            return Err(format!(
+                "JAGR-∞ legality: {}@{} violates direct range {}",
+                name, pkg.version, spec
+            ));
+        }
+    }
+
+    for (node, pkg) in layout {
+        let name = node_key_package_name(node)
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| format!("JAGR-∞ legality: invalid dependency node {}", node))?;
+        semver::Version::parse(&pkg.version)
+            .map_err(|_| format!("JAGR-∞ legality: invalid version {}@{}", name, pkg.version))?;
+        for (child, spec) in &pkg.dependencies {
+            let child_pkg = crate::layout::visible_dependency(node, child, |path| layout.get(path))
+                .ok_or_else(|| {
+                    format!(
+                        "JAGR-∞ legality: {}@{} missing dependency {}",
+                        name, pkg.version, child
+                    )
+                })?;
+            if !crate::registry::version_satisfies(spec, &child_pkg.version) {
+                return Err(format!(
+                    "JAGR-∞ legality: {}@{} requires {} {}, got {}",
+                    name, pkg.version, child, spec, child_pkg.version
+                ));
+            }
+        }
+    }
 
     // Peer dependencies. Unlike `dependencies`, a peer is provided by the
     // consumer and may legitimately be absent or resolve to a conflicting
@@ -3215,9 +3291,7 @@ fn validate_layout(
     let peer_conflicts = collect_peer_conflicts(layout);
     if !peer_conflicts.is_empty() {
         let msg = format!("JAGR-∞ peer conflicts: {}", peer_conflicts.join("; "));
-        let strict = std::env::var("JHOL_STRICT_PEER_DEPS")
-            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
-        if strict {
+        if strict_peers {
             return Err(msg);
         }
         eprintln!("[JAGR] warning: {}", msg);
@@ -3229,7 +3303,8 @@ fn validate_layout(
 ///
 /// A conflict is either a missing peer, or a present peer whose version does
 /// not satisfy the declared range. Peers marked optional via
-/// `peerDependenciesMeta` are ignored. Pure function so it can be unit-tested
+/// `peerDependenciesMeta` may be absent; a present optional peer must still
+/// satisfy its range. Pure function so it can be unit-tested
 /// without a network or a full resolution.
 fn collect_peer_conflicts(layout: &HashMap<String, ResolvedPackage>) -> Vec<String> {
     let mut conflicts = Vec::new();
@@ -3249,10 +3324,8 @@ fn collect_peer_conflicts(layout: &HashMap<String, ResolvedPackage>) -> Vec<Stri
                 .and_then(|m| m.get("optional"))
                 .and_then(|o| o.as_bool())
                 .unwrap_or(false);
-            if optional {
-                continue;
-            }
             match crate::layout::visible_dependency(node, peer, |path| layout.get(path)) {
+                None if optional => {}
                 None => conflicts.push(format!(
                     "{}@{} requires missing peer {} {}",
                     name, pkg.version, peer, spec
@@ -3280,145 +3353,181 @@ fn reconcile_versions(
     packuments: &HashMap<String, serde_json::Value>,
     direct: &HashMap<String, String>,
     overrides: &HashMap<String, String>,
-) {
-    // Collect incoming ranges per package from each dependent's DECLARED deps
-    // (read from the dependent's selected version's packument entry, so the
-    // real spec like `^0.23.0` is used, not the chosen child version).
-    // Gather from EVERY package — scheduler/ms are only required by direct
-    // deps (react-dom, debug) and must still constrain the child version.
-    // Fixpoint: dependent versions change as we re-derive, so ranges must be
-    // re-gathered until nothing moves (e.g. https-proxy-agent 9.1.0 requires
-    // agent-base 9.0.0, but 5.0.1 requires ^6 — the range only appears after
-    // https-proxy-agent itself is corrected).
-    for _round in 0..8 {
-        let mut incoming_ranges: HashMap<String, Vec<String>> = direct
-            .iter()
-            .map(|(name, spec)| (name.clone(), vec![spec.clone()]))
+) -> Result<(), String> {
+    // Keep one contribution per parent so a selected-version change updates only
+    // that parent's outgoing constraints and the affected children.
+    fn requirements(
+        name: &str,
+        version: &str,
+        packuments: &HashMap<String, serde_json::Value>,
+    ) -> Vec<(String, String)> {
+        let Some(info) = packuments
+            .get(name)
+            .and_then(|p| p.get("versions"))
+            .and_then(|v| v.as_object())
+            .and_then(|versions| versions.get(version))
+        else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        if let Some(deps) = info.get("dependencies").and_then(|v| v.as_object()) {
+            out.extend(
+                deps.iter()
+                    .map(|(child, spec)| (child.clone(), spec.as_str().unwrap_or("*").to_string())),
+            );
+        }
+        if let Some(peers) = info.get("peerDependencies").and_then(|v| v.as_object()) {
+            let meta = info.get("peerDependenciesMeta").and_then(|v| v.as_object());
+            out.extend(peers.iter().filter_map(|(peer, spec)| {
+                let optional = meta
+                    .and_then(|m| m.get(peer))
+                    .and_then(|p| p.get("optional"))
+                    .and_then(|o| o.as_bool())
+                    .unwrap_or(false);
+                (!optional).then(|| (peer.clone(), spec.as_str().unwrap_or("*").to_string()))
+            }));
+        }
+        out
+    }
+
+    let mut candidates: HashMap<String, Vec<(semver::Version, String)>> = HashMap::new();
+    for name in resolved.keys() {
+        let versions = packuments
+            .get(name)
+            .and_then(|p| p.get("versions"))
+            .and_then(|v| v.as_object());
+        let parsed = versions
+            .into_iter()
+            .flat_map(|versions| versions.keys())
+            .filter_map(|version| {
+                semver::Version::parse(version)
+                    .ok()
+                    .map(|parsed| (parsed, version.clone()))
+            })
             .collect();
-        for (dep_name, dep_spec) in resolved.iter() {
-            let Some(packument) = packuments.get(dep_name) else {
-                continue;
-            };
-            let base_version = &dep_spec.version;
-            let Some(ver_info) = packument
-                .get("versions")
-                .and_then(|v| v.as_object())
-                .and_then(|o| o.get(base_version))
-            else {
-                continue;
-            };
-            if let Some(declared) = ver_info.get("dependencies").and_then(|v| v.as_object()) {
-                for (child, spec) in declared {
-                    incoming_ranges
-                        .entry(child.clone())
-                        .or_default()
-                        .push(spec.as_str().unwrap_or("*").to_string());
-                }
-            }
-            // Non-optional peer ranges also constrain the chosen version, so
-            // version selection picks a peer-compatible release instead of
-            // leaving `collect_peer_conflicts` to discover the damage later.
-            // Optional peers (`peerDependenciesMeta[peer].optional`) are skipped.
-            if let Some(peers) = ver_info.get("peerDependencies").and_then(|v| v.as_object()) {
-                let meta = ver_info
-                    .get("peerDependenciesMeta")
-                    .and_then(|v| v.as_object());
-                for (peer, spec) in peers {
-                    let optional = meta
-                        .and_then(|m| m.get(peer))
-                        .and_then(|p| p.get("optional"))
-                        .and_then(|o| o.as_bool())
-                        .unwrap_or(false);
-                    if optional {
-                        continue;
-                    }
-                    incoming_ranges
-                        .entry(peer.clone())
-                        .or_default()
-                        .push(spec.as_str().unwrap_or("*").to_string());
-                }
+        candidates.insert(name.clone(), parsed);
+    }
+
+    let mut incoming: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
+    let mut contributions: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    let mut names: Vec<_> = resolved.keys().cloned().collect();
+    names.sort();
+    for parent in &names {
+        let selected = resolved[parent].version.clone();
+        let edges = requirements(parent, &selected, packuments);
+        for (child, spec) in &edges {
+            incoming
+                .entry(child.clone())
+                .or_default()
+                .entry(parent.clone())
+                .or_default()
+                .push(spec.clone());
+        }
+        contributions.insert(parent.clone(), edges);
+    }
+
+    let mut queue: std::collections::VecDeque<String> = names.iter().cloned().collect();
+    let mut queued: HashSet<String> = names.into_iter().collect();
+    // Work budget for the reconciliation worklist. Each step is one package
+    // being re-selected; a package legitimately changes version a handful of
+    // times as its dependents settle, so 256 per package is generous headroom
+    // rather than a threshold we expect to approach. The floor keeps tiny trees
+    // from being judged by a limit they could not exhaust, and the ceiling keeps
+    // a pathological graph from running unbounded. Exceeding it is reported as
+    // an error, never truncated to a partial tree — a resolver that gives up
+    // must not hand back something that looks like an answer.
+    let step_limit = std::env::var("JAGR_RECONCILE_STEPS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or_else(|| resolved.len().saturating_mul(256).clamp(1_024, 1_000_000));
+    let mut steps = 0usize;
+    while let Some(name) = queue.pop_front() {
+        queued.remove(&name);
+        steps += 1;
+        if steps > step_limit {
+            return Err(format!(
+                "JAGR version reconciliation exceeded {step_limit} work steps; refusing partial resolution"
+            ));
+        }
+        let Some(versions) = candidates.get(&name) else {
+            continue;
+        };
+        let mut specs = Vec::new();
+        if let Some(spec) = direct.get(&name) {
+            specs.push(spec.clone());
+        }
+        if let Some(parents) = incoming.get(&name) {
+            specs.extend(parents.values().flatten().cloned());
+        }
+        if let Some(spec) = overrides.get(&name) {
+            if resolved.contains_key(&name) {
+                specs.clear();
+                specs.push(spec.clone());
             }
         }
-        // npm `overrides` / yarn `resolutions` win over every discovered range.
-        // Replacing (rather than adding) is required: keeping the real ranges
-        // alongside the override usually makes the set unsatisfiable, and the
-        // package then drops out of the tree entirely — which is how a transitive
-        // override was silently ignored on this (nested/JAGR) path before.
-        if !overrides.is_empty() {
-            for (name, spec) in overrides {
-                if resolved.contains_key(name) {
-                    incoming_ranges.insert(name.clone(), vec![spec.clone()]);
-                }
-            }
+        if specs.is_empty() {
+            continue;
         }
 
-        let mut changed = false;
-        let names: Vec<String> = resolved.keys().cloned().collect();
-        for name in names {
-            let Some(specs) = incoming_ranges.get(&name) else {
-                continue;
-            };
-            let Some(packument) = packuments.get(&name) else {
-                continue;
-            };
-            let versions: Vec<(semver::Version, &str)> = packument
-                .get("versions")
-                .and_then(|v| v.as_object())
-                .map(|o| {
-                    o.keys()
-                        .filter_map(|version| {
-                            semver::Version::parse(version)
-                                .ok()
-                                .map(|parsed| (parsed, version.as_str()))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            // Prefer a version satisfying *every* dependent. When the ranges
-            // genuinely conflict (e.g. an exact `2.0.0` from debug 2.6.9 alongside
-            // `^2.1.1` from jsonwebtoken), fall back to the highest version
-            // satisfying **at least one** of them rather than keeping the previous
-            // pick: that pick can be an unconstrained solver choice no dependent
-            // asked for. Observed end-to-end as a phantom
-            // `node_modules/ms -> 4.0.0-nightly.202508271359` hoisted to the root
-            // (zero inbound links) while every declarer wanted 2.x. Prerelease
-            // exclusion comes for free here because `version_satisfies` implements
-            // npm's rule, so a nightly matches only a range that names a prerelease.
-            fn highest<'a>(
-                versions: &'a [(semver::Version, &'a str)],
-                ok: impl Fn(&semver::Version) -> bool,
-            ) -> Option<&'a str> {
+        // Preserve existing conflict behavior: prefer a version satisfying every
+        // reaching range, then the highest version satisfying at least one.
+        let best = versions
+            .iter()
+            .filter(|(version, _)| {
+                specs
+                    .iter()
+                    .all(|s| crate::registry::version_satisfies_parsed(s, version))
+            })
+            .max_by(|a, b| a.0.cmp(&b.0))
+            .or_else(|| {
                 versions
                     .iter()
-                    .filter(|(version, _)| ok(version))
+                    .filter(|(version, _)| {
+                        specs
+                            .iter()
+                            .any(|s| crate::registry::version_satisfies_parsed(s, version))
+                    })
                     .max_by(|a, b| a.0.cmp(&b.0))
-                    .map(|(_, version)| *version)
-            }
-            let satisfies_all = |v: &semver::Version| {
-                specs
-                    .iter()
-                    .all(|s| crate::registry::version_satisfies_parsed(s, v))
-            };
-            let satisfies_any = |v: &semver::Version| {
-                specs
-                    .iter()
-                    .any(|s| crate::registry::version_satisfies_parsed(s, v))
-            };
-            let best =
-                highest(&versions, satisfies_all).or_else(|| highest(&versions, satisfies_any));
-            if let Some(version) = best {
-                if let Some(pkg) = resolved.get_mut(&name) {
-                    if pkg.version != version {
-                        changed = true;
-                        pkg.resolved = crate::lockfile::tarball_url_from_registry(&name, version);
-                        pkg.version = version.to_string();
-                    }
+            })
+            .map(|(_, version)| version.clone());
+        let Some(best) = best else {
+            continue;
+        };
+        let Some(pkg) = resolved.get_mut(&name) else {
+            continue;
+        };
+        if pkg.version == best {
+            continue;
+        }
+        pkg.version = best.clone();
+        pkg.resolved = crate::lockfile::tarball_url_from_registry(&name, &best);
+
+        let old_edges = contributions.remove(&name).unwrap_or_default();
+        for (child, _) in old_edges {
+            if let Some(parents) = incoming.get_mut(&child) {
+                parents.remove(&name);
+                if parents.is_empty() {
+                    incoming.remove(&child);
                 }
             }
+            if resolved.contains_key(&child) && queued.insert(child.clone()) {
+                queue.push_back(child);
+            }
         }
-        if !changed {
-            break;
+        let new_edges = requirements(&name, &best, packuments);
+        for (child, spec) in &new_edges {
+            incoming
+                .entry(child.clone())
+                .or_default()
+                .entry(name.clone())
+                .or_default()
+                .push(spec.clone());
+            if resolved.contains_key(child) && queued.insert(child.clone()) {
+                queue.push_back(child.clone());
+            }
         }
+        contributions.insert(name, new_edges);
     }
     // Rebuild dependency edges to match the FINAL selected version. The fixpoint
     // rewrites versions, but each package's `dependencies` map still reflects the
@@ -3467,6 +3576,7 @@ fn reconcile_versions(
             pkg.peer_dependencies_meta = peers_meta;
         }
     }
+    Ok(())
 }
 
 /// BFS over the resolved dependency graph starting from the direct deps.
@@ -3721,14 +3831,19 @@ pub fn fetch_dep_tree(
     // whose constraint set grows after discovery (string-width `^5` from the
     // root, then `^4` from cliui) — except that re-expansion now reuses the
     // cached packument instead of re-fetching it.
+    // Prefetch-only prediction of the closure from stale local metadata; the loop
+    // below still decides every version from live data. Stops when dropped.
+    let _speculation = start_closure_speculation(direct);
     let mut queue: std::collections::VecDeque<String> = direct.keys().cloned().collect();
     let mut pending: HashSet<String> = HashSet::new();
     // Avoid repeating a full fetch for the same accumulated range set. A later
     // constraint set may need versions removed by pruning, so escalation is keyed
     // by canonical constraints rather than limited to one fetch per package.
     let mut escalated: HashMap<String, Vec<String>> = HashMap::new();
+    let mut coverage: HashMap<String, Vec<String>> = HashMap::new();
     let limit = crate::registry::packument_concurrency().max(2);
-    let (tx, rx) = std::sync::mpsc::channel::<(String, Result<serde_json::Value, String>)>();
+    let (tx, rx) =
+        std::sync::mpsc::channel::<(String, Vec<String>, Result<serde_json::Value, String>)>();
     // Runaway guard. Every discovered package keeps its FULL packument resident for
     // the rest of the resolution (large ones are tens of MB: a framework's packs
     // thousands of versions), so a big real-world graph — a Next.js app has ~300
@@ -3742,8 +3857,8 @@ pub fn fetch_dep_tree(
         .filter(|v| *v > 0)
         .unwrap_or(4_000);
     let _recent_sequence: Vec<String> = Vec::new();
-    let prefetch_tarballs = !crate::registry::offline_mode()
-        && std::env::var("JHOL_NO_PREFETCH").is_err();
+    let prefetch_tarballs =
+        !crate::registry::offline_mode() && std::env::var("JHOL_NO_PREFETCH").is_err();
     let cache_dir = std::path::PathBuf::from(crate::utils::get_cache_dir());
     let mut prefetched_tarballs: HashSet<String> = HashSet::new();
     std::thread::scope(|scope| -> Result<(), String> {
@@ -3765,10 +3880,11 @@ pub fn fetch_dep_tree(
                     // Already fetched — only the constraint set grew, so expand
                     // against the cached packument rather than re-fetching it,
                     // unless pruning removed every candidate for a new range.
-                    let needs_refetch = needs_escalation(&name, &packuments[&name], &incoming);
-                    let mut current_constraints = incoming.get(&name).cloned().unwrap_or_default();
-                    current_constraints.sort_unstable();
-                    current_constraints.dedup();
+                    let current_constraints = canonical_constraints(
+                        incoming.get(&name).map(Vec::as_slice).unwrap_or(&[]),
+                    );
+                    let needs_refetch = needs_escalation(&name, &packuments[&name], &incoming)
+                        || coverage.get(&name) != Some(&current_constraints);
                     let escalate =
                         needs_refetch && escalated.get(&name) != Some(&current_constraints);
                     if escalate {
@@ -3776,17 +3892,24 @@ pub fn fetch_dep_tree(
                             eprintln!("[bundled] ESCALATE to full packument: {name} needs {current_constraints:?} (synth has {})", packuments.get(&name).map(|p| p.get("versions").and_then(|v| v.as_object()).map(|o| o.keys().cloned().collect::<Vec<_>>().join(",")).unwrap_or_default()).unwrap_or_default());
                         }
                         escalated.insert(name.clone(), current_constraints.clone());
-                        if let Ok(mut full) = crate::registry::fetch_metadata_full_packument(&name)
+                        let mut full = crate::registry::fetch_metadata_full_packument(&name)
+                            .map_err(|e| {
+                                format!("could not expand metadata domain for {name}: {e}")
+                            })?;
                         {
                             if prefetch_tarballs {
                                 for c in &current_constraints {
                                     if let Some(v) = highest_satisfying(&full, c) {
-                                        if crate::install::version_supported_on_current_platform(&full, &v) {
+                                        if crate::install::version_supported_on_current_platform(
+                                            &full, &v,
+                                        ) {
                                             let pkg_key = format!("{}@{}", name, v);
                                             if prefetched_tarballs.insert(pkg_key.clone()) {
                                                 if let (Some(url), integrity) = (
                                                     crate::registry::get_tarball_url(&full, &v),
-                                                    crate::registry::get_integrity_for_version(&full, &v),
+                                                    crate::registry::get_integrity_for_version(
+                                                        &full, &v,
+                                                    ),
                                                 ) {
                                                     let cd = cache_dir.clone();
                                                     let key = pkg_key.clone();
@@ -3811,6 +3934,7 @@ pub fn fetch_dep_tree(
                             );
                             packuments.insert(name.clone(), full);
                         }
+                        coverage.insert(name.clone(), current_constraints);
                     }
                     let packument = &packuments[&name];
                     expand_children(&name, packument, &mut incoming, &mut seen, &mut queue);
@@ -3819,13 +3943,14 @@ pub fn fetch_dep_tree(
                 pending.insert(name.clone());
                 in_flight += 1;
                 let tx = tx.clone();
-                let constraints = incoming.get(&name).cloned().unwrap_or_default();
+                let constraints =
+                    canonical_constraints(incoming.get(&name).map(Vec::as_slice).unwrap_or(&[]));
                 scope.spawn(move || {
                     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         fetch_one_packument_for(&name, &constraints)
                     }))
                     .unwrap_or_else(|_| Err("packument fetch panicked".to_string()));
-                    let _ = tx.send((name, r));
+                    let _ = tx.send((name, constraints, r));
                 });
             }
             if in_flight == 0 {
@@ -3839,7 +3964,9 @@ pub fn fetch_dep_tree(
             // with no lockfile sat at 10 MB RSS indefinitely. A timeout turns that
             // into "stop waiting and resolve what we have", matching the bounded
             // receive already used by the install pipeline.
-            let (name, result) = match rx.recv_timeout(std::time::Duration::from_secs(120)) {
+            let (name, fetched_constraints, result) = match rx
+                .recv_timeout(std::time::Duration::from_secs(120))
+            {
                 Ok(v) => v,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                     return Err(
@@ -3858,16 +3985,19 @@ pub fn fetch_dep_tree(
             pending.remove(&name);
             match result {
                 Ok(mut packument) => {
-                    let needs_refetch = needs_escalation(&name, &packument, &incoming);
-                    let mut current_constraints = incoming.get(&name).cloned().unwrap_or_default();
-                    current_constraints.sort_unstable();
-                    current_constraints.dedup();
+                    let current_constraints = canonical_constraints(
+                        incoming.get(&name).map(Vec::as_slice).unwrap_or(&[]),
+                    );
+                    let needs_refetch = needs_escalation(&name, &packument, &incoming)
+                        || fetched_constraints != current_constraints;
                     if needs_refetch && escalated.get(&name) != Some(&current_constraints) {
-                        escalated.insert(name.clone(), current_constraints);
-                        if let Ok(full) = crate::registry::fetch_metadata_full_packument(&name) {
-                            packument = full;
-                        }
+                        escalated.insert(name.clone(), current_constraints.clone());
+                        packument =
+                            crate::registry::fetch_metadata_full_packument(&name).map_err(|e| {
+                                format!("could not expand metadata domain for {name}: {e}")
+                            })?;
                     }
+                    coverage.insert(name.clone(), current_constraints);
                     expand_children(&name, &packument, &mut incoming, &mut seen, &mut queue);
 
                     // Retain only the versions that can still be selected; the full
@@ -3881,7 +4011,9 @@ pub fn fetch_dep_tree(
                     if prefetch_tarballs {
                         let mut cand_versions = Vec::new();
                         if constraints_for_name.is_empty() {
-                            if let Some(versions) = packument.get("versions").and_then(|v| v.as_object()) {
+                            if let Some(versions) =
+                                packument.get("versions").and_then(|v| v.as_object())
+                            {
                                 if let Some(v) = versions.keys().max_by(|a, b| {
                                     semver::Version::parse(a)
                                         .ok()
@@ -3903,12 +4035,16 @@ pub fn fetch_dep_tree(
                         }
 
                         for cand_ver in cand_versions {
-                            if crate::install::version_supported_on_current_platform(&packument, &cand_ver) {
+                            if crate::install::version_supported_on_current_platform(
+                                &packument, &cand_ver,
+                            ) {
                                 let pkg_key = format!("{}@{}", name, cand_ver);
                                 if prefetched_tarballs.insert(pkg_key.clone()) {
                                     if let (Some(url), integrity) = (
                                         crate::registry::get_tarball_url(&packument, &cand_ver),
-                                        crate::registry::get_integrity_for_version(&packument, &cand_ver),
+                                        crate::registry::get_integrity_for_version(
+                                            &packument, &cand_ver,
+                                        ),
                                     ) {
                                         let cd = cache_dir.clone();
                                         let key = pkg_key.clone();
@@ -3942,6 +4078,139 @@ pub fn fetch_dep_tree(
         Ok(())
     })?;
     Ok(packuments)
+}
+
+// ── Closure speculation ───────────────────────────────────────────────────
+//
+// Cold resolution is a chain of dependent round trips: a package's children are
+// unknown until its packument arrives, so wall time is roughly depth x RTT even
+// with the pipelined frontier. The machine usually holds *older* packuments of
+// the same packages (project cache, durable origin). Their dependency lists are
+// a good prediction of the current ones, and reading them costs no network.
+//
+// `start_closure_speculation` walks that predicted closure locally and warms the
+// live-metadata caches for every predicted name in parallel, so by the time the
+// real frontier reaches a package its packument is cached or already in flight
+// (single-flight joins it).
+//
+// Quality is unaffected by construction: this only *prefetches*. Version choice
+// still happens in the frontier on live data. A wrong prediction costs one extra
+// request; a missed one is discovered the normal way. Bounded (`JHOL_SPECULATE_MAX`
+// names, at most 8 dedicated threads, none from the shared IO pool), off with
+// `JHOL_NO_SPECULATE=1`, and never runs offline.
+//
+// The release profile is `panic = "abort"`, so nothing here may panic.
+
+/// Stops the speculation threads when dropped.
+struct SpeculationGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for SpeculationGuard {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Any-age packument from the project cache or durable origin, TTL ignored: a
+/// stale body is exactly what a *prediction* needs, and is never used to resolve.
+fn stale_packument(name: &str) -> Option<serde_json::Value> {
+    for abbreviated in [true, false] {
+        let (body, _) = crate::origin::read_packument_cache(name, abbreviated);
+        let Some(body) = body.filter(|b| !b.is_empty()) else {
+            continue;
+        };
+        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
+            let has_versions = v
+                .get("versions")
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|o| !o.is_empty());
+            if has_versions {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
+fn start_closure_speculation(direct: &HashMap<String, String>) -> Option<SpeculationGuard> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    if direct.is_empty()
+        || crate::registry::offline_mode()
+        || std::env::var("JHOL_NO_SPECULATE").is_ok()
+    {
+        return None;
+    }
+    let max_names = std::env::var("JHOL_SPECULATE_MAX")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(256);
+    let workers = crate::registry::packument_concurrency().clamp(2, 8);
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = std::sync::mpsc::channel::<(String, String)>();
+    let rx = Arc::new(Mutex::new(rx));
+
+    for i in 0..workers {
+        let rx = Arc::clone(&rx);
+        let stop = Arc::clone(&stop);
+        let _ = std::thread::Builder::new()
+            .name(format!("jhol-spec-{i}"))
+            .spawn(move || loop {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                // Hold the lock only for the receive, never across the fetch.
+                let job = match rx.lock() {
+                    Ok(guard) => guard.recv(),
+                    Err(_) => break,
+                };
+                let Ok((name, constraint)) = job else { break };
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                // Result is discarded: the point is the cache/in-flight side effect.
+                let _ = crate::registry::fetch_metadata_for_constraint(&name, &constraint);
+            });
+    }
+
+    let direct = direct.clone();
+    let walk_stop = Arc::clone(&stop);
+    let _ = std::thread::Builder::new()
+        .name("jhol-spec-walk".into())
+        .spawn(move || {
+            let mut incoming: HashMap<String, Vec<String>> = HashMap::new();
+            let mut seen: HashSet<String> = HashSet::new();
+            let mut emitted: HashSet<String> = HashSet::new();
+            let mut queue: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+            for (name, spec) in &direct {
+                incoming.entry(name.clone()).or_default().push(spec.clone());
+                seen.insert(name.clone());
+                queue.push_back(name.clone());
+            }
+            while let Some(name) = queue.pop_front() {
+                if walk_stop.load(Ordering::Relaxed) || emitted.len() >= max_names {
+                    break;
+                }
+                if emitted.insert(name.clone()) {
+                    let constraint = incoming
+                        .get(&name)
+                        .and_then(|c| c.first())
+                        .cloned()
+                        .unwrap_or_default();
+                    if tx.send((name.clone(), constraint)).is_err() {
+                        break;
+                    }
+                }
+                if let Some(stale) = stale_packument(&name) {
+                    expand_children(&name, &stale, &mut incoming, &mut seen, &mut queue);
+                }
+            }
+            // `tx` drops here, so idle workers exit.
+        });
+
+    Some(SpeculationGuard(stop))
 }
 
 /// Record a fetched package's children: accumulate their constraints and queue
@@ -4095,27 +4364,139 @@ fn load_or_build_atlas() -> Result<Atlas, String> {
     Ok(Atlas::new())
 }
 
-fn try_cached_program(chart_id: u64) -> Option<crate::jagr_infinite::rvm::inst::Program> {
-    let path = atlas_cache_dir().join(format!("{:016x}.rvm", chart_id));
-    let data = std::fs::read(&path).ok()?;
-    bincode::deserialize::<crate::jagr_infinite::rvm::inst::Program>(&data).ok()
+fn rvm_program_cache_key(
+    constraints: &HashMap<u32, VersionInterval>,
+    candidates: &HashMap<u32, crate::jagr_infinite::chart::VersionBitmap>,
+) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+
+    // Compiled bytecode consumes these constraint inputs; execution receives
+    // the freshly built Atlas and policy each time. Change this version marker
+    // whenever the emitted instruction semantics or consumed inputs change.
+    let mut hasher = Sha256::new();
+    hasher.update(b"jhol-jagr-rvm-program-v2\0");
+    let mut package_ids: Vec<_> = constraints.keys().copied().collect();
+    package_ids.sort_unstable();
+    hasher.update((package_ids.len() as u64).to_le_bytes());
+    for package_id in package_ids {
+        let interval = constraints[&package_id];
+        hasher.update(package_id.to_le_bytes());
+        hasher.update(interval.lo.0.to_le_bytes());
+        hasher.update(interval.hi.0.to_le_bytes());
+    }
+
+    let mut package_ids: Vec<_> = candidates.keys().copied().collect();
+    package_ids.sort_unstable();
+    hasher.update((package_ids.len() as u64).to_le_bytes());
+    for package_id in package_ids {
+        let domain = &candidates[&package_id];
+        hasher.update(package_id.to_le_bytes());
+        hasher.update(domain.ordinal_lo.0.to_le_bytes());
+        hasher.update(domain.ordinal_hi.0.to_le_bytes());
+        hasher.update((domain.words.len() as u64).to_le_bytes());
+        for word in &domain.words {
+            hasher.update(word.to_le_bytes());
+        }
+    }
+    hasher.finalize().into()
 }
 
-fn persist_cached_program(program: &crate::jagr_infinite::rvm::inst::Program, chart_id: u64) {
+const MAX_CACHED_RVM_PROGRAM_BYTES: usize = 1024 * 1024;
+const MAX_CACHED_RVM_INSTRUCTIONS: usize = 10_000;
+
+fn try_cached_program(
+    cache_key: [u8; 32],
+    chart_id: u64,
+    constraints: &HashMap<u32, VersionInterval>,
+) -> Option<crate::jagr_infinite::rvm::inst::Program> {
+    let path = atlas_cache_dir().join(format!("rvm-v2-{}.rvm", hex::encode(cache_key)));
+    use std::io::Read;
+    let file = std::fs::File::open(&path).ok()?;
+    let mut data = Vec::new();
+    file.take(MAX_CACHED_RVM_PROGRAM_BYTES as u64 + 1)
+        .read_to_end(&mut data)
+        .ok()?;
+    decode_cached_program(&data, cache_key, chart_id, constraints)
+}
+
+fn decode_cached_program(
+    data: &[u8],
+    cache_key: [u8; 32],
+    chart_id: u64,
+    constraints: &HashMap<u32, VersionInterval>,
+) -> Option<crate::jagr_infinite::rvm::inst::Program> {
+    use crate::jagr_infinite::rvm::inst::Inst;
+
+    if data.len() > MAX_CACHED_RVM_PROGRAM_BYTES {
+        return None;
+    }
+    let program = bincode::deserialize::<crate::jagr_infinite::rvm::inst::Program>(data).ok()?;
+    if program.metadata.chart_id != chart_id || program.metadata.cache_key != Some(cache_key) {
+        return None;
+    }
+    let interval_count = program.instructions.len().checked_sub(5)?;
+    if program.metadata.package_count as usize != interval_count
+        || interval_count != constraints.len()
+        || program.instructions.len() >= MAX_CACHED_RVM_INSTRUCTIONS
+        || program.metadata.scc_count != 1
+    {
+        return None;
+    }
+    let mut expected_intervals: HashMap<(u16, u16), usize> = HashMap::new();
+    for interval in constraints.values() {
+        *expected_intervals
+            .entry((interval.lo.0, interval.hi.0))
+            .or_default() += 1;
+    }
+    let mut seen_packages = vec![false; interval_count];
+    for instruction in &program.instructions[..interval_count] {
+        let Inst::PushInterval { pkg, lo, hi } = instruction else {
+            return None;
+        };
+        let seen = seen_packages.get_mut(*pkg as usize)?;
+        if *seen {
+            return None;
+        }
+        *seen = true;
+        let remaining = expected_intervals.get_mut(&(*lo, *hi))?;
+        if *remaining == 0 {
+            return None;
+        }
+        *remaining -= 1;
+    }
+    if seen_packages.iter().any(|seen| !seen)
+        || expected_intervals.values().any(|remaining| *remaining != 0)
+    {
+        return None;
+    }
+    let tail = &program.instructions[interval_count..];
+    if !matches!(&tail[0], Inst::LoadChart { chart_id: loaded } if *loaded == chart_id)
+        || !matches!(&tail[1], Inst::GreedySCC { scc_id: 0 })
+        || !matches!(&tail[2], Inst::VerifyDeps)
+        || !matches!(&tail[3], Inst::StoreResult)
+        || !matches!(&tail[4], Inst::Halt)
+    {
+        return None;
+    }
+    Some(program)
+}
+
+fn persist_cached_program(program: &crate::jagr_infinite::rvm::inst::Program, cache_key: [u8; 32]) {
     let dir = atlas_cache_dir();
     let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join(format!("{:016x}.rvm", chart_id));
+    let path = dir.join(format!("rvm-v2-{}.rvm", hex::encode(cache_key)));
     if let Ok(data) = bincode::serialize(program) {
-        let _ = std::fs::write(path, data);
+        if data.len() <= MAX_CACHED_RVM_PROGRAM_BYTES {
+            let _ = std::fs::write(path, data);
+        }
     }
 }
 
 /// P1 persistent resolved-bundle cache. Keyed by the sorted (name, spec) of the
 /// direct dependency set, so it is lockfile-independent and shared across
-/// projects. Replays a previous full resolution (fetch+atlas+RVM+reconcile)
-/// when the exact same dep-set was resolved before AND every direct dep's
-/// cached version still satisfies its range (registry versions are immutable;
-/// a satisfying pinned version never goes stale).
+/// projects. Replay requires the same dependency/override inputs, current
+/// registry and credential fingerprints, metadata TTL, and a valid complete
+/// dependency layout under the current peer policy.
 ///
 /// Returns None on miss or staleness — caller falls through to the real
 /// pipeline and then calls `persist_resolved_bundle`.
@@ -4128,17 +4509,21 @@ fn deps_spec_hash(deps: &HashMap<String, String>, overrides: &HashMap<String, St
     let ordered_deps: BTreeMap<_, _> = deps.iter().collect();
     let ordered_overrides: BTreeMap<_, _> = overrides.iter().collect();
     let mut hasher = xxhash_rust::xxh3::Xxh3::new();
-    for (k, v) in ordered_deps {
-        hasher.update(k.as_bytes());
-        hasher.update(b"\0");
-        hasher.update(v.as_bytes());
-        hasher.update(b"\0");
-    }
-    for (k, v) in ordered_overrides {
-        hasher.update(k.as_bytes());
-        hasher.update(b"\0");
-        hasher.update(v.as_bytes());
-        hasher.update(b"\0");
+    // Version the namespace and frame both sections and fields. Otherwise
+    // moving the last root into overrides produces the identical byte stream.
+    hasher.update(b"jhol-resolved-bundle-v4\0");
+    for (section, entries) in [
+        (b"dependencies\0".as_slice(), ordered_deps),
+        (b"overrides\0".as_slice(), ordered_overrides),
+    ] {
+        hasher.update(section);
+        hasher.update(&(entries.len() as u64).to_le_bytes());
+        for (name, spec) in entries {
+            for field in [name, spec] {
+                hasher.update(&(field.len() as u64).to_le_bytes());
+                hasher.update(field.as_bytes());
+            }
+        }
     }
     hasher.digest()
 }
@@ -4149,20 +4534,19 @@ fn try_resolved_bundle(
 ) -> Option<HashMap<String, ResolvedPackage>> {
     let dir = atlas_cache_dir();
     let path = dir.join(format!("{:016x}.jres", deps_spec_hash(deps, overrides)));
-    let data = std::fs::read(&path).ok()?;
-    let resolved = jres_decode(&data)?;
-    // Staleness guard: every direct dep must remain satisfied by the cached pick.
-    // Cached bundles may be node-keyed (current) or name-keyed (older), so look
-    // up both forms.
-    for (name, spec) in deps {
-        let pkg = resolved
-            .get(&format!("node_modules/{}", name))
-            .or_else(|| resolved.get(name))?;
-        if !crate::registry::version_satisfies(spec, &pkg.version) {
-            return None;
-        }
+    // Age guard: this cache is global and lockfile-independent, so without a TTL a
+    // months-old pick for `^1.2.0` would be replayed forever while the registry
+    // moved on. Same age policy as the packument cache it was derived from.
+    if !crate::origin::within_metadata_ttl(&path) {
+        return None;
     }
-    Some(resolved)
+    let data = std::fs::read(&path).ok()?;
+    decode_verified_bundle(
+        &data,
+        deps,
+        strict_peer_dependencies(),
+        crate::registry::RegistryIdentity::for_package,
+    )
 }
 
 fn persist_resolved_bundle(
@@ -4173,22 +4557,116 @@ fn persist_resolved_bundle(
     let dir = atlas_cache_dir();
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join(format!("{:016x}.jres", deps_spec_hash(deps, overrides)));
-    let data = jres_encode(resolved);
-    if !data.is_empty() {
+    let identity_for = crate::registry::RegistryIdentity::for_package;
+    let Some(registries) = registry_fingerprints(resolved, |name| identity_for(name).registry)
+    else {
+        return;
+    };
+    let Some(origin_fingerprint) = origin_fingerprint(resolved, identity_for) else {
+        return;
+    };
+    let bundle = ResolvedBundle {
+        version: 5,
+        registries,
+        origin_fingerprint,
+        resolved,
+    };
+    if let Ok(data) = serde_json::to_vec(&bundle) {
         let _ = std::fs::write(path, data);
     }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ResolvedBundle<T> {
+    version: u8,
+    registries: std::collections::BTreeMap<String, String>,
+    origin_fingerprint: String,
+    resolved: T,
+}
+
+fn decode_verified_bundle(
+    data: &[u8],
+    deps: &HashMap<String, String>,
+    strict_peers: bool,
+    identity_for: impl Fn(&str) -> crate::registry::RegistryIdentity,
+) -> Option<HashMap<String, ResolvedPackage>> {
+    let bundle: ResolvedBundle<HashMap<String, ResolvedPackage>> =
+        serde_json::from_slice(data).ok()?;
+    if bundle.version != 5
+        || bundle.registries
+            != registry_fingerprints(&bundle.resolved, |name| identity_for(name).registry)?
+        || bundle.origin_fingerprint != origin_fingerprint(&bundle.resolved, identity_for)?
+    {
+        return None;
+    }
+    validate_resolved_layout(&bundle.resolved, deps, strict_peers).ok()?;
+    Some(bundle.resolved)
+}
+
+fn origin_fingerprint(
+    layout: &HashMap<String, ResolvedPackage>,
+    identity_for: impl Fn(&str) -> crate::registry::RegistryIdentity,
+) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let mut origins = std::collections::BTreeMap::new();
+    for key in layout.keys() {
+        let name = node_key_package_name(key)?;
+        let identity = identity_for(&name);
+        origins.insert(
+            key.clone(),
+            crate::origin::packument_key_for(
+                &name,
+                false,
+                &identity.registry,
+                identity.token.as_deref(),
+            ),
+        );
+    }
+    let bytes = serde_json::to_vec(&origins).ok()?;
+    Some(format!("{:x}", Sha256::digest(bytes)))
+}
+
+/// Fingerprint the effective default and each scoped registry represented in
+/// the layout. Hash URLs instead of writing raw registry configuration.
+fn registry_fingerprints(
+    layout: &HashMap<String, ResolvedPackage>,
+    registry_for: impl Fn(&str) -> String,
+) -> Option<std::collections::BTreeMap<String, String>> {
+    use sha2::{Digest, Sha256};
+    let mut scopes = std::collections::BTreeMap::new();
+    scopes.insert(String::new(), "jhol-registry-probe".to_string());
+    for key in layout.keys() {
+        let name = node_key_package_name(key)?;
+        if let Some((scope, _)) = name.strip_prefix('@').and_then(|n| n.split_once('/')) {
+            scopes
+                .entry(format!("@{}", scope))
+                .or_insert_with(|| name.to_string());
+        }
+    }
+    Some(
+        scopes
+            .into_iter()
+            .map(|(scope, name)| {
+                let registry = registry_for(&name);
+                let digest = Sha256::digest(registry.trim().trim_end_matches('/').as_bytes());
+                (scope, format!("{:x}", digest))
+            })
+            .collect(),
+    )
 }
 
 /// Codec for the resolved-bundle cache (P1). JSON, NOT bincode:
 /// `ResolvedPackage` carries `peer_dependencies_meta: HashMap<String,
 /// serde_json::Value>`, which bincode cannot deserialize (self-describing
 /// value, non-self-describing codec) — the exact write-only-cache class of
-/// the `.jlat` bug (Appendix 9). Legacy bincode files fail `jres_decode`
-/// (None) and are rewritten by the next persist — self-healing.
+/// the `.jlat` bug (Appendix 9). These helpers retain regression coverage for
+/// the old codec; production v4 rejects older entries and writes a new bundle.
+#[cfg(test)]
 fn jres_encode(resolved: &HashMap<String, ResolvedPackage>) -> Vec<u8> {
     serde_json::to_vec(resolved).unwrap_or_default()
 }
 
+#[cfg(test)]
 fn jres_decode(data: &[u8]) -> Option<HashMap<String, ResolvedPackage>> {
     serde_json::from_slice(data).ok()
 }
@@ -4202,13 +4680,42 @@ fn jres_decode(data: &[u8]) -> Option<HashMap<String, ResolvedPackage>> {
 /// parse).
 const LATTICE_TTL_SECS: u64 = 3600 * 24; // refresh once a day for new versions
 
-fn lattice_path(name: &str) -> std::path::PathBuf {
-    let sanitized = name.replace('/', "__");
-    atlas_cache_dir().join(format!("{}.jlat", sanitized))
+fn canonical_constraints(constraints: &[String]) -> Vec<String> {
+    let mut constraints = constraints.to_vec();
+    constraints.sort_unstable();
+    constraints.dedup();
+    constraints
 }
 
-fn try_lattice_packument(name: &str) -> Option<serde_json::Value> {
-    let path = lattice_path(name);
+fn lattice_cache_key(
+    name: &str,
+    registry: &str,
+    token: Option<&str>,
+    constraints: &[String],
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(b"jhol-lattice-v4\0");
+    hash.update(crate::origin::packument_key_for(
+        name, false, registry, token,
+    ));
+    for constraint in canonical_constraints(constraints) {
+        hash.update((constraint.len() as u64).to_le_bytes());
+        hash.update(constraint.as_bytes());
+    }
+    format!("{:x}", hash.finalize())
+}
+
+fn lattice_path(name: &str, constraints: &[String]) -> std::path::PathBuf {
+    let project_dir = std::path::Path::new(".");
+    let registry = crate::config::effective_registry_url_for_package(project_dir, name);
+    let token = crate::config::registry_auth_token_for_url(project_dir, &registry);
+    let key = lattice_cache_key(name, &registry, token.as_deref(), constraints);
+    atlas_cache_dir().join(format!("lattice-v4-{}.jlat", key))
+}
+
+fn try_lattice_packument(name: &str, constraints: &[String]) -> Option<serde_json::Value> {
+    let path = lattice_path(name, constraints);
     let meta = std::fs::metadata(&path).ok()?;
     let modified = meta.modified().ok()?;
     let age = std::time::SystemTime::now()
@@ -4226,7 +4733,7 @@ fn try_lattice_packument(name: &str) -> Option<serde_json::Value> {
     serde_json::from_slice::<serde_json::Value>(&data).ok()
 }
 
-fn persist_lattice_packument(name: &str, packument: &serde_json::Value) {
+fn persist_lattice_packument(name: &str, constraints: &[String], packument: &serde_json::Value) {
     if packument
         .get("versions")
         .and_then(|v| v.as_object())
@@ -4238,7 +4745,7 @@ fn persist_lattice_packument(name: &str, packument: &serde_json::Value) {
     let dir = atlas_cache_dir();
     let _ = std::fs::create_dir_all(&dir);
     if let Ok(data) = serde_json::to_vec(packument) {
-        let _ = std::fs::write(lattice_path(name), data);
+        let _ = std::fs::write(lattice_path(name, constraints), data);
     }
 }
 
@@ -4278,7 +4785,8 @@ fn needs_escalation(
 }
 
 fn fetch_one_packument(name: &str, constraints: &[String]) -> Result<serde_json::Value, String> {
-    if let Some(cached) = try_lattice_packument(name) {
+    let constraints = canonical_constraints(constraints);
+    if let Some(cached) = try_lattice_packument(name, &constraints) {
         if std::env::var("JHOL_DEBUG_JINF").is_ok() {
             eprintln!("[JINF] lattice hit: {}", name);
         }
@@ -4296,9 +4804,16 @@ fn fetch_one_packument(name: &str, constraints: &[String]) -> Result<serde_json:
     // the cache. Prefer the constraint-aware path (same cache entries, and for an
     // exact pin it fetches a few-KB manifest instead of a whole packument), and
     // pay for the full packument only when that cannot answer the constraints.
-    let primary = match constraints.first() {
-        Some(c) => crate::registry::fetch_metadata_for_constraint(name, c),
-        None => crate::registry::fetch_metadata(name),
+    // A manifest for the first pin cannot establish the candidate domain for
+    // other parents. Snapshot-only selection remains explicitly opt-in/offline.
+    let primary = if constraints.len() > 1 && !crate::registry::bundled_index_allowed(&constraints)
+    {
+        crate::registry::fetch_metadata_full_packument(name)
+    } else {
+        match constraints.first() {
+            Some(c) => crate::registry::fetch_metadata_for_constraint(name, c),
+            None => crate::registry::fetch_metadata(name),
+        }
     };
     let mut packument = match primary {
         Ok(p) => p,
@@ -4313,14 +4828,12 @@ fn fetch_one_packument(name: &str, constraints: &[String]) -> Result<serde_json:
         || packument.get("_bundled_index_synth").is_some();
     if is_synth
         && !constraints.is_empty()
-        && !crate::registry::synth_satisfies_all(&packument, constraints)
+        && !crate::registry::synth_satisfies_all(&packument, &constraints)
     {
-        if let Ok(full) = crate::registry::fetch_metadata_full_packument(name) {
-            packument = full;
-        }
+        packument = crate::registry::fetch_metadata_full_packument(name)?;
     }
 
-    persist_lattice_packument(name, &packument);
+    persist_lattice_packument(name, &constraints, &packument);
     Ok(packument)
 }
 
@@ -4335,6 +4848,20 @@ fn try_lockfile_fast_path(
     package_json_path: &Path,
     deps: &HashMap<String, String>,
     overrides: &HashMap<String, String>,
+) -> Option<HashMap<String, ResolvedPackage>> {
+    try_lockfile_fast_path_with_policy(
+        package_json_path,
+        deps,
+        overrides,
+        strict_peer_dependencies(),
+    )
+}
+
+fn try_lockfile_fast_path_with_policy(
+    package_json_path: &Path,
+    deps: &HashMap<String, String>,
+    overrides: &HashMap<String, String>,
+    strict_peers: bool,
 ) -> Option<HashMap<String, ResolvedPackage>> {
     // This path reconstructs package records from lockfile data without
     // registry metadata, so it cannot prove override semantics. Let the full
@@ -4449,6 +4976,7 @@ fn try_lockfile_fast_path(
     if resolved.is_empty() {
         return None;
     }
+    validate_resolved_layout(&resolved, deps, strict_peers).ok()?;
     Some(resolved)
 }
 
@@ -5087,6 +5615,290 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    // Deliberately slow oracle: rebuild every incoming edge and rescan every
+    // package after each pass. Keep this independent from the production queue
+    // so differential tests can catch missed enqueue/update cases.
+    fn full_scan_reconcile_reference(
+        resolved: &mut HashMap<String, ResolvedPackage>,
+        packuments: &HashMap<String, serde_json::Value>,
+        direct: &HashMap<String, String>,
+        overrides: &HashMap<String, String>,
+    ) -> Result<(), String> {
+        fn edges(
+            name: &str,
+            version: &str,
+            packuments: &HashMap<String, serde_json::Value>,
+        ) -> Vec<(String, String)> {
+            let Some(info) = packuments
+                .get(name)
+                .and_then(|p| p.get("versions"))
+                .and_then(|v| v.get(version))
+            else {
+                return Vec::new();
+            };
+            let mut out = Vec::new();
+            for field in ["dependencies", "peerDependencies"] {
+                let Some(deps) = info.get(field).and_then(|v| v.as_object()) else {
+                    continue;
+                };
+                for (child, spec) in deps {
+                    let optional_peer = field == "peerDependencies"
+                        && info
+                            .get("peerDependenciesMeta")
+                            .and_then(|m| m.get(child))
+                            .and_then(|m| m.get("optional"))
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                    if !optional_peer {
+                        out.push((child.clone(), spec.as_str().unwrap_or("*").to_owned()));
+                    }
+                }
+            }
+            out
+        }
+
+        let mut names: Vec<_> = resolved.keys().cloned().collect();
+        names.sort();
+        let mut seen = HashSet::new();
+        let pass_limit = resolved.len().saturating_mul(256).clamp(1_024, 1_000_000);
+        for _ in 0..pass_limit {
+            let mut incoming: HashMap<String, Vec<String>> = HashMap::new();
+            for parent in &names {
+                for (child, spec) in edges(parent, &resolved[parent].version, packuments) {
+                    incoming.entry(child).or_default().push(spec);
+                }
+            }
+
+            let mut changed = false;
+            for name in &names {
+                let mut specs = Vec::new();
+                if let Some(spec) = direct.get(name) {
+                    specs.push(spec.as_str());
+                }
+                if let Some(parent_specs) = incoming.get(name) {
+                    specs.extend(parent_specs.iter().map(String::as_str));
+                }
+                if let Some(spec) = overrides.get(name) {
+                    specs.clear();
+                    specs.push(spec.as_str());
+                }
+                if specs.is_empty() {
+                    continue;
+                }
+
+                let Some(versions) = packuments
+                    .get(name)
+                    .and_then(|p| p.get("versions"))
+                    .and_then(|v| v.as_object())
+                else {
+                    continue;
+                };
+                let candidates: Vec<_> = versions
+                    .keys()
+                    .filter_map(|v| semver::Version::parse(v).ok().map(|parsed| (parsed, v)))
+                    .collect();
+                let best = candidates
+                    .iter()
+                    .filter(|(v, _)| {
+                        specs
+                            .iter()
+                            .all(|s| crate::registry::version_satisfies_parsed(s, v))
+                    })
+                    .max_by(|a, b| a.0.cmp(&b.0))
+                    .or_else(|| {
+                        candidates
+                            .iter()
+                            .filter(|(v, _)| {
+                                specs
+                                    .iter()
+                                    .any(|s| crate::registry::version_satisfies_parsed(s, v))
+                            })
+                            .max_by(|a, b| a.0.cmp(&b.0))
+                    })
+                    .map(|(_, v)| (*v).clone());
+                let Some(best) = best else {
+                    continue;
+                };
+                let pkg = resolved.get_mut(name).expect("name came from resolved");
+                if pkg.version != best {
+                    pkg.version = best.clone();
+                    pkg.resolved = crate::lockfile::tarball_url_from_registry(name, &best);
+                    changed = true;
+                }
+            }
+
+            let state: Vec<_> = names
+                .iter()
+                .map(|name| (name.clone(), resolved[name].version.clone()))
+                .collect();
+            if !changed {
+                return Ok(());
+            }
+            if !seen.insert(state) {
+                return Err("reference reconciliation entered a version cycle".into());
+            }
+        }
+        Err("reference reconciliation exceeded its bounded full-scan budget".into())
+    }
+
+    fn layout_signature(
+        layout: &HashMap<String, ResolvedPackage>,
+    ) -> Vec<(String, String, Vec<(String, String)>, Vec<(String, String)>)> {
+        let mut signature: Vec<_> = layout
+            .iter()
+            .map(|(path, pkg)| {
+                let mut dependencies: Vec<_> = pkg
+                    .dependencies
+                    .iter()
+                    .map(|(name, version)| (name.clone(), version.clone()))
+                    .collect();
+                dependencies.sort();
+                let mut peers: Vec<_> = pkg
+                    .peer_dependencies
+                    .iter()
+                    .map(|(name, spec)| (name.clone(), spec.clone()))
+                    .collect();
+                peers.sort();
+                (path.clone(), pkg.version.clone(), dependencies, peers)
+            })
+            .collect();
+        signature.sort();
+        signature
+    }
+
+    fn small_dependency_graph(
+        case: usize,
+        count: usize,
+    ) -> (
+        HashMap<String, ResolvedPackage>,
+        HashMap<String, serde_json::Value>,
+        HashMap<String, String>,
+    ) {
+        let mut resolved = HashMap::new();
+        let mut packuments = HashMap::new();
+        for parent in 0..count {
+            let name = format!("oracle-{parent}");
+            resolved.insert(name.clone(), resolved_pkg("1.0.0"));
+            let mut versions = serde_json::Map::new();
+            for (version_index, version) in ["1.0.0", "2.0.0", "3.0.0"].iter().enumerate() {
+                let mut dependencies = serde_json::Map::new();
+                for child in (parent + 1)..count {
+                    let next = child == parent + 1;
+                    let selected = if next {
+                        if version_index == 0 {
+                            1
+                        } else {
+                            2
+                        }
+                    } else {
+                        (case + parent * 3 + child * 5 + version_index) % 2 + 1
+                    };
+                    let include =
+                        next || (case * 7 + parent * 11 + child * 5 + version_index) % 4 == 0;
+                    if include {
+                        dependencies.insert(
+                            format!("oracle-{child}"),
+                            json!(if selected == 1 { "1.0.0" } else { "2.0.0" }),
+                        );
+                    }
+                }
+                versions.insert(
+                    (*version).to_owned(),
+                    json!({ "dependencies": dependencies }),
+                );
+            }
+            packuments.insert(name, json!({ "versions": versions }));
+        }
+        let direct = HashMap::from([("oracle-0".to_owned(), "2.0.0".to_owned())]);
+        (resolved, packuments, direct)
+    }
+
+    #[test]
+    fn resolved_bundle_hash_separates_dependency_and_override_roles() {
+        let roots = HashMap::from([
+            ("a".to_string(), "1.0.0".to_string()),
+            ("b".to_string(), "2.0.0".to_string()),
+        ]);
+        let one_root = HashMap::from([("a".to_string(), "1.0.0".to_string())]);
+        let overrides = HashMap::from([("b".to_string(), "2.0.0".to_string())]);
+        assert_ne!(
+            deps_spec_hash(&roots, &HashMap::new()),
+            deps_spec_hash(&one_root, &overrides)
+        );
+        assert_eq!(
+            deps_spec_hash(&roots, &HashMap::new()),
+            deps_spec_hash(&roots.clone(), &HashMap::new())
+        );
+    }
+
+    #[test]
+    fn replay_validation_requires_nearest_compatible_recorded_edges() {
+        let deps = HashMap::from([("parent".into(), "1.0.0".into())]);
+        let mut parent = resolved_pkg("1.0.0");
+        parent.dependencies.insert("child".into(), "^1.0.0".into());
+        let mut layout = HashMap::from([("node_modules/parent".into(), parent)]);
+        assert!(validate_resolved_layout(&layout, &deps, false).is_err());
+        layout.insert("node_modules/child".into(), resolved_pkg("1.2.0"));
+        assert!(validate_resolved_layout(&layout, &deps, false).is_ok());
+        layout.insert(
+            "node_modules/parent/node_modules/child".into(),
+            resolved_pkg("2.0.0"),
+        );
+        assert!(
+            validate_resolved_layout(&layout, &deps, false).is_err(),
+            "a nearer conflict must not fall through to a compatible root"
+        );
+        layout.insert(
+            "node_modules/parent/node_modules/child".into(),
+            resolved_pkg("1.3.0"),
+        );
+        assert!(validate_resolved_layout(&layout, &deps, false).is_ok());
+        layout.insert("legacy-name-key".into(), resolved_pkg("1.0.0"));
+        assert!(validate_resolved_layout(&layout, &deps, false).is_err());
+    }
+
+    #[test]
+    fn fresh_layout_requires_authoritative_metadata() {
+        let deps = HashMap::from([("parent".into(), "1.0.0".into())]);
+        let layout = HashMap::from([("node_modules/parent".into(), resolved_pkg("1.0.0"))]);
+        assert!(validate_layout(&layout, &HashMap::new(), &deps).is_err());
+        let metadata = HashMap::from([("parent".into(), json!({"versions":{"1.0.0":{}}}))]);
+        assert!(validate_layout(&layout, &metadata, &deps).is_ok());
+    }
+
+    #[test]
+    fn lockfile_replay_obeys_strict_peer_policy_without_global_env_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("package.json");
+        let deps = HashMap::from([("parent".into(), "1.0.0".into())]);
+        let mut lock = json!({"packages": {
+            "node_modules/parent": {"version":"1.0.0", "peerDependencies":{"peer":"^2.0.0"}},
+            "node_modules/peer": {"version":"1.0.0"}
+        }});
+        let replay = |lock: &serde_json::Value, strict| {
+            std::fs::write(directory.path().join("package-lock.json"), lock.to_string()).unwrap();
+            try_lockfile_fast_path_with_policy(&manifest, &deps, &HashMap::new(), strict)
+        };
+        assert!(replay(&lock, false).is_some());
+        assert!(replay(&lock, true).is_none());
+        lock["packages"]["node_modules/parent"]["peerDependenciesMeta"] =
+            json!({"peer":{"optional":true}});
+        assert!(
+            replay(&lock, true).is_none(),
+            "present optional peers must satisfy their range"
+        );
+        lock["packages"]["node_modules/peer"]["version"] = json!("2.1.0");
+        assert!(replay(&lock, true).is_some());
+        lock["packages"]
+            .as_object_mut()
+            .unwrap()
+            .remove("node_modules/peer");
+        assert!(
+            replay(&lock, true).is_some(),
+            "absent optional peers are allowed"
+        );
+    }
+
     #[test]
     fn lockfile_replay_requires_complete_compatible_dependency_edges() {
         let directory = tempfile::tempdir().unwrap();
@@ -5316,13 +6128,13 @@ mod tests {
 
         // Baseline: no override, ^6.0.0 keeps the declared major.
         let mut base = resolved();
-        reconcile_versions(&mut base, &packuments(), &direct, &HashMap::new());
+        reconcile_versions(&mut base, &packuments(), &direct, &HashMap::new()).unwrap();
         assert_eq!(base["ansi-regex"].version, "6.3.0");
 
         // With the override the transitive package is re-derived to 5.0.1.
         let mut overridden = resolved();
         let overrides = HashMap::from([("ansi-regex".to_string(), "5.0.1".to_string())]);
-        reconcile_versions(&mut overridden, &packuments(), &direct, &overrides);
+        reconcile_versions(&mut overridden, &packuments(), &direct, &overrides).unwrap();
         assert_eq!(
             overridden["ansi-regex"].version, "5.0.1",
             "override must replace the declared range"
@@ -5365,7 +6177,7 @@ mod tests {
             ("jsonwebtoken".to_string(), resolved_pkg("9.0.3")),
             ("ms".to_string(), resolved_pkg("4.0.0-nightly.202508271359")),
         ]);
-        reconcile_versions(&mut resolved, &packuments, &HashMap::new(), &HashMap::new());
+        reconcile_versions(&mut resolved, &packuments, &HashMap::new(), &HashMap::new()).unwrap();
         assert_ne!(
             resolved["ms"].version, "4.0.0-nightly.202508271359",
             "a prerelease no dependent requested must not be hoisted"
@@ -5391,9 +6203,227 @@ mod tests {
         )]);
         let direct = HashMap::from([("lodash".to_string(), "4.17.21".to_string())]);
 
-        reconcile_versions(&mut resolved, &packuments, &direct, &HashMap::new());
+        reconcile_versions(&mut resolved, &packuments, &direct, &HashMap::new()).unwrap();
 
         assert_eq!(resolved["lodash"].version, "4.17.21");
+    }
+
+    #[test]
+    fn reconcile_versions_propagates_constraints_through_long_dependency_chains() {
+        let count = 12;
+        let mut resolved = HashMap::new();
+        let mut packuments = HashMap::new();
+        for i in 0..count {
+            let name = format!("chain-{i}");
+            let deps_v1 = if i + 1 < count {
+                HashMap::from([(format!("chain-{}", i + 1), "1.0.0")])
+            } else {
+                HashMap::new()
+            };
+            let deps_v2 = if i + 1 < count {
+                HashMap::from([(format!("chain-{}", i + 1), "2.0.0")])
+            } else {
+                HashMap::new()
+            };
+            resolved.insert(name.clone(), resolved_pkg("1.0.0"));
+            packuments.insert(
+                name,
+                json!({"versions": {
+                    "1.0.0": {"dependencies": deps_v1},
+                    "2.0.0": {"dependencies": deps_v2}
+                }}),
+            );
+        }
+        let direct = HashMap::from([("chain-0".to_string(), "2.0.0".to_string())]);
+
+        reconcile_versions(&mut resolved, &packuments, &direct, &HashMap::new()).unwrap();
+
+        assert!(resolved.values().all(|pkg| pkg.version == "2.0.0"));
+        assert_eq!(resolved["chain-11"].version, "2.0.0");
+    }
+
+    #[test]
+    fn reconcile_worklist_matches_full_scan_reference_on_small_dags() {
+        for case in 0..48 {
+            let count = 2 + case % 7;
+            let (initial, packuments, direct) = small_dependency_graph(case, count);
+            let overrides = if case % 6 == 0 {
+                HashMap::from([(format!("oracle-{}", count - 1), "3.0.0".to_owned())])
+            } else {
+                HashMap::new()
+            };
+            let mut worklist = initial.clone();
+            let mut reference = initial;
+
+            let worklist_result =
+                reconcile_versions(&mut worklist, &packuments, &direct, &overrides);
+            let reference_result =
+                full_scan_reconcile_reference(&mut reference, &packuments, &direct, &overrides);
+            assert_eq!(
+                worklist_result.is_ok(),
+                reference_result.is_ok(),
+                "resolution status diverged for bounded graph {case}: worklist={worklist_result:?}, reference={reference_result:?}"
+            );
+            if worklist_result.is_err() {
+                continue;
+            }
+
+            let worklist_versions: Vec<_> = worklist
+                .iter()
+                .map(|(name, pkg)| (name.clone(), pkg.version.clone()))
+                .collect();
+            let reference_versions: Vec<_> = reference
+                .iter()
+                .map(|(name, pkg)| (name.clone(), pkg.version.clone()))
+                .collect();
+            let mut worklist_versions = worklist_versions;
+            let mut reference_versions = reference_versions;
+            worklist_versions.sort();
+            reference_versions.sort();
+            assert_eq!(
+                worklist_versions, reference_versions,
+                "selected versions diverged for bounded graph {case}"
+            );
+
+            let worklist_layout: HashMap<_, _> =
+                crate::layout::build_node_layout(&direct, &worklist, &packuments)
+                    .into_iter()
+                    .collect();
+            let reference_layout: HashMap<_, _> =
+                crate::layout::build_node_layout(&direct, &reference, &packuments)
+                    .into_iter()
+                    .collect();
+            assert_eq!(
+                layout_signature(&worklist_layout),
+                layout_signature(&reference_layout),
+                "final layout diverged for bounded graph {case}"
+            );
+            validate_layout(&worklist_layout, &packuments, &direct)
+                .unwrap_or_else(|error| panic!("worklist produced illegal graph {case}: {error}"));
+            validate_layout(&reference_layout, &packuments, &direct)
+                .unwrap_or_else(|error| panic!("reference produced illegal graph {case}: {error}"));
+
+            let reachable = dereachable_closure(&direct, &worklist);
+            assert!(
+                reachable.iter().all(|name| worklist.contains_key(name)),
+                "reachable closure contains unresolved package in graph {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn reconcile_versions_stops_on_a_stable_dependency_cycle() {
+        let mut resolved = HashMap::from([
+            ("cycle-a".to_string(), resolved_pkg("1.0.0")),
+            ("cycle-b".to_string(), resolved_pkg("1.0.0")),
+        ]);
+        let packuments = HashMap::from([
+            (
+                "cycle-a".to_string(),
+                json!({"versions": {"1.0.0": {"dependencies": {"cycle-b": "1.0.0"}}}}),
+            ),
+            (
+                "cycle-b".to_string(),
+                json!({"versions": {"1.0.0": {"dependencies": {"cycle-a": "1.0.0"}}}}),
+            ),
+        ]);
+        let direct = HashMap::from([("cycle-a".to_string(), "1.0.0".to_string())]);
+        let mut reference = resolved.clone();
+
+        reconcile_versions(&mut resolved, &packuments, &direct, &HashMap::new()).unwrap();
+        full_scan_reconcile_reference(&mut reference, &packuments, &direct, &HashMap::new())
+            .expect("the stable cycle must converge in the reference");
+
+        assert_eq!(resolved["cycle-a"].version, "1.0.0");
+        assert_eq!(resolved["cycle-b"].version, "1.0.0");
+        assert_eq!(resolved["cycle-a"].version, reference["cycle-a"].version);
+        assert_eq!(resolved["cycle-b"].version, reference["cycle-b"].version);
+    }
+
+    #[test]
+    fn reconcile_versions_fails_closed_on_an_oscillating_cycle() {
+        let mut resolved = HashMap::from([
+            ("cycle-a".to_string(), resolved_pkg("1.0.0")),
+            ("cycle-b".to_string(), resolved_pkg("1.0.0")),
+        ]);
+        let packuments = HashMap::from([
+            (
+                "cycle-a".to_string(),
+                json!({"versions": {
+                    "1.0.0": {"dependencies": {"cycle-b": "1.0.0"}},
+                    "2.0.0": {"dependencies": {"cycle-b": "2.0.0"}}
+                }}),
+            ),
+            (
+                "cycle-b".to_string(),
+                json!({"versions": {
+                    "1.0.0": {"dependencies": {"cycle-a": "2.0.0"}},
+                    "2.0.0": {"dependencies": {"cycle-a": "1.0.0"}}
+                }}),
+            ),
+        ]);
+        let mut reference = resolved.clone();
+
+        let error =
+            reconcile_versions(&mut resolved, &packuments, &HashMap::new(), &HashMap::new())
+                .expect_err("non-convergent graph must not return a partial resolution");
+        let reference_error = full_scan_reconcile_reference(
+            &mut reference,
+            &packuments,
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .expect_err("the full-scan oracle must also reject the cycle");
+        assert!(error.contains("refusing partial resolution"), "{error}");
+        assert!(
+            reference_error.contains("version cycle"),
+            "{reference_error}"
+        );
+    }
+
+    #[test]
+    fn reconcile_worklist_matches_reference_with_nested_version_conflict() {
+        let mut resolved = HashMap::from([
+            ("parent-a".to_string(), resolved_pkg("1.0.0")),
+            ("parent-b".to_string(), resolved_pkg("1.0.0")),
+            ("shared-child".to_string(), resolved_pkg("1.0.0")),
+        ]);
+        let packuments = HashMap::from([
+            (
+                "parent-a".to_string(),
+                json!({"versions":{"1.0.0":{"dependencies":{"shared-child":"1.0.0"}}}}),
+            ),
+            (
+                "parent-b".to_string(),
+                json!({"versions":{"1.0.0":{"dependencies":{"shared-child":"2.0.0"}}}}),
+            ),
+            (
+                "shared-child".to_string(),
+                json!({"versions":{"1.0.0":{},"2.0.0":{}}}),
+            ),
+        ]);
+        let direct = HashMap::from([
+            ("parent-a".to_string(), "1.0.0".to_string()),
+            ("parent-b".to_string(), "1.0.0".to_string()),
+        ]);
+        let mut reference = resolved.clone();
+
+        reconcile_versions(&mut resolved, &packuments, &direct, &HashMap::new()).unwrap();
+        full_scan_reconcile_reference(&mut reference, &packuments, &direct, &HashMap::new())
+            .expect("nested conflict is satisfiable with separate placements");
+
+        let actual: HashMap<_, _> =
+            crate::layout::build_node_layout(&direct, &resolved, &packuments)
+                .into_iter()
+                .collect();
+        let expected: HashMap<_, _> =
+            crate::layout::build_node_layout(&direct, &reference, &packuments)
+                .into_iter()
+                .collect();
+        assert_eq!(layout_signature(&actual), layout_signature(&expected));
+        assert!(actual.contains_key("node_modules/parent-a/node_modules/shared-child"));
+        assert_eq!(validate_layout(&actual, &packuments, &direct), Ok(()));
+        assert_eq!(validate_layout(&expected, &packuments, &direct), Ok(()));
     }
 
     #[test]
@@ -5546,7 +6576,7 @@ mod tests {
         ]);
         let direct = HashMap::from([("child".to_string(), "1.0.0".to_string())]);
 
-        reconcile_versions(&mut resolved, &packuments, &direct, &HashMap::new());
+        reconcile_versions(&mut resolved, &packuments, &direct, &HashMap::new()).unwrap();
 
         // `>=18.0.0` alone would pick 18.3.1; the peer `~18.2.0` must win.
         assert_eq!(resolved["react"].version, "18.2.5");
@@ -5581,7 +6611,7 @@ mod tests {
         ]);
         let direct = HashMap::from([("child".to_string(), "1.0.0".to_string())]);
 
-        reconcile_versions(&mut resolved, &packuments, &direct, &HashMap::new());
+        reconcile_versions(&mut resolved, &packuments, &direct, &HashMap::new()).unwrap();
 
         assert_eq!(resolved["react"].version, "18.3.1");
     }
@@ -5749,10 +6779,462 @@ mod tests {
 
 #[cfg(test)]
 mod lattice_codec_tests {
+    use super::lattice_cache_key;
+    use std::collections::HashMap;
     /// The P4 lattice mirror persists packuments as JSON bytes and reads them
     /// back on every warm install. The previous bincode codec could not
     /// roundtrip a self-describing `serde_json::Value` — every `.jlat` file was
     /// write-only and each new project re-did the full packument fetch wave.
+    #[test]
+    fn lattice_keys_separate_scoped_names_and_registry_origins() {
+        let registry = "https://user:secret@registry.example/";
+        let a = lattice_cache_key("@a__/b", registry, None, &[]);
+        let b = lattice_cache_key("@a/__b", registry, None, &[]);
+        assert_ne!(a, b, "names that formerly collapsed to @a____b must differ");
+        assert_ne!(
+            a,
+            lattice_cache_key("@a__/b", "https://other.example", None, &[])
+        );
+        assert_eq!(
+            a,
+            lattice_cache_key("@a__/b", "https://user:secret@registry.example", None, &[])
+        );
+        assert_ne!(a, lattice_cache_key("@a__/b", registry, Some("token"), &[]));
+        let pin = lattice_cache_key("pkg", registry, None, &["1.0.0".into()]);
+        let broad = lattice_cache_key("pkg", registry, None, &[">=1.0.0".into()]);
+        assert_ne!(pin, broad, "narrow metadata cannot prove a broader domain");
+        assert_eq!(
+            lattice_cache_key("pkg", registry, None, &["^1".into(), "^2".into()]),
+            lattice_cache_key(
+                "pkg",
+                registry,
+                None,
+                &["^2".into(), "^1".into(), "^1".into()]
+            )
+        );
+        assert_ne!(
+            lattice_cache_key("pkg", registry, None, &["a".into(), "bc".into()]),
+            lattice_cache_key("pkg", registry, None, &["ab".into(), "c".into()])
+        );
+        assert_eq!(a.len(), 64);
+        assert!(!a.contains("secret"));
+    }
+
+    #[test]
+    fn compiled_program_cache_key_binds_canonical_constraints_and_candidate_masks() {
+        use crate::jagr_infinite::chart::{VersionBitmap, VersionInterval, VersionOrdinal};
+
+        let interval = VersionInterval::new(VersionOrdinal(0), VersionOrdinal(3));
+        let constraints_a = HashMap::from([(1, interval), (2, interval)]);
+        let constraints_b = HashMap::from([(2, interval), (1, interval)]);
+        let mut left = VersionBitmap::empty(VersionOrdinal(0), VersionOrdinal(3));
+        left.set_interval(VersionInterval::new(VersionOrdinal(0), VersionOrdinal(1)));
+        let mut right = VersionBitmap::empty(VersionOrdinal(0), VersionOrdinal(3));
+        right.set_interval(VersionInterval::new(VersionOrdinal(0), VersionOrdinal(2)));
+        let domains_a = HashMap::from([(1, left.clone()), (2, right.clone())]);
+        let domains_b = HashMap::from([(2, right), (1, left.clone())]);
+
+        assert_eq!(
+            super::rvm_program_cache_key(&constraints_a, &domains_a),
+            super::rvm_program_cache_key(&constraints_b, &domains_b),
+            "cache identity must not depend on HashMap iteration order"
+        );
+        let mut widened = VersionBitmap::empty(VersionOrdinal(0), VersionOrdinal(3));
+        widened.set_interval(VersionInterval::new(VersionOrdinal(0), VersionOrdinal(3)));
+        let changed_domains = HashMap::from([(1, widened), (2, left)]);
+        assert_ne!(
+            super::rvm_program_cache_key(&constraints_a, &domains_a),
+            super::rvm_program_cache_key(&constraints_a, &changed_domains),
+            "a changed exact candidate mask must miss the compiled program cache"
+        );
+    }
+
+    #[test]
+    fn persisted_program_cache_rejects_truncation_and_altered_instructions() {
+        use crate::jagr_infinite::{
+            atlas::Atlas,
+            chart::{VersionInterval, VersionOrdinal},
+            rvm::{compile::compile, inst::Inst},
+        };
+
+        let constraints = HashMap::from([(
+            7,
+            VersionInterval::new(VersionOrdinal(0), VersionOrdinal(2)),
+        )]);
+        let key = [0x5a; 32];
+        let chart_id = 0x1234;
+        let mut program = compile(&Atlas::new(), &constraints, None).unwrap();
+        for instruction in &mut program.instructions {
+            if let Inst::LoadChart {
+                chart_id: instruction_chart_id,
+            } = instruction
+            {
+                *instruction_chart_id = chart_id;
+            }
+        }
+        program.metadata.chart_id = chart_id;
+        program.metadata.cache_key = Some(key);
+        let bytes = bincode::serialize(&program).unwrap();
+
+        assert!(super::decode_cached_program(&bytes, key, chart_id, &constraints).is_some());
+        assert!(super::decode_cached_program(
+            &bytes[..bytes.len() - 1],
+            key,
+            chart_id,
+            &constraints
+        )
+        .is_none());
+        assert!(super::decode_cached_program(&bytes, [0; 32], chart_id, &constraints).is_none());
+        assert!(super::decode_cached_program(&bytes, key, chart_id + 1, &constraints).is_none());
+        assert!(super::decode_cached_program(
+            &vec![0; super::MAX_CACHED_RVM_PROGRAM_BYTES + 1],
+            key,
+            chart_id,
+            &constraints
+        )
+        .is_none());
+
+        let mut altered_interval = program.clone();
+        if let Inst::PushInterval { lo, .. } = &mut altered_interval.instructions[0] {
+            *lo = (*lo).saturating_add(1);
+        }
+        let altered_interval = bincode::serialize(&altered_interval).unwrap();
+        assert!(
+            super::decode_cached_program(&altered_interval, key, chart_id, &constraints).is_none()
+        );
+
+        let mut altered = program;
+        altered.instructions[constraints.len() + 2] = Inst::Halt;
+        let altered = bincode::serialize(&altered).unwrap();
+        assert!(super::decode_cached_program(&altered, key, chart_id, &constraints).is_none());
+    }
+
+    #[test]
+    fn lattice_paths_isolate_scoped_registry_and_auth_origins() {
+        const TEST: &str =
+            "jagr_infinite::lattice_codec_tests::lattice_paths_isolate_scoped_registry_and_auth_origins";
+        if std::env::var_os("JHOL_TEST_LATTICE_SCOPE").is_some() {
+            let path = super::lattice_path("@tenant/pkg", &["^1.0.0".into()]);
+            println!("{}", path.file_name().unwrap().to_string_lossy());
+            return;
+        }
+
+        let mut keys = Vec::new();
+        for (registry, token) in [
+            ("https://tenant-a.example/", "private-a"),
+            ("https://tenant-b.example/", "private-b"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let host = registry
+                .trim_start_matches("https://")
+                .trim_end_matches('/');
+            std::fs::write(
+                dir.path().join(".npmrc"),
+                format!("@tenant:registry={registry}\n//{host}/:_authToken={token}\n"),
+            )
+            .unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg(TEST)
+                .arg("--nocapture")
+                .current_dir(dir.path())
+                .env("JHOL_TEST_LATTICE_SCOPE", "1")
+                .env("JHOL_CACHE_DIR", dir.path())
+                .env_remove("JHOL_REGISTRY")
+                .env_remove("NPM_CONFIG_REGISTRY")
+                .env_remove("NODE_AUTH_TOKEN")
+                .env_remove("NPM_TOKEN")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let key = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .find(|line| line.starts_with("lattice-v4-"))
+                .expect("child prints its scoped lattice cache entry")
+                .to_owned();
+            assert!(
+                !key.contains(token),
+                "auth values must not appear in cache paths"
+            );
+            keys.push(key);
+        }
+        assert_ne!(
+            keys[0], keys[1],
+            "scoped registry credentials share no lattice entry"
+        );
+    }
+
+    #[test]
+    fn full_metadata_expansion_failure_is_not_accepted_as_a_partial_domain() {
+        let name = "partial-proof".to_owned();
+        let original = serde_json::json!({"versions": {"1.0.0": {}}});
+        let mut packuments = std::collections::HashMap::from([(name.clone(), original.clone())]);
+
+        let error = super::expand_synthetic_packuments(
+            std::slice::from_ref(&name),
+            &mut packuments,
+            |_| Err("registry unavailable".to_owned()),
+        )
+        .expect_err("required full metadata expansion must fail closed");
+
+        assert!(
+            error.contains("could not expand metadata domain for partial-proof"),
+            "{error}"
+        );
+        assert_eq!(packuments[&name], original);
+    }
+
+    #[test]
+    fn synthetic_retry_uses_only_the_current_attempts_evidence() {
+        let retry_calls = std::cell::Cell::new(0);
+        let primary = Err::<(), _>("primary failure".to_owned());
+        let no_synth = super::retry_after_synthetic_metadata(primary.clone(), false, || {
+            retry_calls.set(retry_calls.get() + 1);
+            Ok(())
+        });
+        assert_eq!(no_synth, primary);
+        assert_eq!(retry_calls.get(), 0);
+
+        let retry_success = super::retry_after_synthetic_metadata(
+            Err::<(), _>("primary failure".to_owned()),
+            true,
+            || {
+                retry_calls.set(retry_calls.get() + 1);
+                Ok(())
+            },
+        );
+        assert_eq!(retry_success, Ok(()));
+        assert_eq!(retry_calls.get(), 1);
+
+        let retry_failure = super::retry_after_synthetic_metadata(
+            Err::<(), _>("primary failure".to_owned()),
+            true,
+            || {
+                retry_calls.set(retry_calls.get() + 1);
+                Err("full metadata failure".to_owned())
+            },
+        );
+        assert_eq!(retry_failure, Err("primary failure".to_owned()));
+        assert_eq!(retry_calls.get(), 2);
+    }
+
+    #[test]
+    fn lattice_reopens_domain_after_exact_pin() {
+        use std::io::{Read, Write};
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            mpsc, Arc,
+        };
+        use std::time::Duration;
+
+        const TEST: &str =
+            "jagr_infinite::lattice_codec_tests::lattice_reopens_domain_after_exact_pin";
+        if let Ok(action) = std::env::var("JHOL_TEST_LATTICE_DOMAIN") {
+            match action.as_str() {
+                "reopen" => {
+                    let name = "jhol-domain-proof";
+                    let pinned = super::fetch_one_packument(name, &["1.0.0".into()]).unwrap();
+                    assert_eq!(
+                        super::highest_satisfying(&pinned, "1.0.0").as_deref(),
+                        Some("1.0.0")
+                    );
+                    let broad = super::fetch_one_packument(name, &[">=1.0.0".into()]).unwrap();
+                    assert_eq!(
+                        super::highest_satisfying(&broad, ">=1.0.0").as_deref(),
+                        Some("2.0.0"),
+                        "a cached exact manifest must not hide newer legal versions"
+                    );
+                }
+                "late" | "inflight" | "failure" => {
+                    let prefix = match action.as_str() {
+                        "late" => "late",
+                        "inflight" => "inflight",
+                        _ => "fail",
+                    };
+                    let direct = if action == "inflight" {
+                        [
+                            ("inflight-proof".to_owned(), "1.0.0".to_owned()),
+                            ("inflight-parent-a".to_owned(), "1.0.0".to_owned()),
+                        ]
+                        .into_iter()
+                        .collect()
+                    } else {
+                        [(format!("{prefix}-parent-a"), "1.0.0".to_owned())]
+                            .into_iter()
+                            .collect()
+                    };
+                    let result = super::fetch_dep_tree(&direct);
+                    if action == "failure" {
+                        let error =
+                            result.expect_err("required full-domain expansion must fail closed");
+                        assert!(
+                            error.contains("could not expand metadata domain for fail-proof"),
+                            "{error}"
+                        );
+                    } else {
+                        let packuments = result.unwrap();
+                        let proof = if action == "inflight" {
+                            "inflight-proof"
+                        } else {
+                            "late-proof"
+                        };
+                        assert!(
+                            packuments[proof]["versions"].get("2.0.0").is_some(),
+                            "expanded domain must retain v2 for {action} constraint discovery"
+                        );
+                    }
+                }
+                other => panic!("unknown fixture action: {other}"),
+            }
+            return;
+        }
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let (stop, stopped) = mpsc::channel();
+        let parent_seen = Arc::new(AtomicBool::new(false));
+        let server = std::thread::spawn(move || {
+            let mut handlers = Vec::new();
+            while stopped.try_recv().is_err() {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let parent_seen = Arc::clone(&parent_seen);
+                        handlers.push(std::thread::spawn(move || {
+                            let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+                            let mut request = Vec::new();
+                            let mut bytes = [0; 1024];
+                            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                                let n = match stream.read(&mut bytes) {
+                                    Ok(n) => n,
+                                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                                    Err(_) => return,
+                                };
+                                if n == 0 { return; }
+                                request.extend_from_slice(&bytes[..n]);
+                            }
+                            let line = String::from_utf8_lossy(&request);
+                            let path = line.lines().next().unwrap_or("").split_whitespace().nth(1).unwrap_or("");
+                            let parts: Vec<_> = path.trim_matches('/').split('/').collect();
+                            let name = parts.first().copied().unwrap_or("");
+                            let exact = parts.get(1).is_some();
+                            if name == "inflight-proof" && exact {
+                                let deadline = std::time::Instant::now() + Duration::from_secs(3);
+                                while !parent_seen.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+                                    std::thread::sleep(Duration::from_millis(2));
+                                }
+                                // Let the parent manifest reach the resolver and widen constraints while this request remains pending.
+                                std::thread::sleep(Duration::from_millis(150));
+                            }
+                            let (status, body) = fixture_packument(name, exact, &parent_seen);
+                            let status_line = if status == 200 { "200 OK" } else { "503 Unavailable" };
+                            let _ = write!(stream, "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                            let _ = stream.write_all(body.as_bytes());
+                        }));
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(2))
+                    }
+                    Err(e) => panic!("fixture registry: {e}"),
+                }
+            }
+            for handler in handlers {
+                let _ = handler.join();
+            }
+        });
+
+        for action in ["reopen", "late", "inflight", "failure"] {
+            let dir = tempfile::tempdir().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg(TEST)
+                .arg("--nocapture")
+                .current_dir(dir.path())
+                .env("JHOL_TEST_LATTICE_DOMAIN", action)
+                .env("JHOL_CACHE_DIR", dir.path())
+                .env("JHOL_REGISTRY", format!("http://{address}"))
+                .env("JHOL_NO_HARVEST", "1")
+                .env("JHOL_NO_PREFETCH", "1")
+                .env("JHOL_NO_SPECULATE", "1")
+                .env("JHOL_HTTP_RETRIES", "0")
+                .env("NPM_TOKEN", "fixture-token")
+                .env_remove("JHOL_OFFLINE")
+                .env_remove("JHOL_PREFER_BUNDLED")
+                .env_remove("NODE_AUTH_TOKEN")
+                .env_remove("NPM_CONFIG_REGISTRY")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "action={action}\n{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        stop.send(()).unwrap();
+        server.join().unwrap();
+    }
+
+    fn fixture_packument(
+        name: &str,
+        exact: bool,
+        parent_seen: &std::sync::atomic::AtomicBool,
+    ) -> (u16, String) {
+        use serde_json::{json, Value};
+        let mut dependencies = serde_json::Map::new();
+        let (family, proof, parent_b) = if name.starts_with("late-") {
+            ("late", "late-proof", "late-parent-b")
+        } else if name.starts_with("inflight-") {
+            ("inflight", "inflight-proof", "inflight-parent-b")
+        } else if name.starts_with("fail-") {
+            ("fail", "fail-proof", "fail-parent-b")
+        } else {
+            ("", "", "")
+        };
+        if name.ends_with("parent-a") {
+            if family == "inflight" {
+                parent_seen.store(true, std::sync::atomic::Ordering::Release);
+            }
+            dependencies.insert(
+                proof.into(),
+                json!(if family == "inflight" {
+                    ">=1.0.0"
+                } else {
+                    "1.0.0"
+                }),
+            );
+        } else if name == proof && exact {
+            if family != "inflight" {
+                dependencies.insert(parent_b.into(), json!("1.0.0"));
+            }
+        } else if name == parent_b {
+            dependencies.insert(proof.into(), json!(">=1.0.0"));
+        }
+        if name == "fail-proof" && !exact {
+            return (503, "metadata expansion unavailable".into());
+        }
+        let version = |v: &str, deps: &serde_json::Map<String, Value>| {
+            json!({
+                "name": name,
+                "version": v,
+                "dependencies": deps,
+                "dist": {"tarball": format!("https://example.invalid/{name}-{v}.tgz")}
+            })
+        };
+        if exact {
+            (200, version("1.0.0", &dependencies).to_string())
+        } else {
+            let v1 = version("1.0.0", &dependencies);
+            let v2 = version("2.0.0", &serde_json::Map::new());
+            (200, json!({"name":name,"dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":v1,"2.0.0":v2}}).to_string())
+        }
+    }
+
     #[test]
     fn lattice_value_json_roundtrip() {
         let v: serde_json::Value = serde_json::json!({
@@ -5785,7 +7267,9 @@ mod jres_bug_proof {
                 version: "4.22.3".to_string(),
                 resolved: "https://registry.npmjs.org/express/-/express-4.22.3.tgz".to_string(),
                 integrity: Some("sha512-Bdcs4".to_string()),
-                dependencies: [("accepts".to_string(), "^1.3.8".to_string())].into_iter().collect(),
+                dependencies: [("accepts".to_string(), "^1.3.8".to_string())]
+                    .into_iter()
+                    .collect(),
                 peer_dependencies: HashMap::new(),
                 peer_dependencies_meta: [(
                     "debug".to_string(),
@@ -5823,7 +7307,9 @@ mod jres_codec_tests {
                 version: "4.22.3".to_string(),
                 resolved: "https://registry.npmjs.org/express/-/express-4.22.3.tgz".to_string(),
                 integrity: Some("sha512-Bdcs4".to_string()),
-                dependencies: [("accepts".to_string(), "^1.3.8".to_string())].into_iter().collect(),
+                dependencies: [("accepts".to_string(), "^1.3.8".to_string())]
+                    .into_iter()
+                    .collect(),
                 peer_dependencies: HashMap::new(),
                 peer_dependencies_meta: [(
                     "debug".to_string(),
@@ -5834,6 +7320,101 @@ mod jres_codec_tests {
             },
         );
         m
+    }
+
+    #[test]
+    fn registry_fingerprints_bind_default_and_nested_scoped_registries() {
+        let mut layout = sample();
+        layout
+            .get_mut("node_modules/express")
+            .unwrap()
+            .dependencies
+            .clear();
+        layout.insert(
+            "node_modules/express/node_modules/@team/pkg".into(),
+            layout["node_modules/express"].clone(),
+        );
+        let origin = |name: &str| {
+            if name.starts_with("@team/") {
+                "https://user:secret@private.example/".to_string()
+            } else {
+                "https://registry.example/".to_string()
+            }
+        };
+        let proof = registry_fingerprints(&layout, origin).unwrap();
+        assert_eq!(proof.len(), 2);
+        assert!(proof
+            .values()
+            .all(|hash| hash.len() == 64 && !hash.contains("secret")));
+        let changed_default = registry_fingerprints(&layout, |name| {
+            if name.starts_with("@team/") {
+                "https://user:secret@private.example".into()
+            } else {
+                "https://other.example".into()
+            }
+        })
+        .unwrap();
+        assert_ne!(proof, changed_default);
+        let changed_scope =
+            registry_fingerprints(&layout, |_| "https://registry.example".into()).unwrap();
+        assert_ne!(proof, changed_scope);
+        let identity_for = |name: &str| crate::registry::RegistryIdentity {
+            registry: origin(name),
+            token: Some("token-a".to_string()),
+        };
+        let origin_proof = origin_fingerprint(&layout, identity_for).unwrap();
+        let bundle = ResolvedBundle {
+            version: 5,
+            registries: proof.clone(),
+            origin_fingerprint: origin_proof,
+            resolved: &layout,
+        };
+        let bytes = serde_json::to_vec(&bundle).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("user:secret"));
+        let deps = HashMap::from([("express".into(), "^4.0.0".into())]);
+        assert!(decode_verified_bundle(&bytes, &deps, false, identity_for).is_some());
+        assert!(decode_verified_bundle(&bytes, &deps, false, |name| {
+            crate::registry::RegistryIdentity {
+                registry: origin(name),
+                token: Some("token-b".to_string()),
+            }
+        })
+        .is_none());
+        assert!(decode_verified_bundle(&bytes, &deps, false, |name| {
+            crate::registry::RegistryIdentity {
+                registry: origin(name),
+                token: Some(
+                    if name.starts_with("@team/") {
+                        "scoped-token-b"
+                    } else {
+                        "token-a"
+                    }
+                    .to_string(),
+                ),
+            }
+        })
+        .is_none());
+        assert!(decode_verified_bundle(&bytes, &deps, false, |name| {
+            crate::registry::RegistryIdentity {
+                registry: if name.starts_with("@team/") {
+                    "https://user:secret@different-private.example".into()
+                } else {
+                    "https://registry.example".into()
+                },
+                token: Some("token-a".to_string()),
+            }
+        })
+        .is_none());
+        assert!(decode_verified_bundle(&bytes, &deps, false, |_| {
+            crate::registry::RegistryIdentity {
+                registry: "https://registry.example".into(),
+                token: Some("token-a".to_string()),
+            }
+        })
+        .is_none());
+        assert!(
+            decode_verified_bundle(&jres_encode(&layout), &deps, false, identity_for).is_none()
+        );
     }
 
     #[test]

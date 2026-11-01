@@ -179,7 +179,12 @@ impl StreamDirectProjector {
                         }
                         relative
                     });
-                    (out_path, entry.header().entry_type(), is_symlink, symlink_relative)
+                    (
+                        out_path,
+                        entry.header().entry_type(),
+                        is_symlink,
+                        symlink_relative,
+                    )
                 };
 
                 if entry_type.is_dir() {

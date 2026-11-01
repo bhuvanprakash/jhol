@@ -1,6 +1,6 @@
 [package]
 name = "jhol-vm"
-version = "1.0.2"
+version = "2.0.0"
 edition = "2021"
 description = "JholVM — Jhol's own native JavaScript engine: hand-written lexer, Pratt parser, bytecode compiler, register VM with inline caches, and a mark-sweep GC over one flat arena"
 license-file = "../../LICENSE"

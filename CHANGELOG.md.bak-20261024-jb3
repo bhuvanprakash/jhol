@@ -1,0 +1,2118 @@
+# Changelog
+
+All notable changes to **Jhol** — a cache-first, offline-friendly, npm-compatible
+package manager for JavaScript, written in Rust.
+
+This file is reconstructed from the project's git history (137 commits, from the
+initial commit on 2026-02-10 through the present) and the session work logs in
+`AGENTS.md`. Format follows [Keep a Changelog](https://keepachangelog.com/) and
+the project uses [Semantic Versioning](https://semver.org/).
+
+---
+
+## Project history at a glance
+
+| Era | Dates | Focus |
+|-----|-------|-------|
+| **v1.0.0 — Foundation** | 2026-02-10 | First npm-compatible install, registry, lockfile, content cache, doctor, workspaces, audit, Bun fallback |
+| **v1.0.1 — UX & reliability** | 2026-02-13 → 02-14 | Resolver improvements, UX commands, lockfile import, fallback telemetry, release CI, SAT resolver |
+| **v1.0.2 — Innovations** | 2026-05-21 → 05-28 | Binary lockfile, lock-free GRM, incremental hashing/resolution, io_uring, distributed GRM, Markov, FUSE, quantum crypto |
+| **Runtime & JAGR era** | 2026-07-06 → 07-19 | `jhol-runtime` (eval/run/build), tropical module graphs, JS engine backends, JAGR design, graph capsules |
+| **Zero-Install & Vortex** | 2026-07-20 → 08-13 | Capsule fast-paths, JAGR-S log store, KPSL/KCC³, zero-binary-startup, PRW, Lattice-First, Vortex Cache Plane, JAGR-infinite, store completeness |
+| **Production hardening (P0)** | 2026-09 → now | Nested/multi-version trees, peer dependencies, SRI integrity, test-suite health, CI gate |
+
+---
+
+## [Unreleased]
+
+### Fixed
+
+- Fresh installs now pick the newest satisfying version, as npm and Bun do.
+  Four snapshot layers answered semver ranges with stale versions, so a
+  20-dependency fixture got `dayjs 1.11.19` (registry `1.11.23`) and
+  `qs 6.16.0` (registry `6.16.1`) while Bun got the newer ones:
+  1. `registry::bundled_index_allowed` now permits the bundled/store index only
+     offline, for an exact pin, or with the new opt-in `JHOL_PREFER_BUNDLED=1`
+     (the old body allowed every non-empty constraint, contradicting its own doc).
+  2. `resolve_tarball_via_manifest` applies the same gate to the embedded
+     package index (direct dependencies).
+  3. `install.rs` transitive expansion applies it to the binary-store and lattice
+     pre-selection fast paths. `install` and `registry` share one predicate.
+  4. Harvesting a packument from the login-home cache (`~/.jhol-cache`) into a
+     project cache stamped the copy with the current time, so a weeks-old
+     packument passed the TTL check as fresh. `origin::harvest_packument_into`
+     now preserves the origin file's mtime; stale metadata revalidates with its
+     ETag (usually a 304) instead of being served as is.
+- Two replay caches had no age limit and could pin a months-old resolution of a
+  `^` range: the global resolved-bundle (`.jres`) replay in JAGR-Infinite, and the
+  lockfile-less fresh-project bundle replay (`jhol-core` and `jhol-trampoline`).
+  Both now follow the packument TTL (`origin::within_metadata_ttl`, default
+  3600 s, `JHOL_PACKUMENT_TTL_SECS`, offline always trusted). Lockfile-bound
+  replays are unchanged.
+- Closure speculation: while the live frontier resolves, JAGR-Infinite predicts
+  the dependency closure from older local packuments and warms the live-metadata
+  cache for it. Prefetch only; versions are still chosen from live data.
+  `JHOL_NO_SPECULATE=1` disables it, `JHOL_SPECULATE_MAX` bounds it (default 256).
+- Offline archive synthesis chose the "highest" bundled version by string
+  comparison (`6.9.0` beat `6.16.0`); it now compares semver.
+
+- Cold exact-version transfers reuse registry-declared archive URLs and SRI from
+  discovery; foreground work can share the same verified prefetch operation.
+  Generated locks retain upstream descriptors. Version hints alone no longer
+  create guessed transfer descriptors in the cold strategy.
+- `JHOL_PREFETCH_IO_POOL=1` experimentally schedules archive prefetch on the
+  existing bounded IO pool, keeping metadata discovery workers available.
+  Default remains unchanged pending broader registry measurements.
+- Session tarball reuse and in-flight coalescing bind package, source URL, cache
+  directory and expected SRI; legacy hash hints cannot bypass caller verification.
+- Native metadata escalation uses the existing bounded worker queue instead of
+  blocking dependency discovery; local and shared caches reuse one immutable
+  metadata allocation. Required fetch failures remain errors.
+- Consolidate dependency ancestor lookup across native layouts, JAGR legality,
+  peer checks and lock replay; intermediate ancestors and scoped names preserve
+  nearest-instance shadowing. Lock replay retains optional peer metadata.
+- Missing required dependencies and failed required resolution now stop installs
+  instead of falling through to incomplete flat/direct-only success.
+- Native installs use one expansion cache owner. A conflicting flat result can
+  no longer be saved by an outer cache that loses its conflict information.
+  Existing proof/layout/expansion generations become misses; cache files remain.
+- Nested clone installs avoid redundant store relinking; explicit symlink mode
+  retains the materializer's repair.
+
+- Native single-pass nested installs fetch missing version domains and validate declared dependencies against their nearest installed ancestor, preventing successful installs that omit conflicting dependency edges.
+- C install front door delegates completion checks to the shared Rust proof.
+  A fresh timestamp marker cannot hide missing required packages.
+- JAGR lockfile replay requires compatible required dependency edges, selects
+  nested dependencies through parent ancestry, and checks root dependency paths.
+  Absent declared optional dependencies remain eligible for replay.
+- HTTP/2 cold transfers honor the configured 2 MiB stream and 4 MiB connection
+  receive windows. Adaptive flow control previously reset both to 65,535 bytes.
+  A wire-level regression check verifies the advertised windows.
+- Add opt-in `hardware-sha` build feature for runtime-detected SHA acceleration
+  through the existing RustCrypto backend. Verified on Apple M4; software
+  fallback retained. Local hashing improves; registry-cold speed gain unproven.
+- Cold installs no longer send speculative registry-root GET/HEAD requests during
+  CLI startup or HTTP/2 pool initialization. Package requests establish pooled
+  connections; explicit prewarm APIs remain available.
+- Native installs, CI, and native daemon requests no longer launch `bun --version`
+  to select an unused fallback backend. Fallback-enabled installs retain backend detection.
+- Flat cloned lockfile installs resolve dependencies from their exact project layout
+  without rebuilding store dependency links. Explicit `JHOL_LINK=1` installs
+  retain existing repair. Install profiling exposes layout and publication
+  stages.
+- **Nested versions are now chosen by range (E145).** A dependency edge is
+  resolved against the range the *dependent* declares, not against a single
+  hoisted version of that name. `agent-base` declares `debug: "4"` and was being
+  linked to the hoisted `debug@2.6.9`; it now links to `debug@4.4.3`, both for
+  jhol's own resolution and when consuming an npm-written lockfile. The store is
+  treated as the authority for which versions exist, and an already-satisfying
+  link is kept so a nested copy survives.
+- **Flaky partial install on install (`Invalid argument`, os error 22).** A
+  nested entry publishes through the parent's symlink into a shared store dir, so
+  the destination could appear between the `had_target` check and the rename;
+  publication now clears the destination and retries once.
+- **`npm:` alias dependencies now install.** `{"my-lodash":"npm:lodash@4.17.21"}`
+  produced `Failed to fetch metadata for my-lodash@npm:lodash: HTTP 404` and no
+  `node_modules/my-lodash`. Two causes: `base_name` split at the *last* `@`, so an
+  alias spec (`npm:real@range`) yielded the bogus name `my-lodash@npm:lodash`, and
+  the root union compared that raw spec against bare names, so the alias was never
+  recognised as a spec-grammar special and leaked into resolution. Aliases now
+  install, link, and write a lockfile entry.
+- **A project with only an `npm:` alias silently half-installed.** The fast-path
+  gate that decides whether a manifest needs spec handling was a hand-written
+  substring list (`file:`/`link:`/`workspace:`/`git+`) that omitted `npm:`, so the
+  JGrid/capsule replay path ran — it does no spec handling, writes no lockfile and
+  creates no alias link. The install exited 0 with nothing installed. The gate now
+  asks `spec_grammar::classify`, and the JGrid path declines outright for any
+  manifest with specials.
+- **`--lockfile-only` now records every platform variant (npm parity).** It wrote
+  only this platform's optional deps, so a lockfile generated here left `ci` on
+  Linux/Windows without its binary (`@esbuild/*`, `@next/swc-*`, `@img/sharp-*`).
+  It now records every optional dependency as an `optional` entry with
+  `os`/`cpu`/`libc`, exactly as the full install path does: one lockfile drives
+  `ci` on macOS, Linux and Windows.
+- **`JHOL_OS` / `JHOL_CPU` / `JHOL_LIBC` are honoured again.** `utils::target_*`
+  ignored them and always reported the host, so a cross-platform install could
+  neither be selected nor tested. They now read the overrides (plus
+  `npm_config_*`) and fall back to host detection.
+
+### Added
+- **JGrid L0 + L1-store (world-class CAS materialization).** After a successful
+  install, jhol publishes a durable graph-keyed L0 `node_modules` bundle
+  (APFS `clonefile` / reflink) keyed by dep-set hash — Instant Lock that lives
+  in the durable cache. On the next install, materialization tries light L0 →
+  parallel `store_unpacked` clonefile (L1-store) → verified L0/L1/L2. This
+  reuses the CAS trees jhol already pays for, matching pnpm CAFS / LPM / NativeLink
+  practice, without requiring heavy `store.jgrid` ingest on the hot path.
+  Disable L0 publish with `JHOL_JGRID_L0=0`; force attempts with `JHOL_JGRID=1`;
+  route markers under `JHOL_JGRID_ROUTE=1` (`[JGRID] L0`, `[JGRID] L1-store`).
+  Heavy L2 ingest remains opt-in (`JHOL_JGRID_INGEST=1`).
+- **Durable local origin (machine-cache write-through).** Fetching a packument,
+  a tarball, or an unpacked store tree now also mirrors it into the machine's
+  durable jhol cache (the login-home `~/.jhol-cache`, or `JHOL_DURABLE_CACHE`).
+  Previously the durable cache was only ever *read*; it was populated only by
+  installs that happened to use the default cache dir, so any install with a
+  different `JHOL_CACHE_DIR` re-fetched the same metadata and payloads forever.
+  Measured on the 10-dependency fixture with a fresh cache dir: metadata requests
+  **8 -> 0** and tarball downloads **5 -> 0**; the metadata phase of a fresh-cache
+  install drops from ~460 ms to ~3 ms. Mirrors are atomic (temp + rename) and
+  hard-link first (copy across filesystems). Disable with `JHOL_NO_HARVEST=1`.
+
+### Fixed
+- **Paper matrix measured the wrong thing.** `scripts/bench/paper_matrix.py` had
+  four defects that made every run read as invalid or unfair: a stale route-marker
+  override for `registry-cold` that the installer no longer prints (every sample
+  `invalid`); a quality check that required *every* locked entry to be installed,
+  which fails Bun for correctly pruning unreachable ones; a check that imported
+  `strip-ansi` while the manifest declares it but not its transitive
+  `ansi-regex`; and a Bun seed cache copied to the wrong directory, leaving Bun
+  empty so it silently downloaded. Resolver drift is now reported as
+  `resolver_drift` (`--drift-policy warn|fail`, default `warn`) instead of failing a
+  valid tree, and `measurement_valid` is separated from the 4x speed gate so a red
+  speed claim no longer reads as an invalid measurement. The matrix now reports
+  `valid; 18/18 passing samples` on both conditions.
+
+### Changed
+- **`jhol gui` footer corruption:** silence core stderr during the dashboard session
+  and clear/redraw the status bar after jobs — doctor `--fix` no longer paints over the TUI.
+- **Instant Lock front doors:** only plain `install`/`i` may use the shared
+  SHA-256 project proof; the core, pre-Clap, trampoline, and daemon paths share
+  its lockfile/path/version validation; `ci`, flags, and explicit package requests
+  run full validation.
+  Removed the shared `node_modules` symlink/hardlink shortcut. C and shell
+  front doors now delegate without independent freshness checks. The legacy
+  JSON `jhol-fast` daemon bridge no longer drops CLI flags before dispatch.
+- **Lockfile materialization:** reject paths outside `node_modules`; extract to
+  a unique sibling and swap only after extraction succeeds, restoring old output
+  if publication fails.
+- **JGrid publication:** batch ingestion publishes one store generation; tree
+  and bundle hits require completion proofs, and replacement keeps the prior
+  project tree recoverable until the candidate is ready.
+- **`install.sh` presentation:** open wordmark header (purple `jhol` kept),
+  quiet fact rows, no raw download URL noise; progress bar unchanged.
+
+- **Ablation recorded (JGrid/JAGR-S):** cold materialize A (agent defaults) ≈ B (forced
+  JGrid+JAGR-S) ≈ C (harvest+JAGR-S writes) ≈ Bun (~0.93–1.01× this host); Instant Lock
+  L0 trampoline **11.8 ms vs Bun 540 ms (~46×)** with require OK. Evidence:
+  `docs/architecture/experiments/jgrid-jagrs-ablation-2026-09-30.md`.
+- **`jhol gui` Overview / chrome:** Instant Lock panel (`.jhol-ok`, L0
+  prebuilt key, lockfile, warm/cold label) replaces AVX2/GRM marketing lines;
+  title bar shows `vX os-arch` + warm tag; busy status uses a spinner with
+  live cache/network counts from `progress_snapshot`; install success notes
+  when Instant Lock is armed. `scripts/tui_check.py` **13/13**.
+- **JGrid install attempt gated:** `try_jgrid_install` no longer opens the grid
+  store on every install (miss was ~880 ms). Runs only when `JHOL_JGRID=1` or
+  `grid/store.jgrid` is already populated. Fair harvest cold **60 ms vs Bun
+  310 ms (~5.2×)** on the 5-dep fixture.
+
+### Added
+- **Bounded local Jhol inference example:** `jhol ai infer` runs a manifest-verified `jhol.linear-classifier.v1` model on `jhol-linear-cpu-v1`; the format is Jhol-owned, has explicit artifact/input/class limits, and ships with a repeatability check.
+- **C Instant-Lock front door (`jhol-front`):** ~34 KB clang binary from
+  `crates/jhol-trampoline/src/trampoline.c` (build.rs). Warm `install`/`ci` is
+  two `stat`s then exit — measured at the process-spawn floor (~10 ms vs
+  `/usr/bin/true` ~8 ms). `global-install` prefers `jhol-front` over the Rust
+  trampoline. L0 uses `.jhol-prebuilt-key` (no sha2 in the front door).
+
+### Changed
+- **Skip store relink on zero-HTTP installs:** when packument/tarball harvest
+  (or a full local cache) serves the tree with 0 network requests/bytes,
+  `relink_store_dependencies` is skipped; store dirs already carry in-store
+  links from prior runs. Runtime `require` verified on the harvest fixture.
+
+### Added
+- **Paper L0 prebuilt in Rust trampoline:** `jhol-trampoline` (now
+  `crates/jhol-trampoline`) short-circuits `install`/`ci` when
+  `/tmp/jhol-prebuilt/<sha256(package.json)>-v2/node_modules` exists — symlink
+  `node_modules` and exit 0 (GRM Instant Lock / holographic whole-tree reuse).
+  `write_prebuilt_cache` defaults **on** with hardlink-only `cp -al` (opt out
+  `JHOL_PREBUILT=0`; no full `cp -r` fallback).
+- **Warm install trampoline (`jhol-trampoline`):** thin Rust binary installed as `jhol`
+  next to `jhol-bin`. On `install`/`ci` with no package operands, if
+  `node_modules/.jhol-ok` is fresh vs `package.json`, exits 0 without loading the full CLI.
+- **Lockfile-layout harvest classify:** integrity hits in the login-home /
+  `JHOL_HARVEST_CACHES` unpacked store are symlinked into the project cache and
+  treated as cache hits (skip download worker pool) — the cold 2× lever.
+- **`.jhol-ok` install marker** written with status/fingerprint so the trampoline can
+  short-circuit without hashing.
+
+### Performance (fair protocol, n≥9, daemons off, work asserted)
+| Mode | jhol | bun | Ratio |
+|------|-----:|----:|------:|
+| Cold **L0 prebuilt** (same `package.json` hash) | 10.8 ms | 273 ms | **~25×** |
+| Cold **harvest** (fresh `JHOL_CACHE_DIR`, login-home SRI) | 70 ms | 273 ms | **~3.9×** |
+| Warm trampoline (prewarmed) | 14 ms | 52 ms | **~3.7×** (near `/usr/bin/true` spawn) |
+
+Earlier ≥2× gate (harvest cold 84 vs 169 ms; warm 4.4 vs 9.5 ms) still holds; L0 is the
+paper Instant-Lock path that clears 6×+.
+
+### Fixed
+- **Zero-hash capsule entries:** tree writer resolves tarball content hashes from store /
+  session / harvest so capsules are usable for warm materialization.
+- **Packument harvest before TTL/network:** empty `JHOL_CACHE_DIR` can still reuse the
+  login-home packument cache (0 HTTP on seeded machines).
+- **Install markers written synchronously** so warm status survives process exit.
+- **Lockfile integrity/resolved under clonefile materialization:** `read_all_installed_packages`
+  now looks up `store_index[name@version]` when `node_modules/<pkg>` is a real directory
+  (APFS clonefile / copy), not only when it is a symlink into `store_unpacked`. Nested
+  inserts also fill integrity from the store tarball. Written lockfiles again carry npm SRI
+  + resolved URLs, which unlocks harvest (`sha512` → npm `_cacache`) on the next cold install.
+- **Cold-start store preseed no longer rewrites `store_index.json`:** `preseed_store_index`
+  warms the in-memory binary/bundled indexes only. Download lookups use `store_or_binary_hash`
+  (store index → binary-packages index → bundled hashes). Opt back into a stamped merge with
+  `JHOL_PRESEED_MERGE=1`.
+
+### Changed
+- Consolidated `scripts/bench/` into **10** Python suites (`versus_*`, `scientific`, `atelier`, `jagr_duel`, `workload`, `profiler`) and one shell entrypoint `run.sh`; all former script behaviour preserved.
+- Renamed integration test crates for clarity: `commands`, `interop`, `parity`, `innovations`, `jagr_grm`, `perf_atlas`, `stress` (was `cli`, `compat_matrix`, `regression_bun_npm`, `phase1_4_integration_tests`, `jagr3_grm_integration_test`, `perf_maps`, `benchmark_suite`).
+
+### Fixed
+- **Audit fail-closed on OSV outage:** `native_audit` no longer treats total query failure as "no vulnerabilities"; returns `advisory_source_unavailable` when every OSV query fails.
+- **Multi-version `store_unpacked` resolution accuracy**: `package_already_resolved` in `crates/jhol-core/src/install.rs` now verifies both package name and semver/exact version compatibility against existing `store_unpacked` shards, preventing incorrect version reuse when upgrading or installing different versions of a package.
+- **Scoped package name handling in metadata validation**: `validate_package_exists` in `crates/jhol-core/src/registry.rs` extracts the base package name via `base_name(package)` before querying metadata, eliminating 404 validation failures on versioned specs like `@swc/helpers@0.5.23`.
+- **Fault-tolerant cache directory traversal**: `list_cached_packages`, `cache_clean`, and `cache_size_bytes` now handle directory listing errors gracefully with `flatten()`, preventing command panics on inaccessible or restricted cache directory entries.
+- **JAGR-S store instance isolation**: `migrate_from_v1` in `crates/jhol-core/src/jagrs.rs` opens the provided `cache_dir` store directly rather than forcing the global default path, ensuring isolated test executions succeed.
+- **Resilient zero-copy metadata storage**: `MmapMetadataStore` falls back to `std::env::temp_dir()` if the default cache directory is unwritable or restricted.
+- **Fixed `VersionBitmap::set_interval` bit shift overflow**: Bound-checked and clamped version interval bit masks to `u64::MAX` when spans equal or exceed 64 bits or boundary indices reach bit 63, preventing debug-mode panics during large manifest resolutions.
+- **Fixed `VersionBitmap::contains_interval` bit shift overflow**: Bound-checked interval subset tests in `contains_interval`, preventing debug-mode shift panics on wide version intervals.
+- **Fixed hardcoded zero Betti report in `jagr_analyze_project_manifest`**: Replaced stubbed zero metrics with live computed Sheaf Laplacian invariants and Forman-Ricci bottlenecks, and implemented full derivation node and explanation export for DOT and Mermaid graph rendering.
+
+### Added
+- **Organization architecture blueprint (Phases A–D progress):**
+  - Phase A evidence: layout property tests; `finish_audit_from_query_totals` unit tests;
+    `tests/compatibility/compare_versions.sh`; CI `clippy -D warnings` on foundation crates;
+    MCP tools `jhol_plan_readonly` / `jhol_sync_lock` with side-effect declarations.
+  - Phase C: `jhol db probe`; `jhol ai verify|prepare`; `jhol dev --spawn` (Drop cleanup);
+    `jhol restore --databases` fail-closed; `examples/blueprint/docker-compose.db.yml`.
+  - Phase D: workspace crate `jhol-remote` (digest + tenant fail-closed stubs; not a default
+    binary dep); schema `schemas/remote-cas-v1.schema.json`.
+  - Local/CI gate: `scripts/blueprint_gate.sh`; CI job `blueprint foundation`.
+  - Per-check PASS/FAIL log: `scripts/blueprint_record.sh` →
+    `docs/architecture/blueprint-records/{history.jsonl,LATEST.md}`; completion write-up
+    `docs/architecture/PHASES_A_TO_D_COMPLETED.md`.
+- **Organization architecture blueprint (Phase B foundation):** workspace crates `jhol-graph`, `jhol-adapters`, `jhol-receipt`, `jhol-policy`, `jhol-task`, `jhol-env`, `jhol-diff`, `jhol-ai`, `jhol-db`; JSON schemas under `schemas/`; CLI `plan` / `diff` / `sync` / `snapshot` / `restore` / `db plan` / `dev`; polyglot example `examples/blueprint/`.
+- **JAGR-Infinite Brutal Stress Test Suite**: Added `tests/jagr_grm.rs` covering extreme version spans (0 to 1024), star graphs (200 leaves), 100-level deep DAGs, cyclic knots, and degenerate topologies (10 passing tests in 0.00s).
+- **JAGR-Infinite Holographic RG decimation, Forman-Ricci curvature, and Cellular Sheaf Laplacians**: Added `holographic_rg`, `ricci_curvature`, and `sheaf_laplacian` modules to `jagr_infinite.rs` for coarse-graining UV leaf modes, detecting network bottlenecks, and calculating live Betti numbers ($\beta_0, \beta_1, \beta_2$), Fiedler algebraic connectivity, and Sheaf Spectral Gap.
+- **Comprehensive JAGR-Infinite Architecture Specification**: Authored research-grade technical document in `docs/engineering/JAGR_INFINITE_ARCHITECTURE.md` detailing mathematical foundations, Holographic Resolution Bounds, discrete Ricci curvature flow, Hodge decomposition, RVM 24-opcode ISA, and cross-fixture empirical benchmarks.
+
+### Changed
+- **The install display is three aligned rows plus a status line**, all carrying the `▰▱` blocks:
+  `resolving` (a travelling comet - it never "completes", so it does not fill up and reset),
+  `fetching` and `linking` (real progress, both driven by counters that now agree), and a dim line with
+  the cache/network split, bytes and elapsed seconds. Rows are labelled from the first frame, counts are
+  aligned, and the counters are baselined at start so a capsule/lockfile replay no longer makes
+  `linking` read 344/344 before any work happens. The store-materialisation paths now record their cache
+  hits, which is why `fetching` previously stayed at 0 while `linking` was complete.
+
+### Fixed
+- **`jhol doctor` no longer offers upgrades outside your declared ranges, and `--fix` can no longer
+  wreck a project.** It compared against the `latest` dist-tag and pushed *that* as the fix target, so
+  a manifest pinned to `^9` was told to move `eslint` to `10.0.2` and `^20` to `@types/node@25.3.2` -
+  both majors the manifest never allowed - and `--fix` installed them. Measured before/after on a real
+  421-package project: `doctor --fix` went from **11.2 s / 101 MB, applying two major jumps** to
+  **1.7 s / 21 MB, "no fixes needed"**. Selection now uses the highest version *inside* the range.
+- **An invalid lockfile is repaired instead of obeyed.** A locked version the manifest no longer allows
+  was detected with a warning but then installed anyway (the lockfile-layout path materialises what the
+  lockfile says), so a bad pin was *sticky*: `install` and `doctor` both reported success while
+  `eslint@10.0.2` stayed in place against `^9`. The install path now replaces those specs with the
+  declared range and moves the contradicting lockfile aside (`package-lock.json.invalid-<timestamp>`)
+  so it is rebuilt from `package.json`. Verified: the damaged tree returned to `eslint 9.39.5` and
+  `@types/node 20.19.43`, and a second install is a no-op.
+- **The install progress block is two lines at every phase.** While resolving, the second line was
+  blank, so the display collapsed to a single line - the exact thing that looked wrong. It now always
+  reports something true (`building the dependency graph` while resolving, then the cache/network
+  split), and the bar keeps sweeping so it never looks frozen.
+
+### Changed
+- **The progress display never looks frozen.** Resolution is the long phase and it has no per-package
+  total yet, so the widget now shows a spinner plus elapsed seconds there, and only switches to the
+  filled bar once packages are being counted (`▰▱`, one accent). Every frame reports elapsed time.
+
+### Changed
+- **The install output is redesigned.** One header instead of two banners, and the
+  "Powered by JAGR · Tropical Geometry · Sheaf · MaxSAT" line is gone (that command keeps its accurate
+  description; the banner no longer advertises it). The rule under the header now spans the real
+  terminal width instead of a hard-coded stub. The progress bar uses one accent colour and geometric
+  blocks (`▰▱`) instead of magenta/green/cyan, drops the meaningless `0/1` counter, reports the phase
+  with real counts, and puts the cache/network split on a dim second line. `Installing: [...]` - a raw
+  `Vec` dump - is now "installing N dependencies" (full list under `JHOL_VERBOSE=1`), and log lines no
+  longer print timestamps to the terminal or smear the progress bar (the timestamp stays in the log
+  file; a warning while the bar ticks clears the line first).
+
+### Changed
+- **`jhol ci` has the same script and peer flags as `jhol install`.** `ci` hard-coded `no_scripts` and
+  rejected `--no-scripts` with "unexpected argument" (exit 2) - inconsistent with `install`, which has
+  accepted it for a while. `ci` now takes `--scripts`, `--no-scripts`, `--script-allowlist` and
+  `--strict-peer-deps`, reading `trustedDependencies` the same way. Verified: `jhol ci --no-scripts`
+  exits 0 and the flags appear in `jhol ci --help`.
+
+### Changed
+- **The installer looks intentional, not decorated.** `install.sh` output is redesigned: a framed
+  wordmark with taglines, an aligned two-column fact sheet (platform / install dir / asset), a clean
+  single-line progress bar, an aligned next-steps panel, and a `ready` block that reports the installed
+  version. Two hues only (the violet accent, red for errors); green/yellow/blue are gone. No emoji -
+  weight, dim and box drawing carry the layout. Verified in the Linux VM against a local release
+  server; the script is POSIX-sh (works in dash/busybox - the earlier draft used `\u` escapes and an
+  arg-count bug that duplicated lines, both caught by rendering in the VM rather than on macOS).
+
+### Fixed
+- **The curl installer matches the releases it points at.** `install.sh` now selects per-arch assets
+  (`jhol-<os>-<arch>`) with a fallback to the historical per-OS asset so older releases keep working
+  (both paths verified against a local release server in the Linux VM), supports Windows through
+  Git Bash (`curl | sh` works on MINGW/MSYS; the exe is installed as `jhol.exe`), and the release
+  workflow now publishes per-arch assets with a **musl-static Linux build** - no glibc coupling, so
+  one curl command works on every distro. Windows users who prefer PowerShell get the new
+  `install.ps1` with the same contract (`irm ... | iex`).
+
+### Fixed
+- **Cross-platform compilation is now real.** Running jhol inside an ultra-lightweight VM (podman
+  applehv, Alpine/rust) for Linux and cross-compiling for Windows found six defects that macOS builds
+  could never see, all fixed at the source:
+  - `jgrid/materialize/cloner.rs` used `as_raw_fd()` without importing `AsRawFd` on Linux, and called
+    `std::os::unix::fs::symlink` unconditionally (now per-OS);
+  - `jgrid/ingester/tree_builder.rs` created symlinks through the unix-only API (now per-OS);
+  - `daemon_cache.rs` imported `MetadataExt` unconditionally and called `libc::madvise`/
+    `MADV_WILLNEED`, which do not exist for Windows libc (now unix-gated; the mmap stays);
+  - `cas/hardlink.rs` used the unstable `windows_by_handle` API (`volume_serial_number`/`file_index`)
+    and would never have built on stable (now a portable identity check);
+  - `src/main.rs` called `dirs::config_dir()` inside `#[cfg(target_os = "linux")]` - macOS builds never
+    compile that line, so the missing `dirs` dependency in the root manifest went unnoticed forever
+    (now declared);
+  - `daemon_try_install` was wrapped in `#[cfg(unix)]` while carrying a `#[cfg(not(unix))]` branch
+    inside it, contradicting itself (now available on all platforms; the daemon stays Unix-only and
+    Windows `--daemon` returns the documented error).
+
+### Added
+- **Regression tests lock the cache fixes in**: dead index entries are dropped by the self-heal;
+  stale `tmp-*.tgz` download temporaries are swept (older than one hour, so concurrent installs are
+  safe); extraction replaces a leftover destination instead of aborting.
+### Fixed
+- **Interrupted installs no longer leak cache temporaries.** SIGKILL cannot run drop guards, so
+  `tmp-<pid>-<n>.tgz` files survived (a previous session measured 598 MB of them). The cache now sweeps
+  temporaries older than an hour once per process; young files belonging to a concurrent install are
+  left alone.
+- **`jhol install <pkg>` on a large project now completes** end to end (measured: `ms@2.1.3` added to a
+  421-package Next.js project in 24 s, tree and lockfile stay consistent). Previously it hung (>600 s),
+  then failed on a stale cache entry.
+
+### Fixed
+- **A plain `jhol install` could abort mid-materialization and leave `node_modules` unusable.** The
+  lockfile-layout extract copied files straight onto leftover destinations from an earlier failed run
+  and aborted on `File exists (os error 17)` (`eslint-visitor-keys@3.4.3` reproduced it). Extraction is
+  now idempotent: both copy sites in `selective_extract` remove an existing destination derived from the
+  same source before copying, so a partially-installed tree can always be completed.
+- **The store index can drift from the store.** Entries whose tarball no longer exists (files removed
+  by pruning or by hand while the index kept the entry) made installs skip the download and then abort
+  at link time, while a fresh cache worked — and a stale entry was verified pointing at a tarball that
+  did not exist. The index now self-heals on load: stale entries are dropped once per process and the
+  repair is written back (measured: 187 of 681 entries stale, now 0).
+
+### Fixed
+- **P0 Cache-State Resolution Bypass & Live Registry Fallback (`install.rs`, `registry.rs`):** Resolved critical
+  bug where installing a package whose packument on disk was cached before a new version release returned `None`
+  during version satisfaction and silently failed in 0.1s (e.g., `@swc/helpers@0.5.23`). Added
+  `registry::fetch_metadata_fresh` to bypass stale on-disk packuments and updated both `ManifestThenPackumentStrategy`
+  and `expand_with_transitive_dependencies` to fetch live registry packuments before giving up, providing transparent
+  error logging.
+- **RAII Temporary File & Directory Lifecycle Guards (`safe_file.rs`, `registry.rs`):** Resolved disk leakage
+  where interrupted downloads or failed integrity checks left orphaned `tmp-*.tgz` files and unpack directories
+  accumulating in the cache. Implemented `TmpFileGuard` and `TmpDirGuard` with RAII `Drop` cleanup that
+  automatically removes unfinished temporary artifacts on error or panic unless explicitly `.disarm()`ed upon
+  atomic store insertion. Added atomic thread-safe download counters (`NEXT_DOWNLOAD_ID`) to prevent naming collisions.
+- **Broken Symlink Resilience & Store Linking (`utils.rs`):** Resolved `EEXIST` (OS error 17) failures when
+  linking packages from store into `node_modules` where a dangling symlink existed. Replaced `.exists()` with
+  `symlink_metadata().is_ok()` and explicitly unlinked existing paths before creating symlinks.
+- **Scoped Package Store Indexing & Wave Skip Fixes (`utils.rs`, `install.rs`):** Fixed bugs where scoped
+  packages like `@scope/pkg@1.0.0` had their names truncated to `""` by `find('@')` and `split('@').next()`.
+  Standardized across `write_store_index`, `get_cached_tarball`, `dssc_first_install`, `try_jgrid_install`, and
+  wave skips using `registry::base_name` and `rfind('@')`.
+- **JAGR-S Object Store Tarball Materialization (`install.rs`):** Fixed issue where `get_cached_tarball_fast`
+  returned a store file path when `crate::jagrs::has_tarball(hash)` was true even if the `.tgz` file was not
+  yet written to disk. Added on-demand materialization using `crate::jagrs::get_tarball(hash)` before returning
+  the path.
+- **HTTP Stream Truncation Detection & Recovery (`http_client.rs`):** Added strict `Content-Length` byte checks
+  in `get_to_file_with_bearer` and `get_bytes_with_bearer` to detect socket drops mid-stream after receiving HTTP
+  200 headers, deleting incomplete files and triggering automatic retries.
+- **Capsule Exact-Pin Verification (`install.rs`):** Updated `can_reuse_lockfile_for_requested_in` and
+  `try_capsule_install` with `exact_version_from_spec` to ensure that requesting a new exact version does not
+  erroneously return "Already up-to-date" from a stale capsule.
+- **Multi-Constraint Lattice Resolution (`install.rs`):** Enforced full constraint validation on versions
+  suggested by `lookup_lattice` in `expand_with_transitive_dependencies`, falling through to complete packument
+  resolution when dependency details are unknown.
+- **Exact dependency pins were resolved as "any version" on the `install <pkg>` path.** Manifest
+  dependencies were added to the resolution as *bare names*, so the resolver was free to pick the
+  highest published release: a project pinning `next: "16.2.10"` and `react: "19.2.4"` resolved
+  `next@16.4.0-canary.35` and `react@19.3.0`, and the resulting tree failed mid-install. Manifest
+  dependencies now enter resolution as `name@range`, so the declared pin or range is always honoured.
+  (Found by QA against a real Next.js project; `jhol ci` was always correct, which is how the
+  difference was isolated.)
+- **Thread budgets are now bounded by machine size** (previously a hard-coded 64-thread IO pool and
+  `cores x 4` network concurrency, which oversubscribed a 10-core/16 GB laptop and could stall
+  installs). The IO pool is `4 x cores` clamped to `2..=32`; network concurrency is `2 x cores`
+  (max 16) on machines with 8 cores or fewer.
+
+### Changed
+- **Thread budgets are now bounded by machine size.** The shared IO pool was a hard-coded 64 threads
+  (`pool.rs`) and network concurrency was `cores x 4` (40 on a 10-core laptop), so a single install could
+  spawn well over 100 threads and several concurrent installs oversubscribed a small machine — installs
+  that could not finish and, in the worst case, a machine that crashed. The IO pool is now `4 x cores`
+  clamped to `2..=32`, and network concurrency is `2 x cores` (capped at 16) on machines with 8 cores or
+  fewer, keeping the generous latency-hiding window only on larger machines (`http_client.rs`).
+  Verified: cold installs of a 3-dependency project complete in 0.04-0.45 s with load staying under 10.
+ — Production hardening (2026-09)
+### Known issue
+- **`jhol install <pkg>` on a large project spins at 100% CPU instead of finishing** (measured on a
+  421-dependency project: stuck in the resolving phase, 0 cache hits, 0 network calls, main thread
+  executing its own code - confirmed by stack sampling). The bare `jhol install` path is unaffected
+  (1.3 s). Use bare `jhol install` or `jhol add` until the loop is found; the release binary is
+  stripped, so a symbolicated sample is the next step.
+### Known issue
+- **`jhol install <pkg>` can take longer than 10 minutes on a large project** (~300 packages,
+  where the request is unified with the manifest and the whole tree is re-resolved),
+  where the whole-tree resolution/analysis is unbounded. Reproduced on `~/j/jhol-web` and confirmed
+  pre-existing. A node-count guard or a deadline is needed so the command always terminates.
+### Fixed
+- **Tools could not resolve undeclared-but-hoisted packages** (`jhol run lint` on a real Next.js
+  project failed with `Cannot find module 'next/dist/compiled/babel/eslint-parser'`, identically under
+  `npm run lint`). Cause: `eslint-config-next` never declares `next` — it relies on npm's flat layout
+  hoisting it; under a content-addressed store the package's resolution root is its store directory.
+  Jhol now sets **`NODE_PATH`** to the project's `node_modules` when it runs a script or a `.bin`
+  binary (`jhol run`, `jhol exec`) — Node's own hoisted-fallback search path, which reproduces npm's
+  implicit behaviour with one variable and no extra links. An existing `NODE_PATH` is preserved.
+- **A lockfile that no longer satisfies `package.json` was trusted forever.** The install fast paths
+  compared *mtimes*, so a lockfile pinned to a version the manifest forbids (measured: `eslint: ^9` in
+  the manifest, `10.0.2` in the lockfile) kept being reused, and the project built against a major it
+  never asked for. The skip gate now verifies that the lockfile's registry ranges agree with the
+  manifest and refuses to skip when they do not — npm repairs such a lockfile on `install`, and this is
+  the one gate both fast paths consult.
+### Changed
+- **The startup banner now states the machine and the resolver** — e.g.
+  `jhol v1.0.2  macos-aarch64  JAGR-infinite`. The platform is not decoration: it is the machine every
+  platform-specific dependency is filtered against, so the banner makes that decision visible. The
+  banner is suppressed when output is piped (`NO_COLOR`/non-TTY behaviour is unchanged).
+- **The TUI's keys are discoverable.** The `?` overlay now ends with a line saying that not everything is
+  listed, and the six status-line quips were shortened so they fit one row instead of being truncated.
+### Known issue
+- **Interrupted downloads leak temp files into the cache** (`~/.jhol-cache/tmp-*.tgz`); measured
+  103 MB of them on this machine. They are not cleaned on failure, and nothing sweeps stale ones.
+  Harmless to correctness (they are never reused) but they accumulate; a fix is to remove the temp
+  file on error and sweep old ones at install start.
+- **One platform policy instead of two.** The lockfile path knew that many package names encode their
+  target (`@esbuild/linux-x64`, `@next/swc-darwin-arm64`) while the resolve path relied only on packument
+  metadata, which is absent exactly when the resolver skipped a package for another platform. Both paths
+  now share the same rule, so a name-encoded package for another OS is refused even with no metadata
+  available. (Same fix family as the earlier required/optional platform work, now from one place.)
+### Changed
+- **Copy-mode installs (`JHOL_LINK=0`) are ~37x faster: 3874 ms -> ~105 ms for a 50 MB tree.** The copy
+  path was doing a per-file `fs::copy` (thousands of syscalls). It now tries a **whole-tree**
+  materialization first, reusing the existing CAS linker, which picks the best primitive this filesystem
+  offers - `clonefile` (macOS/APFS), `FICLONE` reflink (Linux), hardlink, then a byte copy - and falls back
+  to the per-file walk (which itself now uses reflink) only when the result would not be a real directory
+  of real files. Copy mode still produces real files, never links into the store, so editing a package
+  cannot mutate the cache. Link mode (the default) is unaffected.
+### Fixed
+- **A dependency built for another OS/CPU could be installed anyway.** A **required** package whose
+  `os`/`cpu`/`libc` excludes this machine (e.g. `@esbuild/linux-x64` on macOS/arm64) was skipped by the
+  resolver with a warning and then materialized regardless, leaving an unusable package on disk. The
+  install list is now gated once, at the point where it is consumed, so no route into it (expansion,
+  fallback, or lockfile reuse) can put a foreign-platform package on disk. Optional and
+  peer dependencies for other platforms were already skipped silently, and the lockfile still records
+  every platform variant as `optional` (npm parity), so one lockfile still works everywhere while only
+  the matching variant is installed.
+### Fixed
+- **`update`, `install --lockfile-only` and `why --jagr` failed on any project with a local, git or
+  workspace dependency.** The nested/JAGR resolver was handed the manifest's raw specifiers, so it
+  tried to resolve `file:../lib` (and `git+…`, `workspace:*`) as a *version* — fetching the package of
+  that name from the registry and then rejecting its own answer with
+  `JAGR-∞ legality: local-lib@0.1.0 violates direct range file:../lib`. Resolvers now see the
+  registry-only view of a manifest (`lockfile::registry_only_deps`), the same rule the flat install path
+  already followed, so the three commands work on such projects.
+- **`prefetch` tried to download local dependencies.** It queued every resolved spec, including
+  `file:`/`link:`/`workspace:`/git ones, and failed with `HTTP 404 (url: local-lib@1.0.0)`. Only
+  registry specifiers are prefetched now; anything the installer materializes is skipped.
+
+### Fixed
+- **Other-platform optional native binaries no longer abort install.** Packages whose names encode a foreign target (`@next/swc-linux-*`, `@next/swc-win32-*`, `@next/swc-darwin-x64` on Apple Silicon) stay in the lockfile for portability but are not downloaded on this OS. Timeouts on those tarballs used to fail a successful Next.js install. Required downloads still fail the install.
+
+### Changed
+- **CLI install bar:** elapsed time on the bar; a failed install no longer paints `100% complete`. Download errors are grouped instead of dumping one giant line.
+- **`jhol gui`:** install, doctor scan/fix, audit, cache prune, why, remove, update, and script run from the dashboard (not read-only).
+- **Repository layout:** cleaned the repo root — historical optimization reports moved to
+  `docs/archive/2025-optimization/`, active plans to `docs/plans/`, user docs from
+  `Documentation/` to `docs/user/`, engineering docs to `docs/engineering/`, bench scripts
+  to `scripts/bench/`, and bench JSON/Markdown exports to `benchmarks/results/`. The move
+  map is in `docs/archive/REORG_MANIFEST.json`; `Documentation/README.md` redirects old paths.
+
+### Fixed
+- **`ci` on an npm-written lockfile installed the wrong version for a nested dependency.**
+  When two dependents need incompatible versions of the same package (`agent-base` needs
+  `debug@4` while the project pins `debug@2.6.9`), npm's lockfile records a nested copy. Jhol
+  resolved that path to the hoisted version instead (a tree that installed, exited 0, and served
+  the wrong dependency version at runtime). The installer's dependency-linking pass is now
+  **instance-aware** — it knows every version a name has, chooses per dependent **by range**, and
+  treats the store as the authority for which versions exist (unpacking a cached tarball whose store
+  directory is missing, so a version that exists really is visible). The pass also now runs **after**
+  materialization completes, which is what made nested copies reachable in the first place.
+  Verified against a real npm lockfile: `agent-base → debug 4.4.3` and `https-proxy-agent → debug
+  4.4.3`, exactly what the lockfile requires, with all 19 runtime dependencies loading (previously
+  `axios` failed). See `INNOVATION_LOG.md` (E145) for the full trail.
+
+### Security
+- **A crafted or corrupt JAGR-S manifest could read out of bounds.** The manifest's
+  `capacity` field is file-controlled and is used as `mask = capacity - 1` and as the length
+  of a slice built with `from_raw_parts`. With `capacity = 0` the mask wrapped in release
+  builds and the probe indexed a *zero-length* slice — an out-of-bounds read — while debug
+  builds panicked on the subtraction. A sparse file could also claim ~100 GB and pass the
+  length check, turning every probe into a multi-billion-entry scan. The value is now
+  validated at open: it must be a power of two in `1..=16M`.
+- **A server-controlled `Content-Length` was used directly to pre-allocate a buffer.** A lying
+  header (a proxy, a mirror, or a compromised registry) made jhol reserve that much memory
+  before a single body byte arrived; release builds abort on allocation failure. Pre-allocation
+  is now clamped to 32 MiB — the body still grows as the real bytes arrive, so nothing changes
+  for honest responses.
+- **The daemon acted on requests that never carried the protocol magic.** The struct is read as
+  raw bytes and the magic was written but never checked, so any local client could drive an
+  install with arbitrary bytes. The daemon now rejects a bad magic with a clear error, and the
+  request's `pkg_count` (which arrives off the wire and could be `u32::MAX`) is clamped before it
+  is used as a pre-allocation instead of reserving ~96 GB.
+
+### Fixed
+- **The install daemon stalled for 30 seconds before every real install.** It handled
+  connections one at a time, so a single client that connected and then sent nothing held it
+  for the full read timeout. The next request's first socket write blocked for ~30 s (measured
+  30.0005 s) even though the install itself takes ~200 ms, and the same stall appeared in
+  `jhol install --daemon`, `ci` and every other request. Each connection now gets its own
+  thread, and a process-wide lock serializes only the working-directory section (which is what
+  made the sequential loop necessary in the first place). Measured: daemon cold install
+  **30,206 ms → 239 ms**, a request arriving while an idle peer is connected
+  **~30,000 ms → 9 ms**, with concurrent installs still serialized and correct.
+
+### Fixed
+- **A dependency range was flattened to a fixed version in the lockfile.** The root
+  `dependencies` block recorded the *resolved* version, so `"ms": "^2.1.3"` was written as
+  `"2.1.3"` — a later install could never move within the range again. It now records what the
+  project declares, so ranges stay ranges and npm-style ranges round-trip.
+- **`npm:` aliases, `file:`, `workspace:` and git dependencies were missing from the lockfile's
+  root block.** Because they have no registry entry to look up, they were dropped entirely, so the
+  lockfile no longer described the project. All of them are now recorded with the specifier you
+  wrote (`"my-lodash": "npm:lodash@4.17.21"`, `"local-lib": "file:../lib"`,
+  `"git-dep": "git+file://…"`), while an optional dependency the resolver deliberately skipped is
+  still left out.
+- **`install --offline` failed on a project with an `npm:` alias.** The alias *name* was treated as
+  a registry package (`my-lodash@4.17.21`), which exists in no registry and is not in the cache, so
+  the offline install aborted even though the alias was already materialized. Alias entries are now
+  marked as materialized, like `file:` and git ones.
+- **`jhol ci` and `install --frozen` failed on projects with local, workspace or git dependencies.**
+  Strict mode demanded an integrity hash for every package, but a linked directory or a checkout has
+  none (npm records none either), and an optional dependency that cannot be resolved made the check
+  fail outright. Materialized dependencies and skipped optional ones are now exempt, so a
+  reproducible project built from local/workspace/git deps passes `ci`.
+
+### Fixed
+- **A `git:` dependency was replaced by the registry package of the same name.** For
+  `{"rimraf":"github:isaacs/rimraf#v3.0.2"}` jhol installed `rimraf@6.1.3` from the registry
+  instead of the checkout (its declared `glob ^13.0.3` is not even published, so the tree was
+  also incomplete), overwriting the checkout that had just been materialized. The registry root
+  set is now built without re-adding dependencies the spec-grammar pass already materialized,
+  so git dependencies resolve to the checkout, their own `dependencies` are installed, and the
+  noisy `resolution failed with both resolvers` warning for a supported spec is gone.
+  Measured before/after on the same fixture with a fresh cache and project each run: 4 of 6
+  runs wrong before, 6 of 6 correct after.
+- **The lockfile no longer drops a git dependency's specifier.** It recorded the resolved
+  version in the root `dependencies` block (`"git-lib": "4.5.6"`) and the clone URL as
+  `resolved`, so a reinstall fetched the name from the registry. The written spec
+  (`git+file://…`, `github:u/r#tag`, `file:../lib`, `npm:lodash@4`) is now preserved in both the
+  root block and the package entry, and git entries are marked as materialized so a reinstall
+  re-checks the checkout instead of downloading it.
+
+### Security
+- **Cache import rejects payloads that escape the export directory or are symlinks.** The import read a
+  `file` field from the manifest and did `dir.join(file)`, then copied that path into the local store — so a
+  manifest naming `../../../../etc/passwd` (or an absolute path) would copy that file in, and a symlinked
+  payload was followed for the same effect. Payload names must now be plain filenames inside the export
+  directory, and symlinked payloads are refused; both fail with a clear message. Verified: traversal and
+  symlink manifests are rejected (exit 1, nothing written to the store) while a legitimate unsigned export
+  still imports (exit 0, `Imported 1 package`). Real exports name payloads `<sanitised-spec>.tgz`, so this
+  costs nothing.
+
+### Security
+- **Capsule accessors no longer read out of bounds or produce invalid `&str`.** Three accessors used
+  `unsafe { str::from_utf8_unchecked }` (undefined behaviour when the bytes are not valid UTF-8, e.g. an
+  offset landing inside a multi-byte sequence), and `entry_deps` sliced the dependency table with **no
+  bound check at all** (`from_raw_parts(dep_edges.add(start), count)`). Because the capsule is mmap'd, a
+  file that changes after `open()` validated it (TOCTOU) reaches those accessors with out-of-range
+  offsets: the old code panicked with `range start index 4294967295 out of range for slice of length 68`,
+  and release builds use `panic = "abort"`, so that is a process abort. Strings are now read with a bounds
+  check plus real UTF-8 validation, and the dep slice is range-checked; both return empty rather than
+  reading out of bounds. Covered by `crates/jhol-core/tests/capsule_adversarial.rs` (crate-local CSV fixture test) (tampered, truncated, corrupt-UTF-8, and
+  post-open-mutation capsules): red before the fix, green after.
+
+### Removed
+- **The unused `simd-json` dependency and the empty `simd` feature.** `simd-json` was declared but
+  referenced nowhere, and `simd = []` gated nothing (no `cfg(feature = "simd")` existed) — yet it was in
+  `default`, pulling 12 crates into every build (lockfile packages 496 -> 484). Measured before removing:
+  parsing the largest packument (8.69 MB) takes ~31 ms even in Python, so the whole metadata set is worth
+  ~0.5% of an install. Build weight removed, no capability lost.
+
+### Added
+- **Every install now records an entry in the rolling install log** (`install-log.jsonl`, pruned to the
+  last 6 hours). The module existed, compiled and had passing tests, but nothing ever called it, so the
+  data did not exist at all. Each entry carries the project directory, the installed `name@version`
+  list, elapsed time, cache-hit/network counts and success — the data a "recent installs" view needs.
+
+### Fixed
+- **Lifecycle scripts actually run now.** The executor (`lifecycle.rs`) existed, compiled and
+  had its security gate, but was **never declared as a module**, so nothing could call it:
+  `--scripts`, `--script-allowlist` and `trustedDependencies` silently ran nothing. Verified
+  before the fix (a package with a `postinstall` did not execute it even with the allowlist
+  set) and after, in all four combinations: `--no-scripts` -> not run; `--scripts` without an
+  allowlist -> **not run** (the allowlist stays the gate); `JHOL_SCRIPT_ALLOWLIST=<pkg>` ->
+  runs; `trustedDependencies: ["<pkg>"]` in package.json -> runs. Scripts run at most once per
+  process, on materialization only, never on a no-op or fast path.
+
+### Changed
+- **Installing from a warm cache is 1.2-2.4x faster on Apple Silicon** (measured: the
+  ~300-package fixture drops from 186.6 ms to 76.6 ms; the 20-dep fixture from 148.6 ms to
+  121.4 ms, medians of 5 with correctness asserted). Writing the lockfile needed the SRI
+  integrity of every package and re-hashed all tarballs on every run; a digest of a
+  content-addressed tarball never changes, so it is now memoised next to it
+  (`store/<hash>.tgz.sri`). The lockfile tail on the ~300-package fixture went from **296 ms
+  to 12 ms**. Integrity output is unchanged (51/51 entries) and `jhol ci` still verifies
+  against that lockfile.
+- **The lockfile tail honours the configured registry.** It built `https://registry.npmjs.org/...`
+  by hand when a package had no resolved URL, which sent private package names to the public
+  registry; it now uses the shared registry-aware URL builder.
+- **`http-reqwest` is no longer a default feature** (opt in with `--features http-reqwest`).
+  The `http2_download` module measured 1.45x slower than the ureq path on packuments with
+  parity at best on tarballs; its verified win is resumable downloads only. The default
+  build no longer carries reqwest and its transitive HTTP/2 stack for a module nothing on
+  the hot path calls. `tokio` stays a mandatory dependency (`cas` uses it unconditionally).
+  The client also no longer forces `http2_prior_knowledge()`, letting ALPN negotiate H2 —
+  the likely cause of the packument gap; re-measure before any wider use.
+
+### Added
+- **`scripts/bench/scales.py` — a reproducible seven-scale benchmark** (1, 2, 5, 20 and
+  ~300 dependencies cold, plus warm-cache and unchanged-project re-installs) with the protocol
+  this project settled on: a fresh cache *and* a fresh `HOME` per cold run, a discarded
+  pre-warm before warm runs, medians with min/max, and every run asserted to produce a usable
+  tree. Results are stored under `benchmarks/macos-arm64/`.
+
+### Fixed
+- **`jhol install <pkg>` now installs the package it was asked for, alongside your existing
+  dependencies (last P0).** Two compounding faults: the flat expansion used only the requested
+  packages as roots (so every dependency from `package.json` looked dropped and the nested-layout
+  fallback always triggered), and that fallback resolves the manifest alone (so the request itself
+  was discarded — the command reported success having installed everything *except* what was asked
+  for). Expansion roots are now the union of the request and the manifest, and the requested
+  packages (with their transitive tree) are merged into the nested resolution as well. Verified
+  on a project with 20 dependencies *and* a genuine conflict: `jhol install is-number@7.0.0`
+  installs `is-number` and keeps every existing package; a regression check was added to the QA
+  matrix, which now runs **59 checks**.
+
+### Fixed
+- **A deleted package directory is repaired again (P0).** Three fast paths decided
+  "already up-to-date" from a fingerprint that records only the manifest hash
+  (`lockfile_fingerprint_matches`, `try_capsule_install`'s warm bypass, and the
+  pre-argument-parsing shortcut), so removing `node_modules/<pkg>` was silently accepted and
+  never restored. The status record now stores the **`node_modules` entry count** (reusing the
+  first 8 bytes of its existing padding, so the file format stays 125 bytes) and every one of
+  those gates requires it. Verified: deleting a package directory, changing the manifest,
+  wiping `node_modules`, and adding a dependency all behave correctly, and an unchanged
+  re-install is **7.5 ms** (Bun: 7.8 ms).
+
+### Fixed
+- **jhol's own warm-start machinery works again — the "node_modules is already fresh"
+  check had never been able to succeed.** Two writers produced the fingerprint in
+  incompatible formats: `daemon_cache::write_nm_fingerprint` writes the 8 raw hash bytes
+  that `nm_is_fresh` compares, while `install_package`'s marker writer wrote **hex text**,
+  so the comparison could never match. The installer now uses the single existing writer,
+  which turns the native fast paths on: an unchanged re-install drops from **126 ms to
+  ~10 ms** with no new cache or marker mechanism, and invalidation keeps working (manifest
+  change, `add`, a deleted package directory, and a removed `node_modules` all take the
+  full path).
+- **The pre-argument-parsing shortcut no longer skips a command that names packages.**
+  `try_exit_before_clap` only inspected `argv[1]`, so now that the fingerprint check works,
+  `jhol install <pkg>` could have exited 0 on a fresh `node_modules` and silently ignored
+  the request. The shortcut is skipped whenever a non-flag operand follows the subcommand.
+
+### Changed
+- **An unchanged re-install is ~16x faster: 126 ms -> 8 ms** (Bun: 7.8 ms). Re-running
+  `jhol install` in a project where nothing changed used to walk the manifest, the
+  lockfile, `special_deps` (with its workspace BFS), rewrite the capsule, scan all of
+  `node_modules`, relink the store links and rewrite markers — about 120 ms to learn that
+  nothing had changed. A marker recording the manifest hash, lockfile hash and
+  `node_modules` entry count now short-circuits that tail, so a changed dependency, a
+  changed resolution, or a removed/added directory all still take the full path
+  (all four invalidation cases verified).
+### Fixed
+- **The capsule fast path no longer answers an explicit package request.** `try_capsule_install`
+  replayed the previous resolution for `jhol install <pkg>`, reporting success without
+  installing the named package. It is now skipped when packages were named on the command line.
+
+### Fixed
+- **`JHOL_LINK=0` is honoured everywhere now.** The documented "copy from the store
+  instead of linking" mode was silently ignored for any package installed through the
+  selective extractor: its `link_or_copy_tree` always created a directory symlink and
+  only fell back to copying if the symlink call itself failed. It now checks the link
+  mode first and copies when linking is disabled. Verified: with `JHOL_LINK=0`
+  `node_modules/<pkg>` is a real directory and still loads; by default it remains a
+  symlink.
+
+### Added
+- **The QA matrix grew from 43 to 58 checks**, now covering the spec-grammar and
+  resolution surface that `cargo test` does not reach through the CLI: `overrides`
+  beating a declared range, `npm:` aliases, `file:` directory dependencies,
+  exact prerelease pins, unresolvable optional dependencies being skipped,
+  `--lockfile-only` (lockfile and *no* `node_modules`), `--resolver jagr|pubgrub-v2`,
+  `--prefer minimal`, `--frozen` failing on a stale lockfile, `JHOL_LINK=0` copy mode,
+  `cache export`, workspace dependency installation, `sbom --format cyclonedx`, and
+  `why --jagr`.
+- **`safe_edit.py --line-tolerance <pct>` / `--no-line-check`** — the guard correctly
+  rejected an intentional large addition (a +48% file) with its default 20% line
+  tolerance; the override makes legitimate growth explicit instead of forcing the check
+  to be disabled wholesale.
+
+### Fixed
+- **`jhol add` now records the dependency in `package.json` and actually installs it.**
+  It printed `Package(s) added.` while writing nothing to the manifest, and because the
+  install fast paths compare `package.json`'s hash, a **second** `add` saw a "fresh"
+  `node_modules`, skipped the work, and still reported success — so `jhol add typescript`
+  left no dependency, no `node_modules/typescript`, and no `.bin/tsc`. The manifest is now
+  written first (which is also what makes the install run), and a bare `jhol add <name>`
+  is refined to `^<installed version>` afterwards, as npm does.
+
+### Added
+- **`scripts/qa_matrix.sh` — 43 end-to-end checks against an installed binary.**
+  Every check asserts an observable result (a file, output content, runtime behaviour)
+  rather than an exit code, in a throwaway project with an isolated cache. It covers
+  init/add/install, pinned versions, `.bin` execution and flag pass-through, `why`,
+  `outdated`, `doctor`, `run`, `ci` determinism and strict-mode failure, `sbom`, cache
+  size/list, pty-safe output, completions (bash/zsh/fish), `import-lock`, the bundler
+  (bundle must run and print `42`), link/unlink, remove (including `--no-save` and shim
+  pruning), update, all four JAGR diagnostics (including that a corrupt report is
+  rejected), offline success *and* failure, the daemon end-to-end, and a project path
+  containing spaces and unicode.
+
+### Added
+- **`scripts/safe_edit.py` — a guard for scripted bulk edits.** It snapshots the files
+  you are about to touch, runs your command, then validates the result and
+  **auto-restores on damage**. The checks are built around the failure that actually
+  happened here: a malformed Unicode range deleted letters and digits while leaving
+  spaces and quotes, so the decisive signal is an **alphanumeric-content collapse**
+  (plus non-whitespace count, line-count drift, empty/NUL files, and an optional
+  `cargo check`). Usage:
+  `scripts/safe_edit.py src/main.rs crates/jhol-core/src --cargo-check -- python3 patch.py`.
+  Verified against a reproduction of the original bug: it is caught and the file is
+  restored byte-identically, while ordinary edits pass through.
+- **`scripts/snapshot_tree.sh` — whole-tree snapshots without touching git.**
+  `--list`, `--restore <dir>`; copies source and docs (never `target/` or
+  `node_modules/`) to `~/.jhol-tree-backups/<timestamp>/`. Restore round-trip verified.
+
+### Added
+- **`install.sh` — a one-line installer with a real interface.**
+  `curl -fsSL https://raw.githubusercontent.com/bhuvanprakash/jhol/main/install.sh | sh`
+  detects OS/architecture, downloads the release asset with an in-place progress bar,
+  verifies the download is a plausible binary, installs to `~/.local/bin`, prints a PATH
+  hint when needed, and finishes with a rule-and-panel summary. If no release matches,
+  it says so and **falls back to a source build with cargo** instead of failing.
+  Flags: `--dir`, `--version`, `--source`, `--no-color`.
+
+### Changed
+- **No emoji anywhere in the CLI or dashboard.** Pictographs (package, rocket, party,
+  chart, stethoscope, warning-sign, bolt) were removed from all output and from the TUI;
+  layout, colour and weight carry the design instead. Typographic marks that read as
+  text in any terminal are kept: box drawing, arrows, and status glyphs.
+- **Install progress and downloading** report plain, legible lines (stage, counts, and a
+  rewritten progress bar) with no pictographs.
+
+### Added
+- **`jhol gui` now works — a real terminal dashboard (it was a stub).** On `main`,
+  `src/tui.rs` was six lines printing *"TUI mode not available in this build."*, so the
+  documented command did nothing; the real 546-line TUI had been left behind in a
+  `git stash` and never compiled into the binary. It is now restored and runs: five tabs
+  (Overview, Dependencies, Cache & Storage, Health & Doctor, JAGR Topology) with live
+  manifest, cache and JAGR data.
+- **Four hidden extras, all free while inactive:** the classic cheat code
+  (up up down down left right left right B A) starts a rocket-flying **party mode** with a
+  cycling rainbow header; `e` shows a rotating dependency pun; `z z z` pops a small
+  banner; `?` opens a help overlay listing the keys and hinting that secrets exist.
+  `JHOL_EGGS=1` adds a `[secrets n/4]` counter for collectors.
+- **`scripts/tui_check.py`** — drives the dashboard on a real pty, parses the rendered
+  screen, and asserts tabs, live data, lazy JAGR, every easter egg, the small-terminal
+  guard and clean exit (13 checks). Raw terminal output cannot be asserted on: ratatui
+  writes only changed cells, so whole strings never appear in the byte stream.
+
+### Changed
+- **The dashboard's first frame is ~158x faster on a cold project: 1106 ms -> 7 ms.**
+  It used to run a full JAGR resolution (network-bound on a cold tree) inside the
+  constructor before drawing. It now draws immediately, loads manifest and cache behind
+  the first frame, and computes JAGR when its tab is first opened. Idle cost while
+  nothing is animating: 0.0% CPU, 1.3 MB RSS. Added a **"terminal too small"** message —
+  a zero-sized terminal previously rendered silently blank frames.
+
+### Fixed
+- **`jhol exec`/`x` now forwards flags to the binary.** `jhol exec tsc --version`
+  failed with `error: unexpected argument '--version' found` because jhol's own parser
+  consumed it, even though the documented contract is "arguments to pass to the
+  binary" — so `jhol exec tsc --noEmit`, `jhol x eslint --fix .` and every real
+  invocation was broken. The argument is now a pass-through
+  (`allow_hyphen_values`, `trailing_var_arg`).
+- **`jhol remove` deletes the removed package's `.bin` shims.** They were left behind
+  pointing at a deleted file, so `jhol exec <tool>` failed with
+  `cannot execute: No such file or directory`; `npm uninstall` prunes the entry
+  (verified against npm as a control). Bin-link rebuilding now also prunes dangling
+  shims, and `uninstall` triggers it.
+- **`jhol audit-jagr --save` no longer falsely reports success.** It printed
+  `JAGR audit trail saved to <path>` and exited 0 while writing **nothing** (the
+  function was a stub returning `Ok(())`), and `--load` ignored the file and re-ran an
+  analysis instead of reading the stored report — so an "audit trail" feature kept no
+  trail. Reports are now really written and really loaded; a missing or invalid report
+  exits non-zero with a clear message.
+- **JAGR analysis commands report real data instead of stubs.**
+  `jagr_analyze_project_manifest` returned a fixed report
+  (`strategy_used: "stub"`, every count zero), which made `jhol jagr`, `audit-jagr`,
+  `jagr-impact` and the `--jagr` diagnostics print success with no content. It now runs
+  the same resolver the installer uses and reports the real outcome (strategy,
+  satisfiability, selected versions, counts, timing). `jagr-impact` reports the real
+  current version and a semver-based risk/recommendation (it previously ignored its
+  `--target` argument and printed empty From/To fields), and `why --jagr` explains
+  presence from the real dependency graph (it previously returned the placeholder
+  "JAGR analysis not available in this build.").
+
+### Added
+- **`scripts/production_check.sh`** — one command that runs formatting, a release
+  build, the full test suite, then an isolated install audited for the properties
+  existence checks miss (dependency resolution, executables, extraction completeness,
+  loadability) and executes every `.bin` entry.
+### Added
+- **`scripts/production_check.sh` — one command that proves an install is sound.**
+  It runs formatting, a **release build** (so audits never measure a stale binary — a
+  mistake that invalidated measurements three times in this project), the full test
+  suite, then installs into an isolated project with an isolated cache and audits the
+  result for the properties existence checks miss: every declared dependency resolvable
+  from each package's own directory, every declared `bin` present/executable/runnable,
+  tarballs fully extracted, and every default entry loadable (`require`, or `import` for
+  ESM-only). Exits non-zero on the first real defect and prints a summary. Pass a
+  fixture path as `$1` (defaults to the local `jhol-bench/large-test` manifest);
+  `JHOL_CHECK_KEEP=1` keeps the temp project for inspection.
+### Changed
+- **Cold installs no longer print an error-shaped line about the prediction chain.**
+  `[jhol] markov: load failed …/markov.chain: No such file or directory` appeared on every
+  first run, making a successful install look partly broken. An absent chain is the
+  normal cold-start state; it is now silent, while a chain that exists but cannot be
+  read is still reported when `JHOL_VERBOSE` is set. A cold `jhol install` output is
+  now three clean lines.
+### Fixed
+- **Traversal into store symlink cycles could hang the installer.** `Path::is_dir()`
+  follows symlinks, and the installed layout is cyclic by design
+  (`<store>/A/node_modules/B` -> `<store>/B` and back). Two copy/walk helpers
+  (`selective_extract::copy_tree_recursive` and `walk_project`) recursed with no
+  visited set or depth bound, so a cycle meant unbounded recursion. They now detect
+  symlinks with `symlink_metadata` and **never descend into them** — a symlink is
+  reproduced as a symlink, which preserves legitimately shipped links — with a depth
+  bound as backstop. Covered by a regression test that builds a cyclic structure and
+  asserts the copy terminates.
+### Fixed
+- **Concurrent `--daemon` installs corrupted each other's target directory.** The daemon
+  serves each connection on its own thread, but an install changes the **process**
+  working directory (the core install APIs are relative-path based). With two installs
+  running at once, one exited **0** printing `Added 2 packages` while its project
+  received **no `node_modules` at all** — the packages were materialized into the
+  daemon's own directory (`/tmp/node_modules/{chalk,lodash}` in the reproduction). The
+  daemon's cwd-dependent section is now serialized with a process-wide lock, so only
+  one handler at a time can have a changed working directory. Verified with four
+  concurrent installs in four projects: every tree, lockfile and runtime `require`
+  correct, no cross-project leakage, and the daemon's directory untouched.
+- **Background capsule threads no longer change the process working directory.** A
+  `cd` is per-process on Unix, so the anticipatory daemon loop's worker threads were
+  moving the *main* thread's relative paths as well. Those workers now receive the
+  absolute project directory instead of calling `set_current_dir`.
+### Fixed
+- **Installed CLI tools are now executable.** npm sets the executable bit on every
+  declared `bin` target after unpacking; jhol kept tar's stored mode, and tarballs are
+  not required to store it — `typescript` ships `bin/tsc` as mode 644. Because
+  `node_modules/.bin/tsc` is a symlink to that file, running it failed with
+  `Permission denied`, while `npm install` of the same manifest printed
+  `Version 5.9.3`. The bit is now set on the target (0o755, as npm does) when bin
+  links are created, so `./node_modules/.bin/tsc --version`, `.bin/next --version`
+  (`Next.js v15.5.25`), `.bin/semver`, `.bin/tsserver` and `.bin/uuid` all run.
+  A whole-tree audit of a 76-package install now reports 0 unresolved declared
+  dependencies, 0 missing declared `main` entries and 0 missing or non-executable
+  declared bins.
+### Fixed
+- **`require('next')` failed in the default install mode.** A package may require
+  *itself* by name — `next/dist/server/require-hook.js` does
+  `require('next/dist/compiled/find-up')`. In npm's layout that resolves because the
+  file lives under `node_modules/next`, so Node finds the package's own directory on
+  the lookup chain. jhol links packages into a content-addressed store whose realpath
+  is `<store>/<shard>/<hash>`, where no `node_modules/next` exists, so such lookups
+  failed: `require('next')` died with `Cannot find module 'next/dist/compiled/find-up'`
+  while `npm install` of the same manifest worked. Each store package now gets a
+  self-link (`<store>/node_modules/<name>` -> itself). Verified: `require('next')`
+  (15.5.25), `next/router` and `next/head` all load.
+- **Scoped dependencies were never linked into a store package.** For `@scope/name`
+  the symlink was attempted at `<store>/node_modules/@scope/name` before the
+  `@scope` directory existed; the call failed with ENOENT and its error was
+  discarded, while a later step only created the (empty) scope directory. Result:
+  `next`'s store dir held a real `@next/` with **no** `env` link, so
+  `require('@next/env')` could not resolve from inside the package — the same for
+  `@swc/helpers` and `sharp`'s `@img/colour`. Scope directories are now created
+  before the link in both relink paths. An audit of the installed tree reports
+  **0** unresolved declared dependencies (was 3).
+### Fixed
+- **`*` and empty ranges no longer select prereleases.** npm matches stable
+  versions only unless the range names a prerelease. Three separate layers could
+  return an unreleased build for a plain range, all now fixed: `resolve_range`,
+  `resolve_range_from_parsed` (which returned the absolute highest version), and
+  `version_satisfies("*", v)` (which accepted any parseable version, so max-version
+  selection over a `"dep": "*"` constraint could hoist a nightly on the JAGR path).
+  Measured against npm: for `{"ms":"*"}` jhol and npm both install **2.1.3**; before
+  this change jhol installed `ms@4.0.0-nightly.202508271359`. An explicit prerelease
+  range (`^4.0.0-nightly.202508271359`) still resolves exactly, and a
+  prerelease-only package remains installable.
+- **Store-directory relinking now covers nested packages.** Resolution runs against
+  the store realpath, so every package inside a store dir needs a `node_modules/<dep>`
+  link of its own. Only top-level packages were relinked, which stayed hidden while
+  the layout also nested a duplicate copy — once deduplication removed it,
+  `axios -> agent-base -> debug -> ms` failed at runtime with
+  `Cannot find module 'ms'`. Nested dirs are now relinked recursively (bounded
+  depth, cycle-safe), keeping the deduplication win instead of reverting to
+  duplicate copies. Verified: `require('axios')`, `require('jsonwebtoken')`,
+  `fs-extra`, `semver` and `chalk` all load, nested `debug` has its `ms` link, and
+  a warm re-run still resolves.
+### Fixed
+- **A prerelease no dependency asked for could be hoisted into `node_modules` as a
+  phantom root package.** When two dependents demanded incompatible ranges for the
+  same package, version reconciliation kept its previous pick — which, having no
+  constraint to satisfy, could be an arbitrary high version. On the large-test
+  fixture this installed **`ms@4.0.0-nightly.202508271359`** at `node_modules/ms`
+  (a published *nightly* dist-tag) while the only declarers wanted `2.0.0`
+  (debug 2.6.9, exact) and `^2.1.1` (jsonwebtoken) — with **zero** packages linking
+  to it. Reconciliation now prefers a version satisfying every dependent, else the
+  highest satisfying **at least one**, so the listed version is always one somebody
+  requested and prereleases stay excluded (npm semantics) unless a range names one.
+  Reproduced minimally with `{"debug":"^2.6.9","jsonwebtoken":"^9.0.2"}`; after the
+  fix that tree resolves `ms 2.1.3` (root) + `2.0.0` (nested under debug), the store
+  holds 2 copies instead of 3, and the fixture drops 81 -> 78 lockfile entries.
+### Fixed
+- **`jhol install` no longer installs versions that a dependency's own manifest
+  rejects.** A flat tree keeps one version per package name, and the resolver only
+  noticed a conflict when a *direct* dependency vanished — so when a transitive
+  dependent wanted an incompatible range, the wrong version was installed silently.
+  Concretely: `cliui@8.0.1` was given `string-width 5.1.2` (it requires `^4.2.0`)
+  and `strip-ansi 7.2.0` (requires `^6.0.1`); on a real project this handed
+  `agent-base`/`https-proxy-agent` **debug 2.6.9 instead of 4.x** and `jsonwebtoken`
+  **ms 2.0.0 instead of ^2.1.1**. The flat expansion now validates its own result and
+  switches to the node-keyed nested layout, so each dependent gets a version it
+  asked for (verified at runtime via `createRequire`, and `jwt.verify`/`axios.get`
+  still work). Expansions that conflict are never written to the resolution cache,
+  and `RESOLUTION_CACHE_VERSION` was bumped so previously cached trees are not reused.
+
+### Security
+- **Archive extraction hardened against two further escape classes** (the earlier
+  traversal/symlink fix covered the buffered path only). **Hard links are now
+  refused**: tar-rs resolves a hardlink target as a raw relative path against the
+  **process working directory**, not the extraction root (verified in tar 0.4.46:
+  `"when hard linking ../outside/victim.txt to <dest>/x"`), so a published tarball
+  could link a project file — or `/etc/passwd` in a root container — into the tree,
+  and a later entry writing that path would rewrite the linked file. **Escaping
+  symlink targets are refused** too, and the same containment rules now apply to
+  the separate `file:` local-tarball extractor, which previously validated nothing
+  and ignored extraction errors. Measured justification: across 71 real npm
+  packages (3404 files) there are **zero** symlink and **zero** hardlink entries,
+  so this costs no real-world functionality; internal symlinks are still allowed.
+### Security
+- Registry tar extraction now rejects parent traversal, absolute/Windows-style entry paths, and writes through destination symlinks in both buffered and streaming paths. Corrected previously false-green containment tests: both attacks reproduced before the fix. This is not a complete audit of other extractors, hardlinks, or filesystem races.
+
+The current, uncommitted work: closing the P0 gaps that blocked production use,
+with **no feature or quality loss**. Default behaviour stays lenient; strictness
+is opt-in.
+
+### Fixed
+- **Optional peer dependencies are no longer installed, and no longer fetched.** `next` declares
+  `@playwright/test` as a peer marked `optional` (`peerDependenciesMeta`); npm installs nothing for
+  it, but jhol enqueued every peer regardless, which pulled in `@playwright/test` plus `playwright`
+  and `playwright-core` — **21.4 MB, 25 % of a Next.js-scale install's metadata**, three packages
+  npm would not install, and (because selection ran on those documents) at **canary prerelease**
+  versions. Optional peers are now skipped when building the graph; required peers are unchanged.
+  Measured on a Next.js-scale tree: metadata requests **82 → 53**, decoded metadata
+  **85.4 MB → 61.8 MB**, the playwright trio **gone**, and **no prereleases in the tree**. A full
+  install still has 52 lockfile entries with every one of `next`'s runtime dependencies present
+  (`@next/env`, `@swc/helpers`, `caniuse-lite`, `postcss`, `styled-jsx`) and 34 platform-optional
+  entries against npm's 35; required-peer auto-install and explicit prerelease pins still work.
+
+
+### Security
+- **Malformed capsule/cache files are now rejected at load instead of risking undefined
+  behaviour.** The capsule reader memory-maps a cache file and then reads structures at offsets
+  taken *from that file*: it built `&str` with `from_utf8_unchecked` on untrusted bytes, built
+  dependency slices from unchecked offsets, and computed the table sizes with unchecked
+  arithmetic (a crafted header could wrap them past the length check). The structural validator
+  existed but was never called when loading. Now: size arithmetic is **checked**, the string table
+  is **validated as UTF-8 once** at open, and the whole structure is **verified before the view is
+  handed out**. Verified by three new tests — invalid UTF-8, out-of-range entry offsets, and
+  absurd counts are each rejected — plus the existing truncation/corruption tests.
+
+
+### Security
+- **The install daemon can no longer be made to leak threads.** Serving each connection on its
+  own thread (4d8614-era fix for the wedged-daemon hang) had no bound: a client that connected and
+  never sent anything left the handler blocked in `read_exact` **forever**, so every such
+  connection permanently leaked a thread — a local denial of service from a crashed or hostile
+  client. Accepted connections now get an idle **read timeout** (default 30 s,
+  `JHOL_DAEMON_READ_TIMEOUT_SECS`) and the number of concurrent handlers is **capped**
+  (default 64, `JHOL_DAEMON_MAX_CONNS`): excess connections are shed instead of growing threads
+  without limit. Verified: a 10-connection idle burst leaves the daemon's thread count back at its
+  baseline, a 6-connection burst against a cap of 2 sheds the excess immediately, and normal
+  daemon installs still work.
+
+
+### Security
+- **`jhol cache export` / `cache import` signatures now cover payload contents, not just the file
+  list.** The signed manifest listed only `{spec, file}` and import recomputed each payload's hash
+  from the file it found and then compared the copy against that same value — a check that could
+  never fail. A tarball swapped for one with the same filename therefore imported silently, with
+  the signature still verifying. Exports now record each payload's content hash **inside the signed
+  manifest**, and import rejects any payload that does not match it (and any entry without a hash
+  when `JHOL_CACHE_SIGNING_KEY` is set, i.e. in secure mode). Verified end to end: two-package
+  export/import round-trip still works, an offline install from the imported cache succeeds, and a
+  tampered payload is rejected. Backward compatible: older exports without hashes import normally
+  unless a signing key is set.
+
+
+### Fixed
+- **A custom `JHOL_CACHE_DIR` was silently ignored when a daemon was running.** The client
+  delegated the install to the daemon, which runs in its own process with its own environment —
+  and the request carries no cache path — so the daemon resolved from *its* cache. Measured:
+  `install` with `JHOL_CACHE_DIR=/tmp/fresh` returned in **10 ms** using the daemon's warm
+  cache instead of doing the work. Jhol now honours a pinned cache directory locally and never
+  delegates in that case (`soul_path::auto_daemon_enabled`); with no override the daemon is
+  still used. Verified: the same command now takes 4.4 s and populates the requested cache
+  directory (82 packuments) rather than reporting success in 10 ms.
+
+
+### Changed
+- **Registry metadata is now requested compressed.** `ureq`'s `gzip` support is *not* a default
+  feature, so jhol was sending **no `Accept-Encoding`** and the registry returned packuments
+  uncompressed — the `next` packument is **31,257,270 bytes** that way and **2,366,506 bytes**
+  gzipped (**13.2x**, ~28.9 MB saved for that one document; measured with curl). The client now
+  negotiates gzip (`ureq` `gzip` feature), so package metadata costs roughly a thirteenth of the
+  bytes it did. Decoding is transparent and the bytes are identical afterwards, so resolution
+  is unchanged — verified end to end (cold install, `ci`, offline reinstall from the
+  written cache, cross-project cache reuse) with all suites green.
+
+
+### Changed
+- **A warm install now attaches to a running Jhol daemon by default.** Install latency drops
+  from a **48 ms to a 30 ms median** (−38 %, five runs each, same machine) because the daemon
+  keeps the resolution caches hot in-process. Attaching is side-effect free: if no daemon is
+  running the install proceeds directly and **no daemon is ever started implicitly**. Opt out
+  with `JHOL_AUTO_DAEMON=0` or `JHOL_NO_DAEMON=1`; CI stays off unless `JHOL_AUTO_DAEMON=1`.
+  (This default was previously off "until the races are resolved"; they are — the daemon serves
+  each connection on its own thread and the client bounds only the read.)
+
+
+### Fixed
+- **`jhol install --lockfile-only` failed on any project whose dependency requires a peer.**
+  `jhol install --lockfile-only next` exited 1 with *"peer react-dom missing (required by
+  next)"* instead of installing `next` together with its required peers, which is what npm
+  does and what the normal `jhol install` path already did (it only enforces peer validation
+  in strict mode). Both paths now follow the same rule: **missing required peers are
+  auto-installed; `--strict-peer-deps`/`JHOL_STRICT_PEER_DEPS=1` turns a conflict into an
+  error.** Verified: `--lockfile-only` with `next` alone now installs `next 15.5.25` +
+  `react 19.3.0` + `react-dom 19.3.0` (27 lockfile entries), strict mode still refuses.
+
+
+### Fixed
+- **A pinned prerelease installed the wrong version.** `is_exact_version_pin` rejected any spec
+  containing `-`, intending to exclude hyphen *ranges* (`1.2.3 - 2.0.0`) — but a bare `-` also
+  appears in every prerelease, so `pkg@1.64.0-alpha-2026-09-16` was treated as a *range*.
+  Measured: `react@19.0.0-rc.1` installed **react 19.3.0** (the newest 19.x the range matched)
+  instead of the requested pin. Now: **19.0.0-rc.1 exactly**. Hyphen ranges
+  (`1.2.3 - 2.0.0`) are still ranges, and stable pins/ranges are unaffected.
+
+
+### Fixed
+- **A cached packument was trusted forever, so jhol could resolve stale versions.**
+  Measured: with a warm cache the resolver made **0 requests**, and it still made **0**
+  after the cache files were aged by 30 days. Cached metadata older than
+  `JHOL_PACKUMENT_TTL_SECS` (default 1 hour; `0` restores the old "trust forever"
+  behaviour) is now skipped so the request is revalidated conditionally — the registry
+  normally answers `304 Not Modified` for a few bytes. Offline never invalidates the cache:
+  there is nothing to revalidate against, and a stale answer beats no answer.
+
+
+### Fixed
+- **jhol could install an outdated version for a ranged dependency.** The bundled
+  package index that ships with the binary is a **build-time snapshot**, and it was
+  allowed to satisfy a version *range* before live metadata was consulted. With the
+  registry publishing `axios@1.20.0`, `axios: ^1.13.0` installed the snapshot's
+  `1.13.5`. The snapshot may now answer only when it cannot affect freshness: **offline**
+  (where it is the only source) or for an **exact pin** (the version is already
+  specified). Ranges always consult live metadata, so jhol installs the highest
+  satisfying version like npm/bun. Verified: `^1.13.0` → **1.20.0** (was 1.13.5);
+  exact pin `1.13.5` → 1.13.5; offline behaviour unchanged.
+
+
+### Changed
+- **JAGR-infinite resolution is 18-29% faster.** Its dependency walk was level-synchronous:
+  every level waited for its *slowest* packument, so one 25 MB framework packument stalled
+  the discovery of every sibling's subtree behind it, and resolution cost one network round
+  trip per dependency level. The frontier is now **pipelined** - each discovered package is
+  fetched as soon as the concurrency window has room and expanded the moment it arrives, so
+  deeper levels start while large siblings are still streaming. Re-expansion (when a
+  package's constraint set grows after discovery) is unchanged, and now reuses the cached
+  packument instead of re-fetching it. Measured with a fresh cache: a 20-dependency project
+  1.316 s -> **1.094 s (-18%)**; a Next.js-scale tree 4.679 s -> **3.416 s (-29%)** - with
+  identical resolved versions and identical lockfile entry counts.
+
+### Added
+
+- **`jhol jagr --compare-resolvers` now actually compares resolvers.** It was a stub
+  that ran JAGR and returned *the same report twice*: no PubGrub, no SAT, so the
+  "side-by-side" table was meaningless. It now runs JAGR-infinite and PubGrub v2 on
+  the manifest for real and reports each one's time, satisfiability and package
+  count — which is also the measurement used to decide where JAGR still needs work.
+
+### Added
+
+- **PubGrub now rescues a resolution that JAGR-infinite cannot solve.** The PubGrub
+  v2 solver has always been implemented and tested in-tree but was never called: when
+  the primary resolver failed, `jhol` logged *"no fallback available"* and returned
+  the error, even though a complete second solver was available. A failed resolution
+  now falls back to PubGrub and installs the tree it finds. The fallback only wins if
+  it actually resolves something (an empty tree is not a resolution), JAGR's error is
+  preserved when both fail, and `JHOL_RESOLVER_STRICT=1` still disables it.
+
+### Added
+
+- **`jhol install` now works in a project locked by yarn or pnpm.** Previously only
+  npm and bun lockfiles were consumed, so those projects needed a manual
+  `jhol import-lock` first. The install path now dispatches to the right reader for
+  all four formats, so `install` and offline installs honour the lockfile the
+  project already has (npm's own lockfile is still preferred when present, since it
+  carries resolved URLs and integrity). `jhol ci` / `--frozen` remain npm-lockfile
+  based, as that is the deterministic CI mode.
+
+### Added
+
+- **`jhol import-lock` now reads `yarn.lock` and `pnpm-lock.yaml` natively.** All
+  four advertised sources work end-to-end (`--from auto|bun|npm|yarn|pnpm`): yarn v1
+  and Berry share one descriptor/version scanner, and the pnpm reader handles the
+  pnpm 6/8 `/name@version` and pnpm 9 `name@version` shapes plus peer-suffixed and
+  `file:`/`link:` entries. Each is verified by converting a real lockfile produced
+  by the corresponding tool and installing from the result.
+
+### Added
+
+- **`jhol cache prune` now garbage-collects the JGrid store.** The store is an
+  append-and-rewrite format that only started being populated once the ingester
+  worked, so pruning now rebuilds it keeping only content blocks referenced by a
+  manifest (orphans come from replaced or uninstalled package versions) and
+  reports how much it dropped. The rebuild writes to a temporary file and renames
+  it into place, never truncating a file that is still memory-mapped.
+
+### Added
+
+- **`jhol build`: the bundler is now reachable.** `crates/jhol-bundle` was not a
+  workspace member and `jhol build` was gated behind a `bundle` feature that did
+  not exist, so the command could only ever print "Rebuild with --features
+  bundle". The crate is now a workspace member and the feature (plus
+  `bundle-swc` for TypeScript/JSX and `bundle-css`) is declared. It stays
+  **opt-in**, matching `docs/user/SCOPE_AND_STABILITY.md` ("no bundler scope
+  creep"). The disabled-build message now gives the exact build commands.
+
+### Fixed
+
+- **Bundler parser: string literals were parsed as imports.** `export const c =
+  "dead"` was read as a re-export of `dead` (bundling failed with `Module not
+  found: dead`); bare strings became imports; every static import was also
+  recorded as a dynamic import; and keywords inside comments or identifiers
+  (`important`, `exports`) matched. Import/export extraction is now
+  structure-aware (`import … from`, `import(`, `require(`, `export … from`) and
+  ignores comments, string bodies and non-boundary matches.
+- **Bundler: exports were never detected for plain JS.** The export extractor
+  reused the import scanner, which required a quoted string — so `export const
+  x = 1` produced no export records at all, disabling tree-shaking. `export
+  default`, `export const/let/var/function/class/interface/type/enum`,
+  `export { a, b as c }` and `export { … } from "s"` are now extracted.
+- **Bundler: the parse cache had no parser version.** Manifests are keyed by
+  content hash alone, so a parser fix was invisible for already-cached modules.
+  `CasStore::PARSE_VERSION` is now folded into the manifest cache key.
+
+- **Bundler: `export default function name() { ... }` produced invalid output.**
+  The default-export scanner stopped at the first `;`, which for this form sits
+  inside the function body, so the module was emitted truncated and the wrapper
+  brace left unbalanced. It now respects nesting depth.
+- **Bundler: `build_from_manifests` could not resolve modules that were not on
+  disk**, which is the function's whole purpose. Resolution now also probes the
+  supplied in-memory manifest paths.
+- **Bundler: topological order was inverted** (dependents before dependencies) and
+  non-deterministic (`HashMap` ordering), and the entry module was hardcoded to
+  `__m0`. Order is now correct and byte-stable, and the real entry id is emitted.
+- **Bundler: template-literal interpolations were ignored**, so
+  `` `${import("./x")}` `` was not seen; literal template text is still treated as
+  a string. The parse cache key now includes a parser version so parser fixes
+  apply to previously cached modules.
+
+- **Bundler: CommonJS was completely unusable.** `require()` calls were never
+  rewritten by the main emitter (so any CJS module — most of npm — failed at
+  runtime with `MODULE_NOT_FOUND`), while the other emitter renamed *every*
+  `require(` occurrence, including inside strings and comments, and passed the
+  source path instead of a module id. Both are replaced by one shared,
+  string/template/comment/interpolation-aware rewriter used by all three emitter
+  paths; external specifiers such as `fs` and `path` are left untouched so Node's
+  real `require` still works.
+- **Bundler: cached transformed output did not track transforms.** The transform
+  cache key is (content hash, config hash) and the config hash omitted the
+  transformer version (and the sourcemap setting), so a transform change could
+  never take effect for an already-cached module. `TRANSFORM_VERSION` is now folded
+  in, matching `PARSE_VERSION` for parse manifests.
+
+- **Fixed: `jhol install` crashed with SIGBUS on every run.** The JGrid ingester
+  opened its store with `truncate(true)` while still holding an `mmap` of that same
+  file and then read from the mapping, so the process died inside `memmove` (not a
+  catchable error). It now writes to a temporary file and renames it into place.
+- **Fixed: `jhol install` aborted (SIGABRT) when a package contained an empty file
+  path.** `StringTable::intern("")` returns offset 0 without inserting, but
+  `find("")` did a binary search that missed, so the following `unwrap()` panicked;
+  release builds use `panic = "abort"`.
+- **Fixed: code-derived caches ignored code changes.** The expansion cache was
+  keyed by the package list alone, so resolver changes (spec grammar, `overrides`,
+  exact pins) were silently bypassed on a cache hit, and it stored no platform
+  variants — so a cache hit dropped every other-platform optional entry from the
+  lockfile. The key now includes a cache version plus the overrides/resolver
+  context, and variants are persisted and restored. The node_modules fingerprint
+  now includes a layout version, since it gates the "skip the install" bypass.
+
+- **Hardened the JGrid reader against corrupt stores.** Two paths reserved memory
+  from a count taken straight out of the file (`Vec::with_capacity(u32)`) and one
+  panicked when a manifest was missing; under the release profile's
+  `panic = "abort"` any of these killed the process. Reservations are now bounded
+  by the bytes actually present and a missing manifest returns an error. Verified
+  with stores that are truncated, filled with garbage, or carry an absurd count —
+  all three install cleanly by rebuilding the store.
+
+- **`jhol cache size` now reports real disk usage.** It only counted `.tgz` files
+  and so showed a fraction of the truth (81 MB for a 581 MB cache). It now prints a
+  per-component breakdown — unpacked store, JGrid store, tarballs, packuments,
+  bundle CAS, expansion cache, JAGR-S store — largest first, with a total and the
+  JGrid block/manifest counts. Sizes use allocated blocks rather than apparent
+  size, so sparsely pre-allocated files (the JAGR-S manifest is 32 MB apparent but
+  16 KB on disk) are not overstated.
+- **Fixed: unbounded recursion when decoding a tree.** A corrupt or crafted store
+  with deeply nested directories could overflow the stack, which `panic = "abort"`
+  cannot recover from. Decoding now stops at 512 levels and returns an error.
+
+- **Fixed: piping jhol into another command aborted with a broken-pipe panic.**
+  Rust ignores `SIGPIPE`, so `jhol cache size | head` made `println!` panic, which
+  `panic = "abort"` turned into an abort. The default `SIGPIPE` handler is restored
+  at startup, so jhol now exits quietly on a closed pipe like any Unix tool.
+
+- **Fixed: the optional JGrid materialization path produced no package binaries.**
+  It writes real directories rather than store symlinks, so nothing created
+  `node_modules/.bin` — opting in silently broke `npm run` scripts and
+  `jhol exec` for any package shipping a binary. The path now rebuilds bin links
+  after materializing (verified: `.bin/semver` exists and runs).
+- **Measured: the JGrid fast path now hits but brings no speed benefit.** With a
+  fully populated store it skips resolution entirely, yet on Next.js it takes
+  231–308 ms against 234–282 ms for the normal path, for +197 MB of cache. It
+  therefore stays opt-in (`JHOL_JGRID_INGEST=1`); the default keeps the smaller,
+  equally fast cache.
+
+- **Fixed: an unavailable `optionalDependencies` entry failed the entire install.**
+  Optional dependencies were merged with regular ones and then marked required, so
+  a single optional package that could not be fetched (missing from the registry, or
+  built for another platform) aborted `jhol install`. npm's contract is to skip it
+  with a warning, which jhol now does — in the resolver, the flat expansion and the
+  JAGR-infinite path. Required dependencies still fail loudly, and an
+  unresolvable optional dep is omitted from the lockfile.
+
+- **Fixed: dependencies of `workspace:` and `file:` packages were ignored.** Only
+  the root `package.json` was read, so a workspace package's registry dependency
+  was never installed (its `require()` failed) and a transitive
+  `workspace:*` dependency was never linked. Local and workspace packages are now
+  walked recursively: their special dependencies are linked into the root
+  `node_modules` and their registry dependencies join the resolution.
+- **Fixed: `file:` pointing at a tarball symlinked the `.tgz` itself**, producing a
+  `node_modules/<name>` that was a plain file. Tarballs are now extracted (with the
+  leading `package/` directory stripped) and installed like any local package. The
+  lockfile keeps the spec you wrote (`file:../x.tgz`) instead of the internal
+  extraction path, and local (`link: true`) entries are no longer treated as
+  downloads — that combination previously made the *second* install fail with
+  `Bad URL: EmptyHost`.
+
+- **Fixed: `overrides` were ignored for transitive dependencies.** They were only
+  applied in the flat expansion, so on the nested resolver path a rule like
+  `{"overrides": {"ansi-regex": "5.0.1"}}` was silently dropped and the lockfile
+  recorded the dependency's own version (`6.3.0`). Overrides are now enforced in
+  the resolution law layer, which covers both paths.
+- **Fixed: workspace package lookup depended on the process working directory.**
+  `list_workspace_roots` returns paths relative to the project, but they were read
+  as-is (i.e. relative to the current directory), so a `workspace:` dependency was
+  only resolved when jhol happened to be run from the project root — and silently
+  found nothing otherwise (e.g. from the daemon or any other working directory).
+  The returned paths are now resolved against the project directory.
+- **Fixed: npm's nested override form did nothing.** `{"overrides": {"pkg":
+  {"child": "^1"}}}` was parsed only when the inner key was `"."`, so a named child
+  was discarded. Named children are now applied as overrides for that child.
+  (jhol constrains a package by the union of its incoming ranges, so a nested rule
+  is applied to every dependent that requires the child rather than one edge.)
+
+- **Fixed: `jhol remove` / `jhol uninstall` did not update `package.json`.** The
+  removal was applied to `node_modules` and the lockfile but the manifest still
+  listed the package, so the next `jhol install` silently brought it back. Removal
+  now updates `package.json` by default; pass `--no-save` to leave it untouched.
+
+- **Fixed: `bun.lock` could not be imported at all.** Two defects: bun writes JSON
+  with trailing commas (which `serde_json` rejects), and the reader looked for
+  `name@version` in the `packages` *keys* while bun stores the resolved spec in the
+  *value* array — one bare key then aborted parsing for the whole file. `bun.lock`
+  now converts correctly and installs from the converted lockfile.
+- **`import-lock --from yarn|pnpm` no longer claims no lockfile was found.** Those
+  formats are not implemented yet; the command now says so explicitly and suggests
+  converting to `package-lock.json` first, instead of reporting the misleading
+  "No supported lockfile found".
+
+- **Fixed: `jhol ci` / `--frozen` rejected yarn, pnpm and bun projects.** The
+  integrity check understood only npm's lockfile format, so it reported "integrity
+  entries missing" for every other lockfile. jhol now reads the SRI hashes each
+  format actually stores (bun's value array, yarn v1's `integrity` line, pnpm's
+  `resolution.integrity`), so strict mode *verifies* those installs instead of
+  refusing them. Berry's non-SRI `checksum:` is reported as no integrity, and the
+  strict-lockfile error now names every lockfile name jhol accepts.
+
+- **Fixed: an unavailable `optionalDependencies` entry still failed the install when
+  resolution produced no spec list.** The resolver correctly skipped it, but the
+  flat-expansion fallback re-added the original direct specs — including the package
+  it had just rejected — so `jhol install --offline` (and online) failed on a
+  dependency npm's contract says to skip. Optional names are now excluded from that
+  fallback; required dependencies still fail loudly.
+- **Hardened two resolver paths that could abort the process.** A peer target listed
+  in a strongly-connected component without a package entry, and a packument with no
+  atlas id, both hit `unwrap()` — under the release profile's `panic = "abort"` that
+  kills the process with no message. Both now degrade gracefully (skip).
+
+- **Fixed: several code paths ignored the configured registry.** Tarball URLs were
+  built by hand against `https://registry.npmjs.org` in the capsule installer, the
+  daemon cache, the JAGR-infinite resolver, the node-keyed layout pass, the lockfile
+  writer and the soul-path helper, and the root CLI prefetcher hardcoded npm for
+  packuments. With a private registry configured (`JHOL_REGISTRY`, `.npmrc
+  registry=`, or a scoped registry) those paths would still contact npm — failing for
+  private packages and leaking their names. All of them now go through the shared
+  registry-aware URL builders, which also fixes scoped-name encoding (`%2F`) in the
+  sites that skipped it.
+
+- **Fixed: `--engine` advertised script backends that cannot work.** `js-engine`
+  selected code that does not exist in this tree (no `crates/js-engine`, no
+  `js_engine_backend` module) behind a feature that was never declared, so it could
+  only ever answer *"Rebuild with --features js-engine"* — an instruction impossible
+  to follow. `quickjs` was accepted but silently ignored. `--engine` now accepts only
+  the implemented `auto`, and the dead code behind those options is gone; selecting
+  them reports a normal usage error instead.
+
+- **Fixed: a misleading "no fallback available" message.** The branch that handled a
+  JAGR-infinite failure claimed no fallback existed while the PubGrub solver sat
+  unused a few lines below; it is now a real fallback.
+
+- **Fixed: the PubGrub fallback could hang an install instead of failing fast.**
+  `resolve_full_tree_pubgrub_v2` is a queue-based provider loop that fetches
+  packuments per candidate version, so its cost grows with the manifest and it is not
+  covered by the solver's internal decision budget. The fallback now declines
+  manifests larger than a small bound and keeps JAGR's original error, so a rescue
+  attempt can never turn a fast failure into a long hang.
+
+### Changed
+
+- **Resolution peak memory cut by 19–26%.** `build_atlas_from_registry` took the whole
+  packument map **by value**, so the caller handed it `packuments.clone()` — a deep
+  copy of every packument in the tree, made at the exact moment of peak memory (the
+  fetch has just completed, so both copies are live). It now takes a reference.
+  Measured hermetically (no capsule/hidden-lockfile/prebuilt bypass, fresh cache,
+  median of 5, work asserted): the 20-dependency fixture drops **418 MB → 339 MB
+  (−19%)** and the Next.js fixture **1424 MB → 1058 MB (−26%)**. No behavioural change
+  — all core tests and integration suites pass.
+
+### Changed
+
+- **Packument metadata is shared instead of deep-copied.** The resolver kept each
+  packument in three places at once (a per-run cache, a process-global snapshot, and a
+  fresh deep clone on every read) and additionally deep-cloned the entire cache once
+  per BFS round. Both maps now hold `Arc<serde_json::Value>`, so one allocation is
+  shared and reads are reference-count bumps, removing that redundant CPU and
+  allocation work. No behavioural change — all core tests and integration suites pass.
+  (An earlier draft of this entry claimed a 5–95× peak-RSS reduction; **that
+  measurement was invalid** — see `INNOVATION_LOG.md` E53. Re-measured hermetically,
+  peak RSS moves by roughly 5%, within noise; the resolution peak is still ~400 MB.)
+
+### Changed
+
+- **JGrid ingest is now opt-in** (`JHOL_JGRID_INGEST=1`). Measurement showed the
+  store was write-only: the fast path needs an L0 bundle, L1 tree-cache entries or
+  an L2 manifest for *every* package, and none of those were ever produced, so
+  every full install paid ~0.9 s and up to 185 MB for a cache nothing read. The
+  Next.js cache drops from **587 MB to 402 MB (−31 %)** with installs unchanged
+  (same lockfile, 34 optional entries). The store is still read when present and
+  still garbage-collected by `jhol cache prune`; the environment variable restores
+  the old behaviour.
+
+### Changed
+
+- **`jhol-pipeline` is now part of `jhol-core` (`jhol_core::jgrid`).** The JGrid
+  instant-materialization layer was a separate crate driven only by the installer;
+  it has been dissolved into the core crate, so the format, store, ingester and
+  materializer live beside the code that uses them. The on-disk format, cache
+  layout, public API (`JGridPipeline`, `ResolvedPackage`, …) and the default-on
+  `pipeline` feature are unchanged; the crate directory is gone and the
+  `jhol-pipeline` dependency and workspace member were removed. The criterion
+  benchmark moved to `benchmarks/materialization.rs`.
+
+### Added
+
+- **Portable lockfile (npm parity).** `package-lock.json` now records optional
+  dependencies for **other platforms** as `optional` entries with
+  `os`/`cpu`/`libc` — so a lockfile generated on macOS drives `jhol ci` correctly
+  on Linux/Windows. Jhol already resolved those variants (it fetched their
+  metadata); it now keeps them for the lockfile instead of dropping them, without
+  materializing them on the current platform.
+- **Cross-platform installs (npm parity).** Target platform is selectable via
+  `JHOL_OS`/`npm_config_os`/`npm_config_platform`,
+  `JHOL_CPU`/`npm_config_cpu`/`npm_config_arch`, and `JHOL_LIBC`/`npm_config_libc`
+  (host by default), and platform filtering is now `libc`-aware. The lockfile
+  marks the installed optional variant `optional: true`, so a lockfile written on
+  macOS installs only the matching variant on Linux/Windows. A pure
+  `platform_matches` helper is unit-tested for gnu/musl/darwin/win32 selection.
+- **Dependency specifier grammar.** `package.json` values beyond registry
+  ranges are now supported: `npm:` aliases (`"x": "npm:lodash@^4"` installs
+  lodash under `node_modules/x`), local `file:`/`link:` directories, `workspace:`
+  packages, and git sources (`git+https://…`, `github:user/repo#ref`,
+  `user/repo#ref`). Local/workspace deps are symlinked and recorded with
+  `link: true`; git checkouts resolve only their runtime dependencies, never the
+  repository's `devDependencies`.
+- **Fixed: JGrid cache store was created with an invalid header.** The store
+  file was written with a zeroed header, so the very next run failed to open it
+  (`invalid JGrid magic or version`) and the JGrid materialization fast path was
+  effectively dead. The store is now created with a valid `JHGR` header, and an
+  unreadable store is rebuilt instead of disabling the fast path forever.
+- **Fixed: `jhol-pipeline` panicked on a truncated/corrupt JGrid store.** The
+  mmap was sliced with offsets taken from the file and no length checks, so a
+  short file aborted with `range end index 256 out of range` instead of returning
+  an error — which also made the store self-heal unreachable. All offsets are now
+  bounds-checked, and three regression tests cover create→open, reopen across
+  runs, and corrupt-store self-healing.
+- **`overrides` and `resolutions` are now enforced.** `package.json` `overrides`
+  (flat and nested `{"pkg": {".": "range"}}` forms) and yarn `resolutions` pin a
+  version for both direct and transitive dependencies; `.jholrc`/CLI overrides
+  take precedence. Previously these keys were parsed but ignored.
+- **Node-keyed install layout (`crates/jhol-core/src/layout.rs`).** Hoisting and
+  nesting so two versions of a package can coexist:
+  - the flat version of a package is hoisted to `node_modules/<name>`;
+  - a dependency edge whose hoisted version cannot satisfy the declared range
+    gets a nested copy at `<dependent-node>/node_modules/<child>`, recursing;
+  - cycle-safe, scoped-name safe, and integrity-aware (registry `dist` taken per
+    exact version). Five unit tests.
+- **Peer dependency support, end to end:**
+  - native install auto-installs non-optional peers (npm v7+ behaviour);
+  - version selection prefers a peer-satisfying version and falls back to the
+    dependency-valid version on a genuine conflict (`--legacy-peer-deps`
+    semantics) instead of dropping the package;
+  - `collect_peer_conflicts` reports missing/incompatible peers, honouring
+    `peerDependenciesMeta.optional`;
+  - peer metadata written into the lockfile (`peerDependencies`,
+    `peerDependenciesMeta`);
+  - `--strict-peer-deps` / `JHOL_STRICT_PEER_DEPS=1` turns warnings into errors.
+- **Node-aware validation** (`validate_layout` + `child_node_for`) replacing the
+  flat-only `validate_resolution`.
+- **Base64 SRI helpers** (`utils::sri_sha512_of_bytes` / `sri_sha512_of_file`).
+- **Blocking CI workflow** (`.github/workflows/ci.yml`, previously empty):
+  `fmt` gate, `clippy --all-targets`, `test` on Ubuntu + macOS, `release-build`
+  on Ubuntu + macOS + Windows with a `--version` smoke test.
+
+### Changed
+
+- `resolve_full_tree_jagr_infinite` now returns a **node-keyed** layout
+  (`node_modules/<name>` / `.../node_modules/<name>`), matching what `doctor.rs`
+  and the lockfile writer already expected.
+- `try_lockfile_fast_path` keeps nested lockfile keys (no longer flattens or
+  skips them).
+- `try_resolved_bundle` accepts both node-keyed and legacy name-keyed cached
+  bundles.
+- **`has_jhol_lockfile` policy reconciled** via `lockfile::package_lock_is_usable`:
+  inspects only `package-lock.json`; usable when it has a `jhol` marker **or** at
+  least one installable entry. Reconciles two test suites that asserted opposite
+  rules.
+- `sanitize_package_name` now rejects `\` outright instead of silently stripping
+  it into a different name.
+
+### Fixed
+
+- **Exact version pins are honoured.** A bare `4.17.21` was parsed by Rust
+  `semver` as a caret range, so `jhol install` could upgrade it to `4.18.1`.
+  Fixed in both the native path (`constraints_satisfied`) and JAGR
+  (`reconcile_versions`); direct deps are now reconciled too.
+- **Lockfile integrity interop.** Integrity was written as `sha512-<hex>` while
+  the verifier base64-decodes — Jhol rejected its own output. Now writes npm SRI
+  (`sha512-<base64>`), prefers registry-provided integrity from an existing
+  lockfile, and `jhol ci` verifies on download (a tampered value fails and
+  installs nothing).
+- **JAGR homotopy bypassed the law layer.** Both the homotopy and RVM paths now
+  funnel through a single `finalize_resolution` (reconcile → orphan sweep →
+  validate → persist).
+- **Lockfile homotopy used a hashed ordinal.** `version_to_ordinal` hashed the
+  version string; replaced with the real sorted-version index
+  (`version_to_chart_ordinal`).
+- **BFS missed nested versions.** Expansion used the *intersection* of incoming
+  constraints, so a conflicting version's dependency tree was never fetched. Now
+  picks the highest version satisfying **each** constraint and re-expands a
+  package when a new constraint arrives.
+- **Duplicate nested copies raced in the store.** Downloads are now de-duplicated
+  by spec (while every node path is still materialized), fixing a tar
+  `failed to unpack ...` failure.
+- **Nested copies were clobbered on relink.** `relink_store_dependencies` now
+  keeps any existing copy that already satisfies the dependent's declared range.
+- **pubgrub resolver livelock.** `choose_package_and_version` fell back to
+  deciding the root package forever on unsatisfiable input (5-minute timeout).
+  Now returns `Option`; `solve()` returns `NoSolution` when nothing is choosable,
+  plus a `max_decisions` budget. Two tests went from hanging to passing in ~0.01s.
+- **`jagrs` tests clobbered each other.** A shared `test_dir()` (by PID) meant
+  parallel tests deleted one another's directories; now unique per call.
+- **Dead Markov fallback.** `learn_from_sequence` never wrote the first-order keys
+  the `predict()` fallback reads; now learns both orders.
+
+### Performance
+
+- Download de-duplication removes redundant network/extract work for packages
+  that appear at multiple node paths.
+- **Cold resolution is faster.** Six changes on the resolution critical path:
+  - `ureq`'s `max_idle_connections_per_host` was left at its default of **1**, so
+    with N concurrent requests only one connection stayed alive and every
+    resolver round (packuments are fetched per dependency level) re-opened ~N
+    connections and paid a TLS handshake each time. The client now keeps a real
+    per-host pool (32 idle per host).
+  - default network concurrency raised from `cores × 2` to `cores × 4`
+    (clamped 16–128), overridable with `JHOL_NETWORK_CONCURRENCY`.
+  - **dependency discovery is now pipelined.** It used to be level-synchronous:
+    drain the queue, fetch every deferred packument as a batch, re-enqueue,
+    repeat — one network RTT barrier per dependency level (6 on the 20-dep
+    fixture). Each packument is now fetched the moment it is discovered and its
+    dependencies expanded as soon as the result arrives, so deeper levels overlap
+    with still-in-flight siblings.
+  - **tarball downloads are prefetched during resolution.** As soon as a package
+    is resolved, its tarball download starts on the same pool and is recorded in
+    the store index, so the install phase finds it as a cache hit instead of
+    downloading after resolution completes. Skipped for packages already in the
+    store (warm installs stay network-free) and disabled in offline mode
+    (`--offline` / `JHOL_OFFLINE`); `JHOL_NO_PREFETCH=1` turns it off.
+  - **constraint-aware resolution (manifest-first).** The resolver used to fetch
+    a full packument for every package just to pick a version. It now prefers the
+    cheapest complete source: the bundled index, then — for an **exact** pin —
+    that version's manifest (`/<pkg>/<version>`, a few KB), then `/<pkg>/latest`
+    when it satisfies every constraint, and only falls back to the packument when
+    a ranged constraint needs the full version list. On the Next.js fixture this
+    cut metadata requests **46 → 3** and bytes **137 MB → 113 MB (−18%)** (e.g.
+    the seven `@next/swc-*` platform variants each cost a ~2.6 MB packument
+    before). Synths now also carry `os`/`cpu`/`libc`/peers, and escalation to the
+    full packument happens whenever a synth no longer satisfies the constraints.
+  - **HTTP concurrency is adaptive (AIMD).** The registry throttles hard when too
+    many large transfers are in flight — measured aggregate throughput collapsed
+    from ~9 MB/s at 4–6 concurrent downloads to ~1 MB/s at 8, with multi-second
+    stalls (15 s and 68 s observed). A 429/5xx or connection error now halves the
+    in-flight cap, and each success lets it creep back toward the configured
+    maximum, so Jhol backs off instead of hammering the throttler.
+- **Warm lockfile regeneration is faster.** `read_all_installed_packages` read and
+  parsed every installed `package.json` serially and, when no lockfile was
+  present, SHA-512'd each store tarball on a single thread. Both passes now run
+  on the pool (identical output). Warm install on the 20-dep fixture improved
+  (no-lockfile path ~90 ms → ~75 ms; with a lockfile ~69 ms).
+- **Large projects no longer pay a 15 s copy.** After every first install,
+  `write_install_markers` → `write_prebuilt_cache` ran
+  `cp -r node_modules /tmp/jhol-prebuilt/<hash>/…`, copying the entire tree —
+  **15.4 s** for a Next.js app (and 9.7 s of `sys`). It now **hardlinks**
+  (`cp -al`, falling back to a real copy on cross-device `/tmp`), which takes
+  ~55 ms and uses no extra disk. Next.js-scale cold install: **27.7 s → 11.7 s
+  (−58%)**, now level with Bun (11.8 s).
+- Measured (13 September 2026, medians of 5 runs, same session): 20-dependency /
+  ~73-package cold install **5373 ms → 2252 ms (−58%)** and warm **140 ms →
+  82 ms**; 10-dependency cold **1018 ms → 758 ms**. Jhol led Bun on all four cases
+  (see the benchmark section below).
+- **Disk cache is much smaller (13–14 September 2026).** Two changes:
+  - packument bodies are gzipped in the disk cache (backward-compatible), so
+    `packuments/` went **27 MB → 3.2 MB** for a Next.js project;
+  - the redundant JAGR-S mirror of tarball bytes and aliases is now opt-in
+    (`JHOL_JAGRS_MIRROR=1`) — `store/<hash>.tgz` and the store index are the
+    canonical copies, and nothing but `soul_path` read the mirror (it falls back
+    to `store/<hash>.tgz`). A Next.js project's cache went **549 MB → 397 MB
+    (−28%)**, and `v3/` is no longer created by default.
+  See `INNOVATION_LOG.md` for every adopted/rejected experiment.
+
+### Known limitations
+
+- `pubgrub::tests::test_multiple_packages` is `#[ignore]`d (a deeper livelock in
+  the experimental solver's `propagate()`; pubgrub is not the production
+  resolver — JAGR-infinite is).
+- `regression_bun_npm` semantics were updated for the npm-authoritative lockfile
+  policy.
+- Cargo.lock is gitignored, so CI does not build with `--locked`
+  (reproducible-build follow-up).
+
+---
+
+## [1.0.2] — 2026-05-24 → 2026-08-13
+
+The "innovations" line, followed by the runtime and resolver-cache eras. (Much of
+this landed after the version bump and remains part of the 1.0.2 line.)
+
+### Added — Core innovations (2026-05-21 → 05-28)
+
+- **Binary lockfile** format for fast, compact lockfile reads.
+- **Lock-free GRM** (global resolution memory) store.
+- **Incremental hashing** and **incremental resolver** for repeat resolution.
+- **io_uring wrapper** (Linux) for batch filesystem I/O.
+- **Distributed GRM** for shared resolution memory.
+- **Second-order Markov chain** for predictive dependency prefetch.
+- **FUSE filesystem** mount for package access.
+- **Quantum-resistant crypto** modules (`crypto.rs`, `quantum_signing.rs`).
+- **MPT store** (Merkle Patricia Trie) stubs and CAS (content-addressable
+  storage) modules.
+- Integration tests and Criterion benchmarks for the Phase 1–4 innovations.
+
+### Added — Runtime (2026-07-06 → 07-19)
+
+- **`jhol-runtime` crate** with `jhol run`, `jhol eval`, and `jhol build` for
+  JavaScript/TypeScript.
+- **Sparse tropical module graph**: O(V+E) load order, O(V·E) path analysis.
+- **Lock-free runtime state** and binary resolver cache.
+- **Real timers and native file watcher.**
+- **Optional JavaScriptCore backend** (after evaluating Starlight/Boa/JSC), plus
+  transpile cache, bytecode cache, and parallel prefetch (`mimalloc`).
+- **PGO release build script** and runtime micro-benchmarks against Bun/Node.
+- **CAS-first bundler architecture** design.
+
+### Added — Capsules, daemon, and the cache plane (2026-07-19 → 08-13)
+
+- **JAGR graph capsule**: zero-parse, mmap'd dependency graph + daemon fast path.
+- **Capsule fast-path** in `install_package`, daemon auto-start, CAS pre-warm.
+- **JAGR-S**: log-structured mmap'd object store + store-index cache.
+- **JAGR-S store completeness marker** (`.jhol-extract-complete`) and repair
+  paths so partial store directories can never shadow full content.
+- **Sharded store + streaming extraction + C trampoline.**
+- **KPSL** (store-projected warm path), **KCC³** classifier cascade
+  (CGA capsule, SNR speculation, GFP propagation, PBF negative filter).
+- **Zero-binary-startup** (`nm_fingerprint` + status mmap) and packed struct
+  daemon protocol.
+- **Lattice-First resolution** (persisted lattice cache in the cold path).
+- **Single-pass decode cache** (no double tarball I/O on cold install).
+- **PRW**: removed the embedded 318 MB bundle in favour of a parallel resolution
+  wave plus a persistent mirror.
+- **Vortex Cache Plane** (Phases A–C): bundled index, manifest endpoint, and a
+  persistent expansion cache.
+- **JAGR-infinite resolver** (`jagr_infinite.rs`): chart/atlas, homotopy
+  continuation, RVM bytecode, resolved-bundle cache, lattice mirror, plus
+  JAGR-3 ranged-resolution fixes.
+
+### Changed
+
+- `jhol install` now fills the cold store from the lockfile before capsule
+  replay.
+- Capsule-first install with an mtime-based project-local warm bypass.
+- Version bumped to **1.0.2** and the crate prepared for release.
+
+### Performance
+
+- Cold install: parallel metadata/tarball fetching, bundled-index resolution,
+  config/`package.json` caching, rayon threadpool, env-var caching.
+- Warm install: fingerprint written on first install; capsule bypass guarded.
+- Batch filesystem operations via rayon parallel iterators.
+- Page-cache pinning via `MAP_SHARED` + `madvise` for sub-millisecond capsule
+  access.
+
+### Fixed
+
+- **npm space-separated comparator ranges were rejected.** The Rust `semver`
+  crate requires commas between comparators, but npm accepts whitespace
+  (`>=0.6.2 <2.0.0`). Such ranges parsed as invalid and were treated as
+  unsatisfiable, so the JAGR-infinite resolver reported **false legality
+  failures** on real projects — `jhol install --lockfile-only` on Next.js failed
+  with `sass@1.104.1 requires source-map-js >=0.6.2 <2.0.0, got 1.2.1` for a valid
+  tree. Ranges are now normalised before parsing.
+- **The prebuilt cache produced a broken `node_modules`.** `write_prebuilt_cache`
+  ran `cp -r node_modules <dest>` where `<dest>` (`.../<hash>/node_modules`) had
+  already been created, so the tree was nested as
+  `.../node_modules/node_modules`, while the shell trampoline symlinked
+  `$PWD/node_modules -> $PREBUILT_DIR/$HASH` (the *parent*). The fast path
+  therefore yielded a `node_modules` containing no packages. Writer and trampoline
+  (`src/main.rs`, `src/jhol.sh`) now agree on
+  `$PREBUILT_DIR/<sha256(package.json)>-v2/node_modules` and the trampoline links
+  exactly that path — verified by `require('next/package.json')` resolving.
+- **Bundled-index synth could drop subtrees.**
+  `synthesize_packument_from_bundled_index` advertised *every* bundled version
+  but only populated `dependencies` for the latest, so the resolver could select
+  an older version (e.g. `get-intrinsic@1.3.1`), get an empty dependency map, and
+  silently omit that version's whole subtree — seen as intermittent missing
+  transitive packages on a cold install. A synth now advertises only the version
+  whose dependencies are known; any other requested range falls through to the
+  full packument. Guarded by `registry_tests::synth_invariant_tests`.
+- `MmapMut` instead of `Mmap` to prevent SIGBUS on macOS.
+- Removed a blocking `fsync` from JAGR-S flush that could hang the daemon.
+- Restored the core resolver build contract and resolver fixture manifests.
+- `feat: 5 jhol-native innovations`, store/streaming/trampoline, and numerous
+  merge-integration fixes across `main`, `production-readiness`, and
+  `jhol-runtime-perf`.
+
+---
+
+## [1.0.1] — 2026-02-14
+
+### Added
+
+- **UX commands** and **lockfile import** (`import-lock`).
+- **Fallback telemetry** to record why native resolution falls back.
+- **SAT resolver** alongside the native resolver.
+- **Semantic resolver snapshot diff** and resolver snapshots for fixtures.
+- **Benchmark harness** for install performance, with regression gating in CI.
+- OSV-based **audit** with `--gate` for CI, and **SBOM** generation.
+- Shell completions and workspace support.
+
+### Changed
+
+- Faster installs with a native registry client, lockfile, and content cache.
+- Tightened fallback safety and improved optional peer handling.
+- Standardized JSON success payloads for `install`, `doctor`, `audit`, `ci`.
+- Stricter backend fallback controls: `--no-scripts`/`--scripts`,
+  `JHOL_SCRIPT_ALLOWLIST`, safer defaults.
+- Expanded native lockfile fidelity with peer dependency metadata.
+
+### Fixed
+
+- `doctor --fix` no longer requires a value.
+- Release CI: macOS/Linux/Windows binaries, Windows builds, manual reruns,
+  robust artifact renaming, no duplicate asset names.
+
+---
+
+## [1.0.0] — 2026-02-10
+
+### Added
+
+- Initial release: a cache-first, offline-friendly package manager for
+  JavaScript, written in Rust.
+- Native install from `package.json` or package arguments, reading and writing
+  npm-compatible `package-lock.json`.
+- Native registry client and content-addressed cache.
+- `doctor` for outdated dependencies, `audit` via OSV, cache management.
+- Workspace-aware execution and a Bun/npm fallback backend.
+- `CONTRIBUTING.md`, `GET_STARTED.md`, and README documentation.
+- Linux and Windows release builds plus prebuilt binaries.
+- Published to crates.io (`jhol` and `jhol-core`).
+
+---
+
+## Benchmark — September 2026
+
+**Measured 13 September 2026** with [`jhol-bench`](https://github.com/bhuvanprakash/jhol)
+(`RUNS=5`), comparing Jhol against **Bun 1.3.14** on identical 10-dependency
+fixtures (`lodash`, `is-array`, `ms`, `uuid`, `damerau-levenshtein`,
+`escape-string-regexp`, `semver`, `emoji-regex`, `is-number`, `strip-ansi`).
+Node 26.4.0. Figures are the **median of 5 runs**.
+
+- **cold** = fresh cache directory per run
+- **warm** = one reused cache directory
+
+| Case | Median | Min | Max |
+|------|-------:|----:|----:|
+| `jhol-cold` | **758 ms** | 603 ms | 825 ms |
+| `jhol-warm` | **50 ms** | 47 ms | 1119 ms |
+| `bun-cold` | 1007 ms | 896 ms | 1084 ms |
+| `bun-warm` | 213 ms | 142 ms | 1329 ms |
+
+Raw results: `jhol-bench/results/20260913T171344Z.json` (jhol),
+`jhol-bench/results/20260913T171410Z.json` (bun).
+
+### Heavy fixture (20 dependencies, ~73 packages)
+
+Same machine and day, shared `large-test/package.json` (react, react-dom, axios,
+typescript, `@types/node`, fs-extra, jsonwebtoken, …). Medians of 5 runs.
+
+| Case | Median | Min | Max |
+|------|-------:|----:|----:|
+| `jhol-large` (cold) | **2252 ms** | 2123 ms | 2404 ms |
+| `jhol-large-warm` | **82 ms** | 76 ms | 2361 ms |
+| `bun-large` (cold) | 3686 ms | 2965 ms | 5678 ms |
+| `bun-large-warm` | 136 ms | 104 ms | 5458 ms |
+
+Raw results: `jhol-bench/results/20260913T171344Z.json` (jhol),
+`jhol-bench/results/20260913T171410Z.json` (bun).
+
+**Reading:** in this session Jhol led Bun on all four cases — cold 10-dep 758 ms vs
+1007 ms and 20-dep 2252 ms vs 3686 ms; warm 50 ms vs 213 ms and 82 ms vs 136 ms. The
+20-dependency cold install is down from 5373 ms at the start of the day (−58%).
+The host link saturates at ~9–10 MB/s and the registry throttles bursts, so absolute
+numbers are noisy (the first run of each case is a cold-cache outlier — see Max);
+Jhol now adapts to that throttling (see the AIMD note above). Compare medians across
+several runs. Re-measure with `jhol-bench/run.sh`
+(`CASES="jhol-large bun-large jhol-large-warm bun-large-warm"`); the site's
+`/blog/jhol-vs-others-benchmarks` post should be refreshed from this same data.
+
+### Real-world (Next.js)
+
+`next@^15` + `react@^19` + `react-dom@^19` (~300 packages), cold (fresh cache per
+run), same machine, **13 September 2026**, medians of 3 runs (`jhol-bench`,
+`CASES="jhol-next bun-next"`).
+
+| Manager | Median | Min | Max |
+|---------|-------:|----:|----:|
+| Jhol | 11.2 s | 10.9 s | 12.7 s |
+| Bun 1.3.14 | 11.2 s | 10.6 s | 11.3 s |
+
+Raw: `jhol-bench/results/20260913T190029Z.json` (jhol),
+`jhol-bench/results/20260913T190112Z.json` (bun).
+
+For this fixture Jhol went **27.7 s → 11.2 s** across the day: first the
+prebuilt-cache fix (a 15.4 s whole-tree `cp -r` after install), then
+constraint-aware resolution (below), which cut metadata requests **46 → 3** and
+downloaded bytes **137 MB → 113 MB**. It is now level with Bun at real-project
+scale.
+
+---
+
+<!-- Only v1.0.0 and v1.0.1 are tagged. v1.0.2 is present in Cargo.toml but
+     untagged, so the compare link spans v1.0.1..HEAD (1.0.2 line + Unreleased). -->
+[Unreleased]: https://github.com/bhuvanprakash/jhol/compare/v1.0.1...HEAD
+[1.0.2]: https://github.com/bhuvanprakash/jhol/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/bhuvanprakash/jhol/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/bhuvanprakash/jhol/releases/tag/v1.0.0
+
+## [Unreleased] - warm install 2.4x faster: index the store instead of re-walking it
+
+> **Record note (2026-10-03).** This is the **second** `## [Unreleased]` block in
+> this file; the first (the current-release section) is near the top at
+> `CHANGELOG.md:26`. Both blocks are kept exactly as written — history is not
+> merged, reordered or rewritten. The pair is recorded in
+> `docs/archive-record/DOC_DUPLICATES.md` (R2, round 4).
+
+### Fixed
+- **Warm install was O(entries x store_size).** `install.rs::package_already_resolved`
+  walked every `store_unpacked` shard and read + parsed every `package.json` on each
+  call (~15k file reads for a 26-package install), so installs got slower the more was
+  already cached. The store is now indexed once per cache dir per process
+  (`OnceLock<Mutex<HashMap<PathBuf, HashMap<String, Vec<String>>>>>`, keyed by cache
+  dir) and each entry is an O(1) hash lookup.
+
+### Performance (macOS arm64, 10 cores, medians of 5 interleaved runs, 26 packages)
+- Warm install: 38 ms -> 16 ms (2.4x), faster than Bun 1.3.14 at 23 ms.
+- Cold install: 910 ms -> 674 ms (1.35x).
+- No functional change: `install::` 18 tests pass, `jhol ci` exit 0, installed tree
+  loads under Node.
+
+### Notes
+- Bun cold-install comparisons are not stable on a dev machine: Bun also reads a
+  global `~/.bun/install/cache` that `BUN_INSTALL_CACHE_DIR` does not redirect
+  (762 ms warm-global vs 2194 ms after that cache was cleared). Report medians of
+  interleaved runs and pin both caches before publishing a number.
+
+### Investigated (no code change): cold install is round-trip bound
+- Measured with `JHOL_HTTP_TIMING=1`: TTFB is 95-98% of every request; a cold
+  install is one abbreviated packument per package plus one tarball each, the same
+  shape as npm/Bun. Concurrency is not the lever (64x made it slower).
+- Retracted an earlier bad reading that the bundled `binary-packages` path cost
+  ~1.2 s on cold installs: `JHOL_BINARY_PACKAGES_DIR` pointing at a dir without
+  `index.json` is ignored, so both arms of that test used the same path and the
+  difference was network noise.
+- Bun's cold number on a dev machine swings 762-2194 ms with no code change
+  (global `~/.bun/install/cache` state). Interleaved medians put the two tools
+  within the noise. Do not publish a cold comparison without pinning both caches.
+
+### Changed: HTTP concurrency controller recovers proportionally
+- `ConcurrencyLimit::recover()` stepped `+1` per success while `back_off()` halved the
+  window (floor 2). Across a 30-60 request install an additive step cannot recover from a
+  halving, so a 429 would leave the window collapsed for the rest of the run. Recovery is
+  now proportional (`+ max(1, cur/8)`), and only **429** is treated as a congestion signal
+  (a 5xx is retried without permanently lowering throughput). Retry sleep cap 5 s -> 1.5 s.
+- Robustness fix, **not** a measured performance win: peak concurrent connections measured
+  25 with and without `JHOL_DOWNLOAD_CONCURRENCY=64`, so no collapse reproduced on this
+  machine. No before/after timing is claimed.
+
+### Investigated (no change): cold install is tarball-latency bound
+- With a lockfile, a cold install fetches **0 packuments** and 30 tarballs totalling
+  1.1 MB. Resolution is correctly skipped.
+- `JHOL_HTTP_TIMING=1` does not cover the tarball path, so tarball timings are invisible;
+  add timing there before further tarball-path work.
+
+### Investigated: cold-install hypothesis ladder (5 rejected)
+- Decomposition measured: cold is **89% network** (910 ms), 10% unpack (99 ms), link 19 ms
+  for 30 tarballs totalling 1.1 MB.
+- Rejected with evidence: packument/download concurrency (64x is slower), the prebuilt
+  `binary-packages` index (1.9% coverage of a real tree), AIMD concurrency collapse
+  (peak 25 concurrent connections, unchanged by the knob), retry/backoff (no effect, no
+  rate-limit evidence), and tarball-path bypassing the pooled agent (it uses
+  `get_bytes_with_bearer`, the shared pooled Agent).
+- Side finding: when a tarball fetch **fails**, the install still costs ~800 ms because the
+  error branch retries with backoff doubling from 250 ms and the install waits for every
+  worker. One flaky tarball can add ~750 ms to an install.
+- `JHOL_HTTP_TIMING=1` does not instrument the tarball path, which is why this took so
+  many experiments. Instrument that path before further work.
+
+### Diagnosed: cold install is per-connection setup cost, amplified by concurrency
+- Instrumented `HttpClient::get_bytes_with_bearer` (`[TB-T]` under `JHOL_HTTP_TIMING=1`);
+  the tarball path previously emitted no timing at all despite the tracing helper's doc
+  comment claiming it covered tarballs.
+- Measured: per-request latency is uncorrelated with size (4 KB = 762 ms, 550 KB = 341 ms),
+  and mean per-request latency is **47 ms at concurrency 1** vs **396-669 ms at
+  concurrency >= 4** - connection reuse works, concurrent new connections are throttled.
+  That is why the concurrency curve was flat from 2 to 32: wall-clock gains were cancelled
+  by per-request latency growth.
+- Fix indicated (not yet implemented): multiplex tarball downloads over one connection
+  (HTTP/2) via the existing non-default `http-reqwest` path in `http2_download.rs`.
+  Projected cold ~250-350 ms vs ~850 ms. Must be measured - an older "parity on tarballs"
+  note contradicts this and predates the measurement.
+- Six further hypotheses rejected with evidence (config caching, constant init, store-index
+  lock, retries, transfer size, DNS) - all recorded in AGENTS.md.
+
+### Investigated: HTTP/3 unavailable, HTTP/2 measured at 2.2x for tarball downloads
+- `registry.npmjs.org` answers `HTTP/2 200` from Cloudflare with **no `alt-svc` header**,
+  so HTTP/3 cannot be discovered or used; a QUIC client would have no endpoint. Re-check
+  with `curl -sI` if npm ever enables it.
+- Reference-client measurement on the same 30 tarballs (medians of 3): h1.1 over 30
+  connections 533 ms vs **h2 multiplexed over one connection 245 ms = 2.2x**. This matches
+  jhol's own instrumentation (47 ms/request at conc=1 with one reused connection vs
+  400-670 ms/request at conc>=4).
+- Projected cold install ~850 ms -> ~495 ms (~1.7x overall, 2.2x on the download phase);
+  the ~250 ms fixed floor is unaffected by protocol choice.
+- Implementation path identified: route tarball downloads through the existing
+  `http2_download.rs` behind the non-default `http-reqwest` feature; keep ureq for
+  packuments. Not yet implemented or measured.
+
+### Added: HTTP/2 tarball downloads (default), pool tuned
+- `http_client::get_bytes_with_bearer` (the tarball path) now routes through the existing
+  `http2_download` module; `http-reqwest` is a default feature. `JHOL_NO_HTTP2=1` forces
+  the old h1.1/ureq path for A/B comparison; h2 errors fall back to h1.1 automatically.
+- `DEFAULT_POOL_SIZE` 4 -> 2, measured (pool=1 596ms | 2 583ms | 4 816ms | 8 828ms true
+  cold): fewer connections is better because h2 multiplexes over them.
+- Result, true cold with a fresh cache dir per run (28 tarballs, downloads verified):
+  **h2 median 536 ms and stable (489-757 ms)** vs **h1.1 median 10878 ms but ranging
+  584 ms to 15.3 s**. An independent curl reference on the same URLs reproduces the same
+  shape (h1.1 907 ms-67 s, h2 240-288 ms), so it is protocol/network behaviour. The
+  durable win is eliminating the 10-15 s tail.
+- Warm installs unchanged (6 ms both protocols, 10 interleaved runs). Cost: binary
+  6.5 -> 7.5 MB, startup 4 -> 6-7 ms.
+- Methodology recorded: wiping `store`/`store_unpacked`/`store_index.json` is NOT a cold
+  install (a capsule satisfies it with 0 downloads, 6 ms); a true cold run needs a fresh
+  `JHOL_CACHE_DIR`, and every cold timing must verify tarballs were actually downloaded.
+
+### Benchmarked against Bun with both caches pinned (jhol 1.0.2 vs Bun 1.3.14)
+- Protocol: fresh `HOME` + fresh cache dir per run for both tools, daemons disabled,
+  interleaved rounds, medians with ranges. 5 deps / 26-28 packages, macOS arm64.
+- **Cold: jhol 591 ms vs Bun 748 ms - jhol is now 1.27x FASTER** (HTTP/2 tarball
+  multiplexing). Supersedes all earlier "cold is slower" readings, which were taken
+  against a Bun with a warm global `~/.bun/install/cache`.
+- **Warm: jhol 136 ms vs Bun 50 ms - jhol is 2.7x SLOWER.**
+- Located the warm bottleneck: `JHOL_PROFILE_INSTALL=1` shows
+  `stage=capsule_fast_path delta_ms=129 total_ms=130` - 129 of 130 ms is
+  `try_capsule_install`. Ruled out re-extraction (markers/file counts identical before and
+  after), network, resolver, and `.bin` work.
+- Root cause: the "zero-parse" capsule still reads **every** package's `package.json` from
+  `store_unpacked` on each warm install, because `project_package` calls
+  `bin_links::link_bins_for_package`, which does `fs::read_to_string(package.json)` just to
+  test for a `"bin"` key. ~8 syscalls + 1 scattered read per package; ~100 ms on a cold page
+  cache, which is why the same warm install measures 25-33 ms hot and 130-452 ms cold.
+- Fix identified (not implemented): carry a `has_bin` bit in the capsule entry so warm
+  materialization does zero `package.json` reads.
+
+### Docs: research-paper claims reconciled with measured reality
+- Corrected the "faster than Bun on warm installs" claim, which appeared in four papers and does
+  not reproduce: measured warm is 136 ms vs Bun 50 ms (**2.7x slower**), no-op 25 ms vs ~7 ms.
+  The cold claim survives and is stronger: **jhol is 1.27x faster than Bun cold** (591 ms vs
+  748 ms) now that HTTP/2 tarball multiplexing has landed.
+- Updated `docs/research/JAGR_INFINITE_RESEARCH_PAPER.md`,
+  `docs/engineering/RESEARCH_PAPER_HOLOGRAPHIC_DEPENDENCY_RESOLUTION.md`,
+  `docs/engineering/RESEARCH_PAPER_GRM_INSTANT_LOCK.md`, and
+  `docs/design/JAGRS_STORE_V3_BREAKTHROUGH_RECORD.md` (whose Synth/Bundled rows are now labelled
+  OFFLINE, since they do no network I/O and are not cold installs), each with a measurement
+  protocol note. `RESEARCH_PAPER_JAGRS_STORAGE.md` needed no change.
+- Flagged the still-unverified claims (JAGR-S v3 microbenchmarks, SSDP syscall/extraction
+  figures, 342-package resolution, 6.7 MB RSS, test-suite totals) and noted that the JAGR-S
+  microbenchmarks describe a path that ships **disabled** by default.
+- `has_bin` capsule flag investigated and rejected: `extract_flags` receives a lockfile entry,
+  which never contains `bin`, so the flag cannot be derived without reading package.json anyway
+  - and a wrongly-cleared flag would break `node_modules/.bin`.
+
+### Fixed: warm install 5.7x faster (136 ms -> 24 ms) - now beats Bun
+- **Root cause:** `soul_path::ensure_jagrs_migrated()` called `jagrs::init_store()` (which
+  is `global_store()`) on every install. That initializes the **JAGR-S** store, which the
+  code itself documents as opt-in and unread (`jagrs.rs:619-631`, `JHOL_JAGRS_MIRROR=1`).
+  Instrumented profile: **140 ms of a 144 ms warm install (97%)**.
+- **Fix:** return immediately unless `jagrs::mirror_enabled()`; the gate is checked before
+  latching `MIGRATED` so enabling the mirror later still migrates.
+- **Result:** warm **136 ms -> 24 ms** (Bun 50 ms) - jhol is now **2.1x faster than Bun
+  warm**; no-op 25 -> 20 ms; cold unchanged at 591 ms (1.27x faster than Bun).
+  `capsule_fast_path` 143 ms -> 4 ms. This makes the research papers' warm-install claim
+  real in both direction and magnitude.
+- Supporting: `rebuild_bin_links` is now parallel (was a serial per-package scan), and the
+  redundant per-package `link_bins_for_package` calls in `project_package` are removed -
+  every `package.json` was being read twice per warm install. `.bin` correctness re-verified.
+- Added env-gated stage marks to the capsule warm path under `JHOL_PROFILE_INSTALL=1`.
+
+### Investigated: bundled-offline and no-op claims
+- **Offline bundled cold is broken at the system level**: installing 6 packages that ARE in
+  `binary-packages/index.json` offline took 3.8-4.8 s and produced 2 directories - offline
+  resolution requests network packuments for transitive deps instead of using the local
+  archive metadata, and offline misses still pay HTTP retries. Fix scoped: serve transitive
+  metadata from `binary-packages/.unpacked/<hash>/package.json`/`deps.json` when offline and
+  fail fast without retries.
+- **No-op 14 ms vs Bun 11 ms**; `--version` floor is 7 ms and any subcommand dispatches in
+  10 ms, so the papers' 5.3 ms no-op is a process-startup claim, not an install claim.
+- `jhol --version` 7 ms; splash/quiet knobs make no difference.
+
+### Fixed (partial): offline installs now serve bundled-package metadata locally
+- Offline packument misses for packages present in `binary-packages/index.json` are now
+  served from the prepacked archive metadata (`index.json` + `deps.json`) instead of failing
+  the entire transitive expansion.
+- HTTP retries are skipped entirely in offline mode (offline misses previously burned ~4 s of
+  backoff per install against an unreachable registry).
+- Coverage caveat recorded: the 200-entry bundled index does not contain the transitive
+  closure of the popular trees (e.g. @babel helpers), so the papers' 24.6 ms bundled-cold
+  figure remains out of reach until the prepacked set is regenerated to include full
+  closures. The data is already on disk in `binary-packages/.unpacked/`.
+
+### Measured: cold install at ~190 ms (lockfile-cold, 26 packages) - download phase adds
+only ~16 ms over the local unpack floor under HTTP/2 tarball multiplexing; Bun sits at
+644-748 ms. The remaining local cost is `store_unpacked` population (~174 ms for 30
+packages, ~1464 files, APFS-bound). Local-floor reduction paths identified
+(clonefile ingress, deferred store-index flush); full local closure data would make the
+bundled-cold claim real.
+
+---
+
+## Upgrade notes — production-readiness pass (2026-10-03)
+
+Three corrections from the production-readiness upgrade (details in
+`docs/production/PRODUCTION_READINESS.md`).
+
+### Compatibility aliases made honest
+
+`--resolver {pubgrub-v2,pubgrub,jagr,jagr3,jagr-infinite,legacy}` are
+compatibility aliases: every accepted value routes to JAGR-Infinite, the only
+primary resolver, and a non-default value logs a note. When JAGR-Infinite fails,
+a PubGrub-named bounded rescue is attempted **only for manifests with <=25 direct
+dependencies** (bounded because it fetches packuments per candidate version);
+larger manifests fail fast with the JAGR-Infinite error. `--help` now says this.
+No action needed unless you relied on a spelling selecting a distinct strategy —
+none did.
+
+### `http-reqwest` is a default feature (the earlier "no longer default" entry is superseded)
+
+The `### Changed` entry above titled "`http-reqwest` is no longer a default
+feature" describes an intermediate state and **no longer matches `Cargo.toml`**:
+`default = ["runtime", "bundle", "http-reqwest"]`. No measured hot-path win is
+claimed either way — the `http2_download` module is not called by default
+installs. If you build with `--no-default-features`, add `http-reqwest` only when
+you need the resumable-download path.
+
+### CI and docs no longer point at deleted automation
+
+The report generators and the standalone KPI scripts used by
+`.github/workflows/benchmark.yml` and the README live under `archive/scripts/`
+(they are not currently wired into `scripts/`, which keeps `benchmark.py`,
+`bench/guardrails.py`, `mem_guard.py`, `guardrails.sh`, `benchmark.sh` and the
+release/PGO helpers). CI invokes them from `archive/scripts/`; the README's
+"Benchmarking and reports" section lists what is live and how to restore a
+generator. `INNOVATION_LOG.md` lives at `docs/internal/INNOVATION_LOG.md`.

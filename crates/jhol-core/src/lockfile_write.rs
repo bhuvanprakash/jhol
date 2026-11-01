@@ -309,32 +309,7 @@ pub fn resolve_full_tree(
         }
     }
 
-    match resolve_full_tree_jagr_infinite(package_json_path) {
-        Ok(tree) => {
-            crate::jagr_infinite::clear_synth_served();
-            Ok(tree)
-        }
-        Err(first_err) => {
-            // Candidate-domain starvation: single-version bundled synths
-            // advertise ONE candidate per package. If resolution failed while
-            // any synth served, backtracking may have been starved rather than
-            // the graph being genuinely unsatisfiable — retry ONCE with full
-            // packuments for exactly those packages (same constraints, bigger
-            // domains). If the retry fails too, the ORIGINAL error stands.
-            if crate::jagr_infinite::take_synth_served() {
-                std::env::set_var("JHOL_JINF_FULL_RETRY", "1");
-                let retry = resolve_full_tree_jagr_infinite(package_json_path);
-                std::env::remove_var("JHOL_JINF_FULL_RETRY");
-                crate::jagr_infinite::clear_synth_served();
-                match retry {
-                    Ok(tree) => Ok(tree),
-                    Err(_) => Err(first_err),
-                }
-            } else {
-                Err(first_err)
-            }
-        }
-    }
+    resolve_full_tree_jagr_infinite(package_json_path)
 }
 
 /// Decide what to do after the primary resolver (JAGR-infinite) fails.

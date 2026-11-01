@@ -43,7 +43,7 @@ write operation or remote change was performed.
 
 1. GitHub organization creation and remote-repository transfer; the local `.github` repository-root seed and four repository README/contribution/security drafts are prepared.
 2. Cross-platform hosted runs for the online adapter smoke check; the Linux/macOS/Windows matrix is configured but has not produced results here.
-3. Live AWS S3/Arenvara verification, the `jhol-cloud` control plane, and remote task execution design/implementation.
+3. Live AWS S3/Arenvara verification, remote task execution design/implementation, and deployment of the `jhol-cloud` service (its offline domain model now exists in `crates/jhol-cloud`; no service is deployed).
 
 ## Declared-service follow-up (2026-09-30)
 
@@ -67,7 +67,8 @@ The full `scripts/blueprint_gate.sh` was not rerun for this follow-up because
 its example verifier updates persistent fixture artifacts; the focused checks
 above exercised the changed service behavior without rewriting those files.
 The `organization/repositories/jhol-cloud/CONTROL_PLANE_DESIGN.md` file is a
-design proposal only; it does not implement or deploy a cloud service.
+design proposal only. `crates/jhol-cloud` now implements an offline domain model
+and in-memory request/response envelopes, but it does not deploy a service.
 
 
 ## Model artifact acquisition follow-up (2026-09-30)

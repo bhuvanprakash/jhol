@@ -165,6 +165,63 @@ def cache_bytes(root: Path) -> int:
     return total
 
 
+def copy_seed_cache(source: Path, destination: Path) -> str:
+    """Make a writable round-local cache without sharing its seed tree."""
+    source = source.resolve(strict=True)
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(f"round cache destination already exists: {destination}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "darwin":
+        command = ["cp", "-cR", str(source), str(destination)]
+    elif sys.platform.startswith("linux"):
+        command = ["cp", "-a", "--reflink=always", str(source), str(destination)]
+    else:
+        command = None
+
+    method = "copy"
+    if command is not None:
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+            if result.returncode == 0 and destination.is_dir():
+                method = "cow-clone"
+            else:
+                shutil.rmtree(destination, ignore_errors=True)
+        except (OSError, subprocess.TimeoutExpired):
+            shutil.rmtree(destination, ignore_errors=True)
+    if not destination.is_dir():
+        shutil.copytree(source, destination, symlinks=True)
+
+    root = destination.resolve(strict=True)
+    for current, dirs, files in os.walk(root, followlinks=False):
+        for name in dirs + files:
+            path = Path(current) / name
+            if path.is_symlink() and not path.resolve(strict=False).is_relative_to(root):
+                raise ValueError(f"seed symlink escapes its clone: {path}")
+    return method
+
+
+def self_test_cache_copy() -> None:
+    with tempfile.TemporaryDirectory(prefix="paper-matrix-copy-check-") as temporary:
+        root = Path(temporary)
+        source = root / "seed"
+        source.mkdir()
+        payload = source / "payload"
+        payload.write_text("seed bytes")
+        try:
+            (source / "relative-link").symlink_to("payload")
+        except OSError:
+            pass
+        before = _directory_digest(source)
+        destination = root / "round" / "cache"
+        copy_seed_cache(source, destination)
+        (destination / "payload").write_text("round bytes")
+        assert payload.read_text() == "seed bytes"
+        assert _directory_digest(source) == before
+        for link in destination.rglob("*"):
+            if link.is_symlink():
+                assert link.resolve(strict=False).is_relative_to(destination.resolve())
+
+
 def layout_quality(root: Path, node: str, expected_lock_hash: str | None) -> tuple[bool, str, str | None]:
     """Return (ok, reason, drift).
 
@@ -173,8 +230,7 @@ def layout_quality(root: Path, node: str, expected_lock_hash: str | None) -> tup
     declared range (e.g. `source-map-js` 1.2.1 vs 1.2.2). That is a resolver
     difference, not a broken install: the tree loads, the locked identities are
     present, and the ranges are honoured. It is reported, and whether it fails the
-    run is decided by `--drift-policy` (default: warn, so a pin bump does not
-    invalidate an otherwise fair sample set).
+    run is decided by `--drift-policy` (default: fail for this locked fixture).
     """
     drift = None
     if not (root / "package-lock.json").is_file():
@@ -315,9 +371,9 @@ def run_one(args: argparse.Namespace, arm: str, round_no: int, root_tmp: Path,
         if not source_nm.is_dir():
             return {"arm": arm, "round": round_no, "status": "invalid", "reason": "fixture has no prepared node_modules"}
         shutil.copytree(source_nm, project / "node_modules", symlinks=True)
-    cache.mkdir(parents=True)
     home.mkdir(parents=True)
     source = seed_caches.get(arm) if args.condition == "local-cache-cold" else None
+    seed_copy_method = None
     if args.condition == "local-cache-cold":
         if source is None:
             return {"arm": arm, "round": round_no, "status": "invalid", "reason": "missing --seed-cache for arm"}
@@ -327,14 +383,12 @@ def run_one(args: argparse.Namespace, arm: str, round_no: int, root_tmp: Path,
         # seed to the cache root leaves Bun empty and it silently downloads.
         destination = cache / "bun" if arm == "bun" else cache
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if destination.exists():
-            shutil.rmtree(destination, ignore_errors=True)
-        # Seed caches are large (100s of MB); symlink instead of copying per round.
-        # The seed is read-only for the run, so sharing it is safe.
         try:
-            destination.symlink_to(source, target_is_directory=True)
-        except OSError:
-            shutil.copytree(source, destination, dirs_exist_ok=True, symlinks=True)
+            seed_copy_method = copy_seed_cache(source, destination)
+        except (OSError, ValueError, shutil.Error) as error:
+            return {"arm": arm, "round": round_no, "condition": args.condition,
+                    "status": "invalid", "reason": f"seed cache isolation failed: {error}"}
+    cache.mkdir(parents=True, exist_ok=True)
 
     env = os.environ.copy()
     for key in list(env):
@@ -415,6 +469,7 @@ def run_one(args: argparse.Namespace, arm: str, round_no: int, root_tmp: Path,
             },
             "arm_environment": ARM_ENV.get(arm, {}),
             "seed_cache_sha256": _directory_digest(source) if source else None,
+            "seed_copy_method": seed_copy_method,
         }
     except subprocess.TimeoutExpired as error:
         return {"arm": arm, "round": round_no, "condition": args.condition,
@@ -520,7 +575,9 @@ def summarize(samples: list[dict], rounds: int, seed: int) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--fixture", type=Path, required=True, help="Pinned project with package.json and package-lock.json")
+    parser.add_argument("--fixture", type=Path, help="Pinned project with package.json and package-lock.json")
+    parser.add_argument("--self-test-cache-copy", action="store_true",
+                        help="verify seed copying is isolated, then exit")
     parser.add_argument("--jhol", default="target/release/jhol")
     parser.add_argument("--bun", default="bun")
     parser.add_argument("--node", default="node")
@@ -533,11 +590,17 @@ def main() -> int:
     parser.add_argument("--arms", default=",".join(DEFAULT_ARMS),
                         help="Comma-separated arms to run. Defaults to the arms whose route fires today "
                              f"({','.join(DEFAULT_ARMS)}); all arms: {','.join(ALL_ARMS)}")
-    parser.add_argument("--drift-policy", choices=("warn", "fail"), default="warn",
-                        help="warn (default): a valid tree with a different in-range resolution is a "
-                             "pass with resolver_drift recorded. fail: treat it as a failure.")
+    parser.add_argument("--drift-policy", choices=("warn", "fail"), default="fail",
+                        help="fail (default): locked workloads with a different lock are invalid. "
+                             "warn records diagnostic drift but cannot make the matrix valid.")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
+    if args.self_test_cache_copy:
+        self_test_cache_copy()
+        print("paper_matrix: cache-copy isolation passed")
+        return 0
+    if args.fixture is None:
+        parser.error("--fixture is required unless --self-test-cache-copy is used")
     arms = [a for a in (x.strip() for x in args.arms.split(",")) if a]
     unknown = [a for a in arms if a not in ARMS]
     if unknown:
@@ -578,6 +641,7 @@ def main() -> int:
     if args.condition == "local-cache-cold" and not set(arms).issubset(seed_caches):
         parser.error(f"local-cache-cold needs --seed-cache for every arm in {arms}, including Bun")
 
+    seed_cache_before = {arm: _directory_digest(path) for arm, path in seed_caches.items()}
     randomizer = random.Random(args.seed)
     samples: list[dict] = []
     with tempfile.TemporaryDirectory(prefix="jhol-paper-matrix-") as raw_tmp:
@@ -601,6 +665,12 @@ def main() -> int:
             elif sample.get("bin_link_names") != reference.get("bin_link_names"):
                 sample["status"] = "fail"
                 sample["reason"] = "executable link names differ from Bun reference"
+    seed_cache_after = {arm: _directory_digest(path) for arm, path in seed_caches.items()}
+    seed_cache_unchanged = seed_cache_before == seed_cache_after
+    if args.condition == "local-cache-cold" and not seed_cache_unchanged:
+        for sample in samples:
+            sample["status"] = "fail"
+            sample["reason"] = "seed cache changed during isolated local-cache rounds"
     summary = summarize(samples, args.rounds, args.seed)
     # Two independent verdicts. `measurement_valid` says the run is trustworthy:
     # every arm that was *requested* produced every sample and the arms are
@@ -608,7 +678,11 @@ def main() -> int:
     # failures. `speed_gate` is a separate 4x claim gate and must never stand in
     # for validity — a red speed gate on registry-cold is the honest result.
     requested = [a for a in ARMS if any(s.get("arm") == a for s in samples)]
-    measurement_valid = all(summary[a]["passing_samples"] == args.rounds for a in requested)
+    measurement_valid = (
+        seed_cache_unchanged
+        and all(summary[a]["passing_samples"] == args.rounds for a in requested)
+        and all(summary[a]["resolver_drift_samples"] == 0 for a in requested)
+    )
     speed_gate = measurement_valid and all((summary[a].get("bun_over_jhol_median") or 0) >= 4
                      and (summary[a].get("bun_over_jhol_lower_95pct") or 0) >= 4
                      for a in JHOL_ARMS
@@ -628,6 +702,8 @@ def main() -> int:
         "host": {"system": platform.platform(), "machine": platform.machine(), "processor": platform.processor()},
         "fixture_lock_sha256": hash_file(args.fixture / "package-lock.json"),
         "seed_cache_coverage": {arm: {"path": str(path), "bytes": cache_bytes(path), "sha256": _directory_digest(path)} for arm, path in seed_caches.items()},
+        "seed_cache_integrity": {"before": seed_cache_before, "after": seed_cache_after,
+                                 "unchanged": seed_cache_unchanged},
         "summary": summary,
         "measurement_valid": measurement_valid,
         "speed_gate_4x": "pass" if speed_gate else "red",

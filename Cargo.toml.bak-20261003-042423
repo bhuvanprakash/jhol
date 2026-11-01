@@ -1,0 +1,103 @@
+[workspace]
+members = [
+    ".",
+    "crates/jhol-core",
+    "crates/jhol-runtime",
+    "crates/jhol-bundle",
+    # Blueprint foundation crates (Phase B) — contracts first, extract further later
+    "crates/jhol-graph",
+    "crates/jhol-policy",
+    "crates/jhol-receipt",
+    "crates/jhol-adapters",
+    "crates/jhol-task",
+    "crates/jhol-env",
+    "crates/jhol-diff",
+    "crates/jhol-ai",
+    "crates/jhol-db",
+    # Phase D optional remote CAS (not a default binary dep)
+    "crates/jhol-remote",
+    "crates/jhol-trampoline",
+]
+resolver = "2"
+
+[profile.release]
+panic = "abort"
+lto = "fat"
+codegen-units = 1
+strip = true
+
+[profile.release.package.jhol-trampoline]
+opt-level = "z"
+
+[package]
+name = "jhol"
+version = "1.0.2"
+authors = ["Bhuvan Prakash <bhuvanstark6@gmail.com>"]
+edition = "2021"
+description = "Fast, offline-friendly package manager with cache, doctor, and npm fallback"
+license-file = "LICENSE"
+repository = "https://github.com/bhuvanprakash/jhol"
+readme = "README.md"
+keywords = ["package-manager", "npm", "cache", "offline"]
+categories = ["command-line-utilities", "development-tools"]
+
+[features]
+default = ["runtime", "bundle", "http-reqwest"]  # bundler + runtime ship in the box; http-reqwest (HTTP/2 tarball downloads) is default - set JHOL_NO_HTTP2=1 to fall back to h1.1
+http-reqwest = ["jhol-core/http-reqwest"]
+runtime = ["jhol-runtime"]
+runtime-server = ["jhol-runtime", "jhol-runtime/http-server"]
+runtime-websocket = ["jhol-runtime", "jhol-runtime/websocket"]
+runtime-sqlite = ["jhol-runtime", "jhol-runtime/sqlite"]
+# `jhol build`: TypeScript/JSX/React/CSS bundler (crates/jhol-bundle).
+# Optional: `swc-backend` for full TS/JSX, `lightningcss` for CSS minification.
+bundle = ["dep:jhol-bundle"]
+bundle-swc = ["bundle", "jhol-bundle/swc-backend"]
+bundle-css = ["bundle", "jhol-bundle/lightningcss"]
+js-engine = ["jhol-runtime", "jhol-runtime/jsc-engine"]
+
+[dependencies]
+jhol-core = { version = "1.0.2", path = "crates/jhol-core" }
+jhol-runtime = { version = "1.0.2", path = "crates/jhol-runtime", optional = true }
+jhol-bundle = { version = "1.0.2", path = "crates/jhol-bundle", optional = true }
+jhol-adapters = { path = "crates/jhol-adapters" }
+jhol-env = { path = "crates/jhol-env" }
+jhol-receipt = { path = "crates/jhol-receipt" }
+jhol-diff = { path = "crates/jhol-diff" }
+jhol-graph = { path = "crates/jhol-graph" }
+jhol-policy = { path = "crates/jhol-policy" }
+jhol-ai = { path = "crates/jhol-ai" }
+jhol-db = { path = "crates/jhol-db" }
+jhol-task = { path = "crates/jhol-task" }
+clap = { version = "4.5", features = ["cargo"] }
+# main.rs uses dirs::config_dir() inside #[cfg(target_os = "linux")], which macOS
+# builds never compile - so this dependency was missing without anyone noticing.
+dirs = "5.0"
+clap_complete = "4"
+colored = "2.1"
+indicatif = "0.17"
+serde_json = "1.0"
+ratatui = { version = "0.26.3", default-features = false, features = ["crossterm"] }
+crossterm = "0.27"
+mimalloc = { version = "0.1", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"
+dashmap = "6.1"
+parking_lot = "0.12"
+serde = { version = "1.0", features = ["derive"] }
+criterion = "0.5"
+
+[[bench]]
+name = "materialization"
+path = "benchmarks/materialization.rs"
+harness = false
+
+[[bench]]
+name = "phase1_4_benchmarks"
+path = "benchmarks/phase1_4_benchmarks.rs"
+harness = false
+
+[[bin]]
+name = "jhol"
+path = "src/main.rs"

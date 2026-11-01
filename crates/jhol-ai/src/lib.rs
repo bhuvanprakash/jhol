@@ -738,8 +738,11 @@ pub fn infer_linear_cpu(
         ));
     }
     let mut values = Vec::with_capacity(weight_count);
-    for bytes in weights[LINEAR_WEIGHTS_MAGIC.len()..].chunks_exact(4) {
-        let value = f32::from_le_bytes(bytes.try_into().expect("four-byte chunk"));
+    // `as_chunks` yields `&[[u8; 4]]`, so no fallible slice-to-array conversion
+    // (and no `expect` that would abort the process) is needed; any trailing
+    // partial word was already rejected by the length check above.
+    for bytes in weights[LINEAR_WEIGHTS_MAGIC.len()..].as_chunks::<4>().0 {
+        let value = f32::from_le_bytes(*bytes);
         if !value.is_finite() || value.abs() > 1_000_000.0 {
             return Err(AiError::InvalidManifest(
                 "model weight is non-finite or outside the runtime limit".into(),

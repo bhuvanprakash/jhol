@@ -716,8 +716,7 @@ pub fn get_with_bearer_streaming<T, F>(
     bearer_token: Option<&str>,
     // `mut` is used by the `http-reqwest` branch below; clippy --fix, run
     // without that feature active, strips it and breaks the release build.
-    #[allow(unused_mut)]
-    mut consume: F,
+    #[allow(unused_mut)] mut consume: F,
 ) -> Result<T, String>
 where
     F: FnMut(&mut dyn Read) -> Result<T, String>,

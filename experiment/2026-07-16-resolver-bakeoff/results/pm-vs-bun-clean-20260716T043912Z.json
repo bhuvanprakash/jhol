@@ -1,0 +1,36 @@
+{
+  "timestamp_utc": "20260716T043912Z",
+  "fixture": "tests/fixtures/express-app/package.json",
+  "bakeoff_root": "/tmp/jhol-bakeoff-18050",
+  "runs": [{"tool":"jhol","mode":"cold","repeat":1,"seconds":0.99,"exit":Added 2 packages in 8ms
+0,"nm_pkgs":0,"express_present":false,"nodemon_present":false,"jhol_jagr_l1":"auto"},{"tool":"jhol","mode":"cold","repeat":2,"seconds":0.01,"exit":Added 2 packages in 6ms
+0,"nm_pkgs":0,"express_present":false,"nodemon_present":false,"jhol_jagr_l1":"auto"},{"tool":"jhol","mode":"cold-knot","repeat":1,"seconds":0.01,"exit":Added 2 packages in 5ms
+0,"nm_pkgs":0,"express_present":false,"nodemon_present":false,"jhol_jagr_l1":"knot"},{"tool":"jhol","mode":"cold-knot","repeat":2,"seconds":0.01,"exit":Added 2 packages in 6ms
+0,"nm_pkgs":0,"express_present":false,"nodemon_present":false,"jhol_jagr_l1":"knot"},{"tool":"jhol","mode":"warm","repeat":1,"seconds":0.00,"exit":Added 2 packages in 1ms
+0,"nm_pkgs":1,"express_present":false,"nodemon_present":true,"jhol_jagr_l1":"auto"},{"tool":"jhol","mode":"warm","repeat":2,"seconds":0.02,"exit":Added 2 packages in 0ms
+0,"nm_pkgs":1,"express_present":false,"nodemon_present":true,"jhol_jagr_l1":"auto"},{"tool":"bun","mode":"cold","repeat":1,"seconds":1.65,"exit":bun install v1.3.14 (0d9b296a)
+
++ nodemon@3.0.2
++ express@4.18.2
+
+97 packages installed [1.65s]
+0,"nm_pkgs":95,"express_present":true,"nodemon_present":true},{"tool":"bun","mode":"cold","repeat":2,"seconds":0.02,"exit":bun install v1.3.14 (0d9b296a)
+
++ nodemon@3.0.2
++ express@4.18.2
+
+97 packages installed [21.00ms]
+0,"nm_pkgs":95,"express_present":true,"nodemon_present":true},{"tool":"bun","mode":"warm","repeat":1,"seconds":0.02,"exit":bun install v1.3.14 (0d9b296a)
+
++ nodemon@3.0.2
++ express@4.18.2
+
+97 packages installed [23.00ms]
+0,"nm_pkgs":95,"express_present":true,"nodemon_present":true},{"tool":"bun","mode":"warm","repeat":2,"seconds":0.02,"exit":bun install v1.3.14 (0d9b296a)
+
++ nodemon@3.0.2
++ express@4.18.2
+
+97 packages installed [20.00ms]
+0,"nm_pkgs":95,"express_present":true,"nodemon_present":true}]
+}

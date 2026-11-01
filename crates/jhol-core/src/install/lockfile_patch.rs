@@ -199,7 +199,10 @@ pub(crate) fn backfill_lockfile_integrity(lock_path: &Path, cache_dir: &Path) {
             // neither source holds the bytes, the entry stays unattested: frozen
             // installs refusing them is the CORRECT integrity semantics, not a
             // bug (we never fabricate an SRI).
-            if let Some(bytes) = crate::registry::load_binary_tarball(name, version).ok().flatten() {
+            if let Some(bytes) = crate::registry::load_binary_tarball(name, version)
+                .ok()
+                .flatten()
+            {
                 sri = Some(crate::utils::sri_sha512_of_bytes(&bytes));
                 let _ = std::fs::write(&tarball, &bytes);
             }
@@ -213,7 +216,9 @@ pub(crate) fn backfill_lockfile_integrity(lock_path: &Path, cache_dir: &Path) {
         }
     }
     if debug {
-        eprintln!("[integrity] missing={missing} no_hash={no_hash} written={written} changed={changed}");
+        eprintln!(
+            "[integrity] missing={missing} no_hash={no_hash} written={written} changed={changed}"
+        );
     }
     if !changed {
         return;
@@ -589,7 +594,10 @@ mod platform_token_tests {
             return;
         }
         let v = variant(&["darwin"], &["arm64"]);
-        assert!(v.matches_current_platform(), "own binary must be current-platform");
+        assert!(
+            v.matches_current_platform(),
+            "own binary must be current-platform"
+        );
     }
 
     #[test]
@@ -599,8 +607,14 @@ mod platform_token_tests {
         }
         assert!(!variant(&["linux"], &["x64"]).matches_current_platform());
         assert!(!variant(&["win32"], &["x64"]).matches_current_platform());
-        assert!(!variant(&["darwin"], &["x64"]).matches_current_platform(), "right OS, wrong arch");
-        assert!(variant(&[], &[]).matches_current_platform(), "unpinned = everywhere");
+        assert!(
+            !variant(&["darwin"], &["x64"]).matches_current_platform(),
+            "right OS, wrong arch"
+        );
+        assert!(
+            variant(&[], &[]).matches_current_platform(),
+            "unpinned = everywhere"
+        );
     }
 
     #[test]
@@ -608,7 +622,13 @@ mod platform_token_tests {
         if !(cfg!(target_os = "macos") && cfg!(target_arch = "aarch64")) {
             return;
         }
-        assert!(variant(&["!win32"], &[]).matches_current_platform(), "not-windows includes macos");
-        assert!(!variant(&["!darwin"], &[]).matches_current_platform(), "not-darwin excludes macos");
+        assert!(
+            variant(&["!win32"], &[]).matches_current_platform(),
+            "not-windows includes macos"
+        );
+        assert!(
+            !variant(&["!darwin"], &[]).matches_current_platform(),
+            "not-darwin excludes macos"
+        );
     }
 }

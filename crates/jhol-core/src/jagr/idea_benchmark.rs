@@ -19,9 +19,7 @@ use std::time::Instant;
 fn build_test_graph() -> (Vec<Vec<usize>>, Vec<String>, Vec<usize>) {
     // Simulate a 6-dep graph with ~74 packages
     // Direct deps: express, lodash, uuid, chalk, axios, react
-    let names: Vec<String> = (0..74)
-        .map(|i| format!("pkg_{}", i))
-        .collect();
+    let names: Vec<String> = (0..74).map(|i| format!("pkg_{}", i)).collect();
 
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); 74];
 
@@ -153,7 +151,9 @@ fn power_iteration_fiedler(
         ws.to_vec()
     } else {
         // Alternating +1/-1 (current approach)
-        (0..n).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect()
+        (0..n)
+            .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
+            .collect()
     };
 
     // Normalize
@@ -292,7 +292,9 @@ fn compute_effective_resistance(laplacian: &[Vec<f64>], n: usize) -> Vec<f64> {
 /// Gaussian elimination matrix inverse (for small matrices).
 fn matrix_inverse(matrix: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
     let n = matrix.len();
-    let mut aug: Vec<Vec<f64>> = matrix.iter().enumerate()
+    let mut aug: Vec<Vec<f64>> = matrix
+        .iter()
+        .enumerate()
         .map(|(i, row)| {
             let mut new_row = row.clone();
             new_row.extend((0..n).map(|j| if i == j { 1.0 } else { 0.0 }));
@@ -381,7 +383,11 @@ fn test_idea_b(adj: &[Vec<usize>], direct_deps: &[usize], n: usize) -> (u128, u1
     let priority_time = start.elapsed().as_micros();
 
     // Verify same coverage
-    assert_eq!(baseline_order.len(), order.len(), "Idea B: different coverage");
+    assert_eq!(
+        baseline_order.len(),
+        order.len(),
+        "Idea B: different coverage"
+    );
 
     (baseline_time, priority_time)
 }
@@ -457,7 +463,11 @@ mod tests {
 
         // Baseline
         let (baseline_order, baseline_time) = baseline_bfs(&adj, &direct_deps);
-        println!("Baseline BFS: {} μs, {} nodes resolved", baseline_time, baseline_order.len());
+        println!(
+            "Baseline BFS: {} μs, {} nodes resolved",
+            baseline_time,
+            baseline_order.len()
+        );
         println!();
 
         // Idea A: Spectral Warm Starting
@@ -465,9 +475,11 @@ mod tests {
         println!("Idea A: Spectral Warm Starting");
         println!("  Cold start:  {} μs, {} iterations", cold_time, cold_iters);
         println!("  Warm start:  {} μs, {} iterations", warm_time, warm_iters);
-        println!("  Speedup:     {:.1}x ({}% fewer iterations)",
+        println!(
+            "  Speedup:     {:.1}x ({}% fewer iterations)",
             cold_time as f64 / warm_time as f64,
-            (100.0 * (cold_iters - warm_iters) as f64 / cold_iters as f64) as usize);
+            (100.0 * (cold_iters - warm_iters) as f64 / cold_iters as f64) as usize
+        );
         println!();
 
         // Idea B: Effective Resistance Prioritization
@@ -475,7 +487,10 @@ mod tests {
         println!("Idea B: Effective Resistance Prioritization");
         println!("  Baseline BFS:     {} μs", bfs_time);
         println!("  Priority BFS:     {} μs", priority_time);
-        println!("  Speedup:          {:.2}x", bfs_time as f64 / priority_time as f64);
+        println!(
+            "  Speedup:          {:.2}x",
+            bfs_time as f64 / priority_time as f64
+        );
         println!();
 
         // Idea C: Heat Kernel Diffusion
@@ -483,16 +498,31 @@ mod tests {
         println!("Idea C: Heat Kernel Diffusion");
         println!("  Baseline BFS:     {} μs", bfs_time_c);
         println!("  Heat diffusion:   {} μs", diffusion_time);
-        println!("  Speedup:          {:.2}x", bfs_time_c as f64 / diffusion_time as f64);
+        println!(
+            "  Speedup:          {:.2}x",
+            bfs_time_c as f64 / diffusion_time as f64
+        );
         println!();
 
         // Summary
         println!("=== Summary ===");
-        println!("Idea A (Warm Start):    {} μs cold → {} μs warm ({:.1}x speedup)",
-            cold_time, warm_time, cold_time as f64 / warm_time as f64);
-        println!("Idea B (Resistance):    {} μs → {} μs ({:.2}x speedup)",
-            bfs_time, priority_time, bfs_time as f64 / priority_time as f64);
-        println!("Idea C (Heat Kernel):   {} μs → {} μs ({:.2}x speedup)",
-            bfs_time_c, diffusion_time, bfs_time_c as f64 / diffusion_time as f64);
+        println!(
+            "Idea A (Warm Start):    {} μs cold → {} μs warm ({:.1}x speedup)",
+            cold_time,
+            warm_time,
+            cold_time as f64 / warm_time as f64
+        );
+        println!(
+            "Idea B (Resistance):    {} μs → {} μs ({:.2}x speedup)",
+            bfs_time,
+            priority_time,
+            bfs_time as f64 / priority_time as f64
+        );
+        println!(
+            "Idea C (Heat Kernel):   {} μs → {} μs ({:.2}x speedup)",
+            bfs_time_c,
+            diffusion_time,
+            bfs_time_c as f64 / diffusion_time as f64
+        );
     }
 }

@@ -1,0 +1,738 @@
+{
+  "schema": 1,
+  "condition": "registry-cold",
+  "fixture": "/Users/bhuvanprakash/j/jhol/tests/fixtures/react-app",
+  "rounds": 1,
+  "seed": 20260930,
+  "jhol": "/Users/bhuvanprakash/j/jhol/target/release/jhol",
+  "jhol_sha256": "67e35a87b60d355f849c625c44a114b4790e342dac463cfb83b236178d133bc2",
+  "bun": "bun",
+  "bun_version": "1.4.2",
+  "node_version": "v26.10.0",
+  "python_version": "3.14.7",
+  "host": {
+    "system": "macOS-27.0-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "processor": "arm"
+  },
+  "fixture_lock_sha256": "ae3768f832b635987c4370939d4f7808d62c2da748c63aef8421d4c1dd87ae73",
+  "seed_cache_coverage": {},
+  "summary": {
+    "harvest": {
+      "passing_samples": 1,
+      "required_samples": 1,
+      "median_ms": 653.7537499971222,
+      "p95_ms": 653.7537499971222,
+      "median_95pct_ci_ms": [
+        653.7537499971222,
+        653.7537499971222
+      ],
+      "bun_over_jhol_median": 3.128118576770406,
+      "bun_over_jhol_lower_95pct": 3.128118576770406
+    },
+    "jgrid": {
+      "passing_samples": 0,
+      "required_samples": 1,
+      "median_ms": null,
+      "p95_ms": null,
+      "median_95pct_ci_ms": null,
+      "bun_over_jhol_median": null,
+      "bun_over_jhol_lower_95pct": null
+    },
+    "jagrs": {
+      "passing_samples": 0,
+      "required_samples": 1,
+      "median_ms": null,
+      "p95_ms": null,
+      "median_95pct_ci_ms": null,
+      "bun_over_jhol_median": null,
+      "bun_over_jhol_lower_95pct": null
+    },
+    "jgrid+jagrs": {
+      "passing_samples": 0,
+      "required_samples": 1,
+      "median_ms": null,
+      "p95_ms": null,
+      "median_95pct_ci_ms": null,
+      "bun_over_jhol_median": null,
+      "bun_over_jhol_lower_95pct": null
+    },
+    "combined": {
+      "passing_samples": 0,
+      "required_samples": 1,
+      "median_ms": null,
+      "p95_ms": null,
+      "median_95pct_ci_ms": null,
+      "bun_over_jhol_median": null,
+      "bun_over_jhol_lower_95pct": null
+    },
+    "bun": {
+      "passing_samples": 1,
+      "required_samples": 1,
+      "median_ms": 2045.0192499993136,
+      "p95_ms": 2045.0192499993136,
+      "median_95pct_ci_ms": [
+        2045.0192499993136,
+        2045.0192499993136
+      ]
+    }
+  },
+  "four_x_gate": "red",
+  "samples": [
+    {
+      "arm": "harvest",
+      "round": 1,
+      "condition": "registry-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "exit_code": 0,
+      "elapsed_ms": 653.7537499971222,
+      "cpu_user_seconds": 0.328953,
+      "cpu_system_seconds": 0.172862,
+      "peak_process_tree_rss_bytes": 31473664,
+      "cache_bytes_after": 31174457,
+      "downloaded_bytes": 7604102,
+      "package_layout_sha256": "6f81638e794d2edc8874ab5f20c2abb876aefa65b262c8b416bbdb18f8290068",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.63.5"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.63.5"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.1"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "mode:755",
+        "loose-envify": "mode:755",
+        "nanoid": "mode:755",
+        "rollup": "mode:755",
+        "vite": "mode:755"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "ae3768f832b635987c4370939d4f7808d62c2da748c63aef8421d4c1dd87ae73",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "per-matrix-w1_vluvn/001-harvest-1790769299451949000/tool-cache/store/a151f7caec911760e42b7a6f6f1dfcaba141fd11ff49e2af901a2eee0366297c.tgz\n[2026-09-30 17:25:00] [layout]   MATERIALIZE react-dom@18.2.0 -> node_modules/react-dom via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-harvest-1790769299451949000/tool-cache/store/20a71e86b691f860c781f3732a85c7b3c63c4d3d9a803dca9dfe6ed0eb30e2ef.tgz\n[2026-09-30 17:25:00] [layout]   MATERIALIZE source-map-js@1.2.1 -> node_modules/source-map-js via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-harvest-1790769299451949000/tool-cache/store/f126a6f9fca487a43219d8cb8c3a955279187a966119d548eb5cd47e999d4853.tgz\n[2026-09-30 17:25:00] [layout]   MATERIALIZE vite@5.0.0 -> node_modules/vite via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-harvest-1790769299451949000/tool-cache/store/de76095362f298ac15399cea3af028b6cdee5886bfcec13be21adebe5b2cf535.tgz\n[2026-09-30 17:25:00] [layout]   MATERIALIZE postcss@8.5.28 -> node_modules/postcss via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-harvest-1790769299451949000/tool-cache/store/f63d6d9bce28989cd083add85af717c0264e44323d35c909ae99ac934e9641a6.tgz\n[2026-09-30 17:25:00] [layout]   MATERIALIZE scheduler@0.23.2 -> node_modules/scheduler via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-harvest-1790769299451949000/tool-cache/store/e4f1d8fe63a9ab93ef66c92b0ad1af9c1326adbf7f1bd5e9053cac0fee6f26ae.tgz\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 1
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0"
+      },
+      "seed_cache_sha256": null
+    },
+    {
+      "arm": "combined",
+      "round": 1,
+      "condition": "registry-cold",
+      "status": "invalid",
+      "route_observed": false,
+      "reason": "selected route marker not observed",
+      "exit_code": 0,
+      "elapsed_ms": 487.7962500031572,
+      "cpu_user_seconds": 0.313962,
+      "cpu_system_seconds": 0.161712,
+      "peak_process_tree_rss_bytes": 30736384,
+      "cache_bytes_after": 31174473,
+      "downloaded_bytes": 7604102,
+      "package_layout_sha256": "a8d3e27172b86fbf860462e7f7bd1524a28594c1e7577247b7348f16b2799075",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.63.5"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.63.5"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.1"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "mode:755",
+        "loose-envify": "mode:755",
+        "nanoid": "mode:755",
+        "rollup": "mode:755",
+        "vite": "mode:755"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "ae3768f832b635987c4370939d4f7808d62c2da748c63aef8421d4c1dd87ae73",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "683596000/tool-cache/store/20a71e86b691f860c781f3732a85c7b3c63c4d3d9a803dca9dfe6ed0eb30e2ef.tgz\n[2026-09-30 17:25:01] [layout]   MATERIALIZE source-map-js@1.2.1 -> node_modules/source-map-js via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-combined-1790769300683596000/tool-cache/store/f126a6f9fca487a43219d8cb8c3a955279187a966119d548eb5cd47e999d4853.tgz\n[2026-09-30 17:25:01] [layout]   MATERIALIZE esbuild@0.19.12 -> node_modules/esbuild via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-combined-1790769300683596000/tool-cache/store/cdbd0cba6bd625d07f480f4cfa4105935c7ec606f52861862a93cfd255ea8fbc.tgz\n[2026-09-30 17:25:01] [layout]   MATERIALIZE @rollup/rollup-darwin-arm64@4.63.5 -> node_modules/@rollup/rollup-darwin-arm64 via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-combined-1790769300683596000/tool-cache/store/a3216c7e12c3fcdd1606b4f592453eda7b391f9ce5cd69e7540957d4edb933dc.tgz\n[2026-09-30 17:25:01] [layout]   MATERIALIZE vite@5.0.0 -> node_modules/vite via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-combined-1790769300683596000/tool-cache/store/de76095362f298ac15399cea3af028b6cdee5886bfcec13be21adebe5b2cf535.tgz\n[2026-09-30 17:25:01] [layout]   MATERIALIZE scheduler@0.23.2 -> node_modules/scheduler via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-combined-1790769300683596000/tool-cache/store/e4f1d8fe63a9ab93ef66c92b0ad1af9c1326adbf7f1bd5e9053cac0fee6f26ae.tgz\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "1",
+        "JHOL_JGRID_INGEST": "0",
+        "JHOL_JAGRS_MIRROR": "1"
+      },
+      "seed_cache_sha256": null
+    },
+    {
+      "arm": "jagrs",
+      "round": 1,
+      "condition": "registry-cold",
+      "status": "invalid",
+      "route_observed": false,
+      "reason": "selected route marker not observed",
+      "exit_code": 0,
+      "elapsed_ms": 596.964875003323,
+      "cpu_user_seconds": 0.3360749999999999,
+      "cpu_system_seconds": 0.20211399999999996,
+      "peak_process_tree_rss_bytes": 35143680,
+      "cache_bytes_after": 72333799,
+      "downloaded_bytes": 7604102,
+      "package_layout_sha256": "5e3a4f86727b5c75373dbdf1a6bc1640087227945f5d51efbb992fec1d10262f",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.63.5"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.63.5"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.1"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "mode:755",
+        "loose-envify": "mode:755",
+        "nanoid": "mode:755",
+        "rollup": "mode:755",
+        "vite": "mode:755"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "ae3768f832b635987c4370939d4f7808d62c2da748c63aef8421d4c1dd87ae73",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "vluvn/001-jagrs-1790769301664971000/tool-cache/store/cdbd0cba6bd625d07f480f4cfa4105935c7ec606f52861862a93cfd255ea8fbc.tgz\n[2026-09-30 17:25:02] [layout]   MATERIALIZE js-tokens@4.0.0 -> node_modules/js-tokens via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-jagrs-1790769301664971000/tool-cache/store/d884c7a2d8adb5568c1272d92b4f9c62707f4226cf9e7b22e7b957c7361e3c53.tgz\n[2026-09-30 17:25:02] [layout]   MATERIALIZE vite@5.0.0 -> node_modules/vite via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-jagrs-1790769301664971000/tool-cache/store/de76095362f298ac15399cea3af028b6cdee5886bfcec13be21adebe5b2cf535.tgz\n[2026-09-30 17:25:02] [layout]   MATERIALIZE scheduler@0.23.2 -> node_modules/scheduler via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-jagrs-1790769301664971000/tool-cache/store/e4f1d8fe63a9ab93ef66c92b0ad1af9c1326adbf7f1bd5e9053cac0fee6f26ae.tgz\n[2026-09-30 17:25:02] [layout]   MATERIALIZE @rollup/rollup-darwin-arm64@4.63.5 -> node_modules/@rollup/rollup-darwin-arm64 via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-jagrs-1790769301664971000/tool-cache/store/a3216c7e12c3fcdd1606b4f592453eda7b391f9ce5cd69e7540957d4edb933dc.tgz\n[2026-09-30 17:25:02] [layout]   MATERIALIZE nanoid@3.3.19 -> node_modules/nanoid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-jagrs-1790769301664971000/tool-cache/store/4e371b71e3d5081fa0052356d5c1904e7a60e049864c26f0724cfd32dc303849.tgz\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": "1",
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "1"
+      },
+      "seed_cache_sha256": null
+    },
+    {
+      "arm": "jgrid",
+      "round": 1,
+      "condition": "registry-cold",
+      "status": "invalid",
+      "route_observed": false,
+      "reason": "selected route marker not observed",
+      "exit_code": 0,
+      "elapsed_ms": 535.2278750069672,
+      "cpu_user_seconds": 0.325403,
+      "cpu_system_seconds": 0.15715500000000004,
+      "peak_process_tree_rss_bytes": 30703616,
+      "cache_bytes_after": 31174425,
+      "downloaded_bytes": 7604102,
+      "package_layout_sha256": "8b49dd5fe5c470d734857a9548904e888386575a8cc1495e04f158955f644cd3",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.63.5"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.63.5"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.1"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "mode:755",
+        "loose-envify": "mode:755",
+        "nanoid": "mode:755",
+        "rollup": "mode:755",
+        "vite": "mode:755"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "ae3768f832b635987c4370939d4f7808d62c2da748c63aef8421d4c1dd87ae73",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "-1790769302748503000/tool-cache/store/20a71e86b691f860c781f3732a85c7b3c63c4d3d9a803dca9dfe6ed0eb30e2ef.tgz\n[2026-09-30 17:25:03] [layout]   MATERIALIZE @rollup/rollup-darwin-arm64@4.63.5 -> node_modules/@rollup/rollup-darwin-arm64 via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-jgrid-1790769302748503000/tool-cache/store/a3216c7e12c3fcdd1606b4f592453eda7b391f9ce5cd69e7540957d4edb933dc.tgz\n[2026-09-30 17:25:03] [layout]   MATERIALIZE js-tokens@4.0.0 -> node_modules/js-tokens via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-jgrid-1790769302748503000/tool-cache/store/d884c7a2d8adb5568c1272d92b4f9c62707f4226cf9e7b22e7b957c7361e3c53.tgz\n[2026-09-30 17:25:03] [layout]   MATERIALIZE nanoid@3.3.19 -> node_modules/nanoid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-jgrid-1790769302748503000/tool-cache/store/4e371b71e3d5081fa0052356d5c1904e7a60e049864c26f0724cfd32dc303849.tgz\n[2026-09-30 17:25:03] [layout]   MATERIALIZE @types/estree@1.0.9 -> node_modules/@types/estree via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-jgrid-1790769302748503000/tool-cache/store/ec8f3c0dfb21497db5a3480c45a6cf6f9b18d3b337b2ea4d03e3ef2a9c2bb358.tgz\n[2026-09-30 17:25:03] [layout]   MATERIALIZE esbuild@0.19.12 -> node_modules/esbuild via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-jgrid-1790769302748503000/tool-cache/store/cdbd0cba6bd625d07f480f4cfa4105935c7ec606f52861862a93cfd255ea8fbc.tgz\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": "1",
+        "JHOL_JGRID": "1",
+        "JHOL_JGRID_INGEST": "0",
+        "JHOL_JAGRS_MIRROR": "0"
+      },
+      "seed_cache_sha256": null
+    },
+    {
+      "arm": "bun",
+      "round": 1,
+      "condition": "registry-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "exit_code": 0,
+      "elapsed_ms": 2045.0192499993136,
+      "cpu_user_seconds": 0.40175800000000006,
+      "cpu_system_seconds": 0.17121699999999995,
+      "peak_process_tree_rss_bytes": 97173504,
+      "cache_bytes_after": 31013790,
+      "downloaded_bytes": null,
+      "package_layout_sha256": "6ca816ef963ee7c4072a5380737066c6fc3db3ef84c523f4609fb66ca91c648f",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.63.5"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.63.5"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.1"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "../@esbuild/darwin-arm64/bin/esbuild",
+        "loose-envify": "../loose-envify/cli.js",
+        "nanoid": "../nanoid/bin/nanoid.cjs",
+        "rollup": "../rollup/dist/bin/rollup",
+        "vite": "../vite/bin/vite.js"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "ae3768f832b635987c4370939d4f7808d62c2da748c63aef8421d4c1dd87ae73",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "bun install v1.4.2 (744846f84)\n\n+ vite@5.0.0 (v8.3.1 available)\n+ react@18.2.0 (v19.3.0 available)\n+ react-dom@18.2.0 (v19.3.0 available)\n\n16 packages installed [2.01s]\n\nInvalidNPMLockfile: failed to migrate lockfile: 'package-lock.json'\n\nwarn: Ignoring lockfile\nResolving dependencies\nResolved, downloaded and extracted [157]\nSaved lockfile\n",
+      "stage_times_ms": {},
+      "arm_environment": {},
+      "seed_cache_sha256": null
+    },
+    {
+      "arm": "jgrid+jagrs",
+      "round": 1,
+      "condition": "registry-cold",
+      "status": "invalid",
+      "route_observed": false,
+      "reason": "selected route marker not observed",
+      "exit_code": 0,
+      "elapsed_ms": 621.0450000071432,
+      "cpu_user_seconds": 0.32016900000000015,
+      "cpu_system_seconds": 0.16054600000000008,
+      "peak_process_tree_rss_bytes": 31211520,
+      "cache_bytes_after": 31174521,
+      "downloaded_bytes": 7604102,
+      "package_layout_sha256": "d599aa092427339626413d3505593ad928d836f8691f808d7882c31d30e9defb",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.63.5"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.63.5"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.1"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "mode:755",
+        "loose-envify": "mode:755",
+        "nanoid": "mode:755",
+        "rollup": "mode:755",
+        "vite": "mode:755"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "ae3768f832b635987c4370939d4f7808d62c2da748c63aef8421d4c1dd87ae73",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "/001-jgrid-jagrs-1790769306282361000/tool-cache/store/d884c7a2d8adb5568c1272d92b4f9c62707f4226cf9e7b22e7b957c7361e3c53.tgz\n[2026-09-30 17:25:06] [layout]   MATERIALIZE esbuild@0.19.12 -> node_modules/esbuild via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-jgrid-jagrs-1790769306282361000/tool-cache/store/cdbd0cba6bd625d07f480f4cfa4105935c7ec606f52861862a93cfd255ea8fbc.tgz\n[2026-09-30 17:25:06] [layout]   MATERIALIZE scheduler@0.23.2 -> node_modules/scheduler via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-jgrid-jagrs-1790769306282361000/tool-cache/store/e4f1d8fe63a9ab93ef66c92b0ad1af9c1326adbf7f1bd5e9053cac0fee6f26ae.tgz\n[2026-09-30 17:25:06] [layout]   MATERIALIZE nanoid@3.3.19 -> node_modules/nanoid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-jgrid-jagrs-1790769306282361000/tool-cache/store/4e371b71e3d5081fa0052356d5c1904e7a60e049864c26f0724cfd32dc303849.tgz\n[2026-09-30 17:25:06] [layout]   MATERIALIZE source-map-js@1.2.1 -> node_modules/source-map-js via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-jgrid-jagrs-1790769306282361000/tool-cache/store/f126a6f9fca487a43219d8cb8c3a955279187a966119d548eb5cd47e999d4853.tgz\n[2026-09-30 17:25:06] [layout]   MATERIALIZE vite@5.0.0 -> node_modules/vite via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-w1_vluvn/001-jgrid-jagrs-1790769306282361000/tool-cache/store/de76095362f298ac15399cea3af028b6cdee5886bfcec13be21adebe5b2cf535.tgz\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": "1",
+        "JHOL_JGRID": "1",
+        "JHOL_JGRID_INGEST": "0",
+        "JHOL_JAGRS_MIRROR": "1"
+      },
+      "seed_cache_sha256": null
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "note": "After cold-install optimization: wave-parallel JMR expand, abbreviated-skip-micro, in-worker link, npm exact pins",
+  "baseline_cold_s": 4.02,
+  "profile_sample": {
+    "expand_or_reuse_graph_ms": 2947,
+    "download_unpack_install_cold_ms": 1801,
+    "total_ms": 4761,
+    "nm_top": 96,
+    "express_version": "4.18.2"
+  },
+  "runs": [
+    {"label": "jhol-cold-1", "tool": "jhol", "mode": "cold", "seconds": 4.166, "exit": 0, "nm_top": 96, "express": true},
+    {"label": "jhol-warm-1", "tool": "jhol", "mode": "warm", "seconds": 0.074, "exit": 0, "nm_top": 96, "express": true},
+    {"label": "jhol-cold-2", "tool": "jhol", "mode": "cold", "seconds": 3.992, "exit": 0, "nm_top": 96, "express": true},
+    {"label": "jhol-warm-2", "tool": "jhol", "mode": "warm", "seconds": 0.079, "exit": 0, "nm_top": 96, "express": true},
+    {"label": "bun-cold-1", "tool": "bun", "mode": "cold", "seconds": 5.461, "exit": 0, "nm_top": 95, "express": true},
+    {"label": "bun-warm-1", "tool": "bun", "mode": "warm", "seconds": 0.05, "exit": 0, "nm_top": 95, "express": true},
+    {"label": "bun-cold-2", "tool": "bun", "mode": "cold", "seconds": 5.099, "exit": 0, "nm_top": 95, "express": true},
+    {"label": "bun-warm-2", "tool": "bun", "mode": "warm", "seconds": 0.046, "exit": 0, "nm_top": 95, "express": true}
+  ]
+}

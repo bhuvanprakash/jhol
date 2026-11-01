@@ -1,0 +1,744 @@
+{
+  "schema": 1,
+  "condition": "registry-cold",
+  "fixture": "/private/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-upgrade-cold-fixture-8afpux2k/react-app",
+  "rounds": 3,
+  "seed": 20260930,
+  "jhol": "/Users/bhuvanprakash/.cargo/bin/jhol",
+  "jhol_sha256": "8b186ca8a6ca045e82162321fc3cf6e7fe1841aaba2b5268f3c99dc40f79c518",
+  "bun": "/Users/bhuvanprakash/.bun/bin/bun",
+  "bun_version": "1.4.2",
+  "node_version": "v26.10.0",
+  "python_version": "3.14.7",
+  "host": {
+    "system": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "processor": "arm"
+  },
+  "fixture_lock_sha256": "ae3768f832b635987c4370939d4f7808d62c2da748c63aef8421d4c1dd87ae73",
+  "seed_cache_coverage": {},
+  "summary": {
+    "harvest": {
+      "passing_samples": 0,
+      "required_samples": 3,
+      "invalid_samples": 0,
+      "failed_samples": 3,
+      "resolver_drift_samples": 0,
+      "median_ms": null,
+      "p95_ms": null,
+      "median_95pct_ci_ms": null,
+      "bun_over_jhol_median": null,
+      "bun_over_jhol_lower_95pct": null
+    },
+    "jgrid": {
+      "passing_samples": 0,
+      "required_samples": 3,
+      "invalid_samples": 0,
+      "failed_samples": 0,
+      "resolver_drift_samples": 0,
+      "median_ms": null,
+      "p95_ms": null,
+      "median_95pct_ci_ms": null,
+      "bun_over_jhol_median": null,
+      "bun_over_jhol_lower_95pct": null
+    },
+    "jagrs": {
+      "passing_samples": 0,
+      "required_samples": 3,
+      "invalid_samples": 0,
+      "failed_samples": 0,
+      "resolver_drift_samples": 0,
+      "median_ms": null,
+      "p95_ms": null,
+      "median_95pct_ci_ms": null,
+      "bun_over_jhol_median": null,
+      "bun_over_jhol_lower_95pct": null
+    },
+    "jgrid+jagrs": {
+      "passing_samples": 0,
+      "required_samples": 3,
+      "invalid_samples": 0,
+      "failed_samples": 0,
+      "resolver_drift_samples": 0,
+      "median_ms": null,
+      "p95_ms": null,
+      "median_95pct_ci_ms": null,
+      "bun_over_jhol_median": null,
+      "bun_over_jhol_lower_95pct": null
+    },
+    "combined": {
+      "passing_samples": 0,
+      "required_samples": 3,
+      "invalid_samples": 0,
+      "failed_samples": 0,
+      "resolver_drift_samples": 0,
+      "median_ms": null,
+      "p95_ms": null,
+      "median_95pct_ci_ms": null,
+      "bun_over_jhol_median": null,
+      "bun_over_jhol_lower_95pct": null
+    },
+    "bun": {
+      "passing_samples": 3,
+      "required_samples": 3,
+      "invalid_samples": 0,
+      "failed_samples": 0,
+      "resolver_drift_samples": 0,
+      "median_ms": 1913.7385829963023,
+      "p95_ms": 1944.3265839945525,
+      "median_95pct_ci_ms": [
+        1789.8869159980677,
+        1944.3265839945525
+      ]
+    }
+  },
+  "measurement_valid": false,
+  "speed_gate_4x": "pass",
+  "samples": [
+    {
+      "arm": "harvest",
+      "round": 1,
+      "condition": "registry-cold",
+      "status": "fail",
+      "route_observed": true,
+      "reason": "installed package identities or paths differ from Bun reference",
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 1331.2854579999112,
+      "cpu_user_seconds": 0.328908,
+      "cpu_system_seconds": 0.233101,
+      "peak_process_tree_rss_bytes": 31326208,
+      "cache_bytes_after": 54756137,
+      "downloaded_bytes": 7604102,
+      "package_layout_sha256": "09dad37e1a85821735570c777a2c1d9f6f2a5a74d1999b0f4d0a6a62a63e4c5b",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.63.5"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.63.5"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.1"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "mode:755",
+        "loose-envify": "mode:755",
+        "nanoid": "mode:755",
+        "rollup": "mode:755",
+        "vite": "mode:755"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "ae3768f832b635987c4370939d4f7808d62c2da748c63aef8421d4c1dd87ae73",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "darwin-arm64@4.63.5 -> node_modules/@rollup/rollup-darwin-arm64 via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-z29n6nji/001-harvest-1791047290457782000/tool-cache/store/a3216c7e12c3fcdd1606b4f592453eda7b391f9ce5cd69e7540957d4edb933dc.tgz\n[2026-10-03 22:38:11] [layout]   MATERIALIZE js-tokens@4.0.0 -> node_modules/js-tokens via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-z29n6nji/001-harvest-1791047290457782000/tool-cache/store/d884c7a2d8adb5568c1272d92b4f9c62707f4226cf9e7b22e7b957c7361e3c53.tgz\n[2026-10-03 22:38:11] [layout]   MATERIALIZE vite@5.0.0 -> node_modules/vite via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-z29n6nji/001-harvest-1791047290457782000/tool-cache/store/de76095362f298ac15399cea3af028b6cdee5886bfcec13be21adebe5b2cf535.tgz\n[2026-10-03 22:38:11] [layout]   MATERIALIZE loose-envify@1.4.0 -> node_modules/loose-envify via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-z29n6nji/001-harvest-1791047290457782000/tool-cache/store/1218830a93538a4f730d530138e945ea6a65b45e099ee7a9ea538a05141babdc.tgz\n[2026-10-03 22:38:11] [layout]   MATERIALIZE nanoid@3.3.19 -> node_modules/nanoid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-z29n6nji/001-harvest-1791047290457782000/tool-cache/store/4e371b71e3d5081fa0052356d5c1904e7a60e049864c26f0724cfd32dc303849.tgz\n[2026-10-03 22:38:11] [collect] 16 names, 16 instances; debug -> None\n[JGRID] L0-publish\n[2026-10-03 22:38:11] JGrid: published L0 bundle (16 packages) in 19.825583ms\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0,
+        "before_jgrid_early": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0"
+      },
+      "seed_cache_sha256": null
+    },
+    {
+      "arm": "bun",
+      "round": 1,
+      "condition": "registry-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 1944.3265839945525,
+      "cpu_user_seconds": 0.35400600000000004,
+      "cpu_system_seconds": 0.13030999999999998,
+      "peak_process_tree_rss_bytes": 88473600,
+      "cache_bytes_after": 31061529,
+      "downloaded_bytes": null,
+      "package_layout_sha256": "e5224f0893e158c2486df117afe0cf1b6e366a619e5b99462221f6be9525c4ee",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.64.0"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.64.0"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.2"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "../@esbuild/darwin-arm64/bin/esbuild",
+        "loose-envify": "../loose-envify/cli.js",
+        "nanoid": "../nanoid/bin/nanoid.cjs",
+        "rollup": "../rollup/dist/bin/rollup",
+        "vite": "../vite/bin/vite.js"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "ae3768f832b635987c4370939d4f7808d62c2da748c63aef8421d4c1dd87ae73",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "bun install v1.4.2 (744846f84)\n\n+ vite@5.0.0 (v8.3.2 available)\n+ react@18.2.0 (v19.3.0 available)\n+ react-dom@18.2.0 (v19.3.0 available)\n\n16 packages installed [1.93s]\n\nInvalidNPMLockfile: failed to migrate lockfile: 'package-lock.json'\n\nwarn: Ignoring lockfile\nResolving dependencies\nResolved, downloaded and extracted [157]\nSaved lockfile\n",
+      "stage_times_ms": {},
+      "arm_environment": {},
+      "seed_cache_sha256": null
+    },
+    {
+      "arm": "harvest",
+      "round": 2,
+      "condition": "registry-cold",
+      "status": "fail",
+      "route_observed": true,
+      "reason": "installed package identities or paths differ from Bun reference",
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 1048.1877499987604,
+      "cpu_user_seconds": 0.326044,
+      "cpu_system_seconds": 0.20774900000000002,
+      "peak_process_tree_rss_bytes": 31277056,
+      "cache_bytes_after": 54756137,
+      "downloaded_bytes": 7604102,
+      "package_layout_sha256": "9feece38aee82d0a0dfeee9ef9c0ec7c5eb0535fda5f7a7b62b2e912b87c3de6",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.63.5"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.63.5"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.1"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "mode:755",
+        "loose-envify": "mode:755",
+        "nanoid": "mode:755",
+        "rollup": "mode:755",
+        "vite": "mode:755"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "ae3768f832b635987c4370939d4f7808d62c2da748c63aef8421d4c1dd87ae73",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "ode_modules/loose-envify via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-z29n6nji/002-harvest-1791047294818310000/tool-cache/store/1218830a93538a4f730d530138e945ea6a65b45e099ee7a9ea538a05141babdc.tgz\n[2026-10-03 22:38:15] [layout]   MATERIALIZE nanoid@3.3.19 -> node_modules/nanoid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-z29n6nji/002-harvest-1791047294818310000/tool-cache/store/4e371b71e3d5081fa0052356d5c1904e7a60e049864c26f0724cfd32dc303849.tgz\n[2026-10-03 22:38:15] [layout]   MATERIALIZE js-tokens@4.0.0 -> node_modules/js-tokens via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-z29n6nji/002-harvest-1791047294818310000/tool-cache/store/d884c7a2d8adb5568c1272d92b4f9c62707f4226cf9e7b22e7b957c7361e3c53.tgz\n[2026-10-03 22:38:15] [layout]   MATERIALIZE esbuild@0.19.12 -> node_modules/esbuild via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-z29n6nji/002-harvest-1791047294818310000/tool-cache/store/cdbd0cba6bd625d07f480f4cfa4105935c7ec606f52861862a93cfd255ea8fbc.tgz\n[2026-10-03 22:38:15] [layout]   MATERIALIZE @rollup/rollup-darwin-arm64@4.63.5 -> node_modules/@rollup/rollup-darwin-arm64 via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-z29n6nji/002-harvest-1791047294818310000/tool-cache/store/a3216c7e12c3fcdd1606b4f592453eda7b391f9ce5cd69e7540957d4edb933dc.tgz\n[2026-10-03 22:38:15] [collect] 16 names, 16 instances; debug -> None\n[JGRID] L0-publish\n[2026-10-03 22:38:15] JGrid: published L0 bundle (16 packages) in 21.079875ms\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0,
+        "before_jgrid_early": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0"
+      },
+      "seed_cache_sha256": null
+    },
+    {
+      "arm": "bun",
+      "round": 2,
+      "condition": "registry-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 1789.8869159980677,
+      "cpu_user_seconds": 0.35757899999999987,
+      "cpu_system_seconds": 0.13983,
+      "peak_process_tree_rss_bytes": 92979200,
+      "cache_bytes_after": 31061529,
+      "downloaded_bytes": null,
+      "package_layout_sha256": "e5224f0893e158c2486df117afe0cf1b6e366a619e5b99462221f6be9525c4ee",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.64.0"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.64.0"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.2"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "../@esbuild/darwin-arm64/bin/esbuild",
+        "loose-envify": "../loose-envify/cli.js",
+        "nanoid": "../nanoid/bin/nanoid.cjs",
+        "rollup": "../rollup/dist/bin/rollup",
+        "vite": "../vite/bin/vite.js"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "ae3768f832b635987c4370939d4f7808d62c2da748c63aef8421d4c1dd87ae73",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "bun install v1.4.2 (744846f84)\n\n+ vite@5.0.0 (v8.3.2 available)\n+ react@18.2.0 (v19.3.0 available)\n+ react-dom@18.2.0 (v19.3.0 available)\n\n16 packages installed [1.78s]\n\nInvalidNPMLockfile: failed to migrate lockfile: 'package-lock.json'\n\nwarn: Ignoring lockfile\nResolving dependencies\nResolved, downloaded and extracted [157]\nSaved lockfile\n",
+      "stage_times_ms": {},
+      "arm_environment": {},
+      "seed_cache_sha256": null
+    },
+    {
+      "arm": "bun",
+      "round": 3,
+      "condition": "registry-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 1913.7385829963023,
+      "cpu_user_seconds": 0.35854200000000014,
+      "cpu_system_seconds": 0.13359599999999994,
+      "peak_process_tree_rss_bytes": 101384192,
+      "cache_bytes_after": 31061529,
+      "downloaded_bytes": null,
+      "package_layout_sha256": "e5224f0893e158c2486df117afe0cf1b6e366a619e5b99462221f6be9525c4ee",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.64.0"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.64.0"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.2"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "../@esbuild/darwin-arm64/bin/esbuild",
+        "loose-envify": "../loose-envify/cli.js",
+        "nanoid": "../nanoid/bin/nanoid.cjs",
+        "rollup": "../rollup/dist/bin/rollup",
+        "vite": "../vite/bin/vite.js"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "ae3768f832b635987c4370939d4f7808d62c2da748c63aef8421d4c1dd87ae73",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "bun install v1.4.2 (744846f84)\n\n+ vite@5.0.0 (v8.3.2 available)\n+ react@18.2.0 (v19.3.0 available)\n+ react-dom@18.2.0 (v19.3.0 available)\n\n16 packages installed [1.90s]\n\nInvalidNPMLockfile: failed to migrate lockfile: 'package-lock.json'\n\nwarn: Ignoring lockfile\nResolving dependencies\nResolved, downloaded and extracted [157]\nSaved lockfile\n",
+      "stage_times_ms": {},
+      "arm_environment": {},
+      "seed_cache_sha256": null
+    },
+    {
+      "arm": "harvest",
+      "round": 3,
+      "condition": "registry-cold",
+      "status": "fail",
+      "route_observed": true,
+      "reason": "installed package identities or paths differ from Bun reference",
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 1440.0051669945242,
+      "cpu_user_seconds": 0.42185499999999987,
+      "cpu_system_seconds": 0.2528370000000001,
+      "peak_process_tree_rss_bytes": 25886720,
+      "cache_bytes_after": 54756137,
+      "downloaded_bytes": 7604102,
+      "package_layout_sha256": "5fbb1710f9aa982ebf87e78dd6c5d95c1430ee356bc6271a63a301db16bf6cb1",
+      "package_inventory": {
+        "@esbuild/darwin-arm64": {
+          "name": "@esbuild/darwin-arm64",
+          "version": "0.19.12"
+        },
+        "@rollup/rollup-darwin-arm64": {
+          "name": "@rollup/rollup-darwin-arm64",
+          "version": "4.63.5"
+        },
+        "@types/estree": {
+          "name": "@types/estree",
+          "version": "1.0.9"
+        },
+        "esbuild": {
+          "name": "esbuild",
+          "version": "0.19.12"
+        },
+        "fsevents": {
+          "name": "fsevents",
+          "version": "2.3.3"
+        },
+        "js-tokens": {
+          "name": "js-tokens",
+          "version": "4.0.0"
+        },
+        "loose-envify": {
+          "name": "loose-envify",
+          "version": "1.4.0"
+        },
+        "nanoid": {
+          "name": "nanoid",
+          "version": "3.3.19"
+        },
+        "picocolors": {
+          "name": "picocolors",
+          "version": "1.1.1"
+        },
+        "postcss": {
+          "name": "postcss",
+          "version": "8.5.28"
+        },
+        "react": {
+          "name": "react",
+          "version": "18.2.0"
+        },
+        "react-dom": {
+          "name": "react-dom",
+          "version": "18.2.0"
+        },
+        "rollup": {
+          "name": "rollup",
+          "version": "4.63.5"
+        },
+        "scheduler": {
+          "name": "scheduler",
+          "version": "0.23.2"
+        },
+        "source-map-js": {
+          "name": "source-map-js",
+          "version": "1.2.1"
+        },
+        "vite": {
+          "name": "vite",
+          "version": "5.0.0"
+        }
+      },
+      "bin_links": {
+        "esbuild": "mode:755",
+        "loose-envify": "mode:755",
+        "nanoid": "mode:755",
+        "rollup": "mode:755",
+        "vite": "mode:755"
+      },
+      "bin_link_names": [
+        "esbuild",
+        "loose-envify",
+        "nanoid",
+        "rollup",
+        "vite"
+      ],
+      "package_lock_sha256": "ae3768f832b635987c4370939d4f7808d62c2da748c63aef8421d4c1dd87ae73",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "ut]   MATERIALIZE nanoid@3.3.19 -> node_modules/nanoid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-z29n6nji/003-harvest-1791047300984206000/tool-cache/store/4e371b71e3d5081fa0052356d5c1904e7a60e049864c26f0724cfd32dc303849.tgz\n[2026-10-03 22:38:22] [layout]   MATERIALIZE scheduler@0.23.2 -> node_modules/scheduler via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-z29n6nji/003-harvest-1791047300984206000/tool-cache/store/e4f1d8fe63a9ab93ef66c92b0ad1af9c1326adbf7f1bd5e9053cac0fee6f26ae.tgz\n[2026-10-03 22:38:22] [layout]   MATERIALIZE react-dom@18.2.0 -> node_modules/react-dom via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-z29n6nji/003-harvest-1791047300984206000/tool-cache/store/20a71e86b691f860c781f3732a85c7b3c63c4d3d9a803dca9dfe6ed0eb30e2ef.tgz\n[2026-10-03 22:38:22] [layout]   MATERIALIZE source-map-js@1.2.1 -> node_modules/source-map-js via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-z29n6nji/003-harvest-1791047300984206000/tool-cache/store/f126a6f9fca487a43219d8cb8c3a955279187a966119d548eb5cd47e999d4853.tgz\n[2026-10-03 22:38:22] [layout]   MATERIALIZE vite@5.0.0 -> node_modules/vite via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-z29n6nji/003-harvest-1791047300984206000/tool-cache/store/de76095362f298ac15399cea3af028b6cdee5886bfcec13be21adebe5b2cf535.tgz\n[2026-10-03 22:38:22] [collect] 16 names, 16 instances; debug -> None\n[JGRID] L0-publish\n[2026-10-03 22:38:22] JGrid: published L0 bundle (16 packages) in 24.569084ms\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0,
+        "before_jgrid_early": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0"
+      },
+      "seed_cache_sha256": null
+    }
+  ]
+}

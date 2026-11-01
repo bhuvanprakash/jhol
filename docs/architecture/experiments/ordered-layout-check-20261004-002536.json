@@ -1,0 +1,345 @@
+{
+  "binary": "/Users/bhuvanprakash/j/jhol/target/release/jhol",
+  "binary_sha256": "d24f0b3b3054ea49b95d1c6127a6caa341a5d2d14e8ff5cacf630a6dfa034755",
+  "fixture_manifest": {
+    "name": "ordered-layout-check",
+    "version": "1.0.0",
+    "private": true,
+    "dependencies": {
+      "jhol-order-parent": "1.0.0",
+      "jhol-order-child": "1.0.0"
+    }
+  },
+  "fixture_lock": {
+    "name": "ordered-layout-check",
+    "version": "1.0.0",
+    "lockfileVersion": 3,
+    "requires": true,
+    "packages": {
+      "": {
+        "name": "ordered-layout-check",
+        "version": "1.0.0",
+        "private": true,
+        "dependencies": {
+          "jhol-order-parent": "1.0.0",
+          "jhol-order-child": "1.0.0"
+        }
+      },
+      "node_modules/jhol-order-parent": {
+        "name": "jhol-order-parent",
+        "version": "1.0.0",
+        "resolved": "http://127.0.0.1:55937/parent.tgz",
+        "integrity": "sha512-ZqstIGwruCybQUUeRQaCvC0NjQfN7Oe9SW1d6HzZ2Zws2/x/ZdN+ujlDJDhzh9TKa3wXFS7IuAcKYyE1VgXPAg==",
+        "dependencies": {
+          "jhol-order-child": "2.0.0"
+        },
+        "bin": {
+          "order-check": "bin.js"
+        }
+      },
+      "node_modules/jhol-order-child": {
+        "name": "jhol-order-child",
+        "version": "1.0.0",
+        "resolved": "http://127.0.0.1:55937/child1.tgz",
+        "integrity": "sha512-JtpjWB9VBLVvqz7MsboFaaK2fjp9n5h2Y5mQWoGKa4l+qnSNu23dhKs2ydGvP9G28+Y8HClUt/XbS1MeUsTc1g==",
+        "dependencies": {}
+      },
+      "node_modules/jhol-order-parent/node_modules/jhol-order-child": {
+        "name": "jhol-order-child",
+        "version": "2.0.0",
+        "resolved": "http://127.0.0.1:55937/child2.tgz",
+        "integrity": "sha512-MfTI5oxoBCx77h5ACTfzfAzJqhmC9/eQMLy85GaWR8kSUPA6ge5Ep1Q48o2jrTwTJHgwtoJI6VcrEF5pSL/0LQ==",
+        "dependencies": {}
+      }
+    }
+  },
+  "checks": [
+    {
+      "case": "seed",
+      "mode": "clone",
+      "shape": "empty",
+      "round": 0,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=101 total_ms=101\n[jhol-profile] stage=layout_projection delta_ms=2 total_ms=104\n[jhol-profile] stage=layout_index_relink delta_ms=0 total_ms=104\n[jhol-profile] stage=layout_complete delta_ms=104 total_ms=105\n[jhol-profile] stage=layout_capsule_markers delta_ms=18 total_ms=123\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=5 total_ms=129\n"
+    },
+    {
+      "case": "cold",
+      "mode": "clone",
+      "shape": "empty",
+      "round": 0,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=104 total_ms=105\n[jhol-profile] stage=layout_projection delta_ms=2 total_ms=108\n[jhol-profile] stage=layout_index_relink delta_ms=0 total_ms=108\n[jhol-profile] stage=layout_complete delta_ms=108 total_ms=108\n[jhol-profile] stage=layout_capsule_markers delta_ms=11 total_ms=120\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=8 total_ms=128\n"
+    },
+    {
+      "case": "cold",
+      "mode": "symlink",
+      "shape": "empty",
+      "round": 0,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_lookup delta_ms=5 total_ms=5\n[jhol-profile] stage=layout_fetch_extract delta_ms=110 total_ms=116\n[jhol-profile] stage=layout_projection delta_ms=1 total_ms=118\n[jhol-profile] stage=layout_index_relink delta_ms=1 total_ms=120\n[jhol-profile] stage=layout_complete delta_ms=120 total_ms=120\n[jhol-profile] stage=layout_capsule_markers delta_ms=59 total_ms=180\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=189 total_ms=369\n"
+    },
+    {
+      "case": "cold",
+      "mode": "clone",
+      "shape": "empty",
+      "round": 1,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=1\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=98 total_ms=98\n[jhol-profile] stage=layout_projection delta_ms=2 total_ms=100\n[jhol-profile] stage=layout_index_relink delta_ms=0 total_ms=100\n[jhol-profile] stage=layout_complete delta_ms=100 total_ms=102\n[jhol-profile] stage=layout_capsule_markers delta_ms=5 total_ms=107\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=16 total_ms=124\n"
+    },
+    {
+      "case": "cold",
+      "mode": "symlink",
+      "shape": "empty",
+      "round": 1,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=97 total_ms=97\n[jhol-profile] stage=layout_projection delta_ms=0 total_ms=98\n[jhol-profile] stage=layout_index_relink delta_ms=1 total_ms=99\n[jhol-profile] stage=layout_complete delta_ms=99 total_ms=99\n[jhol-profile] stage=layout_capsule_markers delta_ms=9 total_ms=108\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=5 total_ms=114\n"
+    },
+    {
+      "case": "cold",
+      "mode": "clone",
+      "shape": "empty",
+      "round": 2,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=111 total_ms=111\n[jhol-profile] stage=layout_projection delta_ms=2 total_ms=114\n[jhol-profile] stage=layout_index_relink delta_ms=0 total_ms=114\n[jhol-profile] stage=layout_complete delta_ms=114 total_ms=114\n[jhol-profile] stage=layout_capsule_markers delta_ms=5 total_ms=120\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=7 total_ms=127\n"
+    },
+    {
+      "case": "cold",
+      "mode": "symlink",
+      "shape": "empty",
+      "round": 2,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=100 total_ms=101\n[jhol-profile] stage=layout_projection delta_ms=1 total_ms=102\n[jhol-profile] stage=layout_index_relink delta_ms=2 total_ms=104\n[jhol-profile] stage=layout_complete delta_ms=104 total_ms=105\n[jhol-profile] stage=layout_capsule_markers delta_ms=7 total_ms=113\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=4 total_ms=117\n"
+    },
+    {
+      "case": "cold",
+      "mode": "clone",
+      "shape": "empty",
+      "round": 3,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=98 total_ms=98\n[jhol-profile] stage=layout_projection delta_ms=2 total_ms=101\n[jhol-profile] stage=layout_index_relink delta_ms=0 total_ms=101\n[jhol-profile] stage=layout_complete delta_ms=101 total_ms=101\n[jhol-profile] stage=layout_capsule_markers delta_ms=6 total_ms=108\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=6 total_ms=115\n"
+    },
+    {
+      "case": "cold",
+      "mode": "symlink",
+      "shape": "empty",
+      "round": 3,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=102 total_ms=102\n[jhol-profile] stage=layout_projection delta_ms=2 total_ms=104\n[jhol-profile] stage=layout_index_relink delta_ms=1 total_ms=106\n[jhol-profile] stage=layout_complete delta_ms=106 total_ms=106\n[jhol-profile] stage=layout_capsule_markers delta_ms=7 total_ms=113\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=4 total_ms=118\n"
+    },
+    {
+      "case": "cold",
+      "mode": "clone",
+      "shape": "empty",
+      "round": 4,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=106 total_ms=106\n[jhol-profile] stage=layout_projection delta_ms=3 total_ms=110\n[jhol-profile] stage=layout_index_relink delta_ms=0 total_ms=110\n[jhol-profile] stage=layout_complete delta_ms=110 total_ms=110\n[jhol-profile] stage=layout_capsule_markers delta_ms=5 total_ms=116\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=7 total_ms=123\n"
+    },
+    {
+      "case": "cold",
+      "mode": "symlink",
+      "shape": "empty",
+      "round": 4,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=1\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=1\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=106 total_ms=106\n[jhol-profile] stage=layout_projection delta_ms=1 total_ms=107\n[jhol-profile] stage=layout_index_relink delta_ms=1 total_ms=109\n[jhol-profile] stage=layout_complete delta_ms=109 total_ms=110\n[jhol-profile] stage=layout_capsule_markers delta_ms=6 total_ms=117\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=4 total_ms=121\n"
+    },
+    {
+      "case": "cold",
+      "mode": "clone",
+      "shape": "empty",
+      "round": 5,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=104 total_ms=104\n[jhol-profile] stage=layout_projection delta_ms=2 total_ms=107\n[jhol-profile] stage=layout_index_relink delta_ms=0 total_ms=107\n[jhol-profile] stage=layout_complete delta_ms=107 total_ms=108\n[jhol-profile] stage=layout_capsule_markers delta_ms=6 total_ms=114\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=7 total_ms=121\n"
+    },
+    {
+      "case": "cold",
+      "mode": "symlink",
+      "shape": "empty",
+      "round": 5,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=133 total_ms=133\n[jhol-profile] stage=layout_projection delta_ms=9 total_ms=142\n[jhol-profile] stage=layout_index_relink delta_ms=12 total_ms=155\n[jhol-profile] stage=layout_complete delta_ms=155 total_ms=155\n[jhol-profile] stage=layout_capsule_markers delta_ms=8 total_ms=163\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=5 total_ms=169\n"
+    },
+    {
+      "case": "cold",
+      "mode": "clone",
+      "shape": "empty",
+      "round": 6,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=117 total_ms=118\n[jhol-profile] stage=layout_projection delta_ms=3 total_ms=121\n[jhol-profile] stage=layout_index_relink delta_ms=0 total_ms=122\n[jhol-profile] stage=layout_complete delta_ms=122 total_ms=122\n[jhol-profile] stage=layout_capsule_markers delta_ms=10 total_ms=132\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=10 total_ms=143\n"
+    },
+    {
+      "case": "cold",
+      "mode": "symlink",
+      "shape": "empty",
+      "round": 6,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=113 total_ms=113\n[jhol-profile] stage=layout_projection delta_ms=1 total_ms=114\n[jhol-profile] stage=layout_index_relink delta_ms=1 total_ms=116\n[jhol-profile] stage=layout_complete delta_ms=116 total_ms=116\n[jhol-profile] stage=layout_capsule_markers delta_ms=6 total_ms=122\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=5 total_ms=128\n"
+    },
+    {
+      "case": "cold",
+      "mode": "clone",
+      "shape": "empty",
+      "round": 7,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=101 total_ms=102\n[jhol-profile] stage=layout_projection delta_ms=2 total_ms=104\n[jhol-profile] stage=layout_index_relink delta_ms=0 total_ms=105\n[jhol-profile] stage=layout_complete delta_ms=105 total_ms=105\n[jhol-profile] stage=layout_capsule_markers delta_ms=5 total_ms=111\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=7 total_ms=118\n"
+    },
+    {
+      "case": "cold",
+      "mode": "symlink",
+      "shape": "empty",
+      "round": 7,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=103 total_ms=103\n[jhol-profile] stage=layout_projection delta_ms=1 total_ms=105\n[jhol-profile] stage=layout_index_relink delta_ms=1 total_ms=106\n[jhol-profile] stage=layout_complete delta_ms=106 total_ms=106\n[jhol-profile] stage=layout_capsule_markers delta_ms=5 total_ms=112\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=4 total_ms=117\n"
+    },
+    {
+      "case": "cold",
+      "mode": "clone",
+      "shape": "empty",
+      "round": 8,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=101 total_ms=101\n[jhol-profile] stage=layout_projection delta_ms=2 total_ms=104\n[jhol-profile] stage=layout_index_relink delta_ms=0 total_ms=104\n[jhol-profile] stage=layout_complete delta_ms=104 total_ms=104\n[jhol-profile] stage=layout_capsule_markers delta_ms=6 total_ms=111\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=7 total_ms=118\n"
+    },
+    {
+      "case": "cold",
+      "mode": "symlink",
+      "shape": "empty",
+      "round": 8,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=115 total_ms=115\n[jhol-profile] stage=layout_projection delta_ms=4 total_ms=119\n[jhol-profile] stage=layout_index_relink delta_ms=1 total_ms=121\n[jhol-profile] stage=layout_complete delta_ms=121 total_ms=121\n[jhol-profile] stage=layout_capsule_markers delta_ms=8 total_ms=130\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=6 total_ms=137\n"
+    },
+    {
+      "case": "cold",
+      "mode": "clone",
+      "shape": "empty",
+      "round": 9,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=104 total_ms=104\n[jhol-profile] stage=layout_projection delta_ms=2 total_ms=107\n[jhol-profile] stage=layout_index_relink delta_ms=0 total_ms=107\n[jhol-profile] stage=layout_complete delta_ms=107 total_ms=108\n[jhol-profile] stage=layout_capsule_markers delta_ms=11 total_ms=119\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=17 total_ms=136\n"
+    },
+    {
+      "case": "cold",
+      "mode": "symlink",
+      "shape": "empty",
+      "round": 9,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 3,
+      "peak_concurrent_requests": 3,
+      "route_observed": true,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[jhol-profile] stage=install_pkg_start delta_ms=0 total_ms=0\n[jhol-profile] stage=after_preseed delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_lookup delta_ms=0 total_ms=0\n[jhol-profile] stage=layout_fetch_extract delta_ms=101 total_ms=102\n[jhol-profile] stage=layout_projection delta_ms=1 total_ms=103\n[jhol-profile] stage=layout_index_relink delta_ms=2 total_ms=106\n[jhol-profile] stage=layout_complete delta_ms=106 total_ms=106\n[jhol-profile] stage=layout_capsule_markers delta_ms=10 total_ms=116\n[JGRID] L0-publish\n[jhol-profile] stage=layout_l0_publish delta_ms=6 total_ms=123\n"
+    },
+    {
+      "case": "mixed",
+      "mode": "clone",
+      "shape": "children-only",
+      "round": 0,
+      "pass": true,
+      "reason": "",
+      "exit": 0,
+      "tarball_requests": 0,
+      "peak_concurrent_requests": 0,
+      "route_observed": false,
+      "output": "[jhol-profile] stage=before_capsule delta_ms=0 total_ms=0\n[jhol-profile] stage=before_jgrid_early_lane delta_ms=0 total_ms=0\n[JGRID] L0\n[jhol-profile] stage=jgrid_fast_path delta_ms=2 total_ms=2\n"
+    }
+  ],
+  "runner_source": "#!/usr/bin/env python3\n\"\"\"Owned local HTTP fixture: ordering, mixed sources, replacement, SRI failure.\"\"\"\nimport argparse, base64, gzip, hashlib, http.server, io, json, os, shutil\nimport subprocess, tarfile, tempfile, threading, time\nfrom pathlib import Path\n\nREPO = Path(__file__).resolve().parents[4]\nparser = argparse.ArgumentParser(description=__doc__)\nparser.add_argument('--jhol', type=Path, default=REPO/'target/release/jhol')\nparser.add_argument('--rounds', type=int, default=10)\nargs = parser.parse_args()\nargs.jhol = args.jhol.resolve()\n\ndef tarball(name, version, deps=None, parent=False):\n    files = {'package.json': json.dumps({'name':name,'version':version,'main':'index.js',\n              'dependencies':deps or {}, **({'bin':{'order-check':'bin.js'}} if parent else {})}),\n             'index.js': \"module.exports=require('jhol-order-child');\" if parent else f\"module.exports='{version}';\"}\n    if parent:\n        files['bin.js'] = \"#!/usr/bin/env node\\nconsole.log(require('./'));\\n\"\n        files.update({f'fixture/{i}.txt':'ordering' for i in range(128)})\n    raw = io.BytesIO()\n    with tarfile.open(fileobj=raw, mode='w') as archive:\n        for path, content in files.items():\n            payload = content.encode(); info = tarfile.TarInfo('package/'+path)\n            info.size = len(payload); info.mode = 0o755 if path=='bin.js' else 0o644\n            archive.addfile(info, io.BytesIO(payload))\n    return gzip.compress(raw.getvalue(), mtime=0)\n\nbodies = {'/parent.tgz':tarball('jhol-order-parent','1.0.0',{'jhol-order-child':'2.0.0'},True),\n          '/child1.tgz':tarball('jhol-order-child','1.0.0'),\n          '/child2.tgz':tarball('jhol-order-child','2.0.0')}\nactive = peak = requests = 0\nmutex = threading.Lock()\nclass Handler(http.server.BaseHTTPRequestHandler):\n    protocol_version = 'HTTP/1.1'\n    def log_message(self, *_): pass\n    def do_GET(self):\n        global active, peak, requests\n        body = bodies.get(self.path)\n        if body is None:\n            self.send_response(200); self.send_header('Content-Length','2');self.end_headers();self.wfile.write(b'{}');return\n        with mutex: active += 1; requests += 1; peak = max(peak,active)\n        try:\n            time.sleep(.08)\n            self.send_response(200); self.send_header('Content-Length',str(len(body)))\n            self.send_header('Content-Type','application/octet-stream'); self.end_headers(); self.wfile.write(body)\n        finally:\n            with mutex: active -= 1\n\nserver = http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)\nthread = threading.Thread(target=server.serve_forever,daemon=True);thread.start()\nurl = f'http://127.0.0.1:{server.server_port}'\nmanifest = {'name':'ordered-layout-check','version':'1.0.0','private':True,\n            'dependencies':{'jhol-order-parent':'1.0.0','jhol-order-child':'1.0.0'}}\nlock = {'name':manifest['name'],'version':'1.0.0','lockfileVersion':3,'requires':True,\n        'packages':{'':dict(manifest)}}\nfor path, endpoint, name, version, deps in [\n    ('node_modules/jhol-order-parent','/parent.tgz','jhol-order-parent','1.0.0',{'jhol-order-child':'2.0.0'}),\n    ('node_modules/jhol-order-child','/child1.tgz','jhol-order-child','1.0.0',{}),\n    ('node_modules/jhol-order-parent/node_modules/jhol-order-child','/child2.tgz','jhol-order-child','2.0.0',{})]:\n    lock['packages'][path] = {'name':name,'version':version,'resolved':url+endpoint,\n        'integrity':'sha512-'+base64.b64encode(hashlib.sha512(bodies[endpoint]).digest()).decode(),\n        'dependencies':deps,**({'bin':{'order-check':'bin.js'}} if name.endswith('parent') else {})}\nchecks=[]\ntry:\n    with tempfile.TemporaryDirectory(prefix='jhol-ordered-layout-') as raw:\n        root=Path(raw); seed_cache=root/'seed-cache';seed_project=root/'seed-project'\n        def run(case, mode='clone', shape='empty', round_no=0):\n            global requests,peak\n            project=root/f'{case}-{mode}-{round_no}';project.mkdir();cache=root/f'cache-{case}-{mode}-{round_no}'\n            case_lock=json.loads(json.dumps(lock))\n            if shape!='empty':\n                shutil.copytree(seed_cache,cache)\n                if shape in ('children-only','parent-only'):\n                    index=json.loads((cache/'store_index.json').read_text())\n                    for spec,h in index.items():\n                        remove = spec.startswith('jhol-order-parent@') if shape=='children-only' else spec.startswith('jhol-order-child@')\n                        if not remove: continue\n                        assert len(h)==64 and all(c in '0123456789abcdef' for c in h)\n                        for p in (cache/'store').glob(h+'.*'): p.unlink()\n                        p=cache/'store_unpacked'/h[:2]/h\n                        if p.is_symlink():p.unlink()\n                        elif p.exists():shutil.rmtree(p)\n                if shape=='installed-child':\n                    shutil.copytree(seed_project/'node_modules',project/'node_modules',symlinks=True)\n                    p=project/'node_modules/jhol-order-parent/package.json';v=json.loads(p.read_text());v['version']='0.0.0';p.write_text(json.dumps(v))\n                    (project/'node_modules/.jhol-ok').unlink(missing_ok=True)\n            if case=='bad-integrity':\n                case_lock['packages']['node_modules/jhol-order-parent/node_modules/jhol-order-child']['integrity']='sha512-'+base64.b64encode(bytes(64)).decode()\n            if case=='conflicting-source':\n                case_lock['packages']['node_modules/jhol-order-child']=dict(case_lock['packages']['node_modules/jhol-order-parent/node_modules/jhol-order-child'],integrity='sha512-'+base64.b64encode(bytes(64)).decode())\n                case_lock['packages']['']['dependencies']['jhol-order-child']='2.0.0'\n            (project/'package.json').write_text(json.dumps(case_lock['packages']['']))\n            (project/'package-lock.json').write_text(json.dumps(case_lock))\n            home=root/f'home-{case}-{mode}-{round_no}';home.mkdir()\n            env={k:v for k,v in os.environ.items() if not k.startswith('JHOL_')}\n            env.update({'HOME':str(home),'JHOL_CACHE_DIR':str(cache),'JHOL_NO_HARVEST':'1','JHOL_JGRID':'0',\n                'JHOL_PREBUILT':'0','JHOL_NO_DAEMON':'1','JHOL_NO_SPLASH':'1','JHOL_PROFILE_INSTALL':'1',\n                'JHOL_REGISTRY':url,'NO_PROXY':'127.0.0.1,localhost'})\n            if mode=='symlink':env['JHOL_LINK']='1'\n            with mutex:requests=peak=0\n            proc=subprocess.run([str(args.jhol),'install','--native-only'],cwd=project,env=env,capture_output=True,text=True,timeout=60)\n            expected_failure=case in ('bad-integrity','conflicting-source')\n            reason='';ok=proc.returncode!=0 if expected_failure else proc.returncode==0\n            if expected_failure:\n                ok=ok and not (project/'node_modules/jhol-order-parent').exists()\n            else:\n                for path,entry in case_lock['packages'].items():\n                    if not path.startswith('node_modules/'):continue\n                    p=project/path/'package.json'\n                    if not p.is_file() or json.loads(p.read_text()).get('version')!=entry['version']:\n                        ok=False;reason='missing or incorrect locked path: '+path\n                js=\"if(require('jhol-order-child')!=='1.0.0'||require('jhol-order-parent')!=='2.0.0')process.exit(1)\"\n                consumer=subprocess.run(['node','-e',js],cwd=project,capture_output=True,text=True,timeout=15)\n                binary=subprocess.run([str(project/'node_modules/.bin/order-check')],cwd=project,capture_output=True,text=True,timeout=15) if (project/'node_modules/.bin/order-check').is_file() else None\n                ok=ok and consumer.returncode==0 and binary is not None and binary.returncode==0 and binary.stdout.strip()=='2.0.0'\n                if mode=='clone' and (project/'node_modules/jhol-order-parent/node_modules/jhol-order-child').is_symlink():\n                    ok=False;reason='clone child repaired as shared store symlink'\n            record={'case':case,'mode':mode,'shape':shape,'round':round_no,'pass':ok,'reason':reason,\n                    'exit':proc.returncode,'tarball_requests':requests,'peak_concurrent_requests':peak,\n                    'route_observed':'stage=layout_lookup' in proc.stderr,'output':(proc.stdout+proc.stderr)[-2400:]}\n            checks.append(record);print(case,mode,round_no,ok,reason,flush=True)\n            if case=='seed':\n                shutil.copytree(cache,seed_cache);shutil.copytree(project,seed_project,symlinks=True)\n        run('seed')\n        for r in range(args.rounds):\n            for mode in ('clone','symlink'):run('cold',mode,round_no=r)\n        for shape in ('children-only','parent-only','installed-child'):run('mixed',shape=shape)\n        run('bad-integrity',shape='all');run('conflicting-source')\nfinally:\n    server.shutdown();server.server_close()\n    report={'binary':str(args.jhol),'binary_sha256':hashlib.sha256(args.jhol.read_bytes()).hexdigest(),\n            'fixture_manifest':manifest,'fixture_lock':lock,'checks':checks,'runner_source':Path(__file__).read_text()}\n    out=REPO/'docs/architecture/experiments'/f'ordered-layout-check-{time.strftime(\"%Y%m%d-%H%M%S\")}.json'\n    out.write_text(json.dumps(report,indent=2)+'\\n');print(out)\nraise SystemExit(0 if checks and all(c['pass'] for c in checks) else 2)\n"
+}

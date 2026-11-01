@@ -1,0 +1,18 @@
+const o = {};
+Object.defineProperty(o, "g", { get: function () { return 42; } });
+Object.defineProperty(o, "s", { set: function (v) { this._v = v; }, configurable: true });
+o.s = 9;
+console.log(o.g, o._v, Object.keys(o).length);
+Object.defineProperty(o, "ro", { value: 1, writable: false });
+o.ro = 2;
+console.log(o.ro);
+const frozen = Object.freeze({ a: 1 });
+frozen.a = 5;
+console.log(frozen.a, Object.isFrozen(frozen));
+const sealed = Object.seal({ a: 1 });
+sealed.b = 2;
+console.log(sealed.b, Object.keys(sealed).length);
+const nested = { get x() { return this._x || "dflt"; }, set x(v) { this._x = v * 2; } };
+nested.x = 5;
+console.log(nested.x);
+console.log(Object.getOwnPropertyNames(o).sort().join(","));

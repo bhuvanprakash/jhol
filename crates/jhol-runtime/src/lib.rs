@@ -60,8 +60,12 @@ fn available_engines() -> String {
 
 pub fn engine_kind() -> EngineKind {
     match std::env::var("JHOL_RUNTIME_ENGINE").ok().as_deref() {
-        Some(v) if v.eq_ignore_ascii_case("qjs") => return available_or_default(EngineKind::QuickJs),
-        Some(v) if v.eq_ignore_ascii_case("jsc") => return available_or_default(EngineKind::JavaScriptCore),
+        Some(v) if v.eq_ignore_ascii_case("qjs") => {
+            return available_or_default(EngineKind::QuickJs)
+        }
+        Some(v) if v.eq_ignore_ascii_case("jsc") => {
+            return available_or_default(EngineKind::JavaScriptCore)
+        }
         Some(v) if v.eq_ignore_ascii_case("jholvm") || v.eq_ignore_ascii_case("vm") => {
             return available_or_default(EngineKind::JholVm)
         }
@@ -123,7 +127,8 @@ pub fn run_file(path: &Path) -> RuntimeResult<i32> {
     if engine_kind() == EngineKind::JholVm {
         #[cfg(feature = "jholvm")]
         {
-            return jhol_vm::bridge::run_file(path).map_err(|m| errors::RuntimeError::ExecutionError(m));
+            return jhol_vm::bridge::run_file(path)
+                .map_err(|m| errors::RuntimeError::ExecutionError(m));
         }
         #[cfg(not(feature = "jholvm"))]
         {

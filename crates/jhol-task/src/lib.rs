@@ -29,6 +29,8 @@ pub enum ScheduleError {
     Graph(#[from] GraphError),
     #[error("unknown dependency {0} required by {1}")]
     MissingDep(String, String),
+    #[error("duplicate task name {0}")]
+    Duplicate(String),
 }
 
 /// Build a graph from named tasks and return topological execution order (names).
@@ -37,6 +39,9 @@ pub fn schedule_order(tasks: &[TaskSpec]) -> Result<Vec<String>, ScheduleError> 
     let mut id_by_name: std::collections::HashMap<String, NodeId> =
         std::collections::HashMap::new();
     for t in tasks {
+        if id_by_name.contains_key(&t.name) {
+            return Err(ScheduleError::Duplicate(t.name.clone()));
+        }
         let id = NodeId::compute(NodeKind::BuildAction, &t.name, "", "");
         id_by_name.insert(t.name.clone(), id.clone());
         g.insert_node(Node {
@@ -364,6 +369,55 @@ pub fn spawn_services(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_task_names_are_a_clear_error() {
+        let mk = |name: &str| TaskSpec {
+            name: name.into(),
+            run: vec!["true".into()],
+            cwd: None,
+            needs: vec![],
+            cache: false,
+        };
+        let tasks = vec![mk("build"), mk("build")];
+        assert!(matches!(
+            schedule_order(&tasks),
+            Err(ScheduleError::Duplicate(_))
+        ));
+    }
+
+    #[test]
+    fn self_dependency_is_a_cycle() {
+        let tasks = vec![TaskSpec {
+            name: "build".into(),
+            run: vec!["true".into()],
+            cwd: None,
+            needs: vec!["build".into()],
+            cache: false,
+        }];
+        assert!(matches!(
+            schedule_order(&tasks),
+            Err(ScheduleError::Graph(GraphError::Cycle(_)))
+        ));
+    }
+
+    #[test]
+    fn missing_dependency_names_both_tasks() {
+        let tasks = vec![TaskSpec {
+            name: "test".into(),
+            run: vec!["true".into()],
+            cwd: None,
+            needs: vec!["nope".into()],
+            cache: false,
+        }];
+        match schedule_order(&tasks) {
+            Err(ScheduleError::MissingDep(dep, requirer)) => {
+                assert_eq!(dep, "nope");
+                assert_eq!(requirer, "test");
+            }
+            other => panic!("expected MissingDep, got {other:?}"),
+        }
+    }
 
     #[test]
     fn topo_respects_needs() {

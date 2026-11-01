@@ -17,8 +17,7 @@ pub fn rebuild_bin_links(node_modules: &Path) -> Result<BinLinkReport, String> {
         return Ok(report);
     }
 
-    let bin_dir = node_modules.join(".bin");
-    fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
+    let bin_dir = ensure_bin_dir(node_modules)?;
 
     // Collect the installed package names first (a cheap readdir), then scan them
     // in parallel.
@@ -86,8 +85,7 @@ pub fn link_bins_for_packages(
         return Ok(report);
     }
 
-    let bin_dir = node_modules.join(".bin");
-    fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
+    let bin_dir = ensure_bin_dir(node_modules)?;
 
     {
         use rayon::prelude::*;
@@ -116,21 +114,33 @@ pub fn link_bins_for_packages(
 /// file — failed with `Permission denied` while npm's identical install ran
 /// `Version 5.9.3`. Executing a script needs +x on the real target, so fix the target
 /// rather than the link. 0o755 matches npm's chmod.
-fn ensure_executable(path: &Path) {
+fn ensure_executable(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = fs::metadata(path) {
-            let mode = meta.permissions().mode();
-            if mode & 0o111 != 0o111 {
-                let _ = fs::set_permissions(path, fs::Permissions::from_mode(mode | 0o755));
-            }
+        let meta = fs::metadata(path).map_err(|error| error.to_string())?;
+        let mode = meta.permissions().mode();
+        if mode & 0o111 != 0o111 {
+            fs::set_permissions(path, fs::Permissions::from_mode(mode | 0o755))
+                .map_err(|error| error.to_string())?;
         }
     }
     #[cfg(not(unix))]
     {
         let _ = path;
     }
+    Ok(())
+}
+
+fn ensure_bin_dir(node_modules: &Path) -> Result<PathBuf, String> {
+    let modules_root = node_modules.canonicalize().map_err(|e| e.to_string())?;
+    let bin_dir = node_modules.join(".bin");
+    fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
+    let resolved_bin_dir = bin_dir.canonicalize().map_err(|e| e.to_string())?;
+    if !resolved_bin_dir.starts_with(&modules_root) || !resolved_bin_dir.is_dir() {
+        return Err("node_modules/.bin resolves outside node_modules".to_string());
+    }
+    Ok(resolved_bin_dir)
 }
 
 /// Remove `.bin` shims whose target no longer exists.
@@ -191,17 +201,34 @@ pub fn link_bins_for_package(node_modules: &Path, package_name: &str) -> Result<
         return Ok(());
     }
 
-    let bin_dir = node_modules.join(".bin");
-    fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
-
+    // Resolve and validate the entire manifest before changing permissions or
+    // publishing any shim. A package may contain a symlink whose target escapes
+    // its directory even when the `bin` path itself is lexically safe.
+    let package_root = pkg_dir.canonicalize().map_err(|e| e.to_string())?;
+    let mut targets = Vec::with_capacity(bins.len());
     for (bin_name, rel_target) in bins {
         let target = pkg_dir.join(&rel_target);
-        if !target.exists() {
-            continue;
+        let resolved_target = target.canonicalize().map_err(|_| {
+            format!(
+                "package {} declares missing bin target {}",
+                package_name, rel_target
+            )
+        })?;
+        if !resolved_target.starts_with(&package_root) || !resolved_target.is_file() {
+            return Err(format!(
+                "package {} declares unsafe bin target {}",
+                package_name, rel_target
+            ));
         }
+        targets.push((bin_name, rel_target, resolved_target));
+    }
+
+    let bin_dir = ensure_bin_dir(node_modules)?;
+
+    for (bin_name, rel_target, resolved_target) in targets {
         // The target must be runnable, not merely present: `bin` scripts are
         // invoked through `.bin`, and a 644 target fails with "Permission denied".
-        ensure_executable(&target);
+        ensure_executable(&resolved_target)?;
         create_bin_link(&bin_dir, &bin_name, &package_name, &rel_target)?;
     }
 
@@ -223,21 +250,70 @@ fn parse_bin_entries(pkg: &serde_json::Value) -> Result<HashMap<String, String>,
             .unwrap_or(package_name)
             .to_string();
         if !name.is_empty() {
-            out.insert(name, bin_path.to_string());
+            insert_bin_entry(&mut out, &name, bin_path)?;
         }
         return Ok(out);
     }
 
     if let Some(obj) = bin.as_object() {
         for (k, v) in obj {
-            if let Some(bin_path) = v.as_str() {
-                out.insert(k.clone(), bin_path.to_string());
-            }
+            let bin_path = v
+                .as_str()
+                .ok_or_else(|| "invalid package.json bin target".to_string())?;
+            insert_bin_entry(&mut out, k, bin_path)?;
         }
         return Ok(out);
     }
 
+    if bin.is_null() {
+        return Ok(out);
+    }
     Err("invalid package.json bin field".to_string())
+}
+
+fn insert_bin_entry(
+    out: &mut HashMap<String, String>,
+    name: &str,
+    target: &str,
+) -> Result<(), String> {
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', ':', '\0']) {
+        return Err(format!("invalid package.json bin name: {name}"));
+    }
+    let mut components = Path::new(name).components();
+    if !matches!(components.next(), Some(std::path::Component::Normal(_)))
+        || components.next().is_some()
+    {
+        return Err(format!("invalid package.json bin name: {name}"));
+    }
+
+    // Treat backslash as a separator on every host so a package cannot pass
+    // validation on Unix and escape the package directory when installed on Windows.
+    let portable = target.replace('\\', "/");
+    if portable.is_empty() || portable.contains('\0') || portable.contains(':') {
+        return Err(format!("invalid package.json bin target: {target}"));
+    }
+    let mut safe_components = Vec::new();
+    for component in Path::new(&portable).components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(part) => {
+                let Some(part) = part.to_str() else {
+                    return Err(format!("invalid package.json bin target: {target}"));
+                };
+                safe_components.push(part);
+            }
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => {
+                return Err(format!("invalid package.json bin target: {target}"));
+            }
+        }
+    }
+    if safe_components.is_empty() {
+        return Err(format!("invalid package.json bin target: {target}"));
+    }
+    out.insert(name.to_owned(), safe_components.join("/"));
+    Ok(())
 }
 
 fn is_node_target(target: &Path) -> bool {
@@ -414,5 +490,85 @@ mod tests {
         assert!(node_modules.join(".bin").join("demo-cli").exists());
         #[cfg(windows)]
         assert!(node_modules.join(".bin").join("demo-cli.cmd").exists());
+    }
+
+    #[test]
+    fn package_bin_target_cannot_escape_package_directory() {
+        let td = tempfile::tempdir().expect("tmp");
+        let node_modules = td.path().join("node_modules");
+        let pkg_dir = node_modules.join("demo-cli");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let sentinel = td.path().join("victim-sentinel");
+        std::fs::write(&sentinel, "preserve me").unwrap();
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            r#"{"name":"demo-cli","version":"1.0.0","bin":{"demo":"../../victim-sentinel"}}"#,
+        )
+        .unwrap();
+
+        assert!(link_bins_for_package(&node_modules, "demo-cli").is_err());
+        assert_eq!(std::fs::read_to_string(sentinel).unwrap(), "preserve me");
+        assert!(!node_modules.join(".bin/demo").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn package_bin_symlink_cannot_escape_package_directory() {
+        let td = tempfile::tempdir().expect("tmp");
+        let node_modules = td.path().join("node_modules");
+        let pkg_dir = node_modules.join("demo-cli");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let sentinel = td.path().join("victim-sentinel");
+        std::fs::write(&sentinel, "preserve me").unwrap();
+        std::os::unix::fs::symlink(&sentinel, pkg_dir.join("bin.js")).unwrap();
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            r#"{"name":"demo-cli","version":"1.0.0","bin":{"demo":"bin.js"}}"#,
+        )
+        .unwrap();
+
+        assert!(link_bins_for_package(&node_modules, "demo-cli").is_err());
+        assert_eq!(std::fs::read_to_string(sentinel).unwrap(), "preserve me");
+        assert!(!node_modules.join(".bin/demo").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn package_bin_link_cannot_write_through_escaping_bin_directory() {
+        let td = tempfile::tempdir().expect("tmp");
+        let node_modules = td.path().join("node_modules");
+        let pkg_dir = node_modules.join("demo-cli");
+        let outside = td.path().join("outside");
+        std::fs::create_dir_all(pkg_dir.join("bin")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(pkg_dir.join("bin/cli.js"), "console.log('ok')").unwrap();
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            r#"{"name":"demo-cli","version":"1.0.0","bin":{"demo":"bin/cli.js"}}"#,
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&outside, node_modules.join(".bin")).unwrap();
+
+        assert!(link_bins_for_package(&node_modules, "demo-cli").is_err());
+        assert!(!outside.join("demo").exists());
+    }
+
+    #[test]
+    fn package_bin_name_cannot_escape_bin_directory() {
+        let td = tempfile::tempdir().expect("tmp");
+        let node_modules = td.path().join("node_modules");
+        let pkg_dir = node_modules.join("demo-cli");
+        std::fs::create_dir_all(pkg_dir.join("bin")).unwrap();
+        std::fs::write(pkg_dir.join("bin/cli.js"), "console.log('ok')").unwrap();
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            r#"{"name":"demo-cli","version":"1.0.0","bin":{"../../escaped-command":"bin/cli.js"}}"#,
+        )
+        .unwrap();
+
+        assert!(link_bins_for_package(&node_modules, "demo-cli").is_err());
+        assert!(!node_modules.join("escaped-command").exists());
+        assert!(!node_modules.join("escaped-command.cmd").exists());
+        assert!(!node_modules.join("escaped-command.ps1").exists());
     }
 }

@@ -22,10 +22,10 @@
 //!   plain `Value` arrays and no upvalue can dangle.
 
 pub mod arena;
-pub mod bridge;
 pub mod ast;
-pub mod bytecode;
+pub mod bridge;
 pub mod builtins;
+pub mod bytecode;
 pub mod compiler;
 pub mod errors;
 pub mod formatter;

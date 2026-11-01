@@ -1,0 +1,1571 @@
+{
+  "schema": 1,
+  "condition": "local-cache-cold",
+  "fixture": "/private/tmp/pmfix",
+  "rounds": 9,
+  "seed": 20260930,
+  "jhol": "/Users/bhuvanprakash/.cargo/bin/jhol",
+  "jhol_sha256": "3e168ee48b3d69047a2d6321611546874909435bd1fa55e9b7128faab74a3542",
+  "bun": "bun",
+  "bun_version": "1.4.2",
+  "node_version": "v26.10.0",
+  "python_version": "3.14.7",
+  "host": {
+    "system": "macOS-27.0-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "processor": "arm"
+  },
+  "fixture_lock_sha256": "a5db6b80200c7c8ff7a21c82b98e0b2e1aeccf278802afdbe4c4469e1b4c062e",
+  "seed_cache_coverage": {
+    "harvest": {
+      "path": "/private/tmp/seed-jhol",
+      "bytes": 2183102,
+      "sha256": "0aa0410e8db6313658b7bf1f5be64a2ba311a693990ff58e794418dfb24b2a0e"
+    },
+    "bun": {
+      "path": "/private/tmp/seed-bun-cache",
+      "bytes": 112719746,
+      "sha256": "10f45879cf260b6521e3f631842fd20bd3c78294447436402cfc68b677ed67a6"
+    }
+  },
+  "summary": {
+    "harvest": {
+      "passing_samples": 9,
+      "required_samples": 9,
+      "invalid_samples": 0,
+      "failed_samples": 0,
+      "resolver_drift_samples": 0,
+      "median_ms": 44.564332987647504,
+      "p95_ms": 147.42754201870412,
+      "median_95pct_ci_ms": [
+        43.156291998457164,
+        47.20995802199468
+      ],
+      "bun_over_jhol_median": 0.66453461803123,
+      "bun_over_jhol_lower_95pct": 0.6272943938218657
+    },
+    "jgrid": {
+      "passing_samples": 0,
+      "required_samples": 9,
+      "invalid_samples": 0,
+      "failed_samples": 0,
+      "resolver_drift_samples": 0,
+      "median_ms": null,
+      "p95_ms": null,
+      "median_95pct_ci_ms": null,
+      "bun_over_jhol_median": null,
+      "bun_over_jhol_lower_95pct": null
+    },
+    "jagrs": {
+      "passing_samples": 0,
+      "required_samples": 9,
+      "invalid_samples": 0,
+      "failed_samples": 0,
+      "resolver_drift_samples": 0,
+      "median_ms": null,
+      "p95_ms": null,
+      "median_95pct_ci_ms": null,
+      "bun_over_jhol_median": null,
+      "bun_over_jhol_lower_95pct": null
+    },
+    "jgrid+jagrs": {
+      "passing_samples": 0,
+      "required_samples": 9,
+      "invalid_samples": 0,
+      "failed_samples": 0,
+      "resolver_drift_samples": 0,
+      "median_ms": null,
+      "p95_ms": null,
+      "median_95pct_ci_ms": null,
+      "bun_over_jhol_median": null,
+      "bun_over_jhol_lower_95pct": null
+    },
+    "combined": {
+      "passing_samples": 0,
+      "required_samples": 9,
+      "invalid_samples": 0,
+      "failed_samples": 0,
+      "resolver_drift_samples": 0,
+      "median_ms": null,
+      "p95_ms": null,
+      "median_95pct_ci_ms": null,
+      "bun_over_jhol_median": null,
+      "bun_over_jhol_lower_95pct": null
+    },
+    "bun": {
+      "passing_samples": 9,
+      "required_samples": 9,
+      "invalid_samples": 0,
+      "failed_samples": 0,
+      "resolver_drift_samples": 0,
+      "median_ms": 29.614541999762878,
+      "p95_ms": 63.62645802437328,
+      "median_95pct_ci_ms": [
+        28.853208990767598,
+        34.54441699432209
+      ]
+    }
+  },
+  "measurement_valid": true,
+  "speed_gate_4x": "red",
+  "samples": [
+    {
+      "arm": "harvest",
+      "round": 1,
+      "condition": "local-cache-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 147.42754201870412,
+      "cpu_user_seconds": 0.17241099999999998,
+      "cpu_system_seconds": 0.07679799999999999,
+      "peak_process_tree_rss_bytes": 16465920,
+      "cache_bytes_after": 2126230,
+      "downloaded_bytes": 0,
+      "package_layout_sha256": "7c9fefb1faf3d19936dee16d435c5bf5ddfe49ad6d95cf4185d4d6a142d3fdac",
+      "package_inventory": {
+        "ansi-regex": {
+          "name": "ansi-regex",
+          "version": "6.4.0"
+        },
+        "damerau-levenshtein": {
+          "name": "damerau-levenshtein",
+          "version": "1.0.8"
+        },
+        "emoji-regex": {
+          "name": "emoji-regex",
+          "version": "10.6.0"
+        },
+        "escape-string-regexp": {
+          "name": "escape-string-regexp",
+          "version": "4.0.0"
+        },
+        "is-array": {
+          "name": "is-array",
+          "version": "1.0.1"
+        },
+        "is-number": {
+          "name": "is-number",
+          "version": "7.0.0"
+        },
+        "lodash": {
+          "name": "lodash",
+          "version": "4.18.1"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "semver": {
+          "name": "semver",
+          "version": "7.8.5"
+        },
+        "strip-ansi": {
+          "name": "strip-ansi",
+          "version": "7.2.0"
+        },
+        "uuid": {
+          "name": "uuid",
+          "version": "9.0.1"
+        }
+      },
+      "bin_links": {
+        "semver": "mode:755",
+        "uuid": "mode:755"
+      },
+      "bin_link_names": [
+        "semver",
+        "uuid"
+      ],
+      "package_lock_sha256": "a5db6b80200c7c8ff7a21c82b98e0b2e1aeccf278802afdbe4c4469e1b4c062e",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "640000gn/T/jhol-paper-matrix-fhizs_64/001-harvest-1790827253045140000/tool-cache/store/4b44a14da6987a3c0585c2ff16b3800425732ff35cad710c65e72d7f8e33b11b.tgz\n[2026-10-01 09:30:53] [layout]   MATERIALIZE is-array@1.0.1 -> node_modules/is-array via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/001-harvest-1790827253045140000/tool-cache/store/3b3558aaf8731fd55b6bea386c767accde77e3c2171a5428a1342b239b18ba5e.tgz\n[2026-10-01 09:30:53] [layout]   MATERIALIZE strip-ansi@7.2.0 -> node_modules/strip-ansi via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/001-harvest-1790827253045140000/tool-cache/store/2fa01de86a5022ef32773abbc4e84a53a1c5d31f5a5cbf03ed2575f10408543f.tgz\n[2026-10-01 09:30:53] [layout]   MATERIALIZE lodash@4.18.1 -> node_modules/lodash via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/001-harvest-1790827253045140000/tool-cache/store/696942c2a488c9d7428e9ca5f12ccf03b52de01dcdbfe4d4751d392f0491ae16.tgz\n[2026-10-01 09:30:53] [layout]   MATERIALIZE semver@7.8.5 -> node_modules/semver via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/001-harvest-1790827253045140000/tool-cache/store/d85045d4300d7d57c891336b95df532e73f34c22ffcd222452b6d08b9d127d5d.tgz\n[2026-10-01 09:30:53] [layout]   MATERIALIZE uuid@9.0.1 -> node_modules/uuid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/001-harvest-1790827253045140000/tool-cache/store/9fa6f415a7d9f7f8ea48e45beeb567686261da85cd395901c54c3515589e3f7e.tgz\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 1
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0"
+      },
+      "seed_cache_sha256": "f6414ee829062085b83746cf6d0fe2345db2450a48edf064f0729e0b155c3d4f"
+    },
+    {
+      "arm": "bun",
+      "round": 1,
+      "condition": "local-cache-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 63.62645802437328,
+      "cpu_user_seconds": 0.167966,
+      "cpu_system_seconds": 0.050661,
+      "peak_process_tree_rss_bytes": 6340608,
+      "cache_bytes_after": 0,
+      "downloaded_bytes": null,
+      "package_layout_sha256": "bf61692b3b302ef9569d623968dd0308ba842964ae5d1f8539131325c8051859",
+      "package_inventory": {
+        "ansi-regex": {
+          "name": "ansi-regex",
+          "version": "6.4.0"
+        },
+        "damerau-levenshtein": {
+          "name": "damerau-levenshtein",
+          "version": "1.0.8"
+        },
+        "emoji-regex": {
+          "name": "emoji-regex",
+          "version": "10.6.0"
+        },
+        "escape-string-regexp": {
+          "name": "escape-string-regexp",
+          "version": "4.0.0"
+        },
+        "is-array": {
+          "name": "is-array",
+          "version": "1.0.1"
+        },
+        "is-number": {
+          "name": "is-number",
+          "version": "7.0.0"
+        },
+        "lodash": {
+          "name": "lodash",
+          "version": "4.18.1"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "semver": {
+          "name": "semver",
+          "version": "7.8.5"
+        },
+        "strip-ansi": {
+          "name": "strip-ansi",
+          "version": "7.2.0"
+        },
+        "uuid": {
+          "name": "uuid",
+          "version": "9.0.1"
+        }
+      },
+      "bin_links": {
+        "semver": "../semver/bin/semver.js",
+        "uuid": "../uuid/dist/bin/uuid"
+      },
+      "bin_link_names": [
+        "semver",
+        "uuid"
+      ],
+      "package_lock_sha256": "a5db6b80200c7c8ff7a21c82b98e0b2e1aeccf278802afdbe4c4469e1b4c062e",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "bun install v1.4.2 (744846f84)\n\n+ damerau-levenshtein@1.0.8\n+ emoji-regex@10.6.0\n+ escape-string-regexp@4.0.0\n+ is-array@1.0.1\n+ is-number@7.0.0\n+ lodash@4.18.1\n+ ms@2.1.3\n+ semver@7.8.5\n+ strip-ansi@7.2.0\n+ uuid@9.0.1\n\n11 packages installed [43.00ms]\n\n[6.09ms] migrated lockfile from package-lock.json\nSaved lockfile\n",
+      "stage_times_ms": {},
+      "arm_environment": {},
+      "seed_cache_sha256": "10f45879cf260b6521e3f631842fd20bd3c78294447436402cfc68b677ed67a6"
+    },
+    {
+      "arm": "harvest",
+      "round": 2,
+      "condition": "local-cache-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 47.20995802199468,
+      "cpu_user_seconds": 0.17081799999999997,
+      "cpu_system_seconds": 0.06783,
+      "peak_process_tree_rss_bytes": 16793600,
+      "cache_bytes_after": 2133339,
+      "downloaded_bytes": 0,
+      "package_layout_sha256": "e0365eb49b3e1e1ac0ac6d1018c04dc62b02549d61f856e164f79bf505f1ab15",
+      "package_inventory": {
+        "ansi-regex": {
+          "name": "ansi-regex",
+          "version": "6.4.0"
+        },
+        "damerau-levenshtein": {
+          "name": "damerau-levenshtein",
+          "version": "1.0.8"
+        },
+        "emoji-regex": {
+          "name": "emoji-regex",
+          "version": "10.6.0"
+        },
+        "escape-string-regexp": {
+          "name": "escape-string-regexp",
+          "version": "4.0.0"
+        },
+        "is-array": {
+          "name": "is-array",
+          "version": "1.0.1"
+        },
+        "is-number": {
+          "name": "is-number",
+          "version": "7.0.0"
+        },
+        "lodash": {
+          "name": "lodash",
+          "version": "4.18.1"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "semver": {
+          "name": "semver",
+          "version": "7.8.5"
+        },
+        "strip-ansi": {
+          "name": "strip-ansi",
+          "version": "7.2.0"
+        },
+        "uuid": {
+          "name": "uuid",
+          "version": "9.0.1"
+        }
+      },
+      "bin_links": {
+        "semver": "mode:755",
+        "uuid": "mode:755"
+      },
+      "bin_link_names": [
+        "semver",
+        "uuid"
+      ],
+      "package_lock_sha256": "a5db6b80200c7c8ff7a21c82b98e0b2e1aeccf278802afdbe4c4469e1b4c062e",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "hol-paper-matrix-fhizs_64/002-harvest-1790827255716847000/tool-cache/store/2fa01de86a5022ef32773abbc4e84a53a1c5d31f5a5cbf03ed2575f10408543f.tgz\n[2026-10-01 09:30:55] [layout]   MATERIALIZE escape-string-regexp@4.0.0 -> node_modules/escape-string-regexp via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/002-harvest-1790827255716847000/tool-cache/store/4b44a14da6987a3c0585c2ff16b3800425732ff35cad710c65e72d7f8e33b11b.tgz\n[2026-10-01 09:30:55] [layout]   MATERIALIZE uuid@9.0.1 -> node_modules/uuid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/002-harvest-1790827255716847000/tool-cache/store/9fa6f415a7d9f7f8ea48e45beeb567686261da85cd395901c54c3515589e3f7e.tgz\n[2026-10-01 09:30:55] [layout]   MATERIALIZE is-array@1.0.1 -> node_modules/is-array via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/002-harvest-1790827255716847000/tool-cache/store/3b3558aaf8731fd55b6bea386c767accde77e3c2171a5428a1342b239b18ba5e.tgz\n[2026-10-01 09:30:55] [layout]   MATERIALIZE lodash@4.18.1 -> node_modules/lodash via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/002-harvest-1790827255716847000/tool-cache/store/696942c2a488c9d7428e9ca5f12ccf03b52de01dcdbfe4d4751d392f0491ae16.tgz\n[2026-10-01 09:30:55] [layout]   MATERIALIZE ms@2.1.3 -> node_modules/ms via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/002-harvest-1790827255716847000/tool-cache/store/f6616e15e530ed552f9daa2d3ce71963947c6bc7c98c9b64fd3e673fd02622c6.tgz\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0"
+      },
+      "seed_cache_sha256": "4f7540aa51997b5ef06dd9978bd449f4468f8798daa6a517bedc0b34b7c21a52"
+    },
+    {
+      "arm": "bun",
+      "round": 2,
+      "condition": "local-cache-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 29.614541999762878,
+      "cpu_user_seconds": 0.17298000000000002,
+      "cpu_system_seconds": 0.048846,
+      "peak_process_tree_rss_bytes": 6422528,
+      "cache_bytes_after": 0,
+      "downloaded_bytes": null,
+      "package_layout_sha256": "bf61692b3b302ef9569d623968dd0308ba842964ae5d1f8539131325c8051859",
+      "package_inventory": {
+        "ansi-regex": {
+          "name": "ansi-regex",
+          "version": "6.4.0"
+        },
+        "damerau-levenshtein": {
+          "name": "damerau-levenshtein",
+          "version": "1.0.8"
+        },
+        "emoji-regex": {
+          "name": "emoji-regex",
+          "version": "10.6.0"
+        },
+        "escape-string-regexp": {
+          "name": "escape-string-regexp",
+          "version": "4.0.0"
+        },
+        "is-array": {
+          "name": "is-array",
+          "version": "1.0.1"
+        },
+        "is-number": {
+          "name": "is-number",
+          "version": "7.0.0"
+        },
+        "lodash": {
+          "name": "lodash",
+          "version": "4.18.1"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "semver": {
+          "name": "semver",
+          "version": "7.8.5"
+        },
+        "strip-ansi": {
+          "name": "strip-ansi",
+          "version": "7.2.0"
+        },
+        "uuid": {
+          "name": "uuid",
+          "version": "9.0.1"
+        }
+      },
+      "bin_links": {
+        "semver": "../semver/bin/semver.js",
+        "uuid": "../uuid/dist/bin/uuid"
+      },
+      "bin_link_names": [
+        "semver",
+        "uuid"
+      ],
+      "package_lock_sha256": "a5db6b80200c7c8ff7a21c82b98e0b2e1aeccf278802afdbe4c4469e1b4c062e",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "bun install v1.4.2 (744846f84)\n\n+ damerau-levenshtein@1.0.8\n+ emoji-regex@10.6.0\n+ escape-string-regexp@4.0.0\n+ is-array@1.0.1\n+ is-number@7.0.0\n+ lodash@4.18.1\n+ ms@2.1.3\n+ semver@7.8.5\n+ strip-ansi@7.2.0\n+ uuid@9.0.1\n\n11 packages installed [16.00ms]\n\n[0.14ms] migrated lockfile from package-lock.json\nSaved lockfile\n",
+      "stage_times_ms": {},
+      "arm_environment": {},
+      "seed_cache_sha256": "10f45879cf260b6521e3f631842fd20bd3c78294447436402cfc68b677ed67a6"
+    },
+    {
+      "arm": "bun",
+      "round": 3,
+      "condition": "local-cache-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 29.576582979643717,
+      "cpu_user_seconds": 0.169489,
+      "cpu_system_seconds": 0.045159000000000005,
+      "peak_process_tree_rss_bytes": 4734976,
+      "cache_bytes_after": 0,
+      "downloaded_bytes": null,
+      "package_layout_sha256": "bf61692b3b302ef9569d623968dd0308ba842964ae5d1f8539131325c8051859",
+      "package_inventory": {
+        "ansi-regex": {
+          "name": "ansi-regex",
+          "version": "6.4.0"
+        },
+        "damerau-levenshtein": {
+          "name": "damerau-levenshtein",
+          "version": "1.0.8"
+        },
+        "emoji-regex": {
+          "name": "emoji-regex",
+          "version": "10.6.0"
+        },
+        "escape-string-regexp": {
+          "name": "escape-string-regexp",
+          "version": "4.0.0"
+        },
+        "is-array": {
+          "name": "is-array",
+          "version": "1.0.1"
+        },
+        "is-number": {
+          "name": "is-number",
+          "version": "7.0.0"
+        },
+        "lodash": {
+          "name": "lodash",
+          "version": "4.18.1"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "semver": {
+          "name": "semver",
+          "version": "7.8.5"
+        },
+        "strip-ansi": {
+          "name": "strip-ansi",
+          "version": "7.2.0"
+        },
+        "uuid": {
+          "name": "uuid",
+          "version": "9.0.1"
+        }
+      },
+      "bin_links": {
+        "semver": "../semver/bin/semver.js",
+        "uuid": "../uuid/dist/bin/uuid"
+      },
+      "bin_link_names": [
+        "semver",
+        "uuid"
+      ],
+      "package_lock_sha256": "a5db6b80200c7c8ff7a21c82b98e0b2e1aeccf278802afdbe4c4469e1b4c062e",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "bun install v1.4.2 (744846f84)\n\n+ damerau-levenshtein@1.0.8\n+ emoji-regex@10.6.0\n+ escape-string-regexp@4.0.0\n+ is-array@1.0.1\n+ is-number@7.0.0\n+ lodash@4.18.1\n+ ms@2.1.3\n+ semver@7.8.5\n+ strip-ansi@7.2.0\n+ uuid@9.0.1\n\n11 packages installed [12.00ms]\n\n[0.14ms] migrated lockfile from package-lock.json\nSaved lockfile\n",
+      "stage_times_ms": {},
+      "arm_environment": {},
+      "seed_cache_sha256": "10f45879cf260b6521e3f631842fd20bd3c78294447436402cfc68b677ed67a6"
+    },
+    {
+      "arm": "harvest",
+      "round": 3,
+      "condition": "local-cache-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 45.08354200515896,
+      "cpu_user_seconds": 0.1674420000000001,
+      "cpu_system_seconds": 0.06783800000000001,
+      "peak_process_tree_rss_bytes": 16777216,
+      "cache_bytes_after": 2140448,
+      "downloaded_bytes": 0,
+      "package_layout_sha256": "1c0239640f835009ba26e3b32a6401df32c7b91432c8198b2748fa28357305ba",
+      "package_inventory": {
+        "ansi-regex": {
+          "name": "ansi-regex",
+          "version": "6.4.0"
+        },
+        "damerau-levenshtein": {
+          "name": "damerau-levenshtein",
+          "version": "1.0.8"
+        },
+        "emoji-regex": {
+          "name": "emoji-regex",
+          "version": "10.6.0"
+        },
+        "escape-string-regexp": {
+          "name": "escape-string-regexp",
+          "version": "4.0.0"
+        },
+        "is-array": {
+          "name": "is-array",
+          "version": "1.0.1"
+        },
+        "is-number": {
+          "name": "is-number",
+          "version": "7.0.0"
+        },
+        "lodash": {
+          "name": "lodash",
+          "version": "4.18.1"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "semver": {
+          "name": "semver",
+          "version": "7.8.5"
+        },
+        "strip-ansi": {
+          "name": "strip-ansi",
+          "version": "7.2.0"
+        },
+        "uuid": {
+          "name": "uuid",
+          "version": "9.0.1"
+        }
+      },
+      "bin_links": {
+        "semver": "mode:755",
+        "uuid": "mode:755"
+      },
+      "bin_link_names": [
+        "semver",
+        "uuid"
+      ],
+      "package_lock_sha256": "a5db6b80200c7c8ff7a21c82b98e0b2e1aeccf278802afdbe4c4469e1b4c062e",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "jhol-paper-matrix-fhizs_64/003-harvest-1790827257858924000/tool-cache/store/7b75c1057198cf97696909a9bee176c9c5e9bcb5b03bf3ecef2f484defadd51e.tgz\n[2026-10-01 09:30:57] [layout]   MATERIALIZE escape-string-regexp@4.0.0 -> node_modules/escape-string-regexp via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/003-harvest-1790827257858924000/tool-cache/store/4b44a14da6987a3c0585c2ff16b3800425732ff35cad710c65e72d7f8e33b11b.tgz\n[2026-10-01 09:30:57] [layout]   MATERIALIZE semver@7.8.5 -> node_modules/semver via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/003-harvest-1790827257858924000/tool-cache/store/d85045d4300d7d57c891336b95df532e73f34c22ffcd222452b6d08b9d127d5d.tgz\n[2026-10-01 09:30:57] [layout]   MATERIALIZE is-array@1.0.1 -> node_modules/is-array via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/003-harvest-1790827257858924000/tool-cache/store/3b3558aaf8731fd55b6bea386c767accde77e3c2171a5428a1342b239b18ba5e.tgz\n[2026-10-01 09:30:57] [layout]   MATERIALIZE ms@2.1.3 -> node_modules/ms via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/003-harvest-1790827257858924000/tool-cache/store/f6616e15e530ed552f9daa2d3ce71963947c6bc7c98c9b64fd3e673fd02622c6.tgz\n[2026-10-01 09:30:57] [layout]   MATERIALIZE uuid@9.0.1 -> node_modules/uuid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/003-harvest-1790827257858924000/tool-cache/store/9fa6f415a7d9f7f8ea48e45beeb567686261da85cd395901c54c3515589e3f7e.tgz\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0"
+      },
+      "seed_cache_sha256": "9a055fd149377465367a20a6f708967fa442698ea0022e3b24e675279bbc858a"
+    },
+    {
+      "arm": "bun",
+      "round": 4,
+      "condition": "local-cache-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 30.946417013183236,
+      "cpu_user_seconds": 0.16628399999999988,
+      "cpu_system_seconds": 0.04783399999999999,
+      "peak_process_tree_rss_bytes": 6373376,
+      "cache_bytes_after": 0,
+      "downloaded_bytes": null,
+      "package_layout_sha256": "bf61692b3b302ef9569d623968dd0308ba842964ae5d1f8539131325c8051859",
+      "package_inventory": {
+        "ansi-regex": {
+          "name": "ansi-regex",
+          "version": "6.4.0"
+        },
+        "damerau-levenshtein": {
+          "name": "damerau-levenshtein",
+          "version": "1.0.8"
+        },
+        "emoji-regex": {
+          "name": "emoji-regex",
+          "version": "10.6.0"
+        },
+        "escape-string-regexp": {
+          "name": "escape-string-regexp",
+          "version": "4.0.0"
+        },
+        "is-array": {
+          "name": "is-array",
+          "version": "1.0.1"
+        },
+        "is-number": {
+          "name": "is-number",
+          "version": "7.0.0"
+        },
+        "lodash": {
+          "name": "lodash",
+          "version": "4.18.1"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "semver": {
+          "name": "semver",
+          "version": "7.8.5"
+        },
+        "strip-ansi": {
+          "name": "strip-ansi",
+          "version": "7.2.0"
+        },
+        "uuid": {
+          "name": "uuid",
+          "version": "9.0.1"
+        }
+      },
+      "bin_links": {
+        "semver": "../semver/bin/semver.js",
+        "uuid": "../uuid/dist/bin/uuid"
+      },
+      "bin_link_names": [
+        "semver",
+        "uuid"
+      ],
+      "package_lock_sha256": "a5db6b80200c7c8ff7a21c82b98e0b2e1aeccf278802afdbe4c4469e1b4c062e",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "bun install v1.4.2 (744846f84)\n\n+ damerau-levenshtein@1.0.8\n+ emoji-regex@10.6.0\n+ escape-string-regexp@4.0.0\n+ is-array@1.0.1\n+ is-number@7.0.0\n+ lodash@4.18.1\n+ ms@2.1.3\n+ semver@7.8.5\n+ strip-ansi@7.2.0\n+ uuid@9.0.1\n\n11 packages installed [15.00ms]\n\n[0.14ms] migrated lockfile from package-lock.json\nSaved lockfile\n",
+      "stage_times_ms": {},
+      "arm_environment": {},
+      "seed_cache_sha256": "10f45879cf260b6521e3f631842fd20bd3c78294447436402cfc68b677ed67a6"
+    },
+    {
+      "arm": "harvest",
+      "round": 4,
+      "condition": "local-cache-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 42.62704201391898,
+      "cpu_user_seconds": 0.17067999999999994,
+      "cpu_system_seconds": 0.06052999999999997,
+      "peak_process_tree_rss_bytes": 16793600,
+      "cache_bytes_after": 2147557,
+      "downloaded_bytes": 0,
+      "package_layout_sha256": "a8f731f76832add07cab57849e87fc1b2f631797355631944c306ddf4ee786e2",
+      "package_inventory": {
+        "ansi-regex": {
+          "name": "ansi-regex",
+          "version": "6.4.0"
+        },
+        "damerau-levenshtein": {
+          "name": "damerau-levenshtein",
+          "version": "1.0.8"
+        },
+        "emoji-regex": {
+          "name": "emoji-regex",
+          "version": "10.6.0"
+        },
+        "escape-string-regexp": {
+          "name": "escape-string-regexp",
+          "version": "4.0.0"
+        },
+        "is-array": {
+          "name": "is-array",
+          "version": "1.0.1"
+        },
+        "is-number": {
+          "name": "is-number",
+          "version": "7.0.0"
+        },
+        "lodash": {
+          "name": "lodash",
+          "version": "4.18.1"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "semver": {
+          "name": "semver",
+          "version": "7.8.5"
+        },
+        "strip-ansi": {
+          "name": "strip-ansi",
+          "version": "7.2.0"
+        },
+        "uuid": {
+          "name": "uuid",
+          "version": "9.0.1"
+        }
+      },
+      "bin_links": {
+        "semver": "mode:755",
+        "uuid": "mode:755"
+      },
+      "bin_link_names": [
+        "semver",
+        "uuid"
+      ],
+      "package_lock_sha256": "a5db6b80200c7c8ff7a21c82b98e0b2e1aeccf278802afdbe4c4469e1b4c062e",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "matrix-fhizs_64/004-harvest-1790827259320798000/tool-cache/store/696942c2a488c9d7428e9ca5f12ccf03b52de01dcdbfe4d4751d392f0491ae16.tgz\n[2026-10-01 09:30:59] [layout]   MATERIALIZE uuid@9.0.1 -> node_modules/uuid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/004-harvest-1790827259320798000/tool-cache/store/9fa6f415a7d9f7f8ea48e45beeb567686261da85cd395901c54c3515589e3f7e.tgz\n[2026-10-01 09:30:59] [layout]   MATERIALIZE ms@2.1.3 -> node_modules/ms via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/004-harvest-1790827259320798000/tool-cache/store/f6616e15e530ed552f9daa2d3ce71963947c6bc7c98c9b64fd3e673fd02622c6.tgz\n[2026-10-01 09:30:59] [layout]   MATERIALIZE emoji-regex@10.6.0 -> node_modules/emoji-regex via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/004-harvest-1790827259320798000/tool-cache/store/9f40e54c0586f30882ece0ee0d22654394b89321e89cb55e8faf12ed8ccff981.tgz\n[2026-10-01 09:30:59] [layout]   MATERIALIZE escape-string-regexp@4.0.0 -> node_modules/escape-string-regexp via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/004-harvest-1790827259320798000/tool-cache/store/4b44a14da6987a3c0585c2ff16b3800425732ff35cad710c65e72d7f8e33b11b.tgz\n[2026-10-01 09:30:59] [layout]   MATERIALIZE is-array@1.0.1 -> node_modules/is-array via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/004-harvest-1790827259320798000/tool-cache/store/3b3558aaf8731fd55b6bea386c767accde77e3c2171a5428a1342b239b18ba5e.tgz\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0"
+      },
+      "seed_cache_sha256": "5b533642be18b1426b7b998643a49c9b38f6a75bdc6ff5e8f10fc9566b79378e"
+    },
+    {
+      "arm": "bun",
+      "round": 5,
+      "condition": "local-cache-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 34.54441699432209,
+      "cpu_user_seconds": 0.17003800000000013,
+      "cpu_system_seconds": 0.04769399999999996,
+      "peak_process_tree_rss_bytes": 2146304,
+      "cache_bytes_after": 0,
+      "downloaded_bytes": null,
+      "package_layout_sha256": "bf61692b3b302ef9569d623968dd0308ba842964ae5d1f8539131325c8051859",
+      "package_inventory": {
+        "ansi-regex": {
+          "name": "ansi-regex",
+          "version": "6.4.0"
+        },
+        "damerau-levenshtein": {
+          "name": "damerau-levenshtein",
+          "version": "1.0.8"
+        },
+        "emoji-regex": {
+          "name": "emoji-regex",
+          "version": "10.6.0"
+        },
+        "escape-string-regexp": {
+          "name": "escape-string-regexp",
+          "version": "4.0.0"
+        },
+        "is-array": {
+          "name": "is-array",
+          "version": "1.0.1"
+        },
+        "is-number": {
+          "name": "is-number",
+          "version": "7.0.0"
+        },
+        "lodash": {
+          "name": "lodash",
+          "version": "4.18.1"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "semver": {
+          "name": "semver",
+          "version": "7.8.5"
+        },
+        "strip-ansi": {
+          "name": "strip-ansi",
+          "version": "7.2.0"
+        },
+        "uuid": {
+          "name": "uuid",
+          "version": "9.0.1"
+        }
+      },
+      "bin_links": {
+        "semver": "../semver/bin/semver.js",
+        "uuid": "../uuid/dist/bin/uuid"
+      },
+      "bin_link_names": [
+        "semver",
+        "uuid"
+      ],
+      "package_lock_sha256": "a5db6b80200c7c8ff7a21c82b98e0b2e1aeccf278802afdbe4c4469e1b4c062e",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "bun install v1.4.2 (744846f84)\n\n+ damerau-levenshtein@1.0.8\n+ emoji-regex@10.6.0\n+ escape-string-regexp@4.0.0\n+ is-array@1.0.1\n+ is-number@7.0.0\n+ lodash@4.18.1\n+ ms@2.1.3\n+ semver@7.8.5\n+ strip-ansi@7.2.0\n+ uuid@9.0.1\n\n11 packages installed [17.00ms]\n\n[0.21ms] migrated lockfile from package-lock.json\nSaved lockfile\n",
+      "stage_times_ms": {},
+      "arm_environment": {},
+      "seed_cache_sha256": "10f45879cf260b6521e3f631842fd20bd3c78294447436402cfc68b677ed67a6"
+    },
+    {
+      "arm": "harvest",
+      "round": 5,
+      "condition": "local-cache-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 43.32458300632425,
+      "cpu_user_seconds": 0.1740679999999999,
+      "cpu_system_seconds": 0.0633260000000001,
+      "peak_process_tree_rss_bytes": 16793600,
+      "cache_bytes_after": 2154666,
+      "downloaded_bytes": 0,
+      "package_layout_sha256": "4d2359151ca3228bd09e987d3afa85ba77fb7655e7fa0a13b27b7885574155fb",
+      "package_inventory": {
+        "ansi-regex": {
+          "name": "ansi-regex",
+          "version": "6.4.0"
+        },
+        "damerau-levenshtein": {
+          "name": "damerau-levenshtein",
+          "version": "1.0.8"
+        },
+        "emoji-regex": {
+          "name": "emoji-regex",
+          "version": "10.6.0"
+        },
+        "escape-string-regexp": {
+          "name": "escape-string-regexp",
+          "version": "4.0.0"
+        },
+        "is-array": {
+          "name": "is-array",
+          "version": "1.0.1"
+        },
+        "is-number": {
+          "name": "is-number",
+          "version": "7.0.0"
+        },
+        "lodash": {
+          "name": "lodash",
+          "version": "4.18.1"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "semver": {
+          "name": "semver",
+          "version": "7.8.5"
+        },
+        "strip-ansi": {
+          "name": "strip-ansi",
+          "version": "7.2.0"
+        },
+        "uuid": {
+          "name": "uuid",
+          "version": "9.0.1"
+        }
+      },
+      "bin_links": {
+        "semver": "mode:755",
+        "uuid": "mode:755"
+      },
+      "bin_link_names": [
+        "semver",
+        "uuid"
+      ],
+      "package_lock_sha256": "a5db6b80200c7c8ff7a21c82b98e0b2e1aeccf278802afdbe4c4469e1b4c062e",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "izs_64/005-harvest-1790827260753094000/tool-cache/store/f6616e15e530ed552f9daa2d3ce71963947c6bc7c98c9b64fd3e673fd02622c6.tgz\n[2026-10-01 09:31:00] [layout]   MATERIALIZE emoji-regex@10.6.0 -> node_modules/emoji-regex via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/005-harvest-1790827260753094000/tool-cache/store/9f40e54c0586f30882ece0ee0d22654394b89321e89cb55e8faf12ed8ccff981.tgz\n[2026-10-01 09:31:00] [layout]   MATERIALIZE lodash@4.18.1 -> node_modules/lodash via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/005-harvest-1790827260753094000/tool-cache/store/696942c2a488c9d7428e9ca5f12ccf03b52de01dcdbfe4d4751d392f0491ae16.tgz\n[2026-10-01 09:31:00] [layout]   MATERIALIZE is-array@1.0.1 -> node_modules/is-array via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/005-harvest-1790827260753094000/tool-cache/store/3b3558aaf8731fd55b6bea386c767accde77e3c2171a5428a1342b239b18ba5e.tgz\n[2026-10-01 09:31:00] [layout]   MATERIALIZE escape-string-regexp@4.0.0 -> node_modules/escape-string-regexp via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/005-harvest-1790827260753094000/tool-cache/store/4b44a14da6987a3c0585c2ff16b3800425732ff35cad710c65e72d7f8e33b11b.tgz\n[2026-10-01 09:31:00] [layout]   MATERIALIZE uuid@9.0.1 -> node_modules/uuid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/005-harvest-1790827260753094000/tool-cache/store/9fa6f415a7d9f7f8ea48e45beeb567686261da85cd395901c54c3515589e3f7e.tgz\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0"
+      },
+      "seed_cache_sha256": "4da6a25128d08d75a83aa836bc94d926bf425ccdf1a922f73fef8c6572e40c4e"
+    },
+    {
+      "arm": "harvest",
+      "round": 6,
+      "condition": "local-cache-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 43.47858298569918,
+      "cpu_user_seconds": 0.17181100000000016,
+      "cpu_system_seconds": 0.06747799999999993,
+      "peak_process_tree_rss_bytes": 16121856,
+      "cache_bytes_after": 2161775,
+      "downloaded_bytes": 0,
+      "package_layout_sha256": "1c53ac2c93c0db33536604cbcdfb32589ba2164979b25008f6ee625f3eef3106",
+      "package_inventory": {
+        "ansi-regex": {
+          "name": "ansi-regex",
+          "version": "6.4.0"
+        },
+        "damerau-levenshtein": {
+          "name": "damerau-levenshtein",
+          "version": "1.0.8"
+        },
+        "emoji-regex": {
+          "name": "emoji-regex",
+          "version": "10.6.0"
+        },
+        "escape-string-regexp": {
+          "name": "escape-string-regexp",
+          "version": "4.0.0"
+        },
+        "is-array": {
+          "name": "is-array",
+          "version": "1.0.1"
+        },
+        "is-number": {
+          "name": "is-number",
+          "version": "7.0.0"
+        },
+        "lodash": {
+          "name": "lodash",
+          "version": "4.18.1"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "semver": {
+          "name": "semver",
+          "version": "7.8.5"
+        },
+        "strip-ansi": {
+          "name": "strip-ansi",
+          "version": "7.2.0"
+        },
+        "uuid": {
+          "name": "uuid",
+          "version": "9.0.1"
+        }
+      },
+      "bin_links": {
+        "semver": "mode:755",
+        "uuid": "mode:755"
+      },
+      "bin_link_names": [
+        "semver",
+        "uuid"
+      ],
+      "package_lock_sha256": "a5db6b80200c7c8ff7a21c82b98e0b2e1aeccf278802afdbe4c4469e1b4c062e",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/006-harvest-1790827261201470000/tool-cache/store/3b3558aaf8731fd55b6bea386c767accde77e3c2171a5428a1342b239b18ba5e.tgz\n[2026-10-01 09:31:01] [layout]   MATERIALIZE is-number@7.0.0 -> node_modules/is-number via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/006-harvest-1790827261201470000/tool-cache/store/7b75c1057198cf97696909a9bee176c9c5e9bcb5b03bf3ecef2f484defadd51e.tgz\n[2026-10-01 09:31:01] [layout]   MATERIALIZE strip-ansi@7.2.0 -> node_modules/strip-ansi via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/006-harvest-1790827261201470000/tool-cache/store/2fa01de86a5022ef32773abbc4e84a53a1c5d31f5a5cbf03ed2575f10408543f.tgz\n[2026-10-01 09:31:01] [layout]   MATERIALIZE lodash@4.18.1 -> node_modules/lodash via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/006-harvest-1790827261201470000/tool-cache/store/696942c2a488c9d7428e9ca5f12ccf03b52de01dcdbfe4d4751d392f0491ae16.tgz\n[2026-10-01 09:31:01] [layout]   MATERIALIZE uuid@9.0.1 -> node_modules/uuid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/006-harvest-1790827261201470000/tool-cache/store/9fa6f415a7d9f7f8ea48e45beeb567686261da85cd395901c54c3515589e3f7e.tgz\n[2026-10-01 09:31:01] [layout]   MATERIALIZE ms@2.1.3 -> node_modules/ms via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/006-harvest-1790827261201470000/tool-cache/store/f6616e15e530ed552f9daa2d3ce71963947c6bc7c98c9b64fd3e673fd02622c6.tgz\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0"
+      },
+      "seed_cache_sha256": "0ce32b56c023d7ac51750153f92a89b93d17c0637825adf800b7dbd9e05810d6"
+    },
+    {
+      "arm": "bun",
+      "round": 6,
+      "condition": "local-cache-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 29.059458000119776,
+      "cpu_user_seconds": 0.16803100000000004,
+      "cpu_system_seconds": 0.04366800000000004,
+      "peak_process_tree_rss_bytes": 4734976,
+      "cache_bytes_after": 0,
+      "downloaded_bytes": null,
+      "package_layout_sha256": "bf61692b3b302ef9569d623968dd0308ba842964ae5d1f8539131325c8051859",
+      "package_inventory": {
+        "ansi-regex": {
+          "name": "ansi-regex",
+          "version": "6.4.0"
+        },
+        "damerau-levenshtein": {
+          "name": "damerau-levenshtein",
+          "version": "1.0.8"
+        },
+        "emoji-regex": {
+          "name": "emoji-regex",
+          "version": "10.6.0"
+        },
+        "escape-string-regexp": {
+          "name": "escape-string-regexp",
+          "version": "4.0.0"
+        },
+        "is-array": {
+          "name": "is-array",
+          "version": "1.0.1"
+        },
+        "is-number": {
+          "name": "is-number",
+          "version": "7.0.0"
+        },
+        "lodash": {
+          "name": "lodash",
+          "version": "4.18.1"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "semver": {
+          "name": "semver",
+          "version": "7.8.5"
+        },
+        "strip-ansi": {
+          "name": "strip-ansi",
+          "version": "7.2.0"
+        },
+        "uuid": {
+          "name": "uuid",
+          "version": "9.0.1"
+        }
+      },
+      "bin_links": {
+        "semver": "../semver/bin/semver.js",
+        "uuid": "../uuid/dist/bin/uuid"
+      },
+      "bin_link_names": [
+        "semver",
+        "uuid"
+      ],
+      "package_lock_sha256": "a5db6b80200c7c8ff7a21c82b98e0b2e1aeccf278802afdbe4c4469e1b4c062e",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "bun install v1.4.2 (744846f84)\n\n+ damerau-levenshtein@1.0.8\n+ emoji-regex@10.6.0\n+ escape-string-regexp@4.0.0\n+ is-array@1.0.1\n+ is-number@7.0.0\n+ lodash@4.18.1\n+ ms@2.1.3\n+ semver@7.8.5\n+ strip-ansi@7.2.0\n+ uuid@9.0.1\n\n11 packages installed [13.00ms]\n\n[0.13ms] migrated lockfile from package-lock.json\nSaved lockfile\n",
+      "stage_times_ms": {},
+      "arm_environment": {},
+      "seed_cache_sha256": "10f45879cf260b6521e3f631842fd20bd3c78294447436402cfc68b677ed67a6"
+    },
+    {
+      "arm": "bun",
+      "round": 7,
+      "condition": "local-cache-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 29.733458010014147,
+      "cpu_user_seconds": 0.16913,
+      "cpu_system_seconds": 0.04711900000000002,
+      "peak_process_tree_rss_bytes": 6422528,
+      "cache_bytes_after": 0,
+      "downloaded_bytes": null,
+      "package_layout_sha256": "bf61692b3b302ef9569d623968dd0308ba842964ae5d1f8539131325c8051859",
+      "package_inventory": {
+        "ansi-regex": {
+          "name": "ansi-regex",
+          "version": "6.4.0"
+        },
+        "damerau-levenshtein": {
+          "name": "damerau-levenshtein",
+          "version": "1.0.8"
+        },
+        "emoji-regex": {
+          "name": "emoji-regex",
+          "version": "10.6.0"
+        },
+        "escape-string-regexp": {
+          "name": "escape-string-regexp",
+          "version": "4.0.0"
+        },
+        "is-array": {
+          "name": "is-array",
+          "version": "1.0.1"
+        },
+        "is-number": {
+          "name": "is-number",
+          "version": "7.0.0"
+        },
+        "lodash": {
+          "name": "lodash",
+          "version": "4.18.1"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "semver": {
+          "name": "semver",
+          "version": "7.8.5"
+        },
+        "strip-ansi": {
+          "name": "strip-ansi",
+          "version": "7.2.0"
+        },
+        "uuid": {
+          "name": "uuid",
+          "version": "9.0.1"
+        }
+      },
+      "bin_links": {
+        "semver": "../semver/bin/semver.js",
+        "uuid": "../uuid/dist/bin/uuid"
+      },
+      "bin_link_names": [
+        "semver",
+        "uuid"
+      ],
+      "package_lock_sha256": "a5db6b80200c7c8ff7a21c82b98e0b2e1aeccf278802afdbe4c4469e1b4c062e",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "bun install v1.4.2 (744846f84)\n\n+ damerau-levenshtein@1.0.8\n+ emoji-regex@10.6.0\n+ escape-string-regexp@4.0.0\n+ is-array@1.0.1\n+ is-number@7.0.0\n+ lodash@4.18.1\n+ ms@2.1.3\n+ semver@7.8.5\n+ strip-ansi@7.2.0\n+ uuid@9.0.1\n\n11 packages installed [14.00ms]\n\n[0.14ms] migrated lockfile from package-lock.json\nSaved lockfile\n",
+      "stage_times_ms": {},
+      "arm_environment": {},
+      "seed_cache_sha256": "10f45879cf260b6521e3f631842fd20bd3c78294447436402cfc68b677ed67a6"
+    },
+    {
+      "arm": "harvest",
+      "round": 7,
+      "condition": "local-cache-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 45.98316698684357,
+      "cpu_user_seconds": 0.17131300000000005,
+      "cpu_system_seconds": 0.06356699999999993,
+      "peak_process_tree_rss_bytes": 16154624,
+      "cache_bytes_after": 2168884,
+      "downloaded_bytes": 0,
+      "package_layout_sha256": "deb4c20949a73e5ea15828819acae9362d48d1581c78a05bab5767991a91bff0",
+      "package_inventory": {
+        "ansi-regex": {
+          "name": "ansi-regex",
+          "version": "6.4.0"
+        },
+        "damerau-levenshtein": {
+          "name": "damerau-levenshtein",
+          "version": "1.0.8"
+        },
+        "emoji-regex": {
+          "name": "emoji-regex",
+          "version": "10.6.0"
+        },
+        "escape-string-regexp": {
+          "name": "escape-string-regexp",
+          "version": "4.0.0"
+        },
+        "is-array": {
+          "name": "is-array",
+          "version": "1.0.1"
+        },
+        "is-number": {
+          "name": "is-number",
+          "version": "7.0.0"
+        },
+        "lodash": {
+          "name": "lodash",
+          "version": "4.18.1"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "semver": {
+          "name": "semver",
+          "version": "7.8.5"
+        },
+        "strip-ansi": {
+          "name": "strip-ansi",
+          "version": "7.2.0"
+        },
+        "uuid": {
+          "name": "uuid",
+          "version": "9.0.1"
+        }
+      },
+      "bin_links": {
+        "semver": "mode:755",
+        "uuid": "mode:755"
+      },
+      "bin_link_names": [
+        "semver",
+        "uuid"
+      ],
+      "package_lock_sha256": "a5db6b80200c7c8ff7a21c82b98e0b2e1aeccf278802afdbe4c4469e1b4c062e",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "7263330202000/tool-cache/store/f6616e15e530ed552f9daa2d3ce71963947c6bc7c98c9b64fd3e673fd02622c6.tgz\n[2026-10-01 09:31:03] [layout]   MATERIALIZE emoji-regex@10.6.0 -> node_modules/emoji-regex via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/007-harvest-1790827263330202000/tool-cache/store/9f40e54c0586f30882ece0ee0d22654394b89321e89cb55e8faf12ed8ccff981.tgz\n[2026-10-01 09:31:03] [layout]   MATERIALIZE damerau-levenshtein@1.0.8 -> node_modules/damerau-levenshtein via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/007-harvest-1790827263330202000/tool-cache/store/a23cfcb0fcac3cab70443595dc31266a6e20efbdc63857cab53c985d95075688.tgz\n[2026-10-01 09:31:03] [layout]   MATERIALIZE escape-string-regexp@4.0.0 -> node_modules/escape-string-regexp via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/007-harvest-1790827263330202000/tool-cache/store/4b44a14da6987a3c0585c2ff16b3800425732ff35cad710c65e72d7f8e33b11b.tgz\n[2026-10-01 09:31:03] [layout]   MATERIALIZE uuid@9.0.1 -> node_modules/uuid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/007-harvest-1790827263330202000/tool-cache/store/9fa6f415a7d9f7f8ea48e45beeb567686261da85cd395901c54c3515589e3f7e.tgz\n[2026-10-01 09:31:03] [layout]   MATERIALIZE is-array@1.0.1 -> node_modules/is-array via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/007-harvest-1790827263330202000/tool-cache/store/3b3558aaf8731fd55b6bea386c767accde77e3c2171a5428a1342b239b18ba5e.tgz\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0"
+      },
+      "seed_cache_sha256": "c27e45aea15c79567c961af56b8d69f5c948e2cb25502bbdd3c03c214182a143"
+    },
+    {
+      "arm": "bun",
+      "round": 8,
+      "condition": "local-cache-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 20.531208981992677,
+      "cpu_user_seconds": 0.1685509999999999,
+      "cpu_system_seconds": 0.04748600000000003,
+      "peak_process_tree_rss_bytes": 4734976,
+      "cache_bytes_after": 0,
+      "downloaded_bytes": null,
+      "package_layout_sha256": "bf61692b3b302ef9569d623968dd0308ba842964ae5d1f8539131325c8051859",
+      "package_inventory": {
+        "ansi-regex": {
+          "name": "ansi-regex",
+          "version": "6.4.0"
+        },
+        "damerau-levenshtein": {
+          "name": "damerau-levenshtein",
+          "version": "1.0.8"
+        },
+        "emoji-regex": {
+          "name": "emoji-regex",
+          "version": "10.6.0"
+        },
+        "escape-string-regexp": {
+          "name": "escape-string-regexp",
+          "version": "4.0.0"
+        },
+        "is-array": {
+          "name": "is-array",
+          "version": "1.0.1"
+        },
+        "is-number": {
+          "name": "is-number",
+          "version": "7.0.0"
+        },
+        "lodash": {
+          "name": "lodash",
+          "version": "4.18.1"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "semver": {
+          "name": "semver",
+          "version": "7.8.5"
+        },
+        "strip-ansi": {
+          "name": "strip-ansi",
+          "version": "7.2.0"
+        },
+        "uuid": {
+          "name": "uuid",
+          "version": "9.0.1"
+        }
+      },
+      "bin_links": {
+        "semver": "../semver/bin/semver.js",
+        "uuid": "../uuid/dist/bin/uuid"
+      },
+      "bin_link_names": [
+        "semver",
+        "uuid"
+      ],
+      "package_lock_sha256": "a5db6b80200c7c8ff7a21c82b98e0b2e1aeccf278802afdbe4c4469e1b4c062e",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "bun install v1.4.2 (744846f84)\n\n+ damerau-levenshtein@1.0.8\n+ emoji-regex@10.6.0\n+ escape-string-regexp@4.0.0\n+ is-array@1.0.1\n+ is-number@7.0.0\n+ lodash@4.18.1\n+ ms@2.1.3\n+ semver@7.8.5\n+ strip-ansi@7.2.0\n+ uuid@9.0.1\n\n11 packages installed [15.00ms]\n\n[0.14ms] migrated lockfile from package-lock.json\nSaved lockfile\n",
+      "stage_times_ms": {},
+      "arm_environment": {},
+      "seed_cache_sha256": "10f45879cf260b6521e3f631842fd20bd3c78294447436402cfc68b677ed67a6"
+    },
+    {
+      "arm": "harvest",
+      "round": 8,
+      "condition": "local-cache-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 43.156291998457164,
+      "cpu_user_seconds": 0.17161599999999977,
+      "cpu_system_seconds": 0.06364999999999998,
+      "peak_process_tree_rss_bytes": 16072704,
+      "cache_bytes_after": 2175993,
+      "downloaded_bytes": 0,
+      "package_layout_sha256": "5f5df2b89bd1f784cb9c4dfa5d45846fa484a57c5f45c3c11eb2a806fb23919c",
+      "package_inventory": {
+        "ansi-regex": {
+          "name": "ansi-regex",
+          "version": "6.4.0"
+        },
+        "damerau-levenshtein": {
+          "name": "damerau-levenshtein",
+          "version": "1.0.8"
+        },
+        "emoji-regex": {
+          "name": "emoji-regex",
+          "version": "10.6.0"
+        },
+        "escape-string-regexp": {
+          "name": "escape-string-regexp",
+          "version": "4.0.0"
+        },
+        "is-array": {
+          "name": "is-array",
+          "version": "1.0.1"
+        },
+        "is-number": {
+          "name": "is-number",
+          "version": "7.0.0"
+        },
+        "lodash": {
+          "name": "lodash",
+          "version": "4.18.1"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "semver": {
+          "name": "semver",
+          "version": "7.8.5"
+        },
+        "strip-ansi": {
+          "name": "strip-ansi",
+          "version": "7.2.0"
+        },
+        "uuid": {
+          "name": "uuid",
+          "version": "9.0.1"
+        }
+      },
+      "bin_links": {
+        "semver": "mode:755",
+        "uuid": "mode:755"
+      },
+      "bin_link_names": [
+        "semver",
+        "uuid"
+      ],
+      "package_lock_sha256": "a5db6b80200c7c8ff7a21c82b98e0b2e1aeccf278802afdbe4c4469e1b4c062e",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "ol-paper-matrix-fhizs_64/008-harvest-1790827264614021000/tool-cache/store/4b44a14da6987a3c0585c2ff16b3800425732ff35cad710c65e72d7f8e33b11b.tgz\n[2026-10-01 09:31:04] [layout]   MATERIALIZE damerau-levenshtein@1.0.8 -> node_modules/damerau-levenshtein via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/008-harvest-1790827264614021000/tool-cache/store/a23cfcb0fcac3cab70443595dc31266a6e20efbdc63857cab53c985d95075688.tgz\n[2026-10-01 09:31:04] [layout]   MATERIALIZE ms@2.1.3 -> node_modules/ms via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/008-harvest-1790827264614021000/tool-cache/store/f6616e15e530ed552f9daa2d3ce71963947c6bc7c98c9b64fd3e673fd02622c6.tgz\n[2026-10-01 09:31:04] [layout]   MATERIALIZE strip-ansi@7.2.0 -> node_modules/strip-ansi via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/008-harvest-1790827264614021000/tool-cache/store/2fa01de86a5022ef32773abbc4e84a53a1c5d31f5a5cbf03ed2575f10408543f.tgz\n[2026-10-01 09:31:04] [layout]   MATERIALIZE semver@7.8.5 -> node_modules/semver via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/008-harvest-1790827264614021000/tool-cache/store/d85045d4300d7d57c891336b95df532e73f34c22ffcd222452b6d08b9d127d5d.tgz\n[2026-10-01 09:31:04] [layout]   MATERIALIZE uuid@9.0.1 -> node_modules/uuid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/008-harvest-1790827264614021000/tool-cache/store/9fa6f415a7d9f7f8ea48e45beeb567686261da85cd395901c54c3515589e3f7e.tgz\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0"
+      },
+      "seed_cache_sha256": "eeb12531f2492b34408a771d91d2e51c4ff2c91a3c5116f059c89be71a2f70c3"
+    },
+    {
+      "arm": "bun",
+      "round": 9,
+      "condition": "local-cache-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 28.853208990767598,
+      "cpu_user_seconds": 0.17188399999999993,
+      "cpu_system_seconds": 0.04526399999999997,
+      "peak_process_tree_rss_bytes": 4734976,
+      "cache_bytes_after": 0,
+      "downloaded_bytes": null,
+      "package_layout_sha256": "bf61692b3b302ef9569d623968dd0308ba842964ae5d1f8539131325c8051859",
+      "package_inventory": {
+        "ansi-regex": {
+          "name": "ansi-regex",
+          "version": "6.4.0"
+        },
+        "damerau-levenshtein": {
+          "name": "damerau-levenshtein",
+          "version": "1.0.8"
+        },
+        "emoji-regex": {
+          "name": "emoji-regex",
+          "version": "10.6.0"
+        },
+        "escape-string-regexp": {
+          "name": "escape-string-regexp",
+          "version": "4.0.0"
+        },
+        "is-array": {
+          "name": "is-array",
+          "version": "1.0.1"
+        },
+        "is-number": {
+          "name": "is-number",
+          "version": "7.0.0"
+        },
+        "lodash": {
+          "name": "lodash",
+          "version": "4.18.1"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "semver": {
+          "name": "semver",
+          "version": "7.8.5"
+        },
+        "strip-ansi": {
+          "name": "strip-ansi",
+          "version": "7.2.0"
+        },
+        "uuid": {
+          "name": "uuid",
+          "version": "9.0.1"
+        }
+      },
+      "bin_links": {
+        "semver": "../semver/bin/semver.js",
+        "uuid": "../uuid/dist/bin/uuid"
+      },
+      "bin_link_names": [
+        "semver",
+        "uuid"
+      ],
+      "package_lock_sha256": "a5db6b80200c7c8ff7a21c82b98e0b2e1aeccf278802afdbe4c4469e1b4c062e",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "bun install v1.4.2 (744846f84)\n\n+ damerau-levenshtein@1.0.8\n+ emoji-regex@10.6.0\n+ escape-string-regexp@4.0.0\n+ is-array@1.0.1\n+ is-number@7.0.0\n+ lodash@4.18.1\n+ ms@2.1.3\n+ semver@7.8.5\n+ strip-ansi@7.2.0\n+ uuid@9.0.1\n\n11 packages installed [12.00ms]\n\n[0.14ms] migrated lockfile from package-lock.json\nSaved lockfile\n",
+      "stage_times_ms": {},
+      "arm_environment": {},
+      "seed_cache_sha256": "10f45879cf260b6521e3f631842fd20bd3c78294447436402cfc68b677ed67a6"
+    },
+    {
+      "arm": "harvest",
+      "round": 9,
+      "condition": "local-cache-cold",
+      "status": "pass",
+      "route_observed": true,
+      "reason": null,
+      "resolver_drift": null,
+      "exit_code": 0,
+      "elapsed_ms": 44.564332987647504,
+      "cpu_user_seconds": 0.1765380000000003,
+      "cpu_system_seconds": 0.06601100000000004,
+      "peak_process_tree_rss_bytes": 16826368,
+      "cache_bytes_after": 2183102,
+      "downloaded_bytes": 0,
+      "package_layout_sha256": "ad73c0ba47df546c3c62a470d040068316ea6d6067c28abe46014d497c9e15b2",
+      "package_inventory": {
+        "ansi-regex": {
+          "name": "ansi-regex",
+          "version": "6.4.0"
+        },
+        "damerau-levenshtein": {
+          "name": "damerau-levenshtein",
+          "version": "1.0.8"
+        },
+        "emoji-regex": {
+          "name": "emoji-regex",
+          "version": "10.6.0"
+        },
+        "escape-string-regexp": {
+          "name": "escape-string-regexp",
+          "version": "4.0.0"
+        },
+        "is-array": {
+          "name": "is-array",
+          "version": "1.0.1"
+        },
+        "is-number": {
+          "name": "is-number",
+          "version": "7.0.0"
+        },
+        "lodash": {
+          "name": "lodash",
+          "version": "4.18.1"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "semver": {
+          "name": "semver",
+          "version": "7.8.5"
+        },
+        "strip-ansi": {
+          "name": "strip-ansi",
+          "version": "7.2.0"
+        },
+        "uuid": {
+          "name": "uuid",
+          "version": "9.0.1"
+        }
+      },
+      "bin_links": {
+        "semver": "mode:755",
+        "uuid": "mode:755"
+      },
+      "bin_link_names": [
+        "semver",
+        "uuid"
+      ],
+      "package_lock_sha256": "a5db6b80200c7c8ff7a21c82b98e0b2e1aeccf278802afdbe4c4469e1b4c062e",
+      "quality": "locked identities, CJS/ESM imports, and lock stability pass",
+      "stdout_stderr_tail": "rg63h640000gn/T/jhol-paper-matrix-fhizs_64/009-harvest-1790827265905698000/tool-cache/store/2fa01de86a5022ef32773abbc4e84a53a1c5d31f5a5cbf03ed2575f10408543f.tgz\n[2026-10-01 09:31:05] [layout]   MATERIALIZE ms@2.1.3 -> node_modules/ms via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/009-harvest-1790827265905698000/tool-cache/store/f6616e15e530ed552f9daa2d3ce71963947c6bc7c98c9b64fd3e673fd02622c6.tgz\n[2026-10-01 09:31:05] [layout]   MATERIALIZE uuid@9.0.1 -> node_modules/uuid via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/009-harvest-1790827265905698000/tool-cache/store/9fa6f415a7d9f7f8ea48e45beeb567686261da85cd395901c54c3515589e3f7e.tgz\n[2026-10-01 09:31:05] [layout]   MATERIALIZE lodash@4.18.1 -> node_modules/lodash via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/009-harvest-1790827265905698000/tool-cache/store/696942c2a488c9d7428e9ca5f12ccf03b52de01dcdbfe4d4751d392f0491ae16.tgz\n[2026-10-01 09:31:05] [layout]   MATERIALIZE emoji-regex@10.6.0 -> node_modules/emoji-regex via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/009-harvest-1790827265905698000/tool-cache/store/9f40e54c0586f30882ece0ee0d22654394b89321e89cb55e8faf12ed8ccff981.tgz\n[2026-10-01 09:31:05] [layout]   MATERIALIZE is-array@1.0.1 -> node_modules/is-array via tarball /var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-paper-matrix-fhizs_64/009-harvest-1790827265905698000/tool-cache/store/3b3558aaf8731fd55b6bea386c767accde77e3c2171a5428a1342b239b18ba5e.tgz\n",
+      "stage_times_ms": {
+        "before_capsule": 0,
+        "install_pkg_start": 0,
+        "after_preseed": 0
+      },
+      "arm_environment": {
+        "JHOL_NO_HARVEST": null,
+        "JHOL_JGRID": "0",
+        "JHOL_JAGRS_MIRROR": "0"
+      },
+      "seed_cache_sha256": "0aa0410e8db6313658b7bf1f5be64a2ba311a693990ff58e794418dfb24b2a0e"
+    }
+  ]
+}

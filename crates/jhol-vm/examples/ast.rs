@@ -6,11 +6,16 @@ fn main() {
         if let jhol_vm::ast::Stmt::Class(c) = s {
             println!("class {:?} members={}", c.name, c.members.len());
             for m in &c.members {
-                println!("  member kind={}", match &m.kind {
-                    jhol_vm::ast::ClassMemberKind::Method(_, s) => format!("method static={}", s),
-                    jhol_vm::ast::ClassMemberKind::Field(_) => "field".to_string(),
-                    jhol_vm::ast::ClassMemberKind::StaticField(_) => "static field".to_string(),
-                });
+                println!(
+                    "  member kind={}",
+                    match &m.kind {
+                        jhol_vm::ast::ClassMemberKind::Method(_, s) =>
+                            format!("method static={}", s),
+                        jhol_vm::ast::ClassMemberKind::Field(_) => "field".to_string(),
+                        jhol_vm::ast::ClassMemberKind::StaticField(_) => "static field".to_string(),
+                        jhol_vm::ast::ClassMemberKind::StaticBlock(_) => "static block".to_string(),
+                    }
+                );
             }
         }
     }

@@ -1,0 +1,12 @@
+console.log(0.1 + 0.2, 0.1 + 0.2 === 0.3);
+console.log(1 / 0, -1 / 0, 0 / 0);
+console.log((0.5).toFixed(0), (1.005).toFixed(2), (-2.5).toFixed(0), 2.35.toFixed(1));
+console.log(1e21, 1e-7, 123456789123456789123);
+console.log(0.000001, 0.0000001);
+console.log(parseInt("08"), parseInt("0x10"), parseInt("  42px"), parseFloat("3.14more"));
+console.log(Number(""), Number("  "), Number("12abc"), Number(true), Number(null), Number(undefined));
+console.log(5 + null, "5" + null, "5" - null, true + true, [] + []);
+console.log(NaN === NaN, Object.is(NaN, NaN), -0 === 0, Object.is(-0, 0));
+console.log((1073741823 + 1) | 0, (2 ** 31) | 0, ~0, 5 & 3, 5 | 3, 5 ^ 3, 1 << 33);
+console.log(String(-0), JSON.stringify(-0), ({}).toString.call(-0));
+console.log(Number.MAX_SAFE_INTEGER + 1, Number.MAX_SAFE_INTEGER + 2);

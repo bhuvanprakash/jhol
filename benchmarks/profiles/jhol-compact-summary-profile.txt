@@ -1,0 +1,584 @@
+[2026-03-12 05:04:45] Installing dependencies from package.json
+[2026-03-12 05:04:47] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=46 package=accepts bytes=26951
+[2026-03-12 05:04:47] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=52 package=vary bytes=4471
+[2026-03-12 05:04:47] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=81 package=parseurl bytes=7304
+[2026-03-12 05:04:47] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=118 package=encodeurl bytes=2943
+[2026-03-12 05:04:47] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=190 package=content-type bytes=5536
+[2026-03-12 05:04:47] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=223 package=escape-html bytes=2563
+[2026-03-12 05:04:47] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=253 package=range-parser bytes=7601
+[2026-03-12 05:04:47] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=302 package=methods bytes=3634
+[2026-03-12 05:04:47] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=428 package=proxy-addr bytes=23445
+[2026-03-12 05:04:47] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=720 package=type-is bytes=27215
+[2026-03-12 05:04:48] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=1023 package=etag bytes=9009
+[2026-03-12 05:04:49] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=42 package=mime-types bytes=54950
+[2026-03-12 05:04:50] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=34 package=safer-buffer bytes=3543
+[2026-03-12 05:04:50] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=71 package=sharp bytes=251098
+[2026-03-12 05:04:50] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=206 package=caniuse-lite bytes=1190304
+[2026-03-12 05:04:51] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=50 package=nanoid bytes=144434
+[2026-03-12 05:04:51] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=33 package=picocolors bytes=5887
+[2026-03-12 05:04:52] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=35 package=loose-envify bytes=4759
+[2026-03-12 05:04:52] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=32 package=js-tokens bytes=18314
+[2026-03-12 05:04:52] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=411 package=scheduler bytes=2604466
+[2026-03-12 05:04:53] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=36 package=source-map-js bytes=7731
+[2026-03-12 05:04:53] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=36 package=detect-libc bytes=17663
+[2026-03-12 05:04:53] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=43 package=side-channel bytes=10144
+[2026-03-12 05:04:53] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=44 package=streamsearch bytes=5718
+[2026-03-12 05:04:53] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=44 package=tslib bytes=42915
+[2026-03-12 05:04:53] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=356 package=color bytes=44794
+[2026-03-12 05:04:54] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=37 package=color-convert bytes=26557
+[2026-03-12 05:04:54] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=37 package=color-name bytes=7908
+[2026-03-12 05:04:54] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=945 package=semver bytes=96449
+[2026-03-12 05:04:54] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=352 package=color-string bytes=38170
+[2026-03-12 05:04:54] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=40 package=es-errors bytes=4277
+[2026-03-12 05:04:55] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=919 package=object-inspect bytes=41631
+[2026-03-12 05:04:55] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=41 package=side-channel-list bytes=1191
+[2026-03-12 05:04:55] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=35 package=side-channel-map bytes=2423
+[2026-03-12 05:04:56] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=932 package=call-bound bytes=4871
+[2026-03-12 05:04:56] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=178 package=call-bind-apply-helpers bytes=3677
+[2026-03-12 05:04:56] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=40 package=function-bind bytes=3724
+[2026-03-12 05:04:56] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=60 package=get-intrinsic bytes=27579
+[2026-03-12 05:04:56] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=128 package=async-function bytes=1536
+[2026-03-12 05:04:56] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=114 package=es-define-property bytes=1985
+[2026-03-12 05:04:56] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=118 package=get-proto bytes=1965
+[2026-03-12 05:04:56] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=120 package=math-intrinsics bytes=2182
+[2026-03-12 05:04:56] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=120 package=hasown bytes=3513
+[2026-03-12 05:04:56] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=122 package=has-symbols bytes=7061
+[2026-03-12 05:04:56] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=122 package=gopd bytes=3782
+[2026-03-12 05:04:56] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=123 package=generator-function bytes=2659
+[2026-03-12 05:04:56] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=138 package=simple-swizzle bytes=3493
+[2026-03-12 05:04:56] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=125 package=side-channel-weakmap bytes=3731
+[2026-03-12 05:04:56] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=126 package=es-object-atoms bytes=3800
+[2026-03-12 05:04:57] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=943 package=async-generator-function bytes=1116
+[2026-03-12 05:04:57] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=162 package=dunder-proto bytes=2071
+[2026-03-12 05:04:58] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=966 package=is-arrayish bytes=6137
+[2026-03-12 05:04:59] [jhol-cold-profile] stage=jagr3.resolve_graph elapsed_ms=13556 nodes=104
+[2026-03-12 05:04:59] [jhol-profile] stage=resolved_specs_ready delta_ms=13560 total_ms=13560
+[2026-03-12 05:04:59] [jhol-profile] stage=saved_daemon_snapshot delta_ms=0 total_ms=13561
+[2026-03-12 05:04:59] Installing package: @img/sharp-darwin-arm64@0.33.5
+[2026-03-12 05:04:59] Installing package: @img/sharp-libvips-darwin-arm64@1.0.4
+[2026-03-12 05:04:59] Installing package: @next/env@15.1.0
+[2026-03-12 05:04:59] Installing package: @next/swc-darwin-arm64@15.1.0
+[2026-03-12 05:04:59] Installing package: @swc/counter@0.1.3
+[2026-03-12 05:04:59] Installing package: @swc/helpers@0.5.15
+[2026-03-12 05:04:59] Installing package: accepts@1.3.8
+[2026-03-12 05:04:59] Installing package: array-flatten@1.1.1
+[2026-03-12 05:04:59] Installing package: async-function@1.0.0
+[2026-03-12 05:04:59] Installing package: async-generator-function@1.0.0
+[2026-03-12 05:04:59] Installing package: body-parser@1.20.3
+[2026-03-12 05:04:59] Installing package: busboy@1.6.0
+[2026-03-12 05:04:59] Installing package: bytes@3.1.2
+[2026-03-12 05:04:59] Installing package: call-bind-apply-helpers@1.0.2
+[2026-03-12 05:04:59] Installing package: call-bound@1.0.4
+[2026-03-12 05:04:59] Installing package: caniuse-lite@1.0.30001777
+[2026-03-12 05:04:59] Installing package: client-only@0.0.1
+[2026-03-12 05:04:59] Installing package: color-convert@2.0.1
+[2026-03-12 05:04:59] Installing package: color-name@1.1.4
+[2026-03-12 05:04:59] Installing package: color-string@1.9.1
+[2026-03-12 05:04:59] Installing package: color@4.2.3
+[2026-03-12 05:04:59] Installing package: content-disposition@0.5.4
+[2026-03-12 05:04:59] Installing package: content-type@1.0.5
+[2026-03-12 05:04:59] Installing package: cookie-signature@1.0.6
+[2026-03-12 05:04:59] Installing package: cookie@0.7.1
+[2026-03-12 05:04:59] Installing package: debug@2.6.9
+[2026-03-12 05:04:59] Installing package: depd@2.0.0
+[2026-03-12 05:04:59] Installing package: destroy@1.2.0
+[2026-03-12 05:04:59] Installing package: detect-libc@2.1.2
+[2026-03-12 05:04:59] Installing package: dunder-proto@1.0.1
+[2026-03-12 05:04:59] Installing package: ee-first@1.1.1
+[2026-03-12 05:04:59] Installing package: encodeurl@1.0.2
+[2026-03-12 05:04:59] Warning: Multiple versions of encodeurl requested.
+[2026-03-12 05:04:59] Installing package: encodeurl@2.0.0
+[2026-03-12 05:04:59] Installing package: es-define-property@1.0.1
+[2026-03-12 05:04:59] Installing package: es-errors@1.3.0
+[2026-03-12 05:04:59] Installing package: es-object-atoms@1.1.1
+[2026-03-12 05:04:59] Installing package: escape-html@1.0.3
+[2026-03-12 05:04:59] Installing package: etag@1.8.1
+[2026-03-12 05:04:59] Installing package: express@4.21.2
+[2026-03-12 05:04:59] Installing package: finalhandler@1.3.1
+[2026-03-12 05:04:59] Installing package: forwarded@0.2.0
+[2026-03-12 05:04:59] Installing package: fresh@0.5.2
+[2026-03-12 05:04:59] Installing package: function-bind@1.1.2
+[2026-03-12 05:04:59] Installing package: generator-function@2.0.1
+[2026-03-12 05:04:59] Installing package: get-intrinsic@1.3.1
+[2026-03-12 05:04:59] Installing package: get-proto@1.0.1
+[2026-03-12 05:04:59] Installing package: gopd@1.2.0
+[2026-03-12 05:04:59] Installing package: has-symbols@1.1.0
+[2026-03-12 05:04:59] Installing package: hasown@2.0.2
+[2026-03-12 05:04:59] Installing package: http-errors@2.0.0
+[2026-03-12 05:04:59] Installing package: iconv-lite@0.4.24
+[2026-03-12 05:04:59] Installing package: inherits@2.0.4
+[2026-03-12 05:04:59] Installing package: ipaddr.js@1.9.1
+[2026-03-12 05:04:59] Installing package: is-arrayish@0.3.4
+[2026-03-12 05:04:59] Installing package: js-tokens@4.0.0
+[2026-03-12 05:04:59] Installing package: loose-envify@1.4.0
+[2026-03-12 05:04:59] Installing package: math-intrinsics@1.1.0
+[2026-03-12 05:04:59] Installing package: media-typer@0.3.0
+[2026-03-12 05:04:59] Installing package: merge-descriptors@1.0.3
+[2026-03-12 05:04:59] Installing package: methods@1.1.2
+[2026-03-12 05:04:59] Installing package: mime-db@1.52.0
+[2026-03-12 05:04:59] Installing package: mime-types@2.1.35
+[2026-03-12 05:04:59] Installing package: mime@1.6.0
+[2026-03-12 05:04:59] Installing package: ms@2.0.0
+[2026-03-12 05:04:59] Warning: Multiple versions of ms requested.
+[2026-03-12 05:04:59] Installing package: ms@2.1.3
+[2026-03-12 05:04:59] Installing package: nanoid@3.3.11
+[2026-03-12 05:04:59] Installing package: negotiator@0.6.3
+[2026-03-12 05:04:59] Installing package: next@15.1.0
+[2026-03-12 05:04:59] Installing package: object-inspect@1.13.4
+[2026-03-12 05:04:59] Installing package: on-finished@2.4.1
+[2026-03-12 05:04:59] Installing package: parseurl@1.3.3
+[2026-03-12 05:04:59] Installing package: path-to-regexp@0.1.12
+[2026-03-12 05:04:59] Installing package: picocolors@1.1.1
+[2026-03-12 05:04:59] Installing package: postcss@8.4.31
+[2026-03-12 05:04:59] Installing package: proxy-addr@2.0.7
+[2026-03-12 05:04:59] Installing package: qs@6.13.0
+[2026-03-12 05:04:59] Installing package: range-parser@1.2.1
+[2026-03-12 05:04:59] Installing package: raw-body@2.5.2
+[2026-03-12 05:04:59] Installing package: react-dom@18.3.1
+[2026-03-12 05:04:59] Installing package: react@18.3.1
+[2026-03-12 05:04:59] Installing package: safe-buffer@5.2.1
+[2026-03-12 05:04:59] Installing package: safer-buffer@2.1.2
+[2026-03-12 05:04:59] Installing package: scheduler@0.23.2
+[2026-03-12 05:04:59] Installing package: semver@7.7.4
+[2026-03-12 05:04:59] Installing package: send@0.19.0
+[2026-03-12 05:04:59] Installing package: serve-static@1.16.2
+[2026-03-12 05:04:59] Installing package: setprototypeof@1.2.0
+[2026-03-12 05:04:59] Installing package: sharp@0.33.5
+[2026-03-12 05:04:59] Installing package: side-channel-list@1.0.0
+[2026-03-12 05:04:59] Installing package: side-channel-map@1.0.1
+[2026-03-12 05:04:59] Installing package: side-channel-weakmap@1.0.2
+[2026-03-12 05:04:59] Installing package: side-channel@1.1.0
+[2026-03-12 05:04:59] Installing package: simple-swizzle@0.2.4
+[2026-03-12 05:04:59] Installing package: source-map-js@1.2.1
+[2026-03-12 05:04:59] Installing package: statuses@2.0.1
+[2026-03-12 05:04:59] Installing package: streamsearch@1.1.0
+[2026-03-12 05:04:59] Installing package: styled-jsx@5.1.6
+[2026-03-12 05:04:59] Installing package: toidentifier@1.0.1
+[2026-03-12 05:04:59] Installing package: tslib@2.8.1
+[2026-03-12 05:04:59] Installing package: type-is@1.6.18
+[2026-03-12 05:04:59] Installing package: typescript@5.7.2
+[2026-03-12 05:04:59] Installing package: unpipe@1.0.0
+[2026-03-12 05:04:59] Installing package: utils-merge@1.0.1
+[2026-03-12 05:04:59] Installing package: vary@1.1.2
+[2026-03-12 05:04:59] [jhol-profile] stage=classify_cache_vs_fetch delta_ms=3 total_ms=13564
+[2026-03-12 05:04:59] [jhol-profile] stage=install_from_cache delta_ms=0 total_ms=13564
+[2026-03-12 05:04:59] [jhol-profile] stage=resolve_cold_specs delta_ms=0 total_ms=13565
+[jhol-native-download] 29034ms
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=16 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ddc0a81d2fe39d65.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ddc0a81d2fe39d65
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=17 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ddc0a81d2fe39d65.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ddc0a81d2fe39d65 files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=17 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ddc0a81d2fe39d65.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ddc0a81d2fe39d65
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=12 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-532a4aa3e646df5e.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-532a4aa3e646df5e
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=13 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-532a4aa3e646df5e.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-532a4aa3e646df5e files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=23 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-532a4aa3e646df5e.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-532a4aa3e646df5e
+[2026-03-12 05:05:28] Installed @swc/counter@0.1.3 (native)
+[2026-03-12 05:05:28] Installed array-flatten@1.1.1 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=16 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-149df618b3d4a942.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-149df618b3d4a942
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=17 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-149df618b3d4a942.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-149df618b3d4a942 files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=27 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-149df618b3d4a942.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-149df618b3d4a942
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=26 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-f87ee461ab967e3e.tgz files=0 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-f87ee461ab967e3e
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=26 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-f87ee461ab967e3e.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-f87ee461ab967e3e files=0
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=49 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-f87ee461ab967e3e.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-f87ee461ab967e3e
+[2026-03-12 05:05:28] Installed busboy@1.6.0 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=56 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-f44956df4b96570b.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-f44956df4b96570b
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=57 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-f44956df4b96570b.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-f44956df4b96570b files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=75 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-f44956df4b96570b.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-f44956df4b96570b
+[2026-03-12 05:05:28] Installed bytes@3.1.2 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=93 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-a468b1ec670f1f93.tgz files=7 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-a468b1ec670f1f93
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=93 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-a468b1ec670f1f93.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-a468b1ec670f1f93 files=7
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=94 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-a468b1ec670f1f93.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-a468b1ec670f1f93
+[2026-03-12 05:05:28] Installed async-generator-function@1.0.0 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=147 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-84e8d3f69d644bfd.tgz files=3 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-84e8d3f69d644bfd
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=147 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-84e8d3f69d644bfd.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-84e8d3f69d644bfd files=3
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=163 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-84e8d3f69d644bfd.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-84e8d3f69d644bfd
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=144 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-93250bed3c8a3140.tgz files=3 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-93250bed3c8a3140
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=144 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-93250bed3c8a3140.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-93250bed3c8a3140 files=3
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=173 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-93250bed3c8a3140.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-93250bed3c8a3140
+[2026-03-12 05:05:28] Installed @img/sharp-darwin-arm64@0.33.5 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=122 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-822a2f14cde22e82.tgz files=4 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-822a2f14cde22e82
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=124 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-822a2f14cde22e82.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-822a2f14cde22e82 files=4
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=132 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-822a2f14cde22e82.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-822a2f14cde22e82
+[2026-03-12 05:05:28] Installed call-bound@1.0.4 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=183 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-c216b68e46a5f1d5.tgz files=7 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-c216b68e46a5f1d5
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=183 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-c216b68e46a5f1d5.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-c216b68e46a5f1d5 files=7
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=193 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-c216b68e46a5f1d5.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-c216b68e46a5f1d5
+[2026-03-12 05:05:28] Installed @next/env@15.1.0 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=100 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-2b592fdc6a0b6815.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-2b592fdc6a0b6815
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=100 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-2b592fdc6a0b6815.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-2b592fdc6a0b6815 files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=100 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-2b592fdc6a0b6815.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-2b592fdc6a0b6815
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=155 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-a89e0761817f97f3.tgz files=3 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-a89e0761817f97f3
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=90 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-65ff334b382238a4.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-65ff334b382238a4
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=99 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-65ff334b382238a4.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-65ff334b382238a4 files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=99 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-65ff334b382238a4.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-65ff334b382238a4
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=164 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-c7d65b0581c1c131.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-c7d65b0581c1c131
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=170 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-c7d65b0581c1c131.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-c7d65b0581c1c131 files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=196 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-c7d65b0581c1c131.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-c7d65b0581c1c131
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=15 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-3eecbaccc89879ce.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-3eecbaccc89879ce
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=22 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-3eecbaccc89879ce.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-3eecbaccc89879ce files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=130 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-3eecbaccc89879ce.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-3eecbaccc89879ce
+[2026-03-12 05:05:28] Installed color-convert@2.0.1 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=168 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-a89e0761817f97f3.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-a89e0761817f97f3 files=3
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=172 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-a89e0761817f97f3.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-a89e0761817f97f3
+[2026-03-12 05:05:28] Installed color@4.2.3 (native)
+[2026-03-12 05:05:28] Installed color-string@1.9.1 (native)
+[2026-03-12 05:05:28] Installed accepts@1.3.8 (native)
+[2026-03-12 05:05:28] Installed async-function@1.0.0 (native)
+[2026-03-12 05:05:28] Installed client-only@0.0.1 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=13 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-f8b4462967b87a7a.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-f8b4462967b87a7a
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=13 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-f8b4462967b87a7a.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-f8b4462967b87a7a files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=34 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-f8b4462967b87a7a.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-f8b4462967b87a7a
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=176 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-1affcfe682c94a98.tgz files=13 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-1affcfe682c94a98
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=176 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-1affcfe682c94a98.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-1affcfe682c94a98 files=13
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=199 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-1affcfe682c94a98.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-1affcfe682c94a98
+[2026-03-12 05:05:28] Installed content-disposition@0.5.4 (native)
+[2026-03-12 05:05:28] Installed color-name@1.1.4 (native)
+[2026-03-12 05:05:28] Installed call-bind-apply-helpers@1.0.2 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=33 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-3fac3bd6a9b26315.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-3fac3bd6a9b26315
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=33 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-3fac3bd6a9b26315.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-3fac3bd6a9b26315 files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=34 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-3fac3bd6a9b26315.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-3fac3bd6a9b26315
+[2026-03-12 05:05:28] Installed content-type@1.0.5 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=14 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-905b0e0b9163add6.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-905b0e0b9163add6
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=14 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-905b0e0b9163add6.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-905b0e0b9163add6 files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=16 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-905b0e0b9163add6.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-905b0e0b9163add6
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=19 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-eed035322a45c8ef.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-eed035322a45c8ef
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=20 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-eed035322a45c8ef.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-eed035322a45c8ef files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=20 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-eed035322a45c8ef.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-eed035322a45c8ef
+[2026-03-12 05:05:28] Installed destroy@1.2.0 (native)
+[2026-03-12 05:05:28] Installed encodeurl@1.0.2 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=22 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-49e738c9d119f11d.tgz files=3 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-49e738c9d119f11d
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=22 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-49e738c9d119f11d.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-49e738c9d119f11d files=3
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=28 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-49e738c9d119f11d.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-49e738c9d119f11d
+[2026-03-12 05:05:28] Installed depd@2.0.0 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=27 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ef26e62c66cb63a7.tgz files=5 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ef26e62c66cb63a7
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=34 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ef26e62c66cb63a7.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ef26e62c66cb63a7 files=5
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=34 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ef26e62c66cb63a7.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ef26e62c66cb63a7
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=37 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-21d0415fdf0ec560.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-21d0415fdf0ec560
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=48 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-21d0415fdf0ec560.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-21d0415fdf0ec560 files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=53 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-21d0415fdf0ec560.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-21d0415fdf0ec560
+[2026-03-12 05:05:28] Installed dunder-proto@1.0.1 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=53 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-aba66bd9972a2b97.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-aba66bd9972a2b97
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=53 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-aba66bd9972a2b97.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-aba66bd9972a2b97 files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=53 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-aba66bd9972a2b97.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-aba66bd9972a2b97
+[2026-03-12 05:05:28] Installed ee-first@1.1.1 (native)
+[2026-03-12 05:05:28] Installed cookie-signature@1.0.6 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=254 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-962e5182b9d94c01.tgz files=7 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-962e5182b9d94c01
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=255 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-962e5182b9d94c01.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-962e5182b9d94c01 files=7
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=264 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-962e5182b9d94c01.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-962e5182b9d94c01
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=65 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ef58818258991350.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ef58818258991350
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=65 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ef58818258991350.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ef58818258991350 files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=66 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ef58818258991350.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ef58818258991350
+[2026-03-12 05:05:28] Installed cookie@0.7.1 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=35 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-3b814b350d6cbecd.tgz files=3 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-3b814b350d6cbecd
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=40 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-3b814b350d6cbecd.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-3b814b350d6cbecd files=3
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=41 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-3b814b350d6cbecd.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-3b814b350d6cbecd
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=16 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-fff499734c9352f7.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-fff499734c9352f7
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=24 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-fff499734c9352f7.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-fff499734c9352f7 files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=40 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-fff499734c9352f7.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-fff499734c9352f7
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=9 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-9fd56bebafb8088d.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-9fd56bebafb8088d
+[2026-03-12 05:05:28] Installed escape-html@1.0.3 (native)
+[2026-03-12 05:05:28] Installed body-parser@1.20.3 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=92 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-9e0f4d0699cd432b.tgz files=6 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-9e0f4d0699cd432b
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=92 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-9e0f4d0699cd432b.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-9e0f4d0699cd432b files=6
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=92 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-9e0f4d0699cd432b.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-9e0f4d0699cd432b
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=15 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-9fd56bebafb8088d.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-9fd56bebafb8088d files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=34 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-9fd56bebafb8088d.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-9fd56bebafb8088d
+[2026-03-12 05:05:28] Installed forwarded@0.2.0 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=19 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-4aeb9892c3ec93d6.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-4aeb9892c3ec93d6
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=19 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-4aeb9892c3ec93d6.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-4aeb9892c3ec93d6 files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=19 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-4aeb9892c3ec93d6.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-4aeb9892c3ec93d6
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=53 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-d25d95c627c1cc4f.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-d25d95c627c1cc4f
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=72 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-d25d95c627c1cc4f.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-d25d95c627c1cc4f files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=86 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-d25d95c627c1cc4f.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-d25d95c627c1cc4f
+[2026-03-12 05:05:28] Installed es-define-property@1.0.1 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=17 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-701c70faab922eea.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-701c70faab922eea
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=41 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-701c70faab922eea.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-701c70faab922eea files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=42 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-701c70faab922eea.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-701c70faab922eea
+[2026-03-12 05:05:28] Installed fresh@0.5.2 (native)
+[2026-03-12 05:05:28] Installed encodeurl@2.0.0 (native)
+[2026-03-12 05:05:28] Installed finalhandler@1.3.1 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=42 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-e9d4b9ff2c75b288.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-e9d4b9ff2c75b288
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=42 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-e9d4b9ff2c75b288.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-e9d4b9ff2c75b288 files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=47 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-e9d4b9ff2c75b288.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-e9d4b9ff2c75b288
+[2026-03-12 05:05:28] Installed etag@1.8.1 (native)
+[2026-03-12 05:05:28] Installed detect-libc@2.1.2 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=15 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-a635cec337dcd8a1.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-a635cec337dcd8a1
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=15 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-a635cec337dcd8a1.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-a635cec337dcd8a1 files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=15 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-a635cec337dcd8a1.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-a635cec337dcd8a1
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=12 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-bff2e27f89fe18be.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-bff2e27f89fe18be
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=12 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-bff2e27f89fe18be.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-bff2e27f89fe18be files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=12 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-bff2e27f89fe18be.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-bff2e27f89fe18be
+[2026-03-12 05:05:28] Installed get-intrinsic@1.3.1 (native)
+[2026-03-12 05:05:28] Installed http-errors@2.0.0 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=84 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-a6a2b71393a15db4.tgz files=3 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-a6a2b71393a15db4
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=84 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-a6a2b71393a15db4.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-a6a2b71393a15db4 files=3
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=84 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-a6a2b71393a15db4.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-a6a2b71393a15db4
+[2026-03-12 05:05:28] Installed function-bind@1.1.2 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=69 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-31ea46455e5305f2.tgz files=7 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-31ea46455e5305f2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=74 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-31ea46455e5305f2.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-31ea46455e5305f2 files=7
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=76 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-31ea46455e5305f2.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-31ea46455e5305f2
+[2026-03-12 05:05:28] Installed generator-function@2.0.1 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=23 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-10e8938943c4b807.tgz files=4 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-10e8938943c4b807
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=23 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-10e8938943c4b807.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-10e8938943c4b807 files=4
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=23 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-10e8938943c4b807.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-10e8938943c4b807
+[2026-03-12 05:05:28] Installed ipaddr.js@1.9.1 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=89 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ce4ae8977585f493.tgz files=3 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ce4ae8977585f493
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=89 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ce4ae8977585f493.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ce4ae8977585f493 files=3
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=89 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ce4ae8977585f493.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ce4ae8977585f493
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=150 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-add3a6ad22065f98.tgz files=9 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-add3a6ad22065f98
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=150 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-add3a6ad22065f98.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-add3a6ad22065f98 files=9
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=173 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-add3a6ad22065f98.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-add3a6ad22065f98
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=205 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-51d47ed11c283979.tgz files=9 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-51d47ed11c283979
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=206 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-51d47ed11c283979.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-51d47ed11c283979 files=9
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=206 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-51d47ed11c283979.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-51d47ed11c283979
+[2026-03-12 05:05:28] Installed hasown@2.0.2 (native)
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_selective elapsed_ms=6 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-deda6602d1143480.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-deda6602d1143480
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=6 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-deda6602d1143480.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-deda6602d1143480 files=2
+[2026-03-12 05:05:28] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=6 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-deda6602d1143480.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-deda6602d1143480
+[2026-03-12 05:05:28] Installed js-tokens@4.0.0 (native)
+[2026-03-12 05:05:28] Installed es-object-atoms@1.1.1 (native)
+[2026-03-12 05:05:28] Installed debug@2.6.9 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=93 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-e4aa2036662c5de6.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-e4aa2036662c5de6
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=98 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-e4aa2036662c5de6.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-e4aa2036662c5de6 files=2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=98 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-e4aa2036662c5de6.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-e4aa2036662c5de6
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=20 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-26d0cf5dc37528c8.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-26d0cf5dc37528c8
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=20 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-26d0cf5dc37528c8.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-26d0cf5dc37528c8 files=2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=63 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-26d0cf5dc37528c8.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-26d0cf5dc37528c8
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=174 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-3a12a09c8a036ff6.tgz files=5 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-3a12a09c8a036ff6
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=181 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-3a12a09c8a036ff6.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-3a12a09c8a036ff6 files=5
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=181 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-3a12a09c8a036ff6.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-3a12a09c8a036ff6
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=177 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-bfff47e8a1334202.tgz files=5 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-bfff47e8a1334202
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=181 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-bfff47e8a1334202.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-bfff47e8a1334202 files=5
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=181 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-bfff47e8a1334202.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-bfff47e8a1334202
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=7 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-f89a2aca6a33cc38.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-f89a2aca6a33cc38
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=14 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-f89a2aca6a33cc38.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-f89a2aca6a33cc38 files=2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=62 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-f89a2aca6a33cc38.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-f89a2aca6a33cc38
+[2026-03-12 05:05:29] Installed media-typer@0.3.0 (native)
+[2026-03-12 05:05:29] Installed has-symbols@1.1.0 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=194 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-f2a1acd4b8956677.tgz files=7 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-f2a1acd4b8956677
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=194 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-f2a1acd4b8956677.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-f2a1acd4b8956677 files=7
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=202 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-f2a1acd4b8956677.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-f2a1acd4b8956677
+[2026-03-12 05:05:29] Installed gopd@1.2.0 (native)
+[2026-03-12 05:05:29] Installed is-arrayish@0.3.4 (native)
+[2026-03-12 05:05:29] Installed merge-descriptors@1.0.3 (native)
+[2026-03-12 05:05:29] Installed get-proto@1.0.1 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=14 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-d9f3bee65e4ae8f8.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-d9f3bee65e4ae8f8
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=14 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-d9f3bee65e4ae8f8.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-d9f3bee65e4ae8f8 files=2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=14 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-d9f3bee65e4ae8f8.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-d9f3bee65e4ae8f8
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=14 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-158f36ba37a0198b.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-158f36ba37a0198b
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=14 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-158f36ba37a0198b.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-158f36ba37a0198b files=2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=15 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-158f36ba37a0198b.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-158f36ba37a0198b
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=27 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-725cf11f44fc6111.tgz files=3 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-725cf11f44fc6111
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=27 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-725cf11f44fc6111.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-725cf11f44fc6111 files=3
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=34 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-725cf11f44fc6111.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-725cf11f44fc6111
+[2026-03-12 05:05:29] Installed mime-db@1.52.0 (native)
+[2026-03-12 05:05:29] Installed ms@2.0.0 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=166 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-9094ae74163a5cf9.tgz files=3 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-9094ae74163a5cf9
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=166 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-9094ae74163a5cf9.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-9094ae74163a5cf9 files=3
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=166 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-9094ae74163a5cf9.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-9094ae74163a5cf9
+[2026-03-12 05:05:29] Installed inherits@2.0.4 (native)
+[2026-03-12 05:05:29] Installed ms@2.1.3 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=175 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-54e3fd55d062bc75.tgz files=6 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-54e3fd55d062bc75
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=175 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-54e3fd55d062bc75.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-54e3fd55d062bc75 files=6
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=175 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-54e3fd55d062bc75.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-54e3fd55d062bc75
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=57 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-5a73b922e1022e2d.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-5a73b922e1022e2d
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=57 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-5a73b922e1022e2d.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-5a73b922e1022e2d files=2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=87 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-5a73b922e1022e2d.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-5a73b922e1022e2d
+[2026-03-12 05:05:29] Installed methods@1.1.2 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=80 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-3ae82a14f8da67c4.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-3ae82a14f8da67c4
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=347 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-215b60df7951f589.tgz files=15 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-215b60df7951f589
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=347 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-215b60df7951f589.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-215b60df7951f589 files=15
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=371 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-215b60df7951f589.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-215b60df7951f589
+[2026-03-12 05:05:29] Installed es-errors@1.3.0 (native)
+[2026-03-12 05:05:29] Installed loose-envify@1.4.0 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=85 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-3ae82a14f8da67c4.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-3ae82a14f8da67c4 files=2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=89 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-3ae82a14f8da67c4.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-3ae82a14f8da67c4
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=52 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-cebcce700230d8fc.tgz files=6 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-cebcce700230d8fc
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=65 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-cebcce700230d8fc.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-cebcce700230d8fc files=6
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=66 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-cebcce700230d8fc.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-cebcce700230d8fc
+[2026-03-12 05:05:29] Installed mime-types@2.1.35 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=8 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ce47b29bd8aceea4.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ce47b29bd8aceea4
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=8 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ce47b29bd8aceea4.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ce47b29bd8aceea4 files=2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=8 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ce47b29bd8aceea4.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ce47b29bd8aceea4
+[2026-03-12 05:05:29] Installed parseurl@1.3.3 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=32 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-c3395968ce4b53ca.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-c3395968ce4b53ca
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=32 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-c3395968ce4b53ca.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-c3395968ce4b53ca files=2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=32 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-c3395968ce4b53ca.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-c3395968ce4b53ca
+[2026-03-12 05:05:29] Installed on-finished@2.4.1 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=20 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-348c4a1af01ba542.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-348c4a1af01ba542
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=20 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-348c4a1af01ba542.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-348c4a1af01ba542 files=2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=20 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-348c4a1af01ba542.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-348c4a1af01ba542
+[2026-03-12 05:05:29] Installed path-to-regexp@0.1.12 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=9 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-e216372c2b3948e6.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-e216372c2b3948e6
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=9 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-e216372c2b3948e6.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-e216372c2b3948e6 files=2
+[2026-03-12 05:05:29] Installed negotiator@0.6.3 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=118 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-fc8f85b2e782730a.tgz files=6 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-fc8f85b2e782730a
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=118 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-fc8f85b2e782730a.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-fc8f85b2e782730a files=6
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=118 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-fc8f85b2e782730a.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-fc8f85b2e782730a
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=9 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-e216372c2b3948e6.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-e216372c2b3948e6
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=7 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ddbd89484173e26a.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ddbd89484173e26a
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=7 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ddbd89484173e26a.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ddbd89484173e26a files=2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=12 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ddbd89484173e26a.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ddbd89484173e26a
+[2026-03-12 05:05:29] Installed proxy-addr@2.0.7 (native)
+[2026-03-12 05:05:29] Installed range-parser@1.2.1 (native)
+[2026-03-12 05:05:29] Installed mime@1.6.0 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=74 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ee6bba2e1327c8f1.tgz files=5 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ee6bba2e1327c8f1
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=74 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ee6bba2e1327c8f1.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ee6bba2e1327c8f1 files=5
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=74 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ee6bba2e1327c8f1.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ee6bba2e1327c8f1
+[2026-03-12 05:05:29] Installed picocolors@1.1.1 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=353 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-d173b161bc471350.tgz files=23 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-d173b161bc471350
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=353 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-d173b161bc471350.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-d173b161bc471350 files=23
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=354 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-d173b161bc471350.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-d173b161bc471350
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=431 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-72cdcd4c47e183c1.tgz files=13 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-72cdcd4c47e183c1
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=431 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-72cdcd4c47e183c1.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-72cdcd4c47e183c1 files=13
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=431 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-72cdcd4c47e183c1.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-72cdcd4c47e183c1
+[2026-03-12 05:05:29] Installed express@4.21.2 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=27 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-c90504d2375e4e03.tgz files=3 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-c90504d2375e4e03
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=27 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-c90504d2375e4e03.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-c90504d2375e4e03 files=3
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=66 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-c90504d2375e4e03.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-c90504d2375e4e03
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=76 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-4a39a04632150dfd.tgz files=7 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-4a39a04632150dfd
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=76 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-4a39a04632150dfd.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-4a39a04632150dfd files=7
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=84 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-4a39a04632150dfd.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-4a39a04632150dfd
+[2026-03-12 05:05:29] Installed raw-body@2.5.2 (native)
+[2026-03-12 05:05:29] Installed iconv-lite@0.4.24 (native)
+[2026-03-12 05:05:29] Installed qs@6.13.0 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=63 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-66b59ce0eb2c23e8.tgz files=3 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-66b59ce0eb2c23e8
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=64 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-66b59ce0eb2c23e8.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-66b59ce0eb2c23e8 files=3
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=64 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-66b59ce0eb2c23e8.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-66b59ce0eb2c23e8
+[2026-03-12 05:05:29] Installed safe-buffer@5.2.1 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=127 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-8cebe72e7a6e7dd8.tgz files=5 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-8cebe72e7a6e7dd8
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=132 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-8cebe72e7a6e7dd8.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-8cebe72e7a6e7dd8 files=5
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=199 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-8cebe72e7a6e7dd8.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-8cebe72e7a6e7dd8
+[2026-03-12 05:05:29] Installed object-inspect@1.13.4 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=59 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-d582619fb1a37156.tgz files=4 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-d582619fb1a37156
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=59 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-d582619fb1a37156.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-d582619fb1a37156 files=4
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=80 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-d582619fb1a37156.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-d582619fb1a37156
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=8 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-25947a6379297a6a.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-25947a6379297a6a
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=8 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-25947a6379297a6a.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-25947a6379297a6a files=2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=26 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-25947a6379297a6a.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-25947a6379297a6a
+[2026-03-12 05:05:29] Installed safer-buffer@2.1.2 (native)
+[2026-03-12 05:05:29] Installed serve-static@1.16.2 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=44 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-3488ea2a9a308097.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-3488ea2a9a308097
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=45 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-3488ea2a9a308097.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-3488ea2a9a308097 files=2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=45 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-3488ea2a9a308097.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-3488ea2a9a308097
+[2026-03-12 05:05:29] Installed send@0.19.0 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=310 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-2611bc97cb9a16a2.tgz files=31 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-2611bc97cb9a16a2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=310 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-2611bc97cb9a16a2.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-2611bc97cb9a16a2 files=31
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=369 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-2611bc97cb9a16a2.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-2611bc97cb9a16a2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=22 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-b465b71ea369359b.tgz files=4 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-b465b71ea369359b
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=22 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-b465b71ea369359b.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-b465b71ea369359b files=4
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=23 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-b465b71ea369359b.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-b465b71ea369359b
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=49 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-fb43a165de8d7e65.tgz files=3 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-fb43a165de8d7e65
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=49 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-fb43a165de8d7e65.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-fb43a165de8d7e65 files=3
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=49 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-fb43a165de8d7e65.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-fb43a165de8d7e65
+[2026-03-12 05:05:29] Installed math-intrinsics@1.1.0 (native)
+[2026-03-12 05:05:29] Installed side-channel-list@1.0.0 (native)
+[2026-03-12 05:05:29] Installed setprototypeof@1.2.0 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=19 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ffaa8dea476a5b2c.tgz files=3 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ffaa8dea476a5b2c
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=19 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ffaa8dea476a5b2c.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ffaa8dea476a5b2c files=3
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=23 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ffaa8dea476a5b2c.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ffaa8dea476a5b2c
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=74 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-1f885cc5673428a1.tgz files=3 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-1f885cc5673428a1
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=77 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-1f885cc5673428a1.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-1f885cc5673428a1 files=3
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=77 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-1f885cc5673428a1.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-1f885cc5673428a1
+[2026-03-12 05:05:29] Installed side-channel-map@1.0.1 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=35 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-0884b7d96cc5ad73.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-0884b7d96cc5ad73
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=35 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-0884b7d96cc5ad73.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-0884b7d96cc5ad73 files=2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=38 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-0884b7d96cc5ad73.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-0884b7d96cc5ad73
+[2026-03-12 05:05:29] Installed simple-swizzle@0.2.4 (native)
+[2026-03-12 05:05:29] Installed side-channel@1.1.0 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=382 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-46297afaacaee212.tgz files=23 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-46297afaacaee212
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=390 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-46297afaacaee212.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-46297afaacaee212 files=23
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=390 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-46297afaacaee212.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-46297afaacaee212
+[2026-03-12 05:05:29] Installed nanoid@3.3.11 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=8 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-c7942cba9a650623.tgz files=0 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-c7942cba9a650623
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=24 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-c7942cba9a650623.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-c7942cba9a650623 files=0
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=24 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-c7942cba9a650623.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-c7942cba9a650623
+[2026-03-12 05:05:29] Installed streamsearch@1.1.0 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=97 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-81bce53a8eb83d28.tgz files=3 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-81bce53a8eb83d28
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=97 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-81bce53a8eb83d28.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-81bce53a8eb83d28 files=3
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=111 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-81bce53a8eb83d28.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-81bce53a8eb83d28
+[2026-03-12 05:05:29] Installed side-channel-weakmap@1.0.2 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=283 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-8d35f7f77b8ec418.tgz files=18 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-8d35f7f77b8ec418
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=283 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-8d35f7f77b8ec418.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-8d35f7f77b8ec418 files=18
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=284 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-8d35f7f77b8ec418.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-8d35f7f77b8ec418
+[2026-03-12 05:05:29] Installed react@18.3.1 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=40 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-988352942dc10f82.tgz files=3 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-988352942dc10f82
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=50 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-988352942dc10f82.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-988352942dc10f82 files=3
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=51 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-988352942dc10f82.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-988352942dc10f82
+[2026-03-12 05:05:29] Installed statuses@2.0.1 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=239 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-a900444f1e88b114.tgz files=15 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-a900444f1e88b114
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=240 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-a900444f1e88b114.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-a900444f1e88b114 files=15
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=240 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-a900444f1e88b114.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-a900444f1e88b114
+[2026-03-12 05:05:29] Installed scheduler@0.23.2 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=28 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-100d104c35e43fab.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-100d104c35e43fab
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=45 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-100d104c35e43fab.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-100d104c35e43fab files=2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=45 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-100d104c35e43fab.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-100d104c35e43fab
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=114 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-8c956961001781b3.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-8c956961001781b3
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=114 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-8c956961001781b3.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-8c956961001781b3 files=2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=120 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-8c956961001781b3.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-8c956961001781b3
+[2026-03-12 05:05:29] Installed toidentifier@1.0.1 (native)
+[2026-03-12 05:05:29] Installed unpipe@1.0.0 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=209 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-63a684e3911f0cc1.tgz files=16 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-63a684e3911f0cc1
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=225 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-63a684e3911f0cc1.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-63a684e3911f0cc1 files=16
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=250 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-63a684e3911f0cc1.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-63a684e3911f0cc1
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=46 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-c9dfc1893a9d81a7.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-c9dfc1893a9d81a7
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=46 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-c9dfc1893a9d81a7.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-c9dfc1893a9d81a7 files=2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=54 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-c9dfc1893a9d81a7.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-c9dfc1893a9d81a7
+[2026-03-12 05:05:29] Installed utils-merge@1.0.1 (native)
+[2026-03-12 05:05:29] Installed source-map-js@1.2.1 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=191 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-4f8084b3658b5e6a.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-4f8084b3658b5e6a
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=192 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-4f8084b3658b5e6a.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-4f8084b3658b5e6a files=2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=193 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-4f8084b3658b5e6a.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-4f8084b3658b5e6a
+[2026-03-12 05:05:29] Installed type-is@1.6.18 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=568 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ffc170574dd02d42.tgz files=53 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ffc170574dd02d42
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=568 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ffc170574dd02d42.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ffc170574dd02d42 files=53
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=568 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-ffc170574dd02d42.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-ffc170574dd02d42
+[2026-03-12 05:05:29] Installed postcss@8.4.31 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=224 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-068bc38da60db2e6.tgz files=8 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-068bc38da60db2e6
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=224 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-068bc38da60db2e6.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-068bc38da60db2e6 files=8
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=225 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-068bc38da60db2e6.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-068bc38da60db2e6
+[2026-03-12 05:05:29] Installed tslib@2.8.1 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=414 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-11032fc6e0f8c7ea.tgz files=30 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-11032fc6e0f8c7ea
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=414 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-11032fc6e0f8c7ea.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-11032fc6e0f8c7ea files=30
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=414 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-11032fc6e0f8c7ea.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-11032fc6e0f8c7ea
+[2026-03-12 05:05:29] Installed sharp@0.33.5 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=135 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-5b994701bf6e68c3.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-5b994701bf6e68c3
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=135 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-5b994701bf6e68c3.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-5b994701bf6e68c3 files=2
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=135 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-5b994701bf6e68c3.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-5b994701bf6e68c3
+[2026-03-12 05:05:29] Installed vary@1.1.2 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=426 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-8d9d269692990488.tgz files=18 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-8d9d269692990488
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=427 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-8d9d269692990488.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-8d9d269692990488 files=18
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=427 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-8d9d269692990488.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-8d9d269692990488
+[2026-03-12 05:05:29] Installed styled-jsx@5.1.6 (native)
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_selective elapsed_ms=651 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-a87be2fcc26f46a7.tgz files=49 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-a87be2fcc26f46a7
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=651 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-a87be2fcc26f46a7.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-a87be2fcc26f46a7 files=49
+[2026-03-12 05:05:29] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=666 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-a87be2fcc26f46a7.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-a87be2fcc26f46a7
+[2026-03-12 05:05:29] Installed semver@7.7.4 (native)
+[2026-03-12 05:05:30] [jhol-cold-profile] stage=extract_selective elapsed_ms=955 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-74196a2068064e0b.tgz files=30 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-74196a2068064e0b
+[2026-03-12 05:05:30] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=955 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-74196a2068064e0b.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-74196a2068064e0b files=30
+[2026-03-12 05:05:30] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=961 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-74196a2068064e0b.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-74196a2068064e0b
+[2026-03-12 05:05:30] Installed react-dom@18.3.1 (native)
+[2026-03-12 05:05:31] [jhol-cold-profile] stage=extract_manifest_minimal elapsed_ms=2495 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-395122d99e9168d0.tgz files=3 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-395122d99e9168d0
+[2026-03-12 05:05:31] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=2495 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-395122d99e9168d0.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-395122d99e9168d0 files=3
+[2026-03-12 05:05:31] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=2507 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-395122d99e9168d0.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-395122d99e9168d0
+[2026-03-12 05:05:31] Installed @img/sharp-libvips-darwin-arm64@1.0.4 (native)
+[2026-03-12 05:05:31] [jhol-cold-profile] stage=extract_selective elapsed_ms=2687 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-8e8511fcd2f99078.tgz files=421 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-8e8511fcd2f99078
+[2026-03-12 05:05:31] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=2697 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-8e8511fcd2f99078.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-8e8511fcd2f99078 files=421
+[2026-03-12 05:05:31] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=2697 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-8e8511fcd2f99078.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-8e8511fcd2f99078
+[2026-03-12 05:05:31] Installed @swc/helpers@0.5.15 (native)
+[2026-03-12 05:05:31] [jhol-cold-profile] stage=extract_selective elapsed_ms=1924 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-fd08a5209e23885e.tgz files=125 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-fd08a5209e23885e
+[2026-03-12 05:05:31] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=1924 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-fd08a5209e23885e.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-fd08a5209e23885e files=125
+[2026-03-12 05:05:31] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=1979 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-fd08a5209e23885e.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-fd08a5209e23885e
+[2026-03-12 05:05:31] Installed typescript@5.7.2 (native)
+[2026-03-12 05:05:31] [jhol-cold-profile] stage=extract_selective elapsed_ms=3317 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-346ef3668cd70a7c.tgz files=837 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-346ef3668cd70a7c
+[2026-03-12 05:05:31] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=3317 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-346ef3668cd70a7c.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-346ef3668cd70a7c files=837
+[2026-03-12 05:05:31] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=3317 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-346ef3668cd70a7c.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-346ef3668cd70a7c
+[2026-03-12 05:05:31] Installed caniuse-lite@1.0.30001777 (native)
+[2026-03-12 05:05:33] [jhol-cold-profile] stage=extract_manifest_minimal elapsed_ms=4621 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-e48d6e5b5fdfa0fc.tgz files=2 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-e48d6e5b5fdfa0fc
+[2026-03-12 05:05:33] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=4622 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-e48d6e5b5fdfa0fc.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-e48d6e5b5fdfa0fc files=2
+[2026-03-12 05:05:33] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=4648 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-e48d6e5b5fdfa0fc.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-e48d6e5b5fdfa0fc
+[2026-03-12 05:05:33] Installed @next/swc-darwin-arm64@15.1.0 (native)
+[2026-03-12 05:05:33] [jhol-cold-profile] stage=extract_manifest_minimal elapsed_ms=4741 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-f6696b6092aec2db.tgz files=65 dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-f6696b6092aec2db
+[2026-03-12 05:05:33] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=4742 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-f6696b6092aec2db.tgz dest=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-f6696b6092aec2db files=65
+[2026-03-12 05:05:33] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=4742 tarball=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store/sri-f6696b6092aec2db.tgz unpacked=/tmp/jhol-compact-summary.Hq9Hae/jhol-cache/store_unpacked/sri-f6696b6092aec2db
+[2026-03-12 05:05:33] Installed next@15.1.0 (native)
+[jhol-native-link] 5290ms
+[2026-03-12 05:05:33] [jhol-profile] stage=download_unpack_install_cold delta_ms=34326 total_ms=47891

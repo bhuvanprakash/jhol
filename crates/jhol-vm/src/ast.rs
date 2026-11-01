@@ -100,7 +100,7 @@ pub enum Expr {
     Bool(bool),
     Null,
     Undefined,
-    BigInt(i64),
+    BigInt(i128),
     Ident(String),
     This,
     Super,
@@ -141,7 +141,13 @@ pub enum Expr {
 
 #[derive(Clone, Debug)]
 pub enum TplPart {
-    Str(String),
+    /// One literal stretch of a template: `cooked` is the value JS produces
+    /// after escape processing, `raw` is the exact source text (what a tagged
+    /// template exposes as `strings.raw[i]`).
+    Str {
+        cooked: String,
+        raw: String,
+    },
     /// A `${...}` hole, produced by the lexer as raw source and turned into an
     /// `Expr` by the parser (keeps template handling out of the lexer).
     Raw(String),
@@ -211,6 +217,8 @@ pub enum ClassMemberKind {
     /// Property with an initialiser.
     Field(Box<Expr>),
     StaticField(Box<Expr>),
+    /// `static { ... }` — runs with `this` bound to the class.
+    StaticBlock(Box<Func>),
 }
 
 /// Assignment / destructuring target.
@@ -224,7 +232,10 @@ pub enum Target {
     /// `x = default` inside a pattern.
     WithDefault(Box<Target>, Box<Expr>),
     /// `...rest` inside an array pattern: bind everything from `from` on.
-    Rest { from: u32, target: Box<Target> },
+    Rest {
+        from: u32,
+        target: Box<Target>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -242,7 +253,10 @@ pub enum Stmt {
     /// A comment, kept as a node so `jhol fmt` can print it back instead of
     /// deleting it. `trailing` means it sat on the same line as the statement
     /// before it (`x = 1; // why`), so the printer re-attaches it there.
-    Comment { text: String, trailing: bool },
+    Comment {
+        text: String,
+        trailing: bool,
+    },
     /// Module-level declarations (`export`/`import`) round-tripped verbatim.
     /// They are not part of the language JholVM executes, so the engine parses
     /// them well enough to leave them alone instead of rejecting a file that
@@ -253,11 +267,15 @@ pub enum Stmt {
     Block(Vec<Stmt>),
     If(Expr, Box<Stmt>, Option<Box<Stmt>>),
     While(Expr, Box<Stmt>),
+    With(Expr, Box<Stmt>),
     DoWhile(Box<Stmt>, Expr),
     For(Option<Box<Stmt>>, Option<Expr>, Option<Expr>, Box<Stmt>),
     ForInOf {
         kind: ForKind,
-        decl: Option<(VarKind, Target)>,
+        /// `None` for a bare head (`for (x in obj)`), `Some(None)` is never
+        /// produced; the inner `Option<VarKind>` distinguishes `var`/`let`/
+        /// `const` from an assignment to an existing binding.
+        decl: Option<(Option<VarKind>, Target)>,
         expr: Expr,
         body: Box<Stmt>,
     },

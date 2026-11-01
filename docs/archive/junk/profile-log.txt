@@ -1,0 +1,24 @@
+Timestamp: 2026-09-28T05:52:43.756919
+Packages: ['lodash', 'axios', 'chalk']
+Total Time: 2.052s
+
+STDOUT:
+
+
+STDERR:
+[2026-09-28 05:52:41] [jhol-profile] stage=install_pkg_start delta_ms=2 total_ms=2
+[2026-09-28 05:52:41] [jhol-profile] stage=after_preseed delta_ms=8 total_ms=10
+[2026-09-28 05:52:41] [jhol-profile] stage=before_capsule delta_ms=0 total_ms=10
+[2026-09-28 05:52:41] [jhol-profile] stage=after_capsule delta_ms=0 total_ms=10
+[jhol-profile] stage=expansion_http requests=26 successful=26 failed=0 body_bytes=933090 specs=8
+[2026-09-28 05:52:43] [jhol-profile] stage=after_expansion delta_ms=1927 total_ms=1937
+[2026-09-28 05:52:43] [jhol-profile] stage=before_jgrid delta_ms=0 total_ms=1938
+[2026-09-28 05:52:43] [jhol-profile] stage=after_store_index delta_ms=7 total_ms=1946
+[2026-09-28 05:52:43] [jhol-profile] stage=after_wave_skip delta_ms=0 total_ms=1946
+[2026-09-28 05:52:43] [jhol-profile] stage=batch_fast_path_miss delta_ms=0 total_ms=1946
+[2026-09-28 05:52:43] [jhol-profile] stage=classify_cache_vs_fetch delta_ms=9 total_ms=1955
+[2026-09-28 05:52:43] [jhol-profile] stage=install_from_cache delta_ms=45 total_ms=2000
+[2026-09-28 05:52:43] [jhol-profile] stage=tail_relink delta_ms=1 total_ms=2002
+[2026-09-28 05:52:43] [jhol-profile] stage=tail_lockfile delta_ms=1 total_ms=2003
+[2026-09-28 05:52:43] [jhol-profile] stage=tail_markers delta_ms=4 total_ms=2007
+[2026-09-28 05:52:43] [jhol-profile] stage=tail_jgrid delta_ms=0 total_ms=2007

@@ -1,0 +1,130 @@
+{
+  "add_cold": {
+    "jhol": {
+      "median": 0.018,
+      "runs": [
+        {
+          "seconds": 0.019576625000013337,
+          "code": 0,
+          "tail": "Package(s) added."
+        },
+        {
+          "seconds": 0.01636499999995067,
+          "code": 0,
+          "tail": "Package(s) added."
+        }
+      ]
+    },
+    "bun": {
+      "median": 153.6445,
+      "runs": [
+        {
+          "seconds": 134.59751816699998,
+          "code": 0,
+          "tail": " - tsc\n - tsserver\ninstalled express@5.2.1\n\n88 packages installed [134.56s]\nResolving dependencies\nResolved, downloaded and extracted [414]\nSaved lockfile"
+        },
+        {
+          "seconds": 172.6914770420001,
+          "code": 0,
+          "tail": " - tsc\n - tsserver\ninstalled express@5.2.1\n\n88 packages installed [172.66s]\nResolving dependencies\nResolved, downloaded and extracted [414]\nSaved lockfile"
+        }
+      ]
+    }
+  },
+  "add_warm": {
+    "jhol": {
+      "median": 0.0163,
+      "runs": [
+        {
+          "seconds": 0.01811550000002171,
+          "code": 0,
+          "tail": "Package(s) added."
+        },
+        {
+          "seconds": 0.014524791999974695,
+          "code": 0,
+          "tail": "Package(s) added."
+        }
+      ]
+    },
+    "bun": {
+      "median": 0.4766,
+      "runs": [
+        {
+          "seconds": 0.5702647499999784,
+          "code": 0,
+          "tail": " - tsc\n - tsserver\ninstalled express@5.2.1\n\n88 packages installed [558.00ms]\nResolving dependencies\nResolved, downloaded and extracted [0]\nSaved lockfile"
+        },
+        {
+          "seconds": 0.3829157089999171,
+          "code": 0,
+          "tail": " - tsc\n - tsserver\ninstalled express@5.2.1\n\n88 packages installed [371.00ms]\nResolving dependencies\nResolved, downloaded and extracted [0]\nSaved lockfile"
+        }
+      ]
+    }
+  },
+  "install_cold": {
+    "jhol": {
+      "median": 0.0448,
+      "runs": [
+        {
+          "seconds": 0.038196083000002545,
+          "code": 0,
+          "tail": "Done."
+        },
+        {
+          "seconds": 0.051336666999986846,
+          "code": 0,
+          "tail": "Done."
+        }
+      ]
+    },
+    "bun": {
+      "median": 66.713,
+      "runs": [
+        {
+          "seconds": 67.1113846249998,
+          "code": 0,
+          "tail": "+ next@16.1.6\n+ react@19.2.4\n+ typescript@5.9.3\n\n88 packages installed [67.08s]\nResolving dependencies\nResolved, downloaded and extracted [416]\nSaved lockfile"
+        },
+        {
+          "seconds": 66.314674792,
+          "code": 0,
+          "tail": "+ next@16.1.6\n+ react@19.2.4\n+ typescript@5.9.3\n\n88 packages installed [66.27s]\nResolving dependencies\nResolved, downloaded and extracted [414]\nSaved lockfile"
+        }
+      ]
+    }
+  },
+  "install_warm": {
+    "jhol": {
+      "median": 0.0293,
+      "runs": [
+        {
+          "seconds": 0.028798000000051616,
+          "code": 0,
+          "tail": "Done."
+        },
+        {
+          "seconds": 0.029792000000043117,
+          "code": 0,
+          "tail": "Done."
+        }
+      ]
+    },
+    "bun": {
+      "median": 0.2908,
+      "runs": [
+        {
+          "seconds": 0.3229238330000044,
+          "code": 0,
+          "tail": "+ next@16.1.6\n+ react@19.2.4\n+ typescript@5.9.3\n\n88 packages installed [308.00ms]\nResolving dependencies\nResolved, downloaded and extracted [0]\nSaved lockfile"
+        },
+        {
+          "seconds": 0.2586815419999766,
+          "code": 0,
+          "tail": "+ next@16.1.6\n+ react@19.2.4\n+ typescript@5.9.3\n\n88 packages installed [249.00ms]\nResolving dependencies\nResolved, downloaded and extracted [0]\nSaved lockfile"
+        }
+      ]
+    }
+  }
+}

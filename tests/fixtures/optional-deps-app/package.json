@@ -1,0 +1,1 @@
+{"name":"jhol-fixture-optional-deps-app","version":"1.0.0","dependencies":{"is-number":"7.0.0"},"optionalDependencies":{"fsevents":"2.3.3"}}

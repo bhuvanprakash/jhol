@@ -23,9 +23,231 @@ the project uses [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Unreleased]
+
+## [2.0.0] — Damascus
+
+**Codename Damascus** — folded steel: many layers welded into one instrument,
+sharpest in its class, craft that cannot be reproduced by copying. Three
+months of work on JholVM — the JS engine inside `jhol run` — and the tooling
+around it.
+
+### Breaking changes
+
+Every entry is a case where JholVM was wrong and is now correct, verified
+byte-identical against node:
+
+- **`JSON.parse` is strict.** `truX`, `01`, `1.`, `.5`, a bare `-`, raw
+  control characters in strings, and trailing garbage after the top-level
+  value now throw, as in node. The previous parser silently accepted them.
+- **`Number(undefined)` is `NaN`** (was `0`). `Number()` with no argument and
+  `Number(null)` remain `0`.
+- **`toFixed` rounds ties away from zero** on the exact decimal expansion
+  (`(0.5).toFixed(0)` is `"1"`, was `"0"`).
+- **`in` and `for-in` treat array elisions as holes.** `1 in [1, , 3]` is
+  `false`; `for (k in sparse)` yields only present indices.
+- **Console output matches node's inspect style**: strings inside containers
+  are quoted (`[ 'a' ]`), `console.log(-0)` prints `-0`,
+  `Object.prototype.toString.call(x)` classifies primitives.
+- **Object key lists filter engine-internal slots** (`#get:`/`#set:`) from
+  `Object.keys` and `getOwnPropertyNames`.
+- **Writes at array indices >= 4096 now stick** (a sparse/dense
+  read-precedence bug silently dropped them), and object numeric keys resolve
+  (`{5000: v}` is readable by either spelling).
+
+### Added
+
+- **Date**: full epoch arithmetic — `now`/`parse`(ISO)/`UTC`, local and UTC
+  getters/setters, `toISOString`/`toString`/`toUTCString`; local time via a
+  one-time zone probe.
+- **WeakMap / WeakSet** (identity-keyed; GC-naive retention documented).
+- **Symbol.for / keyFor / well-known symbols.**
+- **atob / btoa**, **crypto.getRandomValues / randomUUID**, **Object.is**,
+  the **Function** binding with `Function.prototype`, **EvalError / URIError**.
+
+### Performance
+
+- **The JIT learned to allocate.** Flush-to-frame root maps let the collector
+  see values held in JIT registers, so region compilation covers object
+  literals, property access, and native calls — not just numeric counted
+  loops (`jit.rs` grew from ~400 to 4,100 lines).
+- **Primitive-receiver property loads in JIT'd code** use the same inline
+  caches as the interpreter (number/array/string prototype shape checks)
+  instead of an interpreter call per iteration.
+- **Interpreter**: the dense-array fast path extended past an arbitrary
+  4096-slot ceiling; per-site store caches; fused local ops; a string
+  accumulator; call-window reuse; `INLINE_PROPS` raised to 6; primitive
+  prototype `Value`s cached.
+- **JSON.parse rewritten on bytes** (`JsonScan`): single-byte structural
+  scanning, ASCII strings copied from the slice, numbers parsed from the
+  borrowed token; node-faithful to the last edge (lone surrogates preserved
+  in values, strict number grammar).
+
+Measured on the 11-benchmark suite, both engines in the same seconds:
+**19,425 ms to ~130 ms total (~150x)**; all 11 benchmarks ahead of Bun under
+load, 9-11 ahead at quiet-machine noise levels.
+
+### Tooling
+
+- **`jhol fmt` completed**: comment preservation, unicode fidelity, and the
+  real-world harness (1,483 node_modules files, zero failures on
+  parse/format/re-parse/idempotency).
+- **Adversarial corpus** (`tests/adv/`): hostile fixtures with expectations
+  regenerated from node, wired into `verify.sh` with an xfail convention.
+- **Bundler routes plain JS through JholVM's parser** for import extraction —
+  the regex fallback's phantom-import failure mode is gone.
+- **`verify.sh` quality gate**: build, unit tests, corpus, formatter
+  round-trip/idempotency/width, real-world harness, adversarial fixtures.
+
 
 ### Fixed
+
+- The no-op install shortcut now verifies locked package manifests and the
+  prepared-tree proof before reporting that a project is current. Package `bin`
+  names and targets are validated and confined to their package; `.bin` shim
+  writes are confined to `node_modules`, including when existing symlinks are
+  present.
+
+- Extracted package publication no longer deletes a target that appears after a
+  failed rename. Competing output is preserved; the previous package is restored
+  when possible or retained at a reported recovery path. A later install now
+  restores one uniquely matching backup left by process interruption; ambiguous
+  backups and competing outputs remain untouched and fail closed.
+
+- Daemon requests reject unsupported flags, invalid wire data, oversized package
+  lists, package specs, and working-directory paths. The client no longer
+  truncates fields and risks installing into a different project. Active daemon
+  connection workers are capped at 64; excess requests receive a busy response.
+  Daemon startup now uses an owner-only per-socket lock, preserves active sockets
+  and non-socket paths, and removes only a confirmed stale socket. Explicit
+  `install --daemon` starts a separate persistent process and waits for readiness;
+  the XDG socket path is stable across CLI processes so later installs can reuse it.
+  `jhol daemon --stop` stops accepting work, drains accepted connections and
+  daemon background tasks, flushes daemon state, and removes only the socket
+  whose device and inode it bound.
+
+- Prepared-tree reuse now requires installed package names and versions to match
+  the lockfile, including npm aliases and scoped packages. Missing lock versions
+  miss safely. Replay copies no longer hard-link mutable project files to shared
+  bundles, and failed symlink recreation is reported instead of treated as a hit.
+
+- JAGR Infinite reconciliation uses a bounded dependency worklist instead of
+  repeated whole-graph passes. A selected-version change refreshes only that
+  package's outgoing constraints and affected children; budget exhaustion fails
+  rather than returning a partial resolution. Final layouts still undergo
+  semver and peer validation.
+
+- JAGR Infinite's synthetic-domain retry now requires full-packument refreshes
+  to succeed before resolving. Retry eligibility now belongs to the resolver
+  attempt that observed synthetic metadata, so concurrent resolutions cannot
+  consume or clear one another's fallback signal.
+
+- Persisted JAGR resolver programs now have a bounded read size and must match
+  the current cache key, chart, constraints, and emitted instruction shape.
+  Truncated, oversized, stale, or altered cache entries miss and compile again.
+
+- Packument disk, memory, daemon and in-flight cache keys now include registry
+  and credential identity. JAGR lattice keys share that identity; resolved
+  bundles verify credentials plus configured default and scoped registries.
+  Older entries remain in place and become misses. Layout and peer validation
+  still run on every bundle replay.
+
+- Zero-copy package metadata and lattice lookups now require the captured
+  registry/auth identity. Originless legacy lattice records remain as misses;
+  the identity-free GRM assembly helper no longer chooses install versions.
+
+- JholVM native regions cover eligible loops with local or property bounds,
+  re-reading the test each iteration. Guard failures resume at the exact
+  instruction, preserving completed updates and accessor effects.
+
+- JholVM bound functions preserve their receiver and arguments across nested
+  binds, retain bound receivers during collection, and forward constructor
+  arguments while ignoring the bound receiver. Bound-call stack cleanup now
+  waits until the invoked frame returns; invalid bind receivers raise an error.
+  Constructors honor function returns and ignore primitive string returns.
+
+- JholVM reuses capture descriptors for the same binding. Native regions can
+  call verified numeric leaves that commit captured-cell writes only after all
+  guards and return an Smi; whole-function callers retain their purity gate.
+  Closures retain their module's prototype-table identity across later evals.
+
+- JholVM collects automatically at interpreter safe points, traces function
+  property bags and suspended generator state, and roots Rust callback snapshots
+  and pending timers. Generator slots are reused after collection. Array/property
+  buffer growth contributes to collection pressure; host-returned values remain
+  rooted until engine shutdown. Callback exceptions propagate to the caller;
+  delayed bytecode timers execute fully. Primitive conversion accepts primitive
+  results and rejects objects; nested functions keep separate exception-handler
+  tracking so returns cannot discard caller catches. Sparse-array truncation removes old
+  entries, and append respects the logical length of arrays containing holes.
+
+- JholVM distinguishes a present `undefined` property from a missing property,
+  including getters and numeric keys. Shared prototype mutation validates
+  cycles, extensibility and function receivers; setter memos expire on ancestor
+  changes and collection. Pointer decoding is shared, and hot own-property
+  loads reuse the VM arena base while primitive checks retain their early exit.
+- JholVM gates all native emitters by CPU/ABI, uses host mapping flags and
+  synchronizes instruction caches before publishing RX code. Function mappings
+  and live arena objects are released on shutdown. Arena offsets no longer
+  truncate above 4 GiB; oversized blocks and undersized recycled tails are
+  rejected safely. Windows reserves its arena and commits pages incrementally.
+- JholVM native regions use field-width-correct object guards and translate
+  whole-function return status correctly; successful native calls no longer
+  force interpreter fallback. Arrow closures retain lexical `this`, static
+  fields initialize once on their class, and Unicode identifier lookahead
+  consumes complete UTF-8 scalars instead of hanging on valid source.
+- Formatting preserves sparse-array holes, required multiline separators,
+  exponentiation grouping, and static field declarations. The formatter's
+  semantic cache identity is bumped so cached older output is regenerated.
+- JAGR-Infinite replays validate recorded dependency edges and current peer
+  policy. Cache keys separate dependency and override sections; fresh layouts
+  require authoritative registry metadata for every selected package.
+
+- Fresh installs now pick the newest satisfying version, as npm and Bun do.
+  Four snapshot layers answered semver ranges with stale versions, so a
+  20-dependency fixture got `dayjs 1.11.19` (registry `1.11.23`) and
+  `qs 6.16.0` (registry `6.16.1`) while Bun got the newer ones:
+  1. `registry::bundled_index_allowed` now permits the bundled/store index only
+     offline, for an exact pin, or with the new opt-in `JHOL_PREFER_BUNDLED=1`
+     (the old body allowed every non-empty constraint, contradicting its own doc).
+  2. `resolve_tarball_via_manifest` applies the same gate to the embedded
+     package index (direct dependencies).
+  3. `install.rs` transitive expansion applies it to the binary-store and lattice
+     pre-selection fast paths. `install` and `registry` share one predicate.
+  4. Harvesting a packument from the login-home cache (`~/.jhol-cache`) into a
+     project cache stamped the copy with the current time, so a weeks-old
+     packument passed the TTL check as fresh. `origin::harvest_packument_into`
+     now preserves the origin file's mtime; stale metadata revalidates with its
+     ETag (usually a 304) instead of being served as is.
+- Project wedge: `sync --apply` saves its execution receipt under
+  `.jhol/receipts/`. `snapshot create` captures `package.json`, `package-lock.json`
+  and that real receipt (it used to store an empty placeholder). `jhol diff` with
+  no arguments compares the project with the latest snapshot: manifest, lock,
+  per-package changes, and the installed `node_modules` against the lock.
+  `--exit-code` gives CI a status for "sync needed". `restore --apply` writes
+  the lock files only when `package.json` is byte-identical to the snapshot's, and
+  never touches `node_modules`. `jhol dev` without `jhol.toml` prints a valid
+  example. Check: `scripts/project_wedge_e2e.sh`.
+- `jhol-vm` correctness (found by running the engine and formatter against 1,483
+  real `node_modules` files): the formatter no longer emits unparseable or
+  meaning-changing code (template escapes, empty `if`/loop bodies, computed
+  accessor keys); the parser accepts `async function` starting a line, anonymous
+  `class extends`, and reports real errors inside arrow bodies; derived classes
+  work (no-constructor classes, `super(...args)`, multi-level chains,
+  `extends Error/Array`, `super.method()`, static `super`); `__proto__` is a real
+  accessor and works in object literals; functions have `.name`. Real-world
+  parse 98.5% -> 100%, formatter reparse failures 5 -> 0, non-idempotent 3 -> 0.
+- Two replay caches had no age limit and could pin a months-old resolution of a
+  `^` range: the global resolved-bundle (`.jres`) replay in JAGR-Infinite, and the
+  lockfile-less fresh-project bundle replay (`jhol-core` and `jhol-trampoline`).
+  Both now follow the packument TTL (`origin::within_metadata_ttl`, default
+  3600 s, `JHOL_PACKUMENT_TTL_SECS`, offline always trusted). Lockfile-bound
+  replays are unchanged.
+- Closure speculation: while the live frontier resolves, JAGR-Infinite predicts
+  the dependency closure from older local packuments and warms the live-metadata
+  cache for it. Prefetch only; versions are still chosen from live data.
+  `JHOL_NO_SPECULATE=1` disables it, `JHOL_SPECULATE_MAX` bounds it (default 256).
+- Offline archive synthesis chose the "highest" bundled version by string
+  comparison (`6.9.0` beat `6.16.0`); it now compares semver.
 
 - Cold exact-version transfers reuse registry-declared archive URLs and SRI from
   discovery; foreground work can share the same verified prefetch operation.
@@ -106,8 +328,34 @@ the project uses [Semantic Versioning](https://semver.org/).
   ignored them and always reported the host, so a cross-platform install could
   neither be selected nor tested. They now read the overrides (plus
   `npm_config_*`) and fall back to host detection.
+- **TypeScript with type annotations failed to run (`jhol eval --type ts`,
+  `jhol run file.ts`).** The shipped transpiler was the regex fallback
+  (`fast_strip_ts`), which removes `interface`/`type`/`enum` declarations but
+  never strips `: type` annotations, so `const n: number = 5` reached the
+  engine verbatim and died as a raw `JSException` with no useful message. The
+  real SWC backend (`swc-transpile`) now ships by default — the CLI already
+  compiled swc for the bundler, so this costs nothing extra. The transpile
+  disk cache version is bumped (v2): v1 entries written by the fallback stored
+  the unstripped source and were served back forever. Regression tests pin
+  annotation/interface/function-signature/JSX stripping.
+- **One lockfile entry without a `version` disabled the whole resolved map.**
+  npm's `--package-lock-only` lockfiles can omit the version on the root
+  entry; `read_lockfile_resolved_from_str` used `?` inside the loop, so a
+  single such entry returned `None` and `jhol why` reported "No lockfile
+  found" on a perfectly good `package-lock.json`. The same poison-pill pattern
+  existed in the resolved-URL map (an entry without `resolved`, e.g. `link:`
+  packages, discarded every other tarball URL) and in both materialization
+  readers. All four now skip the offending entry and keep the rest.
+- **`jhol why` and friends** now work against lockfile-only checkouts (no
+  `node_modules` needed), verified with `npm install --package-lock-only`.
 
 ### Added
+- **`jhol eval --print` / `-p`.** Plain `jhol eval '1+1'` follows `node -e`
+  and discards the completion value; `--print` evaluates the code and prints
+  its value like `node -p` / `bun -e`. The user's code is passed through
+  `eval()` as a string so its syntax is untouched; TypeScript/JSX are
+  transpiled first (annotations no longer break this, see the transpiler fix
+  above).
 - **JGrid L0 + L1-store (world-class CAS materialization).** After a successful
   install, jhol publishes a durable graph-keyed L0 `node_modules` bundle
   (APFS `clonefile` / reflink) keyed by dep-set hash — Instant Lock that lives

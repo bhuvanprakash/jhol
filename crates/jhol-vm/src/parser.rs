@@ -32,7 +32,9 @@ pub fn parse_program(src: &str) -> Result<Func, String> {
 pub struct Parser {
     toks: Vec<(Tok, u32)>,
     i: usize,
-    no_in: bool,
+    /// Nesting level at which `in` is banned (a `for` head), if any.
+    no_in: Option<usize>,
+    nest: usize,
     /// Comments in source order, waiting to be spliced into the statement
     /// stream at `next_tok`.
     comments: Vec<lexer::LexComment>,
@@ -44,7 +46,8 @@ impl Parser {
         Parser {
             toks,
             i: 0,
-            no_in: false,
+            no_in: None,
+            nest: 0,
             comments: Vec::new(),
             ci: 0,
         }
@@ -57,7 +60,8 @@ impl Parser {
         Parser {
             toks,
             i: 0,
-            no_in: false,
+            no_in: None,
+            nest: 0,
             comments,
             ci: 0,
         }
@@ -66,25 +70,33 @@ impl Parser {
     /// Emit the next comment as a statement if it precedes the current token.
     /// Returns `false` when there is nothing to emit.
     fn take_comment(&mut self) -> Option<Stmt> {
-        let c = self.comments.get(self.ci)?;
-        if c.next_tok > self.i {
-            return None;
+        loop {
+            let c = self.comments.get(self.ci)?.clone();
+            if c.next_tok > self.i {
+                return None;
+            }
+            self.ci += 1;
+            // A comment from inside an expression (`const x = /** doc */
+            // (async function () {}.x)`) is flushed at the next `statement()`
+            // call — inside the function body being parsed, the wrong scope.
+            // Emitting its text there corrupts the output, so a displaced
+            // comment is dropped. Keep scanning: a later comment may belong
+            // exactly here, and stopping at the first displaced one used to
+            // turn that comment into the body of an `if`/loop.
+            if c.next_tok < self.i {
+                continue;
+            }
+            let prev_line = if self.i == 0 {
+                0
+            } else {
+                self.toks[self.i - 1].1
+            };
+            let trailing = c.line == prev_line && prev_line != 0;
+            return Some(Stmt::Comment {
+                text: c.text,
+                trailing,
+            });
         }
-        let c = c.clone();
-        self.ci += 1;
-        // Same line as the token before it means it trailed a statement.
-        let prev_line = if self.i == 0 { 0 } else { self.toks[self.i - 1].1 };
-        let trailing = c.line == prev_line && prev_line != 0;
-        // A comment from inside an expression (`const x = /** doc */
-        // (async function () {}.x)`) is flushed at the next `statement()`
-        // call — inside the function body being parsed, the wrong scope.
-        // Emitting its text there corrupts the output, so a displaced comment
-        // is dropped. Statement-position comments — the overwhelming
-        // majority — are kept byte-exact.
-        if c.next_tok < self.i {
-            return None;
-        }
-        Some(Stmt::Comment { text: c.text, trailing })
     }
 
     /// Flush every comment that has not been consumed yet — called where a
@@ -112,7 +124,8 @@ impl Parser {
         Ok(Parser {
             toks,
             i: 0,
-            no_in: false,
+            no_in: None,
+            nest: 0,
             comments: Vec::new(),
             ci: 0,
         })
@@ -154,6 +167,13 @@ impl Parser {
 
     fn bump(&mut self) -> Tok {
         let t = self.toks[self.i.min(self.toks.len() - 1)].0.clone();
+        if let Tok::Punct(p) = &t {
+            match *p {
+                "(" | "[" | "{" => self.nest += 1,
+                ")" | "]" | "}" => self.nest = self.nest.saturating_sub(1),
+                _ => {}
+            }
+        }
         if self.i + 1 < self.toks.len() {
             self.i += 1;
         }
@@ -189,18 +209,37 @@ impl Parser {
         if self.eat_punct(p) {
             Ok(())
         } else {
-            Err(self.err(&format!("expected `{}`, found {}", p, self.cur().describe())))
+            Err(self.err(&format!(
+                "expected `{}`, found {}",
+                p,
+                self.cur().describe()
+            )))
         }
     }
     fn expect_kw(&mut self, k: &str) -> Result<(), String> {
         if self.eat_kw(k) {
             Ok(())
         } else {
-            Err(self.err(&format!("expected `{}`, found {}", k, self.cur().describe())))
+            Err(self.err(&format!(
+                "expected `{}`, found {}",
+                k,
+                self.cur().describe()
+            )))
         }
     }
     fn err(&self, msg: &str) -> String {
-        format!("SyntaxError: line {}: {}", self.cur_line(), msg)
+        let a = self.i.saturating_sub(2);
+        let b = (self.i + 2).min(self.toks.len());
+        let ctx: Vec<String> = self.toks[a..b]
+            .iter()
+            .map(|(t, l)| format!("{:?}@{}", t, l))
+            .collect();
+        format!(
+            "SyntaxError: line {}: {} [{}]",
+            self.cur_line(),
+            msg,
+            ctx.join(" ")
+        )
     }
 
     fn ident_name(&mut self) -> Result<String, String> {
@@ -281,7 +320,7 @@ impl Parser {
         if self.is_async_fn() {
             self.bump(); // async
             let f = self.function_after_async()?;
-            let name = f.name.clone().unwrap_or_default();
+            let _name = f.name.clone().unwrap_or_default();
             return Ok(Stmt::Func(Box::new(f)));
         }
         let e = self.expression()?;
@@ -344,7 +383,9 @@ impl Parser {
                 Ok(Stmt::Func(Box::new(f)))
             }
             "async" => {
-                if matches!(self.nth(1), Tok::Keyword("function")) && !self.newline_before() {
+                // Check the gap *after* `async`, not before it: a declaration
+                // that starts a line is still a declaration.
+                if self.is_async_fn() {
                     self.bump();
                     let f = self.function_after_async()?;
                     return Ok(Stmt::Func(Box::new(f)));
@@ -377,6 +418,13 @@ impl Parser {
                 self.expect_punct(")")?;
                 Ok(Stmt::While(c, Box::new(self.statement_body()?)))
             }
+            "with" => {
+                self.bump();
+                self.expect_punct("(")?;
+                let c = self.expression()?;
+                self.expect_punct(")")?;
+                Ok(Stmt::With(c, Box::new(self.statement_body()?)))
+            }
             "do" => {
                 self.bump();
                 let body = Box::new(self.statement_body()?);
@@ -390,7 +438,11 @@ impl Parser {
             "for" => self.for_statement(),
             "return" => {
                 self.bump();
-                if self.at_punct(";") || self.at_punct("}") || self.at_end() || self.newline_before() {
+                if self.at_punct(";")
+                    || self.at_punct("}")
+                    || self.at_end()
+                    || self.newline_before()
+                {
                     self.eat_punct(";");
                     return Ok(Stmt::Return(None));
                 }
@@ -444,6 +496,16 @@ impl Parser {
                 let mut text = String::new();
                 let mut needs_gap = false;
                 let mut last_kw = false;
+                let mut last_was_open = false;
+                let mut saw_fn = false;
+                let mut saw_eq = false;
+                let is_import_kw = matches!(self.cur(), Tok::Keyword(k) if *k == "import");
+                let is_export_kw = matches!(self.cur(), Tok::Keyword(k) if *k == "export");
+                let named_export = is_export_kw && matches!(self.nth(1), Tok::Punct("{"));
+                let star_export = is_export_kw && matches!(self.nth(1), Tok::Punct("*"));
+                let from_clause = is_import_kw || named_export || star_export;
+                let mut tokens_seen = 0usize;
+                let mut saw_from = false;
                 // Spacing: bare words and bracket-closers separate on their own;
                 // `(`/`[` attach to a word (`f(x)`) but space after a keyword
                 // (`return (x)`); `{` always separates (`export { a }`).
@@ -459,7 +521,7 @@ impl Parser {
                         let sep = matches!(
                             s,
                             "," | ";" | ":" | "=>" | "..."
-                                | "=" | "==" | "!=" | "==" | "!==" | "<" | ">" | "<=" | ">="
+                                | "=" | "==" | "!=" | "!==" | "<" | ">" | "<=" | ">="
                                 | "+" | "-" | "*" | "/" | "%" | "**"
                                 | "&&" | "||" | "??" | "&" | "|" | "^" | "~" | "!" | "?"
                                 | "<<" | ">>" | ">>>" | "instanceof" | "in"
@@ -471,13 +533,26 @@ impl Parser {
                         let word = !s.is_empty()
                             && (quoted
                                 || s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$'));
-                        if word || closes {
+                        if word {
                             if needs_gap || last_kw {
                                 $toks.push(' ');
                             }
                             $toks.push_str(s);
                             needs_gap = true;
                             last_kw = $is_kw;
+                            last_was_open = false;
+                        } else if closes {
+                            // `)`/`]` always attach to the previous token. A
+                            // `}` attaches only to an opening `{` (empty `{}`);
+                            // after a value it separates (`{ a }`).
+                            let space_before = s == "}" && !last_was_open;
+                            if space_before {
+                                $toks.push(' ');
+                            }
+                            $toks.push_str(s);
+                            needs_gap = true;
+                            last_kw = false;
+                            last_was_open = false;
                         } else if group {
                             // `f(x)` attaches; `return (x)` / `new (x)` do not.
                             if last_kw {
@@ -486,6 +561,7 @@ impl Parser {
                             $toks.push_str(s);
                             needs_gap = true;
                             last_kw = false;
+                            last_was_open = true;
                         } else if brace {
                             if last_kw || needs_gap {
                                 $toks.push(' ');
@@ -493,15 +569,23 @@ impl Parser {
                             $toks.push_str(s);
                             needs_gap = true;
                             last_kw = false;
+                            last_was_open = true;
                         } else {
                             $toks.push_str(s);
                             needs_gap = sep;
                             last_kw = false;
+                            last_was_open = false;
                         }
                     }};
                 }
                 loop {
                     let is_kw = matches!(self.cur(), Tok::Keyword(_));
+                    if let Tok::Keyword(k) = self.cur() {
+                        if *k == "function" || *k == "class" {
+                            saw_fn = true;
+                        }
+                    }
+                    let is_string_tok = matches!(self.cur(), Tok::Str(_) | Tok::Str16(_));
                     let piece: String = match self.cur().clone() {
                         Tok::Eof => break,
                         Tok::Punct(";") if depth == 0 => {
@@ -523,7 +607,7 @@ impl Parser {
                             let mut out = String::from("`");
                             for part in &parts {
                                 match part {
-                                    crate::ast::TplPart::Str(v) => out.push_str(v),
+                                    crate::ast::TplPart::Str { raw, .. } => out.push_str(raw),
                                     crate::ast::TplPart::Expr(e) => out.push_str(&format!(
                                         "${{{}}}",
                                         crate::formatter::expr_source(e.as_ref())
@@ -542,11 +626,46 @@ impl Parser {
                         Tok::Keyword(k) => k.to_string(),
                         Tok::Regex(b, f) => format!("/{}/{}", b, f),
                     };
+                    if piece == "=" && depth == 0 {
+                        saw_eq = true;
+                    }
+                    // A `function`/`class` declaration ends at its closing `}`
+                    // (not at `;`), so the next statement must not be glued on.
+                    let term = piece == "}" && depth == 0 && saw_fn && !saw_eq;
+                    let first_token = tokens_seen == 0;
+                    let was_close_brace = piece == "}";
                     if !piece.is_empty() {
                         push!(text, piece, is_kw);
+                        tokens_seen += 1;
                     }
+                    if from_clause
+                        && depth == 0
+                        && matches!(self.cur(), Tok::Keyword(k) if *k == "from")
+                    {
+                        saw_from = true;
+                    }
+                    // Static `import` ends at its module string; without this,
+                    // an import without a semicolon swallowed every following
+                    // statement up to the next `;`.
+                    let import_attrs = matches!(self.nth(1), Tok::Ident(s) if s == "assert" || s == "with")
+                        || matches!(self.nth(1), Tok::Keyword(s) if *s == "assert" || *s == "with");
+                    let module_done = if is_import_kw {
+                        is_string_tok && depth == 0 && (first_token || saw_from) && !import_attrs
+                    } else if is_export_kw {
+                        (is_string_tok && depth == 0 && saw_from && !import_attrs)
+                            || (named_export
+                                && was_close_brace
+                                && depth == 0
+                                && !matches!(self.nth(1), Tok::Keyword(k) if *k == "from"))
+                    } else {
+                        false
+                    };
                     self.bump();
+                    if term || module_done {
+                        break;
+                    }
                 }
+                let _ = (needs_gap, last_kw, last_was_open);
                 Ok(Stmt::Raw(text.trim_end().to_string()))
             }
             "get" | "set" => {
@@ -571,7 +690,7 @@ impl Parser {
     fn is_let_decl(&self) -> bool {
         match self.nth(1) {
             Tok::Ident(_) => true,
-            Tok::Keyword(k) => !matches!(*k, "in" | "instanceof" | "of"),
+            Tok::Keyword(k) => !matches!(*k, "in" | "instanceof"),
             Tok::Punct("[") | Tok::Punct("{") => true,
             _ => false,
         }
@@ -606,7 +725,8 @@ impl Parser {
             self.bump();
         } else {
             let saved = self.no_in;
-            if self.at_kw("var") || self.at_kw("const") || (self.at_kw("let") && self.is_let_decl()) {
+            if self.at_kw("var") || self.at_kw("const") || (self.at_kw("let") && self.is_let_decl())
+            {
                 let kind = match self.cur() {
                     Tok::Keyword("var") => VarKind::Var,
                     Tok::Keyword("const") => VarKind::Const,
@@ -616,7 +736,7 @@ impl Parser {
                 // keeps `for (let x = a in b; …)` from being read as a loop
                 // head. Test and update are plain expressions, so the flag is
                 // dropped again before them.
-                self.no_in = true;
+                self.no_in = Some(self.nest);
                 self.bump();
                 // Several declarators: `for (let i = 0, j = n; …)` is ordinary
                 // real-world code and used to stop at the first comma.
@@ -638,7 +758,7 @@ impl Parser {
             } else {
                 // Restricted too: the `in` must survive the parse so the
                 // for-in detection below can see it.
-                self.no_in = true;
+                self.no_in = Some(self.nest);
                 let e = self.expression()?;
                 head = Some(Box::new(Stmt::Expr(e)));
             }
@@ -654,16 +774,12 @@ impl Parser {
                     self.expect_punct(")")?;
                     let body = Box::new(self.statement_body()?);
                     let (vk, tg) = match head.map(|b| *b) {
-                        Some(Stmt::Var(k, mut v)) => {
-                            if k == VarKind::Const && false {
-                                (k, v.remove(0).0)
-                            } else {
-                                (k, v.remove(0).0)
-                            }
-                        }
+                        Some(Stmt::Var(k, mut v)) => (Some(k), v.remove(0).0),
                         Some(Stmt::Expr(e)) => {
                             if let Some(t) = target_of(&e) {
-                                (VarKind::Var, t)
+                                // Bare `for (x in obj)`: an assignment to the
+                                // existing binding, not a `var` declaration.
+                                (None, t)
                             } else {
                                 return Err(self.err("invalid left-hand side in for-of"));
                             }
@@ -774,11 +890,7 @@ fn name_unused() {}
 
 /// Convert an already-parsed expression into a destructuring target, when legal.
 fn target_of(e: &Expr) -> Option<Target> {
-    match e {
-        Expr::Ident(s) => Some(Target::Simple(s.clone())),
-        Expr::Member { .. } => Some(Target::Member(Box::new(e.clone()))),
-        _ => None,
-    }
+    to_target(e)
 }
 
 /// Extract a `PropKey`-style plain name from a member expression.
@@ -802,14 +914,28 @@ pub fn dummy_key() -> PropKey {
 // --------------------------------------------------------------------------
 
 impl Parser {
+    /// ECMAScript forbids a line terminator *between* `async` and the token
+    /// after it (`async [no LineTerminator here] function`). A newline *before*
+    /// `async` is irrelevant: `x = 1\nasync function f() {}` is two statements.
+    /// (`newline_before()` asks about the current token, i.e. the wrong gap; it
+    /// made every `async function` that began a line after another statement
+    /// fail to parse, e.g. in axios's node bundle.)
+    fn newline_after_current(&self) -> bool {
+        let a = self.i.min(self.toks.len() - 1);
+        let b = (self.i + 1).min(self.toks.len() - 1);
+        self.line(b) > self.line(a)
+    }
+
     fn is_async_fn(&self) -> bool {
-        self.at_kw("async") && matches!(self.nth(1), Tok::Keyword("function")) && !self.newline_before()
+        self.at_kw("async")
+            && matches!(self.nth(1), Tok::Keyword("function"))
+            && !self.newline_after_current()
     }
     /// Is `async` an async-function *prefix*? True for `async function`,
     /// `async (` and `async ident =>`. A bare `async` used as an identifier
     /// (or followed by anything else) stays an identifier.
     fn is_async_prefix(&self) -> bool {
-        if !self.at_kw("async") || self.newline_before() {
+        if !self.at_kw("async") || self.newline_after_current() {
             return false;
         }
         match self.nth(1) {
@@ -833,7 +959,11 @@ impl Parser {
             self.bump();
             is_generator = true;
         }
-        let name = if self.is_ident() { Some(self.ident_name()?) } else { None };
+        let name = if self.is_ident() {
+            Some(self.ident_name()?)
+        } else {
+            None
+        };
         let params = self.params()?;
         let body = self.function_body()?;
         Ok(Func {
@@ -858,7 +988,11 @@ impl Parser {
             } else {
                 None
             };
-            out.push(Param { target, default, rest });
+            out.push(Param {
+                target,
+                default,
+                rest,
+            });
             if !self.eat_punct(",") {
                 break;
             }
@@ -972,10 +1106,7 @@ impl Parser {
             } else if self.eat_punct("=") {
                 let d = self.assignment_expr()?;
                 if let MemberKey::Dot(n) = &key {
-                    (
-                        Some(Box::new(Target::Simple(n.clone()))),
-                        Some(Box::new(d)),
-                    )
+                    (Some(Box::new(Target::Simple(n.clone()))), Some(Box::new(d)))
                 } else {
                     (None, Some(Box::new(d)))
                 }
@@ -1041,20 +1172,19 @@ impl Parser {
             if self.at_kw("static") && !self.at_punct2("(") && !self.at_punct2("=") {
                 self.bump();
                 if self.at_punct("{") {
-                    // static initialisation block: not supported, skip it
-                    let mut depth = 0;
-                    loop {
-                        if self.at_punct("{") {
-                            depth += 1;
-                        } else if self.at_punct("}") {
-                            depth -= 1;
-                            if depth == 0 {
-                                self.bump();
-                                break;
-                            }
-                        }
-                        self.bump();
-                    }
+                    let body = self.function_body()?;
+                    members.push(ClassMember {
+                        key: ClassKey::Name(String::new()),
+                        kind: ClassMemberKind::StaticBlock(Box::new(Func {
+                            name: None,
+                            params: Vec::new(),
+                            body,
+                            is_arrow: false,
+                            is_async: false,
+                            is_generator: false,
+                            expr_body: None,
+                        })),
+                    });
                     continue;
                 }
                 is_static = true;
@@ -1063,17 +1193,31 @@ impl Parser {
             members.push(member);
         }
         self.expect_punct("}")?;
-        Ok(ClassDef { name, superclass, members })
+        Ok(ClassDef {
+            name,
+            superclass,
+            members,
+        })
     }
 
     fn class_member(&mut self, is_static: bool) -> Result<ClassMember, String> {
         let mut is_get = false;
         let mut is_set = false;
         // `get`/`set` followed by something that is not `(`/`=`/`;`
-        if self.at_kw("get") && !self.at_punct2("(") && !self.at_punct2("=") && !self.at_punct2(";") {
+        if self.at_kw("get")
+            && !self.at_punct2("(")
+            && !self.at_punct2("=")
+            && !self.at_punct2(";")
+            && !self.at_punct2("}")
+        {
             self.bump();
             is_get = true;
-        } else if self.at_kw("set") && !self.at_punct2("(") && !self.at_punct2("=") && !self.at_punct2(";") {
+        } else if self.at_kw("set")
+            && !self.at_punct2("(")
+            && !self.at_punct2("=")
+            && !self.at_punct2(";")
+            && !self.at_punct2("}")
+        {
             self.bump();
             is_set = true;
         }
@@ -1138,7 +1282,11 @@ impl Parser {
             };
             let kind = ClassMemberKind::Method(
                 Box::new(Func {
-                    name: if marker.is_empty() { None } else { Some(marker) },
+                    name: if marker.is_empty() {
+                        None
+                    } else {
+                        Some(marker)
+                    },
                     ..f
                 }),
                 is_static,
@@ -1188,7 +1336,7 @@ impl Parser {
         let left = self.conditional()?;
 
         let op = match self.cur() {
-            Tok::Punct(p) if is_assign_op(p) => p.clone(),
+            Tok::Punct(p) if is_assign_op(p) => (*p).to_string(),
             _ => return Ok(left),
         };
         // `=` must follow directly (no newline) for an assignment expression.
@@ -1201,7 +1349,7 @@ impl Parser {
         };
         self.bump();
         let value = self.assignment_expr()?;
-        let aop = match op {
+        let aop = match op.as_str() {
             "=" => AssignOp::Assign,
             "+=" => AssignOp::AddAssign,
             "-=" => AssignOp::SubAssign,
@@ -1265,7 +1413,7 @@ impl Parser {
                         // `for (i in obj)` swallowed the `in` into a binary
                         // expression and every for-in loop without a `let`
                         // declaration failed to parse.
-                        "in" if !self.no_in => {
+                        "in" if self.no_in != Some(self.nest) => {
                             return Some((BinaryKind::Op(BinOp::In), 15, 16))
                         }
                         "in" => return None,
@@ -1358,7 +1506,16 @@ impl Parser {
                 "yield" => {
                     self.bump();
                     let d = self.eat_punct("*");
-                    if self.at_punct(")") || self.at_punct("]") || self.at_punct("}") || self.at_punct(";") || self.newline_before() {
+                    // `yield` with no argument is valid before any token that
+                    // cannot continue an expression — including the comma that
+                    // separates let-declarators (`let [a] = yield, b = 1`).
+                    if self.at_punct(")")
+                        || self.at_punct("]")
+                        || self.at_punct("}")
+                        || self.at_punct(";")
+                        || self.at_punct(",")
+                        || self.newline_before()
+                    {
                         return Ok(Expr::Yield(None, d));
                     }
                     let e = self.assignment_expr()?;
@@ -1465,10 +1622,11 @@ impl Parser {
                 // after the template.
                 let raw = self.take_template()?;
                 let parts = self.template_parts_from(raw)?;
-                return Ok(Expr::TaggedTemplate {
+                e = Expr::TaggedTemplate {
                     tag: Box::new(e),
                     parts,
-                });
+                };
+                continue;
             }
             break;
         }
@@ -1510,10 +1668,14 @@ impl Parser {
         let mut out = Vec::new();
         for part in raw {
             out.push(match part {
-                TplPart::Str(s) => TplPart::Str(s),
+                TplPart::Str { cooked, raw } => TplPart::Str { cooked, raw },
                 TplPart::Raw(src) => {
                     let mut sub = Parser::new(&src).map_err(|e| {
-                        format!("SyntaxError: line {}: in template interpolation: {}", self.cur_line(), e)
+                        format!(
+                            "SyntaxError: line {}: in template interpolation: {}",
+                            self.cur_line(),
+                            e
+                        )
                     })?;
                     let e = sub.parse_expression_only()?;
                     TplPart::Expr(Box::new(e))
@@ -1539,7 +1701,10 @@ impl Parser {
                 self.bump();
                 Ok(Expr::Str(s))
             }
-            Tok::Str16(s) => { self.bump(); Ok(Expr::Str16(s)) }
+            Tok::Str16(s) => {
+                self.bump();
+                Ok(Expr::Str16(s))
+            }
             Tok::Regex(b, f) => {
                 self.bump();
                 Ok(Expr::Regex(b, f))
@@ -1686,7 +1851,11 @@ impl Parser {
             self.bump();
             is_generator = true;
         }
-        let name = if self.is_ident() { Some(self.ident_name()?) } else { None };
+        let name = if self.is_ident() {
+            Some(self.ident_name()?)
+        } else {
+            None
+        };
         let params = self.params()?;
         let body = self.function_body()?;
         Ok(Expr::Func(Box::new(Func {
@@ -1701,7 +1870,15 @@ impl Parser {
     }
 
     fn class_body_after_keyword(&mut self) -> Result<ClassDef, String> {
-        let name = if self.is_ident() { Some(self.ident_name()?) } else { None };
+        // `extends` is a keyword token that `is_ident` accepts (contextual
+        // keywords are allowed as names), so without this guard the anonymous
+        // `class extends Base {}` took `extends` as its own name. Same guard as
+        // `class_decl`.
+        let name = if self.is_ident() && !self.at_kw("extends") && !self.at_punct("{") {
+            Some(self.ident_name()?)
+        } else {
+            None
+        };
         let superclass = if self.eat_kw("extends") {
             Some(Box::new(self.parse_unary()?))
         } else {
@@ -1738,7 +1915,11 @@ impl Parser {
             members.push(self.class_member(is_static)?);
         }
         self.expect_punct("}")?;
-        Ok(ClassDef { name, superclass, members })
+        Ok(ClassDef {
+            name,
+            superclass,
+            members,
+        })
     }
 
     fn array_literal(&mut self) -> Result<Expr, String> {
@@ -1780,6 +1961,8 @@ impl Parser {
                 && !self.at_punct2("(")
                 && !self.at_punct2(":")
                 && !self.at_punct2(",")
+                && !self.at_punct2("}")
+                && !self.at_punct2("=")
             {
                 if self.at_kw("get") {
                     is_get = true;
@@ -1796,6 +1979,7 @@ impl Parser {
                 && !self.at_punct2(",")
                 && !self.at_punct2("(")
                 && !self.at_punct2("=")
+                && !self.at_punct2("}")
             {
                 self.bump();
                 is_async = true;
@@ -1873,7 +2057,12 @@ impl Parser {
             return Ok(None);
         }
         let start = self.i;
-        let result = (|| -> Result<Option<Expr>, String> {
+        // Speculate only up to the `=>`. Once it is consumed the construct is an
+        // arrow beyond doubt, so a failure in the parameters-after-commit or in
+        // the body is a genuine syntax error and must surface with its own
+        // message. (It used to be swallowed by the rewind below, which reported
+        // a misleading `expected ; found =>` and re-parsed nested arrows.)
+        let head = (|| -> Result<Option<(Vec<Param>, bool)>, String> {
             let mut is_async_flag = false;
             if is_async {
                 self.bump();
@@ -1886,11 +2075,14 @@ impl Parser {
             if self.is_ident() && self.at_punct2("=>") {
                 let name = self.ident_name()?;
                 self.bump(); // =>
-                return Ok(Some(self.finish_arrow(vec![Param {
-                    target: Target::Simple(name),
-                    default: None,
-                    rest: false,
-                }], is_async_flag)?));
+                return Ok(Some((
+                    vec![Param {
+                        target: Target::Simple(name),
+                        default: None,
+                        rest: false,
+                    }],
+                    is_async_flag,
+                )));
             }
             if !self.at_punct("(") {
                 return Ok(None);
@@ -1908,7 +2100,9 @@ impl Parser {
                         }
                         depth -= 1;
                         if depth == 0 {
-                            if j + 1 < self.toks.len() && matches!(&self.toks[j + 1].0, Tok::Punct("=>")) {
+                            if j + 1 < self.toks.len()
+                                && matches!(&self.toks[j + 1].0, Tok::Punct("=>"))
+                            {
                                 found = Some(j + 1);
                             }
                             break;
@@ -1925,10 +2119,12 @@ impl Parser {
             if !self.eat_punct("=>") {
                 return Ok(None);
             }
-            Ok(Some(self.finish_arrow(params, is_async_flag)?))
+            Ok(Some((params, is_async_flag)))
         })();
-        match result {
-            Ok(Some(expr)) => Ok(Some(expr)),
+        match head {
+            Ok(Some((params, is_async_flag))) => {
+                Ok(Some(self.finish_arrow(params, is_async_flag)?))
+            }
             _ => {
                 self.i = start;
                 Ok(None)
@@ -1966,8 +2162,21 @@ impl Parser {
 fn is_assign_op(p: &str) -> bool {
     matches!(
         p,
-        "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "**=" | "<<=" | ">>=" | ">>>=" | "&=" | "|="
-            | "^=" | "&&=" | "||=" | "??="
+        "=" | "+="
+            | "-="
+            | "*="
+            | "/="
+            | "%="
+            | "**="
+            | "<<="
+            | ">>="
+            | ">>>="
+            | "&="
+            | "|="
+            | "^="
+            | "&&="
+            | "||="
+            | "??="
     )
 }
 
@@ -1994,32 +2203,70 @@ fn to_target(e: &Expr) -> Option<Target> {
     match e {
         Expr::Ident(s) => Some(Target::Simple(s.clone())),
         Expr::Member { .. } => Some(Target::Member(Box::new(e.clone()))),
-        Expr::Array(items) => Some(Target::Array(
-            items
-                .iter()
-                .map(|o| o.as_ref().and_then(to_target))
-                .collect(),
+        Expr::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for (i, item) in items.iter().enumerate() {
+                match item {
+                    None => out.push(None),
+                    Some(Expr::Spread(inner)) => {
+                        out.push(Some(Target::Rest {
+                            from: i as u32,
+                            target: Box::new(to_target(inner)?),
+                        }));
+                        break;
+                    }
+                    Some(it) => out.push(Some(to_target(it)?)),
+                }
+            }
+            Some(Target::Array(out))
+        }
+        // `[a, b = 1] = xs`: the default lives on an assignment node in the
+        // expression tree, so converting the literal to an assignment target
+        // has to keep it instead of turning the element into a hole.
+        Expr::Assign(AssignOp::Assign, target, default) => Some(Target::WithDefault(
+            Box::new(target.as_ref().clone()),
+            default.clone(),
         )),
         Expr::Object(props) => {
             let mut fields = Vec::new();
             for p in props {
                 match p {
-                    ObjProp::Init(MemberKey::Dot(n), v) => {
-                        let t = to_target(v)?;
-                        fields.push(ObjPatField {
-                            key: MemberKey::Dot(n.clone()),
-                            target: Some(Box::new(t)),
-                            default: None,
-                            rest: false,
-                        });
-                    }
+                    ObjProp::Spread(v) => fields.push(ObjPatField {
+                        key: MemberKey::Dot(String::new()),
+                        target: Some(Box::new(to_target(v)?)),
+                        default: None,
+                        rest: true,
+                    }),
                     ObjProp::Shorthand(n) => fields.push(ObjPatField {
                         key: MemberKey::Dot(n.clone()),
                         target: None,
                         default: None,
                         rest: false,
                     }),
-                    _ => return None,
+                    ObjProp::Init(key, v) => {
+                        // `{a: b = 1} = x` parses as Init(a, Assign(b, 1));
+                        // `{a = 1} = x` currently parses as the shorthand
+                        // default Cond(a, a, 1). Both become one target field.
+                        let (target, default) = match v.as_ref() {
+                            Expr::Assign(AssignOp::Assign, t, d) => {
+                                (Some(Box::new(t.as_ref().clone())), Some(d.clone()))
+                            }
+                            Expr::Cond(c, a, d) => match (c.as_ref(), a.as_ref()) {
+                                (Expr::Ident(n), Expr::Ident(m)) if n == m => {
+                                    (Some(Box::new(Target::Simple(n.clone()))), Some(d.clone()))
+                                }
+                                _ => (Some(Box::new(to_target(v)?)), None),
+                            },
+                            other => (Some(Box::new(to_target(other)?)), None),
+                        };
+                        fields.push(ObjPatField {
+                            key: key.clone(),
+                            target,
+                            default,
+                            rest: false,
+                        });
+                    }
+                    ObjProp::Method { .. } => return None,
                 }
             }
             Some(Target::Object(fields))

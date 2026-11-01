@@ -1,0 +1,5 @@
+dayjs@^1.11.9
+lodash@^4.17.21
+typescript@^5.2.2
+---VARIANTS---
+[]

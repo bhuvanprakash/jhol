@@ -19,10 +19,44 @@ use crate::value::f64_to_js_string;
 const WIDTH: usize = 80;
 const INDENT: usize = 2;
 
-pub fn format_source(src: &str, name: &str) -> Result<String, String> {
-    format_source_with_config(src, name, 80, 2, false)
+/// Everything `jhol fmt` can change about the output shape. Defaults match
+/// Prettier so existing callers and tests keep the same output.
+#[derive(Clone, Debug)]
+pub struct FormatOptions {
+    pub print_width: usize,
+    pub tab_width: usize,
+    pub use_tabs: bool,
+    pub semi: bool,
+    pub single_quote: bool,
+    /// `all` (default), `es5`, or `none`.
+    pub trailing_comma: String,
 }
 
+impl Default for FormatOptions {
+    fn default() -> Self {
+        Self {
+            print_width: WIDTH,
+            tab_width: INDENT,
+            use_tabs: false,
+            semi: true,
+            single_quote: false,
+            trailing_comma: "all".to_string(),
+        }
+    }
+}
+
+impl FormatOptions {
+    fn trailing_comma(&self) -> bool {
+        !self.trailing_comma.eq_ignore_ascii_case("none")
+    }
+}
+
+pub fn format_source(src: &str, name: &str) -> Result<String, String> {
+    format_source_with_options(src, name, &FormatOptions::default())
+}
+
+/// Backwards-compatible wrapper for the three options the formatter has always
+/// accepted.
 pub fn format_source_with_config(
     src: &str,
     name: &str,
@@ -30,13 +64,29 @@ pub fn format_source_with_config(
     indent: usize,
     use_tabs: bool,
 ) -> Result<String, String> {
+    let opts = FormatOptions {
+        print_width: width.max(20),
+        tab_width: indent.max(1),
+        use_tabs,
+        ..FormatOptions::default()
+    };
+    format_source_with_options(src, name, &opts)
+}
+
+pub fn format_source_with_options(
+    src: &str,
+    name: &str,
+    opts: &FormatOptions,
+) -> Result<String, String> {
     let prog = parser::parse_program(src).map_err(|e| e)?;
-    let mut p = Printer::with_config(width, indent, use_tabs);
+    let mut p = Printer::with_options(opts);
     p.program(&prog).map_err(|e| format!("{}: {}", name, e))?;
     if !p.out.is_empty() && !p.out.ends_with('\n') {
         p.out.push('\n');
     }
-    let _ = name;
+    if !opts.semi {
+        p.out = strip_optional_semicolons(&p.out);
+    }
     Ok(p.out)
 }
 
@@ -46,10 +96,17 @@ struct Printer {
     /// Remaining space on the current line, tracked so call/array/object
     /// literals can be collapsed when they fit.
     col: usize,
+    #[allow(dead_code)]
     prev_was_comment: bool,
     width: usize,
     indent: usize,
     use_tabs: bool,
+    single_quote: bool,
+    trailing_comma: bool,
+    /// Measuring mode: render one flat line without nested fit probes. Fit
+    /// probes only need a width estimate; recursing into a probe at every
+    /// nested call is exponential on generated bundles.
+    flat: bool,
 }
 
 // ── precedence ladder ────────────────────────────────────────────────────
@@ -100,17 +157,103 @@ fn log_prec(op: LogicalOp) -> u8 {
     }
 }
 
+/// True when an expression at the start of a statement would be read as a
+/// block/declaration instead of an expression. Sequences inherit this from
+/// their first element: `({a} = b, c)` needs the parentheses, not just the
+/// assignment.
+/// A `new` callee member chain that reaches through a call needs explicit
+/// parentheses, or `new (f().C)(x)` reparses as `(new f()).C(x)`.
+fn new_callee_needs_parens(e: &Expr) -> bool {
+    match e {
+        Expr::Member { obj, .. } => match obj.as_ref() {
+            Expr::Call { .. } | Expr::New(..) | Expr::TaggedTemplate { .. } => true,
+            Expr::Member { .. } => new_callee_needs_parens(obj),
+            _ => false,
+        },
+        Expr::Call { .. } | Expr::New(..) | Expr::TaggedTemplate { .. } => true,
+        Expr::OptionalChain(inner) => new_callee_needs_parens(inner),
+        _ => false,
+    }
+}
+
+fn stmt_needs_parens(e: &Expr) -> bool {
+    match e {
+        Expr::Object(_) | Expr::Func(_) | Expr::Class(_) => true,
+        Expr::Assign(_, target, _) => {
+            matches!(target.as_ref(), Target::Object(_) | Target::Array(_))
+        }
+        Expr::Seq(items) => items.first().map(stmt_needs_parens).unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// Does this expression contain an `in` operator outside a function body?
+/// For-head initializers are parsed with `in` disallowed, so any `in` there
+/// must be reparenthesized on output or the reparse sees a for-in head.
+fn expr_contains_in(e: &Expr) -> bool {
+    match e {
+        Expr::Binary(op, l, r) => {
+            if *op == BinOp::In {
+                return true;
+            }
+            expr_contains_in(l) || expr_contains_in(r)
+        }
+        Expr::Logical(_, l, r) => expr_contains_in(l) || expr_contains_in(r),
+        Expr::Unary(_, x) | Expr::Update(_, _, x) | Expr::Spread(x) | Expr::OptionalChain(x) => {
+            expr_contains_in(x)
+        }
+        Expr::Assign(_, t, r) => target_contains_in(t) || expr_contains_in(r),
+        Expr::Cond(a, b, c) => expr_contains_in(a) || expr_contains_in(b) || expr_contains_in(c),
+        Expr::Call { callee, args, .. } => {
+            expr_contains_in(callee) || args.iter().any(expr_contains_in)
+        }
+        Expr::New(c, args) => expr_contains_in(c) || args.iter().any(expr_contains_in),
+        Expr::Member { obj, key, .. } => match key {
+            MemberKey::Dot(_) => expr_contains_in(obj),
+            MemberKey::Computed(k) => expr_contains_in(obj) || expr_contains_in(k),
+        },
+        Expr::Seq(items) => items.iter().any(expr_contains_in),
+        Expr::Array(items) => items.iter().flatten().any(expr_contains_in),
+        Expr::Yield(Some(x), _) => expr_contains_in(x),
+        Expr::TaggedTemplate { tag, parts } => {
+            expr_contains_in(tag)
+                || parts
+                    .iter()
+                    .any(|p| matches!(p, TplPart::Expr(x) if expr_contains_in(x)))
+        }
+        Expr::Template(parts) => parts
+            .iter()
+            .any(|p| matches!(p, TplPart::Expr(x) if expr_contains_in(x))),
+        // Function and arrow bodies are parsed with `in` allowed, so an `in`
+        // there needs no parens.
+        Expr::Func(_) | Expr::Arrow(_) | Expr::Class(_) => false,
+        _ => false,
+    }
+}
+
+fn target_contains_in(t: &Target) -> bool {
+    match t {
+        Target::Member(e) => expr_contains_in(e),
+        Target::Array(items) => items.iter().flatten().any(target_contains_in),
+        Target::Object(fields) => fields.iter().any(|f| {
+            f.target.as_ref().is_some_and(|t| target_contains_in(t))
+                || f.default.as_ref().is_some_and(|d| expr_contains_in(d))
+        }),
+        Target::WithDefault(t, d) => target_contains_in(t) || expr_contains_in(d),
+        Target::Rest { target, .. } => target_contains_in(target),
+        _ => false,
+    }
+}
+
 fn prec(e: &Expr) -> u8 {
     match e {
         Expr::Seq(_) => P_SEQ,
         Expr::Yield(..) => P_YIELD,
         // Object/function/class literals sit at assignment level: they need
         // parens when used as a callee, member base or postfix target.
-        Expr::Assign(..)
-        | Expr::Arrow(_)
-        | Expr::Func(_)
-        | Expr::Class(_)
-        | Expr::Object(_) => P_ASSIGN,
+        Expr::Assign(..) | Expr::Arrow(_) | Expr::Func(_) | Expr::Class(_) | Expr::Object(_) => {
+            P_ASSIGN
+        }
         Expr::Cond(..) => P_COND,
         Expr::Logical(op, ..) => log_prec(*op),
         Expr::Binary(op, ..) => bin_prec(*op),
@@ -145,27 +288,33 @@ fn assign_op_str(op: AssignOp) -> &'static str {
 }
 
 impl Printer {
-    fn new() -> Self {
+    fn with_options(opts: &FormatOptions) -> Self {
         Printer {
             out: String::new(),
             depth: 0,
             col: 0,
             prev_was_comment: false,
-            width: WIDTH,
-            indent: INDENT,
-            use_tabs: false,
+            width: opts.print_width.max(20),
+            indent: opts.tab_width.max(1),
+            use_tabs: opts.use_tabs,
+            single_quote: opts.single_quote,
+            trailing_comma: opts.trailing_comma(),
+            flat: false,
         }
     }
 
-    fn with_config(width: usize, indent: usize, use_tabs: bool) -> Self {
+    fn scratch(&self, depth: usize, col: usize) -> Self {
         Printer {
             out: String::new(),
-            depth: 0,
-            col: 0,
+            depth,
+            col,
             prev_was_comment: false,
-            width,
-            indent,
-            use_tabs,
+            width: self.width,
+            indent: self.indent,
+            use_tabs: self.use_tabs,
+            single_quote: self.single_quote,
+            trailing_comma: self.trailing_comma,
+            flat: self.flat,
         }
     }
 
@@ -192,8 +341,13 @@ impl Printer {
     }
 
     fn ind(&mut self) {
-        self.out.push_str(&" ".repeat(self.depth * INDENT));
-        self.col += self.depth * INDENT;
+        let pad = self.depth * self.indent;
+        if self.use_tabs {
+            self.out.push_str(&"\t".repeat(self.depth));
+        } else {
+            self.out.push_str(&" ".repeat(pad));
+        }
+        self.col += pad;
     }
 
     fn sp(&mut self) {
@@ -208,6 +362,7 @@ impl Printer {
         self.col += s.len();
     }
 
+    #[allow(dead_code)]
     fn line(&mut self, s: &str) {
         self.ind();
         self.put(s);
@@ -220,7 +375,7 @@ impl Printer {
         // Top-level: no indent, one statement per line, blank lines collapsed.
         self.depth = 0;
         for (i, s) in prog.body.iter().enumerate() {
-            if i > 0 && !self.out.ends_with('\n') {
+            if i > 0 && !self.out.is_empty() && !self.out.ends_with('\n') {
                 self.nl();
             }
             self.stmt(s)?;
@@ -229,6 +384,9 @@ impl Printer {
     }
 
     fn block(&mut self, body: &[Stmt]) -> Result<(), String> {
+        if body.is_empty() || body.iter().all(|s| matches!(s, Stmt::Empty)) {
+            return Ok(());
+        }
         self.nl();
         for (i, s) in body.iter().enumerate() {
             // Every terminating statement already ends a line; only add the
@@ -322,9 +480,19 @@ impl Printer {
                 self.put(") ");
                 self.body_after_header(body)?;
             }
+            Stmt::With(c, body) => {
+                self.put("with (");
+                self.expr(c)?;
+                self.put(") ");
+                self.body_after_header(body)?;
+            }
             Stmt::DoWhile(body, c) => {
                 self.put("do ");
-                self.stmt_inline(body)?;
+                if matches!(**body, Stmt::Empty) {
+                    self.put("{}");
+                } else {
+                    self.stmt_inline(body)?;
+                }
                 // `} while (cond);` stays on the closing brace's line.
                 self.chain_kw("while (");
                 self.expr(c)?;
@@ -351,11 +519,25 @@ impl Printer {
                                 self.target(t)?;
                                 if let Some(e) = init_e {
                                     self.put(" = ");
-                                    self.expr(e)?;
+                                    if expr_contains_in(e) {
+                                        self.put("(");
+                                        self.expr(e)?;
+                                        self.put(")");
+                                    } else {
+                                        self.expr(e)?;
+                                    }
                                 }
                             }
                         }
-                        Stmt::Expr(e) => self.expr(e)?,
+                        Stmt::Expr(e) => {
+                            if expr_contains_in(e) {
+                                self.put("(");
+                                self.expr(e)?;
+                                self.put(")");
+                            } else {
+                                self.expr(e)?;
+                            }
+                        }
                         Stmt::Comment { text, .. } => self.put(text),
                         other => self.stmt_inline(other)?,
                     }
@@ -373,23 +555,28 @@ impl Printer {
                 self.put(") ");
                 self.body_after_header(body)?;
             }
-            Stmt::ForInOf { kind, decl, expr, body } => {
+            Stmt::ForInOf {
+                kind,
+                decl,
+                expr,
+                body,
+            } => {
                 let conj = match kind {
                     ForKind::In => " in ",
                     ForKind::Of | ForKind::AwaitOf => " of ",
                 };
                 let kw = match decl {
-                    Some((VarKind::Var, _)) => "var ",
-                    Some((VarKind::Let, _)) => "let ",
-                    Some((VarKind::Const, _)) => "const ",
-                    None => "",
+                    Some((Some(VarKind::Var), _)) => "var ",
+                    Some((Some(VarKind::Let), _)) => "let ",
+                    Some((Some(VarKind::Const), _)) => "const ",
+                    Some((None, _)) | None => "",
                 };
                 if matches!(kind, ForKind::AwaitOf) {
                     self.put("for await (");
                 } else {
                     self.put("for (");
                 }
-                if let Some((k, t)) = decl {
+                if let Some((_k, t)) = decl {
                     self.put(kw);
                     self.target(t)?;
                     self.put(conj);
@@ -490,9 +677,16 @@ impl Printer {
     fn stmt_inline(&mut self, s: &Stmt) -> Result<(), String> {
         match s {
             // `else if` chains onto one line instead of nesting a block.
-            Stmt::If(..) | Stmt::For(..) | Stmt::While(..) | Stmt::ForInOf { .. }
+            Stmt::If(..)
+            | Stmt::For(..)
+            | Stmt::While(..)
+            | Stmt::With(..)
+            | Stmt::ForInOf { .. }
             | Stmt::DoWhile(..) => self.stmt(s),
-            Stmt::Empty => Ok(()),
+            Stmt::Empty => {
+                self.put(";");
+                Ok(())
+            }
             Stmt::Block(body) => {
                 self.put("{");
                 self.depth += 1;
@@ -503,7 +697,7 @@ impl Printer {
                 Ok(())
             }
             Stmt::Expr(e) => {
-                self.expr(e)?;
+                self.expr_stmt(e)?;
                 self.semi();
                 Ok(())
             }
@@ -515,6 +709,12 @@ impl Printer {
     /// is not waiting to chain onto it (`} else`, `} while`). Inline contexts
     /// skip this so they can append.
     fn close_brace(&mut self) {
+        if self.out.ends_with('{') {
+            // Empty body: `{}` inline (Prettier style), not a broken line.
+            self.depth -= 1;
+            self.put("}");
+            return;
+        }
         if !self.out.ends_with('\n') && !self.out.ends_with('}') {
             self.nl();
         } else if self.out.ends_with('}') && !self.at_line_start() {
@@ -542,7 +742,7 @@ impl Printer {
             }
             let start = self.out.rfind('\n').map(|i| i + 1).unwrap_or(0);
             let line_len = self.out[start..].chars().count();
-            if line_len + kw.chars().count() <= WIDTH {
+            if line_len + kw.chars().count() <= self.width {
                 self.out.pop();
                 self.col = line_len.saturating_sub(1);
             } else {
@@ -564,19 +764,32 @@ impl Printer {
     /// block stays on the header line, a one-liner stays there if it fits, and
     /// anything wider breaks onto its own indented line.
     fn body_after_header(&mut self, body: &Stmt) -> Result<(), String> {
-        if matches!(body, Stmt::Block(_) | Stmt::If(..) | Stmt::For(..) | Stmt::While(..) | Stmt::ForInOf { .. } | Stmt::DoWhile(..)) {
+        // An empty statement body (`if (x) ; else ...`, `while (f());`) must not
+        // print as nothing: `if (x) ` followed by `else` is not a program. `{}`
+        // is the same statement and always parses. (rollup emits this shape.)
+        if matches!(body, Stmt::Empty) {
+            self.put("{}");
+            return Ok(());
+        }
+        if matches!(
+            body,
+            Stmt::Block(_)
+                | Stmt::If(..)
+                | Stmt::For(..)
+                | Stmt::While(..)
+                | Stmt::With(..)
+                | Stmt::ForInOf { .. }
+                | Stmt::DoWhile(..)
+        ) {
             return self.stmt_inline(body);
         }
-        let mut probe = Printer { out: String::new(), depth: self.depth + 1, col: 0, prev_was_comment: false, width: self.width, indent: self.indent, use_tabs: self.use_tabs };
+        let mut probe = self.scratch(self.depth + 1, 0);
+        probe.flat = true;
         probe.stmt_inline(body)?;
         // The probe indents for its own line; the placement here supplies the
         // indentation, so the leading run is dropped.
-        let text = probe
-            .out
-            .trim_end_matches('\n')
-            .trim_start()
-            .to_string();
-        if self.col + text.chars().count() <= WIDTH {
+        let text = probe.out.trim_end_matches('\n').trim_start().to_string();
+        if self.col + text.chars().count() <= self.width {
             self.out.push_str(&text);
             self.col += text.chars().count();
         } else {
@@ -588,13 +801,17 @@ impl Printer {
                 self.col = self.col.saturating_sub(1);
             }
             self.nl();
-            let pad = (self.depth + 1) * INDENT;
+            let pad = (self.depth + 1) * self.indent;
             self.out.push_str(&" ".repeat(pad));
             self.col = pad;
             self.out.push_str(&text);
             self.col = pad + text.chars().count();
         }
         Ok(())
+    }
+
+    fn quote_str(&self, s: &str) -> String {
+        quote_with(s, self.single_quote)
     }
 
     fn semi(&mut self) {
@@ -688,13 +905,17 @@ impl Printer {
             self.put(n);
         }
         if let Some(s) = &c.superclass {
+            // Class heritage is a LeftHandSideExpression: logical, conditional
+            // and arrow superclasses need the parentheses the AST dropped.
             self.put(" extends ");
-            self.expr(s)?;
+            self.expr_at(s, P_CALL)?;
         }
         self.put(" {");
         self.depth += 1;
         for m in &c.members {
-            self.nl();
+            if !self.out.ends_with('\n') {
+                self.nl();
+            }
             self.ind();
             match &m.kind {
                 ClassMemberKind::Method(f, is_static) => {
@@ -703,14 +924,14 @@ impl Printer {
                     }
                     // The parser encodes getter/setter as a marker in Func.name.
                     let mut prefix = String::new();
-                    let mut shown: Option<String> = None;
                     if let Some(n) = &f.name {
-                        if let Some(r) = n.strip_prefix("\u{1}g:") {
+                        // The marker only says get/set; the key always comes
+                        // from `m.key`, which still knows whether it was a
+                        // string literal and needs quoting.
+                        if n.starts_with("\u{1}g:") {
                             prefix.push_str("get ");
-                            shown = Some(r.to_string());
-                        } else if let Some(r) = n.strip_prefix("\u{1}s:") {
+                        } else if n.starts_with("\u{1}s:") {
                             prefix.push_str("set ");
-                            shown = Some(r.to_string());
                         }
                     }
                     self.put(&prefix);
@@ -720,23 +941,20 @@ impl Printer {
                     if f.is_generator {
                         self.put("*");
                     }
-                    match shown {
-                        Some(n) => self.put(&n),
-                        None => match &m.key {
-                            ClassKey::Name(n) => {
-                                if is_ident(n) {
-                                    self.put(n);
-                                } else {
-                                    self.put(&quote(n));
-                                }
+                    match &m.key {
+                        ClassKey::Name(n) => {
+                            if is_ident(n) {
+                                self.put(n);
+                            } else {
+                                self.put(&self.quote_str(n));
                             }
-                            ClassKey::Private(n) => self.put(&format!("#{}", n)),
-                            ClassKey::Computed(e) => {
-                                self.put("[");
-                                self.expr(e)?;
-                                self.put("]");
-                            }
-                        },
+                        }
+                        ClassKey::Private(n) => self.put(&format!("#{}", n)),
+                        ClassKey::Computed(e) => {
+                            self.put("[");
+                            self.expr(e)?;
+                            self.put("]");
+                        }
                     }
                     self.params(&f.params)?;
                     self.sp();
@@ -745,14 +963,31 @@ impl Printer {
                     self.block(&f.body)?;
                     self.close_brace();
                 }
+                ClassMemberKind::StaticBlock(f) => {
+                    self.put("static ");
+                    self.put("{");
+                    self.depth += 1;
+                    self.block(&f.body)?;
+                    self.close_brace();
+                }
                 ClassMemberKind::Field(e) | ClassMemberKind::StaticField(e) => {
+                    if matches!(m.kind, ClassMemberKind::StaticField(_)) {
+                        self.put("static ");
+                    }
                     match &m.key {
                         ClassKey::Computed(ce) => {
                             self.put("[");
                             self.expr(ce)?;
                             self.put("]");
                         }
-                        key => self.put(&class_key_text(key)),
+                        ClassKey::Name(n) => {
+                            if is_ident(n) {
+                                self.put(n);
+                            } else {
+                                self.put(&self.quote_str(n));
+                            }
+                        }
+                        ClassKey::Private(n) => self.put(&format!("#{}", n)),
                     }
                     self.put(" = ");
                     self.expr(e)?;
@@ -761,7 +996,9 @@ impl Printer {
             }
         }
         self.depth -= 1;
-        self.nl();
+        if !self.out.ends_with('\n') {
+            self.nl();
+        }
         self.ind();
         self.put("}");
         Ok(())
@@ -773,16 +1010,18 @@ impl Printer {
             Target::Member(e) => self.expr(e)?,
             Target::Array(items) => {
                 self.put("[");
-                let mut first = true;
-                for it in items {
-                    if !first {
+                for (i, it) in items.iter().enumerate() {
+                    if i > 0 {
                         self.put(", ");
                     }
-                    first = false;
-                    match it {
-                        Some(t) => self.target(t)?,
-                        None => {}
+                    if let Some(t) = it {
+                        self.target(t)?;
                     }
+                }
+                // A trailing elision needs its own comma: `[a, ,]`, not
+                // `[a, ]` (which reparses as a plain trailing comma).
+                if matches!(items.last(), Some(None)) {
+                    self.put(",");
                 }
                 self.put("]");
             }
@@ -867,7 +1106,7 @@ impl Printer {
     /// Expression statement: a leading `{`, `function` or `class` would be read
     /// as a block or declaration, so wrap it.
     fn expr_stmt(&mut self, e: &Expr) -> Result<(), String> {
-        let ambiguous = matches!(e, Expr::Object(_) | Expr::Func(_) | Expr::Class(_));
+        let ambiguous = stmt_needs_parens(e);
         if ambiguous {
             self.put("(");
             self.raw_expr(e)?;
@@ -894,8 +1133,16 @@ impl Printer {
         let mut cur = e;
         loop {
             match cur {
-                Expr::Call { callee, args, optional } => match callee.as_ref() {
-                    Expr::Member { obj, key, optional: om } => {
+                Expr::Call {
+                    callee,
+                    args,
+                    optional,
+                } => match callee.as_ref() {
+                    Expr::Member {
+                        obj,
+                        key,
+                        optional: om,
+                    } => {
                         links.push((key, *om, args.as_slice(), *optional));
                         cur = obj.as_ref();
                     }
@@ -925,7 +1172,13 @@ impl Printer {
     }
 
     /// One link: `.name(args)` or `?.name(args)`.
-    fn chain_link(&mut self, key: &MemberKey, om: bool, args: &[Expr], call_opt: bool) -> Result<(), String> {
+    fn chain_link(
+        &mut self,
+        key: &MemberKey,
+        om: bool,
+        args: &[Expr],
+        call_opt: bool,
+    ) -> Result<(), String> {
         match key {
             MemberKey::Dot(n) => {
                 if om {
@@ -959,7 +1212,7 @@ impl Printer {
                 let _ = write!(self.out, "{}n", n);
                 self.col += 4;
             }
-            Expr::Str(v) => self.put(&quote(v)),
+            Expr::Str(v) => self.put(&self.quote_str(v)),
             Expr::Str16(v) => self.put(&quote_utf16(v)),
             Expr::Bool(b) => self.put(if *b { "true" } else { "false" }),
             Expr::Null => self.put("null"),
@@ -1009,10 +1262,23 @@ impl Printer {
                     self.put(op_str);
                 }
             }
-            Expr::Binary(op, l, r) => {
+            Expr::Binary(op, _l, _r) => {
                 let p = bin_prec(*op);
                 // `**` is right-associative; everything else left-associative.
-                let (lc, rc) = if *op == BinOp::Pow { (p + 1, p) } else { (p, p + 1) };
+                let (lc, rc) = if *op == BinOp::Pow {
+                    // Unary expressions are forbidden as an unparenthesized
+                    // exponentiation left operand, regardless of precedence.
+                    (
+                        if matches!(_l.as_ref(), Expr::Unary(..)) {
+                            P_UNARY + 1
+                        } else {
+                            p + 1
+                        },
+                        p,
+                    )
+                } else {
+                    (p, p + 1)
+                };
 
                 // Flatten the left spine of same-precedence operators — `a + b
                 // + c + d` — so a chain that overflows the print width breaks
@@ -1028,49 +1294,65 @@ impl Printer {
                     ops.push(*o);
                     operands.push(right.as_ref());
                     cur = left.as_ref();
+                    // Flattening the left spine would turn (a ** b) ** c
+                    // into a ** b ** c, whose right association differs.
+                    if *op == BinOp::Pow {
+                        break;
+                    }
                 }
                 operands.push(cur);
                 operands.reverse();
                 ops.reverse();
 
-                let mut probe = Printer {
-                    out: String::new(),
-                    depth: self.depth,
+                let ls = self.out.rfind('\n').map(|i| i + 1).unwrap_or(0);
+                let line_rest = &self.out[ls..];
+                let line_indent = line_rest.len() - line_rest.trim_start().len();
+                if self.flat {
+                    // An inline context (inside an argument list that was
+                    // already measured to fit) must stay on one line: the
+                    // probe is skipped and the flat form is written directly.
+                    // Falling through to the broken form here wrapped
+                    // `console.log(2 + 3)` across two lines.
+                    for (i, od) in operands.iter().enumerate() {
+                        if i > 0 {
+                            self.put(" ");
+                            self.put(binary_str(ops[i - 1]));
+                            self.put(" ");
+                        }
+                        self.expr_at(*od, if i == 0 { lc } else { rc })?;
+                    }
+                    return Ok(());
+                }
+                if !self.flat {
                     // Seed at the real column: the decision must be identical
                     // whether this runs inside a probe (argument list) or in
                     // the real output, or the two disagree and produce a
                     // different shape than the one that was measured.
-                    col: self.col,
-                    prev_was_comment: false,
-                    width: self.width,
-                    indent: self.indent,
-                    use_tabs: self.use_tabs,
-                };
-                let mut ok = true;
-                for (i, od) in operands.iter().enumerate() {
-                    if i > 0 {
-                        probe.put(" ");
-                        probe.put(binary_str(ops[i - 1]));
-                        probe.put(" ");
+                    let mut probe = self.scratch(self.depth, self.col);
+                    probe.flat = true;
+                    let mut ok = true;
+                    for (i, od) in operands.iter().enumerate() {
+                        if i > 0 {
+                            probe.put(" ");
+                            probe.put(binary_str(ops[i - 1]));
+                            probe.put(" ");
+                        }
+                        // Leftmost operand sits on the left of the whole chain, the
+                        // rest sit on the right — the parentheses each needs follow
+                        // from that, exactly as the unflattened form decided.
+                        if probe.expr_at(*od, if i == 0 { lc } else { rc }).is_err() {
+                            ok = false;
+                        }
                     }
-                    // Leftmost operand sits on the left of the whole chain, the
-                    // rest sit on the right — the parentheses each needs follow
-                    // from that, exactly as the unflattened form decided.
-                    if probe.expr_at(*od, if i == 0 { lc } else { rc }).is_err() {
-                        ok = false;
+                    if ok && !probe.out.contains('\n') && probe.col <= self.width {
+                        let text = probe.out;
+                        self.out.push_str(&text);
+                        self.col += text.chars().count();
+                        return Ok(());
                     }
-                }
-                let ls = self.out.rfind('\n').map(|i| i + 1).unwrap_or(0);
-                let line_rest = &self.out[ls..];
-                let line_indent = line_rest.len() - line_rest.trim_start().len();
-                if ok && !probe.out.contains('\n') && probe.col <= WIDTH {
-                    let text = probe.out;
-                    self.out.push_str(&text);
-                    self.col += text.chars().count();
-                    return Ok(());
                 }
                 // Broken form: the operator trails the line it belongs to.
-                let pad = line_indent + INDENT;
+                let pad = line_indent + self.indent;
                 for (i, od) in operands.iter().enumerate() {
                     if i > 0 {
                         self.put(" ");
@@ -1135,12 +1417,25 @@ impl Printer {
                 self.put(": ");
                 self.expr_at(b, P_ASSIGN)?;
             }
-            Expr::Call { callee, args, optional } => {
+            Expr::Call {
+                callee,
+                args,
+                optional,
+            } => {
+                if self.flat {
+                    self.expr_at(callee, P_CALL)?;
+                    if *optional {
+                        self.put("?.");
+                    }
+                    self.arg_list(args)?;
+                    return Ok(());
+                }
                 // A method chain that does not fit breaks before each link
                 // instead of exploding its argument list.
                 let chain = Self::chain_links(e).filter(|(_, l)| l.len() >= 2);
                 if let Some((base, links)) = chain {
-                    let mut probe = Printer { out: String::new(), depth: self.depth, col: 0, prev_was_comment: false, width: self.width, indent: self.indent, use_tabs: self.use_tabs };
+                    let mut probe = self.scratch(self.depth, 0);
+                    probe.flat = true;
                     let mut fits = true;
                     if probe.callee_base(base).is_err() {
                         fits = false;
@@ -1150,7 +1445,7 @@ impl Printer {
                             fits = false;
                         }
                     }
-                    if fits && probe.col + self.col <= WIDTH {
+                    if fits && probe.col + self.col <= self.width {
                         let text = probe.out;
                         self.out.push_str(&text);
                         self.col += text.chars().count();
@@ -1164,7 +1459,7 @@ impl Printer {
                     let ls = self.out.rfind('\n').map(|i| i + 1).unwrap_or(0);
                     let line_rest = &self.out[ls..];
                     let line_indent = line_rest.len() - line_rest.trim_start().len();
-                    let pad = line_indent + INDENT;
+                    let pad = line_indent + self.indent;
                     for (key, om, as_, co) in &links {
                         self.nl();
                         self.out.push_str(&" ".repeat(pad));
@@ -1181,8 +1476,16 @@ impl Printer {
             }
             Expr::New(callee, args) => {
                 self.put("new ");
-                // `new`'s callee is a MemberExpression: a call needs parens.
-                self.expr_at(callee, P_MEMBER)?;
+                // `new`'s callee is a MemberExpression. A member chain that
+                // itself contains a call must keep its parentheses:
+                // `new (f().C)(x)` is not `new f().C(x)`.
+                if new_callee_needs_parens(callee) {
+                    self.put("(");
+                    self.raw_expr(callee)?;
+                    self.put(")");
+                } else {
+                    self.expr_at(callee, P_MEMBER)?;
+                }
                 self.arg_list(args)?;
             }
             Expr::Member { obj, key, optional } => {
@@ -1238,7 +1541,7 @@ impl Printer {
         self.put("`");
         for p in parts {
             match p {
-                TplPart::Str(s) => self.put(s),
+                TplPart::Str { raw, .. } => self.put(raw),
                 TplPart::Raw(r) => {
                     self.put("${");
                     self.expr(&raw_as_expr(r))?;
@@ -1260,6 +1563,17 @@ impl Printer {
             self.put("()");
             return Ok(());
         }
+        if self.flat {
+            self.put("(");
+            for (i, a) in args.iter().enumerate() {
+                if i > 0 {
+                    self.put(", ");
+                }
+                self.expr(a)?;
+            }
+            self.put(")");
+            return Ok(());
+        }
         // A lone object/array argument breaks *itself*, keeping `push({` and
         // `});` on their anchors:
         //
@@ -1276,13 +1590,14 @@ impl Printer {
             return Ok(());
         }
         // Try one line; break per argument when it would overflow.
-        let mut probe = self.col;
-        let mut buf = String::new();
+        let probe = self.col;
+        let buf: String;
         let mut ok = true;
         let mut old = std::mem::take(&mut self.out);
         let saved_col = self.col;
         self.out = String::new();
         self.col = 0;
+        self.flat = true;
         self.put("(");
         for (i, a) in args.iter().enumerate() {
             if i > 0 {
@@ -1293,22 +1608,23 @@ impl Printer {
             }
         }
         self.put(")");
-        if self.col + probe > WIDTH || !ok {
+        self.flat = false;
+        if self.col + probe > self.width || !ok {
             // Multi-line form.
             // Seed each argument at the column it will actually occupy, so
             // nested printers do not see room the real line lacks (the
             // argument's own trailing comma included).
             // +1 reserves the comma the argument list appends after it.
-            let seed = self.depth * INDENT + INDENT + 1;
+            let seed = self.depth * self.indent + self.indent + 1;
             let inner: Vec<String> = args
                 .iter()
                 .map(|a| {
-                    let mut p2 = Printer { out: String::new(), depth: self.depth + 1, col: seed, prev_was_comment: false, width: self.width, indent: self.indent, use_tabs: self.use_tabs };
+                    let mut p2 = self.scratch(self.depth + 1, seed);
                     let _ = p2.expr(a);
                     p2.out
                 })
                 .collect();
-            let cont = " ".repeat(self.depth * INDENT + INDENT);
+            let cont = " ".repeat(self.depth * self.indent + self.indent);
             old.push('(');
             old.push('\n');
             for (i, line) in inner.iter().enumerate() {
@@ -1317,11 +1633,13 @@ impl Printer {
                 if i + 1 < inner.len() {
                     old.push(',');
                 } else {
-                    out_trailing_comma(&mut old, true);
+                    if self.trailing_comma {
+                        old.push(',');
+                    }
                 }
                 old.push('\n');
             }
-            let close = " ".repeat(self.depth * INDENT);
+            let close = " ".repeat(self.depth * self.indent);
             old.push_str(&close);
             old.push(')');
             self.out = old;
@@ -1339,37 +1657,7 @@ impl Printer {
             self.put("[]");
             return Ok(());
         }
-        // Nested collections always break; scalar lists try to fit on one line.
-        let nested = items
-            .iter()
-            .flatten()
-            .any(|e| matches!(e, Expr::Array(_) | Expr::Object(_) | Expr::Func(_) | Expr::Arrow(_)));
-        if !nested
-            && fits_inline(
-                self.col,
-                self.depth,
-                self.width,
-                self.indent,
-                self.use_tabs,
-                |p| {
-
-            p.put("[");
-            for (i, it) in items.iter().enumerate() {
-                if i > 0 {
-                    p.put(", ");
-                }
-                match it {
-                    Some(e) => {
-                        if p.expr(e).is_err() {
-                            return false;
-                        }
-                    }
-                    None => p.put(""),
-                }
-            }
-            p.put("]");
-            true
-        }) {
+        if self.flat {
             self.put("[");
             for (i, it) in items.iter().enumerate() {
                 if i > 0 {
@@ -1379,18 +1667,77 @@ impl Printer {
                     self.expr(e)?;
                 }
             }
+            if matches!(items.last(), Some(None)) {
+                self.put(",");
+            }
+            self.put("]");
+            return Ok(());
+        }
+        // Nested collections always break; scalar lists try to fit on one line.
+        let nested = items.iter().flatten().any(|e| {
+            matches!(
+                e,
+                Expr::Array(_) | Expr::Object(_) | Expr::Func(_) | Expr::Arrow(_)
+            )
+        });
+        if !nested
+            && fits_inline(
+                self.col,
+                self.depth,
+                self.width,
+                self.indent,
+                self.use_tabs,
+                |p| {
+                    p.put("[");
+                    for (i, it) in items.iter().enumerate() {
+                        if i > 0 {
+                            p.put(", ");
+                        }
+                        match it {
+                            Some(e) => {
+                                if p.expr(e).is_err() {
+                                    return false;
+                                }
+                            }
+                            None => p.put(""),
+                        }
+                    }
+                    if matches!(items.last(), Some(None)) {
+                        p.put(",");
+                    }
+                    p.put("]");
+                    true
+                },
+            )
+        {
+            self.put("[");
+            for (i, it) in items.iter().enumerate() {
+                if i > 0 {
+                    self.put(", ");
+                }
+                if let Some(e) = it {
+                    self.expr(e)?;
+                }
+            }
+            if matches!(items.last(), Some(None)) {
+                self.put(",");
+            }
             self.put("]");
             return Ok(());
         }
         self.put("[");
         self.depth += 1;
-        for it in items {
+        for (i, it) in items.iter().enumerate() {
             self.nl();
             self.ind();
             if let Some(e) = it {
                 self.expr(e)?;
             }
-            any_comma(&mut self.out);
+            // Separators and elision commas are syntax, even when optional
+            // trailing commas are disabled by the formatting policy.
+            if i + 1 < items.len() || it.is_none() || self.trailing_comma {
+                self.put(",");
+            }
         }
         self.depth -= 1;
         self.nl();
@@ -1404,6 +1751,17 @@ impl Printer {
             self.put("{}");
             return Ok(());
         }
+        if self.flat {
+            self.put("{ ");
+            for (i, pr) in props.iter().enumerate() {
+                if i > 0 {
+                    self.put(", ");
+                }
+                self.object_prop(pr)?;
+            }
+            self.put(" }");
+            return Ok(());
+        }
         // A literal with only data properties collapses onto one line when it
         // fits the print width — `{ a: 1, b: { c: 2, d: [3, 4] } }` — the way
         // bun and Prettier print them. Methods and spread force a break.
@@ -1411,10 +1769,7 @@ impl Printer {
         // spans lines, so the literal has to stay expanded.
         let collapsible = props.iter().all(|p| match p {
             ObjProp::Shorthand(_) => true,
-            ObjProp::Init(_, v) => !matches!(
-                **v,
-                Expr::Func(_) | Expr::Class(_) | Expr::Arrow(_)
-            ),
+            ObjProp::Init(_, v) => !matches!(**v, Expr::Func(_) | Expr::Class(_) | Expr::Arrow(_)),
             _ => false,
         });
         if collapsible {
@@ -1422,7 +1777,8 @@ impl Printer {
             // it makes the same fits/doesn't-fit decision it will make while
             // the real output is being written.
             let base = self.col;
-            let mut probe = Printer { out: String::new(), depth: self.depth, col: base, prev_was_comment: false, width: self.width, indent: self.indent, use_tabs: self.use_tabs };
+            let mut probe = self.scratch(self.depth, base);
+            probe.flat = true;
             probe.put("{ ");
             let mut ok = true;
             for (i, pr) in props.iter().enumerate() {
@@ -1436,7 +1792,7 @@ impl Printer {
             probe.put(" }");
             // "Fits" means one line: a probe that broke internally reports only
             // its last line's column, which is misleadingly short.
-            if ok && !probe.out.contains('\n') && probe.col <= WIDTH {
+            if ok && !probe.out.contains('\n') && probe.col <= self.width {
                 self.put(&probe.out);
                 return Ok(());
             }
@@ -1447,7 +1803,9 @@ impl Printer {
             self.nl();
             self.ind();
             self.object_prop(p)?;
-            any_comma(&mut self.out);
+            if self.trailing_comma {
+                self.out.push(',');
+            }
         }
         self.depth -= 1;
         self.nl();
@@ -1498,7 +1856,7 @@ impl Printer {
                 if is_ident(n) {
                     self.put(n);
                 } else {
-                    self.put(&quote(n));
+                    self.put(&self.quote_str(n));
                 }
             }
             MemberKey::Computed(e) => {
@@ -1514,19 +1872,6 @@ impl Printer {
 // ---------------------------------------------------------------------------
 // small helpers
 // ---------------------------------------------------------------------------
-
-fn any_comma(out: &mut String) {
-    let trimmed = out.trim_end_matches(|c| c == ' ' || c == '\n');
-    let _ = trimmed;
-    // Prettier's default trailingComma is "all": add one in multi-line.
-    if !out.is_empty() {
-        out.push(',');
-    }
-}
-
-fn out_trailing_comma(out: &mut String, _yes: bool) {
-    out.push(',');
-}
 
 /// Render `f` against a scratch printer starting at `base` columns and report
 /// whether the result stays within the print width.
@@ -1546,6 +1891,9 @@ fn fits_inline<F: FnOnce(&mut Printer) -> bool>(
         width,
         indent,
         use_tabs,
+        single_quote: false,
+        trailing_comma: true,
+        flat: true,
     };
     if !f(&mut probe) {
         return false;
@@ -1555,12 +1903,18 @@ fn fits_inline<F: FnOnce(&mut Printer) -> bool>(
     !probe.out.contains('\n') && probe.col + base <= width
 }
 
+#[allow(dead_code)]
 fn try_flat(p: &mut Printer, items: &[Option<Expr>]) -> Option<String> {
     // Only literals of scalars collapse; anything nested keeps its own shape.
-    if items.iter().flatten().any(|e| matches!(e, Expr::Array(_) | Expr::Object(_))) {
+    if items
+        .iter()
+        .flatten()
+        .any(|e| matches!(e, Expr::Array(_) | Expr::Object(_)))
+    {
         return None;
     }
-    let mut probe = Printer { out: String::new(), depth: 0, col: 0, prev_was_comment: false, width: WIDTH, indent: INDENT, use_tabs: false };
+    let mut probe = p.scratch(0, 0);
+    probe.flat = true;
     for (i, it) in items.iter().enumerate() {
         if i > 0 {
             probe.put(", ");
@@ -1574,7 +1928,7 @@ fn try_flat(p: &mut Printer, items: &[Option<Expr>]) -> Option<String> {
             None => probe.put(""),
         }
     }
-    if probe.col + p.col > WIDTH {
+    if probe.col + p.col > p.width {
         return None;
     }
     Some(probe.out)
@@ -1584,12 +1938,18 @@ fn try_flat(p: &mut Printer, items: &[Option<Expr>]) -> Option<String> {
 /// template holes inside `export`/`import` statements, which are passed through
 /// verbatim rather than compiled.
 pub fn expr_source(e: &Expr) -> String {
-    let mut p = Printer { out: String::new(), depth: 0, col: 0, prev_was_comment: false, width: WIDTH, indent: INDENT, use_tabs: false };
+    let mut p = Printer::with_options(&FormatOptions::default());
     match p.expr(e) {
         Ok(()) => p.out,
         Err(_) => String::new(),
     }
 }
+
+/// Re-escape a *cooked* template quasi (the lexer resolves escapes) so that
+/// printing it and parsing it again yields the same string. Without this a
+/// `\`` in the source printed as a bare backtick (output that does not parse),
+/// and `\\`, `\${` or a control character silently changed meaning.
+/// Newline and tab stay literal: a template may span lines.
 
 /// Template holes arrive from the lexer as raw source; re-parse so the printer
 /// sees a real expression (the same trick the compiler uses).
@@ -1609,6 +1969,29 @@ pub fn quote(s: &str) -> String {
     let dq = s.matches('"').count();
     let sq = s.matches('\'').count();
     let q = if dq > sq { '\'' } else { '"' };
+    quote_escaped(s, q)
+}
+
+/// Quote with `singleQuote` honoured: prefer the requested delimiter unless the
+/// other one needs strictly fewer escapes (Prettier's rule).
+fn quote_with(s: &str, single: bool) -> String {
+    let dq = s.matches('"').count();
+    let sq = s.matches('\'').count();
+    let q = if single {
+        if sq > dq {
+            '"'
+        } else {
+            '\''
+        }
+    } else if dq > sq {
+        '\''
+    } else {
+        '"'
+    };
+    quote_escaped(s, q)
+}
+
+fn quote_escaped(s: &str, q: char) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push(q);
     for c in s.chars() {
@@ -1637,12 +2020,32 @@ pub fn is_ident(s: &str) -> bool {
     ch.all(|c| c.is_alphanumeric() || c == '_' || c == '$')
 }
 
-fn class_key_text(k: &ClassKey) -> String {
-    match k {
-        ClassKey::Name(n) => n.clone(),
-        ClassKey::Private(n) => format!("#{}", n),
-        ClassKey::Computed(_) => String::new(),
+/// Drop statement semicolons for `semi: false`, except where ASI would join the
+/// next line into this expression (a leading `(`/`[`/template/regex/unary).
+fn strip_optional_semicolons(src: &str) -> String {
+    let lines: Vec<&str> = src.lines().collect();
+    let mut out = String::with_capacity(src.len());
+    for (i, line) in lines.iter().enumerate() {
+        let mut line = *line;
+        let trimmed = line.trim_end();
+        if trimmed.ends_with(';') && trimmed.trim() != ";" {
+            let mut next = lines[i + 1..]
+                .iter()
+                .map(|l| l.trim_start())
+                .find(|l| !l.is_empty() && !l.starts_with("//") && !l.starts_with("/*"));
+            if let Some(n) = next.take() {
+                let hazard = matches!(n.chars().next(), Some('(' | '[' | '`' | '+' | '-' | '/'));
+                if !hazard {
+                    line = &trimmed[..trimmed.len() - 1];
+                }
+            } else {
+                line = &trimmed[..trimmed.len() - 1];
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
     }
+    out
 }
 
 fn unary_str(op: UnOp) -> &'static str {
@@ -1688,7 +2091,170 @@ fn binary_str(op: BinOp) -> &'static str {
 // Preserve unpaired code units when re-emitting a parsed string literal.
 pub(crate) fn quote_utf16(units: &[u16]) -> String {
     use std::fmt::Write;
-    let mut out=String::from("\"");
-    for u in units { let _=write!(out,"\\u{:04x}",u); }
-    out.push('"'); out
+    let mut out = String::from("\"");
+    for u in units {
+        let _ = write!(out, "\\u{:04x}", u);
+    }
+    out.push('"');
+    out
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    fn fmt(src: &str, opts: &FormatOptions) -> String {
+        format_source_with_options(src, "t.js", opts).expect("format")
+    }
+
+    fn preserves_value(src: &'static str, expected: &'static str, opts: FormatOptions) {
+        std::thread::spawn(move || {
+            let output = fmt(src, &opts);
+            assert_eq!(fmt(&output, &opts), output, "formatting must be idempotent");
+            for source in [src, output.as_str()] {
+                let mut engine = crate::vm::Engine::new();
+                engine.ensure_started();
+                let value = engine.eval_source(source, "t.js").expect("evaluate");
+                assert_eq!(engine.vm.to_string(value).unwrap(), expected, "{source}");
+            }
+        })
+        .join()
+        .expect("formatter semantics");
+    }
+
+    #[test]
+    fn array_formatting_preserves_holes_and_sequence_elements() {
+        preserves_value(
+            "const a=[1,,];a.length+':'+(1 in a)",
+            "2:false",
+            FormatOptions::default(),
+        );
+        preserves_value(
+            "const a=[(1,2)];a[0]+':'+a.length",
+            "2:1",
+            FormatOptions::default(),
+        );
+        let mut opts = FormatOptions::default();
+        opts.trailing_comma = "none".into();
+        preserves_value("const a=[{x:1},{x:2}];a[0].x+a[1].x", "3", opts);
+    }
+
+    #[test]
+    fn exponentiation_keeps_association_and_unary_parentheses() {
+        preserves_value("(2**3)**2", "64", FormatOptions::default());
+        preserves_value("2**3**2", "512", FormatOptions::default());
+        preserves_value("(-2)**2", "4", FormatOptions::default());
+    }
+
+    #[test]
+    fn class_field_formatting_preserves_static_ownership() {
+        preserves_value(
+            "class C{static value=7;}C.value+':'+(new C()).value",
+            "7:undefined",
+            FormatOptions::default(),
+        );
+        preserves_value(
+            "let n=0;class C{static value=++n;}new C();new C();n+':'+C.value",
+            "1:1",
+            FormatOptions::default(),
+        );
+    }
+
+    #[test]
+    fn destructuring_assignment_statement_is_parenthesized() {
+        let out = fmt("({ a, b } = obj);\n", &FormatOptions::default());
+        assert_eq!(out.trim(), "({ a, b } = obj);");
+        format_source(&out, "t.js").expect("formatted output must reparse");
+    }
+
+    #[test]
+    fn options_control_width_indent_and_tabs() {
+        let src = "if (x) { foo(alpha, beta, gamma); }\n";
+        let mut opts = FormatOptions::default();
+        opts.print_width = 28;
+        let out = fmt(src, &opts);
+        assert!(out.contains('\n'), "narrow width should break: {out}");
+
+        opts = FormatOptions::default();
+        opts.tab_width = 4;
+        let out = fmt(src, &opts);
+        assert!(out.contains("\n    foo"), "4-space indent expected: {out}");
+
+        opts.use_tabs = true;
+        let out = fmt(src, &opts);
+        assert!(out.contains("\n\tfoo"), "tab indent expected: {out}");
+    }
+
+    #[test]
+    fn options_control_quotes_semicolons_and_trailing_commas() {
+        let mut opts = FormatOptions::default();
+        opts.single_quote = true;
+        opts.semi = false;
+        let out = fmt("const s = \"hi\";\nconst t = \"it's\";\n", &opts);
+        assert!(out.contains("const s = 'hi'"), "{out}");
+        assert!(!out.lines().any(|l| l.trim_end().ends_with(';')), "{out}");
+        format_source(&out, "t.js").expect("semi-free output must reparse");
+
+        opts = FormatOptions::default();
+        opts.trailing_comma = "none".into();
+        let out = fmt("const a = [{ x: 1 }];\n", &opts);
+        assert!(!out.contains(",\n]"), "no trailing comma expected: {out}");
+
+        opts.trailing_comma = "all".into();
+        let out = fmt("const a = [{ x: 1 }];\n", &opts);
+        assert!(out.contains(",\n]"), "trailing comma expected: {out}");
+    }
+
+    #[test]
+    fn bare_for_head_stays_an_assignment() {
+        let out = fmt(
+            "let t;\nfor (t in obj) use(t);\n",
+            &FormatOptions::default(),
+        );
+        assert!(
+            out.contains("for (t in obj)"),
+            "bare head must stay bare: {out}"
+        );
+        assert!(
+            !out.contains("for (var t in obj)"),
+            "must not invent var: {out}"
+        );
+        format_source(&out, "t.js").expect("bare for-in output must reparse");
+    }
+
+    #[test]
+    fn async_function_starting_a_line_is_a_declaration() {
+        let out = fmt(
+            "before();\nasync function f() {}\n",
+            &FormatOptions::default(),
+        );
+        assert!(out.contains("async function f()"), "{out}");
+        assert!(
+            !out.contains("(async function"),
+            "must not become an expression: {out}"
+        );
+    }
+
+    #[test]
+    fn return_of_multiline_template_keeps_its_value() {
+        let out = fmt(
+            "function f() { return `a\nb`; }\n",
+            &FormatOptions::default(),
+        );
+        assert!(out.contains("return `"), "{out}");
+        assert!(
+            !out.contains("return;"),
+            "template must stay attached to return: {out}"
+        );
+        let again = format_source(&out, "t.js").expect("reparse");
+        assert_eq!(out, again, "formatting must be idempotent");
+    }
+
+    #[test]
+    fn semicolonless_output_keeps_asi_hazards() {
+        let mut opts = FormatOptions::default();
+        opts.semi = false;
+        let out = fmt("let a = 1;\n[1, 2].forEach(f);\n", &opts);
+        assert!(out.contains("let a = 1;"), "must keep ASI guard: {out}");
+    }
 }

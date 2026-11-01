@@ -4,14 +4,12 @@ fn main() {
     let src = std::fs::read_to_string(&p).unwrap();
     match e.eval_source(&src, &p) {
         Ok(_) => {}
-        Err(er) => {
-            match &er {
-                jhol_vm::errors::VmError::Exception(t) => {
-                    let s = e.vm.to_string(t.value).unwrap_or_else(|_| "?".into());
-                    eprintln!("ERR: {}", s);
-                }
-                other => eprintln!("ERR: {}", other),
+        Err(er) => match &er {
+            jhol_vm::errors::VmError::Exception(t) => {
+                let s = e.vm.to_string(t.value).unwrap_or_else(|_| "?".into());
+                eprintln!("ERR: {}", s);
             }
-        }
+            other => eprintln!("ERR: {}", other),
+        },
     }
 }

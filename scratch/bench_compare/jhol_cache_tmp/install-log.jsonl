@@ -1,0 +1,2 @@
+{"seq":1,"ts":1791148986,"action":"install","package":"jhol_cold","version":"40f6f0a7c6342ff0968dba02849e2e8f98118e3c42a32720f87c02e8a174b66f","integrity":null,"prev":"","hash":"fe3254a050d010d405aa05ddbd5bc2160257ac5d3757be49c8c0f3d711f7b008"}
+{"seq":2,"ts":1791148988,"action":"install","package":"jhol_warm","version":"7a748fb53cf42c8a1873dee3aeabb7e1c0cb7369d463169face30305fd85615f","integrity":null,"prev":"fe3254a050d010d405aa05ddbd5bc2160257ac5d3757be49c8c0f3d711f7b008","hash":"49171d0ecd4d3764775efb968696af5668047b52b896839390129904b618c8e5"}

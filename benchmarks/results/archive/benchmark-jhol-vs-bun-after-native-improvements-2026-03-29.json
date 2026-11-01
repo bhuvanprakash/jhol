@@ -1,0 +1,26 @@
+{
+  "date": "2026-03-29",
+  "fixture": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "next": "15.1.0",
+    "typescript": "5.7.2",
+    "express": "4.21.2"
+  },
+  "jhol": {
+    "cold_s": 5.160489624948241,
+    "cold_code": 0,
+    "warm_s": 0.03834941698005423,
+    "warm_code": 0
+  },
+  "bun": {
+    "cold_s": 16.15812558401376,
+    "cold_code": 0,
+    "warm_s": 0.17288287496194243,
+    "warm_code": 0
+  },
+  "ratio": {
+    "cold_jhol_over_bun": 0.3193742738361827,
+    "warm_jhol_over_bun": 0.22182310994363252
+  }
+}

@@ -116,7 +116,7 @@ passed. The recorded blueprint gate remains its own 30-check evidence run.
 |------|------|
 | Live AWS S3 + Arenvara backends | Protocol compatibility is implemented; provider setup and behavior are not verified |
 | Live throttle / poison / disconnect suite | Needs real endpoint |
-| `jhol-cloud` control plane | Not started |
+| `jhol-cloud` control plane | Offline domain model implemented (`crates/jhol-cloud`, 12/12 tests). No deployed service, persistence, transport security, or live provider. |
 | Remote task execution | Blocked on trust review |
 
 ---

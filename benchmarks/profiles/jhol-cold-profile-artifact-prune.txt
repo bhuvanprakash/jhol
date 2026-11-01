@@ -1,0 +1,166 @@
+exit=-15 elapsed=36.315s
+
+STDERR
+[2026-03-12 03:29:11] Installing dependencies from package.json
+[2026-03-12 03:29:11] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=55 package=parseurl bytes=7304
+[2026-03-12 03:29:11] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=166 package=escape-html bytes=2563
+[2026-03-12 03:29:11] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=175 package=methods bytes=3634
+[2026-03-12 03:29:11] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=175 package=encodeurl bytes=2943
+[2026-03-12 03:29:11] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=183 package=vary bytes=4471
+[2026-03-12 03:29:11] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=203 package=etag bytes=9009
+[2026-03-12 03:29:11] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=203 package=accepts bytes=26951
+[2026-03-12 03:29:11] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=225 package=proxy-addr bytes=23445
+[2026-03-12 03:29:11] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=233 package=content-type bytes=5536
+[2026-03-12 03:29:11] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=237 package=range-parser bytes=7601
+[2026-03-12 03:29:11] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=255 package=type-is bytes=27215
+[2026-03-12 03:29:12] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=47 package=mime-types bytes=54950
+[2026-03-12 03:29:12] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=49 package=safer-buffer bytes=3543
+[2026-03-12 03:29:12] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=70 package=sharp bytes=251098
+[2026-03-12 03:29:12] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=336 package=caniuse-lite bytes=1190304
+[2026-03-12 03:29:12] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=56 package=nanoid bytes=144434
+[2026-03-12 03:29:12] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=51 package=picocolors bytes=5887
+[2026-03-12 03:29:13] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=28 package=loose-envify bytes=4759
+[2026-03-12 03:29:13] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=42 package=js-tokens bytes=18314
+[2026-03-12 03:29:14] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=1141 package=scheduler bytes=2604466
+[2026-03-12 03:29:14] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=61 package=source-map-js bytes=7731
+[2026-03-12 03:29:14] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=60 package=detect-libc bytes=17663
+[2026-03-12 03:29:14] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=61 package=side-channel bytes=10144
+[2026-03-12 03:29:14] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=60 package=streamsearch bytes=5718
+[2026-03-12 03:29:14] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=77 package=semver bytes=96449
+[2026-03-12 03:29:14] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=79 package=tslib bytes=42915
+[2026-03-12 03:29:15] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=507 package=color bytes=44794
+[2026-03-12 03:29:15] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=64 package=color-convert bytes=26557
+[2026-03-12 03:29:15] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=55 package=color-name bytes=7908
+[2026-03-12 03:29:15] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=361 package=color-string bytes=38170
+[2026-03-12 03:29:15] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=37 package=es-errors bytes=4277
+[2026-03-12 03:29:15] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=181 package=object-inspect bytes=41631
+[2026-03-12 03:29:16] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=223 package=side-channel-list bytes=1191
+[2026-03-12 03:29:16] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=237 package=side-channel-map bytes=2423
+[2026-03-12 03:29:16] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=242 package=call-bound bytes=4871
+[2026-03-12 03:29:16] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=162 package=call-bind-apply-helpers bytes=3677
+[2026-03-12 03:29:16] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=144 package=function-bind bytes=3724
+[2026-03-12 03:29:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=268 package=get-intrinsic bytes=27579
+[2026-03-12 03:29:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=172 package=get-proto bytes=1965
+[2026-03-12 03:29:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=172 package=simple-swizzle bytes=3493
+[2026-03-12 03:29:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=175 package=async-function bytes=1536
+[2026-03-12 03:29:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=184 package=has-symbols bytes=7061
+[2026-03-12 03:29:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=184 package=generator-function bytes=2659
+[2026-03-12 03:29:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=185 package=es-define-property bytes=1985
+[2026-03-12 03:29:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=185 package=async-generator-function bytes=1116
+[2026-03-12 03:29:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=186 package=gopd bytes=3782
+[2026-03-12 03:29:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=186 package=es-object-atoms bytes=3800
+[2026-03-12 03:29:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=187 package=math-intrinsics bytes=2182
+[2026-03-12 03:29:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=187 package=hasown bytes=3513
+[2026-03-12 03:29:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=191 package=side-channel-weakmap bytes=3731
+[2026-03-12 03:29:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=142 package=dunder-proto bytes=2071
+[2026-03-12 03:29:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=291 package=is-arrayish bytes=6137
+[2026-03-12 03:29:18] [jhol-cold-profile] stage=jagr3.resolve_graph elapsed_ms=6516 nodes=104
+[2026-03-12 03:29:18] Installing package: @img/sharp-darwin-arm64@0.33.5
+[2026-03-12 03:29:18] Installing package: @img/sharp-libvips-darwin-arm64@1.0.4
+[2026-03-12 03:29:18] Installing package: @next/env@15.1.0
+[2026-03-12 03:29:18] Installing package: @next/swc-darwin-arm64@15.1.0
+[2026-03-12 03:29:18] Installing package: @swc/counter@0.1.3
+[2026-03-12 03:29:18] Installing package: @swc/helpers@0.5.15
+[2026-03-12 03:29:18] Installing package: accepts@1.3.8
+[2026-03-12 03:29:18] Installing package: array-flatten@1.1.1
+[2026-03-12 03:29:18] Installing package: async-function@1.0.0
+[2026-03-12 03:29:18] Installing package: async-generator-function@1.0.0
+[2026-03-12 03:29:18] Installing package: body-parser@1.20.3
+[2026-03-12 03:29:18] Installing package: busboy@1.6.0
+[2026-03-12 03:29:18] Installing package: bytes@3.1.2
+[2026-03-12 03:29:18] Installing package: call-bind-apply-helpers@1.0.2
+[2026-03-12 03:29:18] Installing package: call-bound@1.0.4
+[2026-03-12 03:29:18] Installing package: caniuse-lite@1.0.30001777
+[2026-03-12 03:29:18] Installing package: client-only@0.0.1
+[2026-03-12 03:29:18] Installing package: color-convert@2.0.1
+[2026-03-12 03:29:18] Installing package: color-name@1.1.4
+[2026-03-12 03:29:18] Installing package: color-string@1.9.1
+[2026-03-12 03:29:18] Installing package: color@4.2.3
+[2026-03-12 03:29:18] Installing package: content-disposition@0.5.4
+[2026-03-12 03:29:18] Installing package: content-type@1.0.5
+[2026-03-12 03:29:18] Installing package: cookie-signature@1.0.6
+[2026-03-12 03:29:18] Installing package: cookie@0.7.1
+[2026-03-12 03:29:18] Installing package: debug@2.6.9
+[2026-03-12 03:29:18] Installing package: depd@2.0.0
+[2026-03-12 03:29:18] Installing package: destroy@1.2.0
+[2026-03-12 03:29:18] Installing package: detect-libc@2.1.2
+[2026-03-12 03:29:18] Installing package: dunder-proto@1.0.1
+[2026-03-12 03:29:18] Installing package: ee-first@1.1.1
+[2026-03-12 03:29:18] Installing package: encodeurl@1.0.2
+[2026-03-12 03:29:18] Warning: Multiple versions of encodeurl requested.
+[2026-03-12 03:29:18] Installing package: encodeurl@2.0.0
+[2026-03-12 03:29:18] Installing package: es-define-property@1.0.1
+[2026-03-12 03:29:18] Installing package: es-errors@1.3.0
+[2026-03-12 03:29:18] Installing package: es-object-atoms@1.1.1
+[2026-03-12 03:29:18] Installing package: escape-html@1.0.3
+[2026-03-12 03:29:18] Installing package: etag@1.8.1
+[2026-03-12 03:29:18] Installing package: express@4.21.2
+[2026-03-12 03:29:18] Installing package: finalhandler@1.3.1
+[2026-03-12 03:29:18] Installing package: forwarded@0.2.0
+[2026-03-12 03:29:18] Installing package: fresh@0.5.2
+[2026-03-12 03:29:18] Installing package: function-bind@1.1.2
+[2026-03-12 03:29:18] Installing package: generator-function@2.0.1
+[2026-03-12 03:29:18] Installing package: get-intrinsic@1.3.1
+[2026-03-12 03:29:18] Installing package: get-proto@1.0.1
+[2026-03-12 03:29:18] Installing package: gopd@1.2.0
+[2026-03-12 03:29:18] Installing package: has-symbols@1.1.0
+[2026-03-12 03:29:18] Installing package: hasown@2.0.2
+[2026-03-12 03:29:18] Installing package: http-errors@2.0.0
+[2026-03-12 03:29:18] Installing package: iconv-lite@0.4.24
+[2026-03-12 03:29:18] Installing package: inherits@2.0.4
+[2026-03-12 03:29:18] Installing package: ipaddr.js@1.9.1
+[2026-03-12 03:29:18] Installing package: is-arrayish@0.3.4
+[2026-03-12 03:29:18] Installing package: js-tokens@4.0.0
+[2026-03-12 03:29:18] Installing package: loose-envify@1.4.0
+[2026-03-12 03:29:18] Installing package: math-intrinsics@1.1.0
+[2026-03-12 03:29:18] Installing package: media-typer@0.3.0
+[2026-03-12 03:29:18] Installing package: merge-descriptors@1.0.3
+[2026-03-12 03:29:18] Installing package: methods@1.1.2
+[2026-03-12 03:29:18] Installing package: mime-db@1.52.0
+[2026-03-12 03:29:18] Installing package: mime-types@2.1.35
+[2026-03-12 03:29:18] Installing package: mime@1.6.0
+[2026-03-12 03:29:18] Installing package: ms@2.0.0
+[2026-03-12 03:29:18] Warning: Multiple versions of ms requested.
+[2026-03-12 03:29:18] Installing package: ms@2.1.3
+[2026-03-12 03:29:18] Installing package: nanoid@3.3.11
+[2026-03-12 03:29:18] Installing package: negotiator@0.6.3
+[2026-03-12 03:29:18] Installing package: next@15.1.0
+[2026-03-12 03:29:18] Installing package: object-inspect@1.13.4
+[2026-03-12 03:29:18] Installing package: on-finished@2.4.1
+[2026-03-12 03:29:18] Installing package: parseurl@1.3.3
+[2026-03-12 03:29:18] Installing package: path-to-regexp@0.1.12
+[2026-03-12 03:29:18] Installing package: picocolors@1.1.1
+[2026-03-12 03:29:18] Installing package: postcss@8.4.31
+[2026-03-12 03:29:18] Installing package: proxy-addr@2.0.7
+[2026-03-12 03:29:18] Installing package: qs@6.13.0
+[2026-03-12 03:29:18] Installing package: range-parser@1.2.1
+[2026-03-12 03:29:18] Installing package: raw-body@2.5.2
+[2026-03-12 03:29:18] Installing package: react-dom@18.3.1
+[2026-03-12 03:29:18] Installing package: react@18.3.1
+[2026-03-12 03:29:18] Installing package: safe-buffer@5.2.1
+[2026-03-12 03:29:18] Installing package: safer-buffer@2.1.2
+[2026-03-12 03:29:18] Installing package: scheduler@0.23.2
+[2026-03-12 03:29:18] Installing package: semver@7.7.4
+[2026-03-12 03:29:18] Installing package: send@0.19.0
+[2026-03-12 03:29:18] Installing package: serve-static@1.16.2
+[2026-03-12 03:29:18] Installing package: setprototypeof@1.2.0
+[2026-03-12 03:29:18] Installing package: sharp@0.33.5
+[2026-03-12 03:29:18] Installing package: side-channel-list@1.0.0
+[2026-03-12 03:29:18] Installing package: side-channel-map@1.0.1
+[2026-03-12 03:29:18] Installing package: side-channel-weakmap@1.0.2
+[2026-03-12 03:29:18] Installing package: side-channel@1.1.0
+[2026-03-12 03:29:18] Installing package: simple-swizzle@0.2.4
+[2026-03-12 03:29:18] Installing package: source-map-js@1.2.1
+[2026-03-12 03:29:18] Installing package: statuses@2.0.1
+[2026-03-12 03:29:18] Installing package: streamsearch@1.1.0
+[2026-03-12 03:29:18] Installing package: styled-jsx@5.1.6
+[2026-03-12 03:29:18] Installing package: toidentifier@1.0.1
+[2026-03-12 03:29:18] Installing package: tslib@2.8.1
+[2026-03-12 03:29:18] Installing package: type-is@1.6.18
+[2026-03-12 03:29:18] Installing package: typescript@5.7.2
+[2026-03-12 03:29:18] Installing package: unpipe@1.0.0
+[2026-03-12 03:29:18] Installing package: utils-merge@1.0.1
+[2026-03-12 03:29:18] Installing package: vary@1.1.2
+
+
+STDOUT

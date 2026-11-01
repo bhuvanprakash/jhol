@@ -208,11 +208,17 @@ unsafe extern "C" fn os_info_cb(
 ) -> *const OpaqueJSValue {
     let arch = std::env::consts::ARCH;
     let platform = std::env::consts::OS;
-    let cpus = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).to_string();
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .to_string();
     let homedir = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    js_string(ctx, &format!(
+    js_string(
+        ctx,
+        &format!(
         "{{\"arch\":\"{}\",\"platform\":\"{}\",\"cpus\":{},\"homedir\":\"{}\",\"tmpdir\":\"{}\"}}",
-        arch, platform, cpus, homedir, std::env::temp_dir().display()))
+        arch, platform, cpus, homedir, std::env::temp_dir().display()),
+    )
 }
 
 unsafe extern "C" fn env_get_cb(
@@ -590,7 +596,10 @@ unsafe extern "C" fn env_keys_cb(
 ) -> *const OpaqueJSValue {
     let mut keys: Vec<String> = std::env::vars().map(|(k, _)| k).collect();
     keys.sort();
-    js_string(ctx, &serde_json::to_string(&keys).unwrap_or_else(|_| "[]".to_string()))
+    js_string(
+        ctx,
+        &serde_json::to_string(&keys).unwrap_or_else(|_| "[]".to_string()),
+    )
 }
 
 fn fill_random(buf: &mut [u8]) {
@@ -614,7 +623,10 @@ unsafe extern "C" fn random_bytes_cb(
     // JSON is the cheap constructor available on this backend.
     let json = format!(
         "[{}]",
-        buf.iter().map(|b| b.to_string()).collect::<Vec<_>>().join(",")
+        buf.iter()
+            .map(|b| b.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
     );
     drop(buf);
     js_from_json(ctx, &json)
@@ -667,8 +679,13 @@ unsafe extern "C" fn spawn_cb(
     let cmd = arg_string(ctx, argument_count, arguments).unwrap_or_default();
     let args_json = if argument_count > 1 && !arguments.is_null() {
         let v = unsafe { JSValue::from_raw(ctx, *arguments.add(1)) };
-        v.to_json_string(0).ok().map(|s| s.to_string()).unwrap_or_default()
-    } else { String::new() };
+        v.to_json_string(0)
+            .ok()
+            .map(|s| s.to_string())
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
     let args: Vec<String> = serde_json::from_str(&args_json).unwrap_or_default();
     let output = std::process::Command::new(&cmd).args(&args).output();
     let result = match output {
@@ -800,8 +817,8 @@ impl JscRuntime {
         register_callback(ctx, "__jhol_hrtime_ns", Some(hrtime_ns_cb));
         register_callback(ctx, "__jhol_jit_fib", Some(jit_fib_cb));
         register_callback(ctx, "__jhol_jit_loop_sum", Some(jit_loop_sum_cb));
-    register_callback(ctx, "__jhol_jit_fact", Some(jit_fact_cb));
-    register_callback(ctx, "__jhol_jit_loop_power", Some(jit_loop_power_cb));
+        register_callback(ctx, "__jhol_jit_fact", Some(jit_fact_cb));
+        register_callback(ctx, "__jhol_jit_loop_power", Some(jit_loop_power_cb));
         // rt-parity: callbacks the QuickJS backend exposes and the JSC backend
         // was missing (audited by diffing the two bootstrap surfaces).
         register_callback(ctx, "__jhol_hash", Some(hash_cb));
@@ -1001,70 +1018,131 @@ pub fn eval_code(code: &str, filename: Option<&str>) -> RuntimeResult<i32> {
     rt.run_event_loop()
 }
 
-
 // ── rt-parity stubs (engine.rs has the same shape; features off by default) ──
 
 unsafe extern "C" fn http_listen_stub_cb(
-    ctx: JSContextRef, _f: JSObjectRef, _t: JSObjectRef, _c: usize, _a: *const JSValueRef, _e: *mut JSValueRef,
+    ctx: JSContextRef,
+    _f: JSObjectRef,
+    _t: JSObjectRef,
+    _c: usize,
+    _a: *const JSValueRef,
+    _e: *mut JSValueRef,
 ) -> *const OpaqueJSValue {
-    js_string(ctx, "{\"ok\":false,\"error\":\"http-server feature not enabled\"}")
+    js_string(
+        ctx,
+        "{\"ok\":false,\"error\":\"http-server feature not enabled\"}",
+    )
 }
 
 unsafe extern "C" fn ws_connect_stub_cb(
-    ctx: JSContextRef, _f: JSObjectRef, _t: JSObjectRef, _c: usize, _a: *const JSValueRef, _e: *mut JSValueRef,
+    ctx: JSContextRef,
+    _f: JSObjectRef,
+    _t: JSObjectRef,
+    _c: usize,
+    _a: *const JSValueRef,
+    _e: *mut JSValueRef,
 ) -> *const OpaqueJSValue {
-    js_string(ctx, "{\"ok\":false,\"error\":\"websocket feature not enabled\"}")
+    js_string(
+        ctx,
+        "{\"ok\":false,\"error\":\"websocket feature not enabled\"}",
+    )
 }
 
 unsafe extern "C" fn db_open_stub_cb(
-    ctx: JSContextRef, _f: JSObjectRef, _t: JSObjectRef, _c: usize, _a: *const JSValueRef, _e: *mut JSValueRef,
+    ctx: JSContextRef,
+    _f: JSObjectRef,
+    _t: JSObjectRef,
+    _c: usize,
+    _a: *const JSValueRef,
+    _e: *mut JSValueRef,
 ) -> *const OpaqueJSValue {
-    js_string(ctx, "{\"ok\":false,\"error\":\"sqlite feature not enabled\"}")
+    js_string(
+        ctx,
+        "{\"ok\":false,\"error\":\"sqlite feature not enabled\"}",
+    )
 }
 
 unsafe extern "C" fn db_exec_stub_cb(
-    ctx: JSContextRef, _f: JSObjectRef, _t: JSObjectRef, _c: usize, _a: *const JSValueRef, _e: *mut JSValueRef,
+    ctx: JSContextRef,
+    _f: JSObjectRef,
+    _t: JSObjectRef,
+    _c: usize,
+    _a: *const JSValueRef,
+    _e: *mut JSValueRef,
 ) -> *const OpaqueJSValue {
-    js_string(ctx, "{\"ok\":false,\"error\":\"sqlite feature not enabled\"}")
+    js_string(
+        ctx,
+        "{\"ok\":false,\"error\":\"sqlite feature not enabled\"}",
+    )
 }
 
 unsafe extern "C" fn db_close_stub_cb(
-    ctx: JSContextRef, _f: JSObjectRef, _t: JSObjectRef, _c: usize, _a: *const JSValueRef, _e: *mut JSValueRef,
+    ctx: JSContextRef,
+    _f: JSObjectRef,
+    _t: JSObjectRef,
+    _c: usize,
+    _a: *const JSValueRef,
+    _e: *mut JSValueRef,
 ) -> *const OpaqueJSValue {
     js_string(ctx, "{\"ok\":true}")
 }
 
 #[cfg(feature = "http-server")]
 unsafe extern "C" fn http_listen_cb(
-    ctx: JSContextRef, _f: JSObjectRef, _t: JSObjectRef, _c: usize, _a: *const JSValueRef, _e: *mut JSValueRef,
+    ctx: JSContextRef,
+    _f: JSObjectRef,
+    _t: JSObjectRef,
+    _c: usize,
+    _a: *const JSValueRef,
+    _e: *mut JSValueRef,
 ) -> *const OpaqueJSValue {
     js_string(ctx, &crate::engine::http_listen_impl())
 }
 
 #[cfg(feature = "websocket")]
 unsafe extern "C" fn ws_connect_cb(
-    ctx: JSContextRef, _f: JSObjectRef, _t: JSObjectRef, _c: usize, _a: *const JSValueRef, _e: *mut JSValueRef,
+    ctx: JSContextRef,
+    _f: JSObjectRef,
+    _t: JSObjectRef,
+    _c: usize,
+    _a: *const JSValueRef,
+    _e: *mut JSValueRef,
 ) -> *const OpaqueJSValue {
     js_string(ctx, "{\"ok\":true}")
 }
 
 #[cfg(feature = "sqlite")]
 unsafe extern "C" fn db_open_cb(
-    ctx: JSContextRef, _f: JSObjectRef, _t: JSObjectRef, _c: usize, _a: *const JSValueRef, _e: *mut JSValueRef,
+    ctx: JSContextRef,
+    _f: JSObjectRef,
+    _t: JSObjectRef,
+    _c: usize,
+    _a: *const JSValueRef,
+    _e: *mut JSValueRef,
 ) -> *const OpaqueJSValue {
     js_string(ctx, "{\"ok\":true,\"id\":1}")
 }
 
 #[cfg(feature = "sqlite")]
 unsafe extern "C" fn db_exec_cb(
-    ctx: JSContextRef, _f: JSObjectRef, _t: JSObjectRef, _c: usize, _a: *const JSValueRef, _e: *mut JSValueRef,
+    ctx: JSContextRef,
+    _f: JSObjectRef,
+    _t: JSObjectRef,
+    _c: usize,
+    _a: *const JSValueRef,
+    _e: *mut JSValueRef,
 ) -> *const OpaqueJSValue {
     js_string(ctx, "{\"ok\":true}")
 }
 
 #[cfg(feature = "sqlite")]
 unsafe extern "C" fn db_close_cb(
-    ctx: JSContextRef, _f: JSObjectRef, _t: JSObjectRef, _c: usize, _a: *const JSValueRef, _e: *mut JSValueRef,
+    ctx: JSContextRef,
+    _f: JSObjectRef,
+    _t: JSObjectRef,
+    _c: usize,
+    _a: *const JSValueRef,
+    _e: *mut JSValueRef,
 ) -> *const OpaqueJSValue {
     js_string(ctx, "{\"ok\":true}")
 }

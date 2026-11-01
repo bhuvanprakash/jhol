@@ -1,0 +1,27 @@
+{
+  "fixture": "optional-deps-app",
+  "expectedStatus": "pass",
+  "notes": "covers optionalDependencies edge",
+  "expectedGraph": {
+    "root": {
+      "name": "jhol-fixture-optional-deps-app",
+      "version": "1.0.0"
+    },
+    "edges": [
+      {
+        "from": "$root",
+        "to": "is-number",
+        "spec": "7.0.0",
+        "type": "dependencies"
+      },
+      {
+        "from": "$root",
+        "to": "fsevents",
+        "spec": "2.3.3",
+        "type": "optionalDependencies"
+      }
+    ],
+    "overrides": {},
+    "workspaces": []
+  }
+}

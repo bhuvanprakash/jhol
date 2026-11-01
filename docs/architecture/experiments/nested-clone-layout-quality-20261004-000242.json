@@ -1,0 +1,228 @@
+{
+  "fixture_inputs": {
+    "package-lock.json": {
+      "name": "jhol-nested-clone-check",
+      "version": "1.0.0",
+      "lockfileVersion": 3,
+      "requires": true,
+      "packages": {
+        "": {
+          "name": "jhol-nested-clone-check",
+          "version": "1.0.0",
+          "dependencies": {
+            "debug": "2.6.9",
+            "https-proxy-agent": "7.0.6"
+          }
+        },
+        "node_modules/agent-base": {
+          "version": "7.1.4",
+          "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-7.1.4.tgz",
+          "integrity": "sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==",
+          "license": "MIT",
+          "engines": {
+            "node": ">= 14"
+          }
+        },
+        "node_modules/debug": {
+          "version": "2.6.9",
+          "resolved": "https://registry.npmjs.org/debug/-/debug-2.6.9.tgz",
+          "integrity": "sha512-bC7ElrdJaJnPbAP+1EotYvqZsb3ecl5wi6Bfi6BJTUcNowp6cvspg0jXznRTKDjm/E7AdgFBVeAPVMNcKGsHMA==",
+          "license": "MIT",
+          "dependencies": {
+            "ms": "2.0.0"
+          }
+        },
+        "node_modules/https-proxy-agent": {
+          "version": "7.0.6",
+          "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-7.0.6.tgz",
+          "integrity": "sha512-vK9P5/iUfdl95AI+JVyUuIcVtd4ofvtrOr3HNtM2yxC9bnMbEdp3x01OhQNnjb8IJYi38VlTE3mBXwcfvywuSw==",
+          "license": "MIT",
+          "dependencies": {
+            "agent-base": "^7.1.2",
+            "debug": "4"
+          },
+          "engines": {
+            "node": ">= 14"
+          }
+        },
+        "node_modules/https-proxy-agent/node_modules/debug": {
+          "version": "4.4.3",
+          "resolved": "https://registry.npmjs.org/debug/-/debug-4.4.3.tgz",
+          "integrity": "sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==",
+          "license": "MIT",
+          "dependencies": {
+            "ms": "^2.1.3"
+          },
+          "engines": {
+            "node": ">=6.0"
+          },
+          "peerDependenciesMeta": {
+            "supports-color": {
+              "optional": true
+            }
+          }
+        },
+        "node_modules/https-proxy-agent/node_modules/ms": {
+          "version": "2.1.3",
+          "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+          "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
+          "license": "MIT"
+        },
+        "node_modules/ms": {
+          "version": "2.0.0",
+          "resolved": "https://registry.npmjs.org/ms/-/ms-2.0.0.tgz",
+          "integrity": "sha512-Tpp60P6IUJDTuOq/5Z8cdskzJujfwqfOTkrwIwj7IRISpnkJnT6SyJ4PCPnGMoFjC9ddhal5KVIYtAt97ix05A==",
+          "license": "MIT"
+        }
+      }
+    },
+    "package.json": {
+      "name": "jhol-nested-clone-check",
+      "version": "1.0.0",
+      "private": true,
+      "dependencies": {
+        "debug": "2.6.9",
+        "https-proxy-agent": "7.0.6"
+      }
+    }
+  },
+  "expected_debug_paths": {
+    "node_modules/debug": "2.6.9",
+    "node_modules/https-proxy-agent/node_modules/debug": "4.4.3"
+  },
+  "checks": [
+    {
+      "variant": "baseline-symlink",
+      "install_exit": 0,
+      "consumer_exit": 1,
+      "consumer": "",
+      "output": "   at wrapResolveFilename (node:internal/modules/cjs/loader:1145:27)\n    at defaultResolveImplForCJSLoading (node:internal/modules/cjs/loader:1169:10)\n    at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1196:12)\n    at Module._load (node:internal/modules/cjs/loader:1368:5)\n    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)\n    at Module.require (node:internal/modules/cjs/loader:1701:12)\n    at require (node:internal/modules/helpers:318:16)\n    at setup (/private/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-nested-clone-check-uwhi17hc/cache-baseline-symlink/store_unpacked/89/89c1ac9c946ee8905a875837114528e97eeae35e03be3190584b2216af43e4a7/src/common.js:14:25)\n    at Object.<anonymous> (/private/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-nested-clone-check-uwhi17hc/cache-baseline-symlink/store_unpacked/89/89c1ac9c946ee8905a875837114528e97eeae35e03be3190584b2216af43e4a7/src/node.js:240:37) {\n  code: 'MODULE_NOT_FOUND',\n  requireStack: [\n    '/private/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-nested-clone-check-uwhi17hc/cache-baseline-symlink/store_unpacked/89/89c1ac9c946ee8905a875837114528e97eeae35e03be3190584b2216af43e4a7/src/common.js',\n    '/private/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-nested-clone-check-uwhi17hc/cache-baseline-symlink/store_unpacked/89/89c1ac9c946ee8905a875837114528e97eeae35e03be3190584b2216af43e4a7/src/node.js',\n    '/private/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-nested-clone-check-uwhi17hc/cache-baseline-symlink/store_unpacked/89/89c1ac9c946ee8905a875837114528e97eeae35e03be3190584b2216af43e4a7/src/index.js',\n    '/private/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-nested-clone-check-uwhi17hc/cache-baseline-symlink/store_unpacked/96/960f89e8e5240882f64249d04a538421dd39d62ffacc138544647cc3251bc0e0/dist/index.js',\n    '/private/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-nested-clone-check-uwhi17hc/baseline-symlink/[eval]'\n  ]\n}\n\nNode.js v26.10.0\n",
+      "inventory": {
+        "agent-base": {
+          "name": "agent-base",
+          "version": "7.1.4"
+        },
+        "debug": {
+          "name": "debug",
+          "version": "2.6.9"
+        },
+        "https-proxy-agent": {
+          "name": "https-proxy-agent",
+          "version": "7.0.6"
+        },
+        "https-proxy-agent/node_modules/debug": {
+          "name": "debug",
+          "version": "4.4.3"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.0.0"
+        }
+      },
+      "binary_sha256": "4934d65c010c5ec0f2dc5cbccc96574d25b308551da8d1238e05e683f93daac1",
+      "lock_stable": true
+    },
+    {
+      "variant": "clone",
+      "install_exit": 0,
+      "consumer_exit": 0,
+      "consumer": "{\"root\":\"2.6.9\",\"nested\":\"4.4.3\",\"agent\":true}",
+      "output": "",
+      "inventory": {
+        "agent-base": {
+          "name": "agent-base",
+          "version": "7.1.4"
+        },
+        "debug": {
+          "name": "debug",
+          "version": "2.6.9"
+        },
+        "https-proxy-agent": {
+          "name": "https-proxy-agent",
+          "version": "7.0.6"
+        },
+        "https-proxy-agent/node_modules/debug": {
+          "name": "debug",
+          "version": "4.4.3"
+        },
+        "https-proxy-agent/node_modules/ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.0.0"
+        }
+      },
+      "binary_sha256": "5ca95287324d38b9f71b925a56b7c90e8ce5134838f5fb1a6d09557452df3099",
+      "lock_stable": true
+    },
+    {
+      "variant": "symlink",
+      "install_exit": 0,
+      "consumer_exit": 0,
+      "consumer": "{\"root\":\"2.6.9\",\"nested\":\"4.4.3\",\"agent\":true}",
+      "output": "",
+      "inventory": {
+        "agent-base": {
+          "name": "agent-base",
+          "version": "7.1.4"
+        },
+        "debug": {
+          "name": "debug",
+          "version": "2.6.9"
+        },
+        "https-proxy-agent": {
+          "name": "https-proxy-agent",
+          "version": "7.0.6"
+        },
+        "https-proxy-agent/node_modules/debug": {
+          "name": "debug",
+          "version": "4.4.3"
+        },
+        "https-proxy-agent/node_modules/ms": {
+          "name": "ms",
+          "version": "2.1.3"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.0.0"
+        }
+      },
+      "binary_sha256": "5ca95287324d38b9f71b925a56b7c90e8ce5134838f5fb1a6d09557452df3099",
+      "lock_stable": true
+    },
+    {
+      "variant": "bun",
+      "install_exit": 0,
+      "consumer_exit": 0,
+      "consumer": "{\"root\":\"2.6.9\",\"nested\":\"4.4.3\",\"agent\":true}",
+      "output": "[0.12ms] migrated lockfile from package-lock.json\nSaved lockfile\n",
+      "inventory": {
+        "agent-base": {
+          "name": "agent-base",
+          "version": "7.1.4"
+        },
+        "debug": {
+          "name": "debug",
+          "version": "2.6.9"
+        },
+        "https-proxy-agent": {
+          "name": "https-proxy-agent",
+          "version": "7.0.6"
+        },
+        "https-proxy-agent/node_modules/debug": {
+          "name": "debug",
+          "version": "4.4.3"
+        },
+        "ms": {
+          "name": "ms",
+          "version": "2.0.0"
+        }
+      },
+      "binary_sha256": "35d20dd0263e5c950194434b925454fdfa9ba6e4467da960410fa05b08a7a5b5",
+      "lock_stable": true
+    }
+  ],
+  "runner_source": "import importlib.util,json,os,subprocess,tempfile,time\nfrom pathlib import Path\nrepo=Path('/Users/bhuvanprakash/j/jhol')\nsp=importlib.util.spec_from_file_location('m',repo/'scripts/bench/paper_matrix.py');m=importlib.util.module_from_spec(sp);sp.loader.exec_module(m)\nchecks=[]\nwith tempfile.TemporaryDirectory(prefix='jhol-nested-clone-check-') as raw:\n root=Path(raw);fixture=root/'fixture';fixture.mkdir()\n manifest={'name':'jhol-nested-clone-check','version':'1.0.0','private':True,'dependencies':{'debug':'2.6.9','https-proxy-agent':'7.0.6'}}\n (fixture/'package.json').write_text(json.dumps(manifest,indent=2)+'\\n')\n lock_run=subprocess.run(['npm','install','--package-lock-only','--ignore-scripts','--no-audit','--no-fund','--cache',str(root/'npm-preparation')],cwd=fixture,capture_output=True,text=True,timeout=120)\n if lock_run.returncode: raise RuntimeError(lock_run.stderr[-1200:])\n inputs={p.name:json.loads(p.read_text()) for p in fixture.iterdir() if p.name in ('package.json','package-lock.json')}\n expected={p:e['version'] for p,e in inputs['package-lock.json']['packages'].items() if p.endswith('node_modules/debug')}\n assert expected['node_modules/debug']=='2.6.9' and any(v.startswith('4.') for p,v in expected.items() if p!='node_modules/debug'),expected\n for variant,exe,link in [('baseline-symlink',Path('/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol-cold-goal-before-mmx48lua/baseline-jhol'),'1'),('clone',repo/'target/release/jhol',None),('symlink',repo/'target/release/jhol','1'),('bun',Path('/Users/bhuvanprakash/.bun/bin/bun'),None)]:\n  project=root/variant;project.mkdir()\n  for name,d in inputs.items(): (project/name).write_text(json.dumps(d,indent=2)+'\\n')\n  env=os.environ.copy()\n  for k in list(env):\n   if k.startswith('JHOL_'):env.pop(k)\n  env.update({'HOME':str(root/f'home-{variant}'),'JHOL_CACHE_DIR':str(root/f'cache-{variant}'),'BUN_INSTALL_CACHE_DIR':str(root/f'bun-{variant}'),'JHOL_NO_HARVEST':'1','JHOL_NO_DAEMON':'1','JHOL_PREBUILT':'0','JHOL_JGRID':'0','JHOL_NO_SPLASH':'1'})\n  Path(env['HOME']).mkdir()\n  if link:env['JHOL_LINK']=link\n  proc=subprocess.run([str(exe),'install'],cwd=project,env=env,capture_output=True,text=True,timeout=120)\n  script=\"const fs=require('fs'),path=require('path'),{createRequire}=require('module'); const root=require('./node_modules/debug/package.json'); if(root.version!=='2.6.9') throw Error('root version'); const req=createRequire(require.resolve('https-proxy-agent')); const nested=req('debug/package.json'); if(!nested.version.startsWith('4.')) throw Error('nested version'); const {HttpsProxyAgent}=require('https-proxy-agent'); const a=new HttpsProxyAgent('http://127.0.0.1:9999'); console.log(JSON.stringify({root:root.version,nested:nested.version,agent:!!a}));\"\n  consumer=subprocess.run(['node','-e',script],cwd=project,capture_output=True,text=True,timeout=30)\n  checks.append({'variant':variant,'install_exit':proc.returncode,'consumer_exit':consumer.returncode,'consumer':consumer.stdout.strip(),'output':(proc.stderr+consumer.stderr)[-2000:],'inventory':m.lock_layout(project),'binary_sha256':m.hash_file(exe),'lock_stable':m.hash_file(project/'package-lock.json')==m.hash_file(fixture/'package-lock.json')})\n  print(variant,proc.returncode,consumer.returncode,consumer.stdout.strip(),flush=True)\n report={'fixture_inputs':inputs,'expected_debug_paths':expected,'checks':checks,'runner_source':Path(__file__).read_text()}\n out=repo/'docs/architecture/experiments'/f'nested-clone-layout-quality-{time.strftime(\"%Y%m%d-%H%M%S\")}.json';out.write_text(json.dumps(report,indent=2)+'\\n');print(out)\n assert all(c['install_exit']==0 and c['consumer_exit']==0 and c['lock_stable'] for c in checks)\n assert checks[1]['inventory']==checks[-1]['inventory'],'clone layout differs from Bun'\n"
+}

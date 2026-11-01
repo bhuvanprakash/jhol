@@ -28,12 +28,16 @@
 use std::cmp::Ordering;
 
 use crate::arena;
-use crate::objects::{JArray, JCell, JFunction, JObject, JString, ObjHeader, TAG_ARRAY, TAG_CELL, TAG_FUNCTION, TAG_OBJECT, TAG_STRING};
 use crate::errors::{type_error, VmError, VmResult};
+use crate::objects::{
+    JArray, JCell, JFunction, JObject, JString, ObjHeader, TAG_ARRAY, TAG_CELL, TAG_FUNCTION,
+    TAG_OBJECT, TAG_STRING,
+};
 
 /// The quiet-NaN prefix shared by every boxed value.
 pub const BOX_TAG: u64 = 0x7FF8_0000_0000_0000;
 const SUB_SHIFT: u32 = 44;
+#[allow(dead_code)]
 const PAYLOAD_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const SMI_MASK: u64 = 0x0000_0FFF_FFFF_FFFF;
 pub const OFFSET_MAX: u64 = 0x0000_0FFF_FFFF_FFFF;
@@ -48,6 +52,7 @@ const SING_TRUE: u64 = 2;
 const SING_FALSE: u64 = 3;
 const SING_EMPTY: u64 = 4;
 
+#[allow(dead_code)]
 const HEADER_OFFSET: usize = 32;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -79,7 +84,11 @@ impl Value {
     pub fn from_f64(f: f64) -> Value {
         if f.is_nan() {
             Value::NAN
-        } else if !(f == 0.0 && f.is_sign_negative()) && f.fract() == 0.0 && f >= -(1i64 << 43) as f64 && f < (1i64 << 43) as f64 {
+        } else if !(f == 0.0 && f.is_sign_negative())
+            && f.fract() == 0.0
+            && f >= -(1i64 << 43) as f64
+            && f < (1i64 << 43) as f64
+        {
             // Integral values inside the Smi range are stored boxed, so every
             // integer has one representation. Before this, `let i = 0` produced
             // a double-repr zero (raw bits), which made the JIT's Smi entry
@@ -98,8 +107,17 @@ impl Value {
 
     #[inline]
     pub fn from_i64(i: i64) -> Value {
-        debug_assert!(i >= -(1i64 << 43) && i < (1i64 << 43), "int out of Smi range");
-        Value(BOX_TAG | (SUB_SMI << SUB_SHIFT) | ((i as u64) & SMI_MASK))
+        // The Smi payload is 44 bits. The old `debug_assert` was the *only*
+        // guard, and asserts vanish in release — an out-of-range caller got a
+        // silently truncated value that then compared equal to other truncated
+        // values (`7777777777777777777 === 7777777777777778000` was true) and
+        // printed the wrong digits. Out of range means "not representable as a
+        // Smi", so store the exact double instead.
+        if i >= -(1i64 << 43) && i < (1i64 << 43) {
+            Value(BOX_TAG | (SUB_SMI << SUB_SHIFT) | ((i as u64) & SMI_MASK))
+        } else {
+            Value::from_f64(i as f64)
+        }
     }
 
     #[inline]
@@ -136,9 +154,16 @@ impl Value {
 
     #[inline]
     pub fn from_ptr<T>(p: *mut T) -> Value {
-        let base = crate::arena::arena_base() as u64;
-        let off = (p as u64).wrapping_sub(base);
-        debug_assert!(off < (1u64 << 44), "heap object outside the 44-bit arena offset space");
+        Self::from_ptr_in(p, crate::arena::arena_base())
+    }
+
+    #[inline]
+    pub(crate) fn from_ptr_in<T>(p: *mut T, base: *mut u8) -> Value {
+        let off = (p as u64).wrapping_sub(base as u64);
+        debug_assert!(
+            off < (1u64 << 44),
+            "heap object outside the 44-bit arena offset space"
+        );
         Value(BOX_TAG | (SUB_PTR << SUB_SHIFT) | (off & OFFSET_MAX))
     }
 
@@ -237,13 +262,27 @@ impl Value {
         if !self.is_ptr() {
             return None;
         }
-        let base = crate::arena::arena_base();
+        self.obj_tag_in(crate::arena::arena_base())
+    }
+
+    /// The supplied base must own this value's offset for the whole access.
+    #[inline]
+    pub(crate) unsafe fn obj_tag_in(&self, base: *mut u8) -> Option<u32> {
+        if !self.is_ptr() {
+            return None;
+        }
         if base.is_null() {
             return None;
         }
-        let off = (self.0 & OFFSET_MAX) as usize;
-        let hdr = base.add(off) as *const ObjHeader;
+        let hdr = self.ptr_in::<ObjHeader>(base);
         Some((*hdr).tag)
+    }
+
+    /// Caller proves the value is a live pointer of type `T` in this arena.
+    #[inline]
+    pub(crate) unsafe fn ptr_in<T>(&self, base: *mut u8) -> *mut T {
+        debug_assert!(self.is_ptr() && !base.is_null());
+        base.add((self.0 & OFFSET_MAX) as usize).cast()
     }
 
     // ---------- accessors ----------
@@ -294,50 +333,42 @@ impl Value {
 
     #[inline]
     pub unsafe fn as_string(&self) -> &'static JString {
-        &*((crate::arena::arena_base() as *mut JString).byte_add((self.0 & OFFSET_MAX) as usize)
-            as *const JString)
+        &*self.ptr_in::<JString>(crate::arena::arena_base())
     }
 
     #[inline]
     pub unsafe fn as_object(&self) -> &'static JObject {
-        &*((crate::arena::arena_base() as *mut JObject).byte_add((self.0 & OFFSET_MAX) as usize)
-            as *const JObject)
+        &*self.ptr_in::<JObject>(crate::arena::arena_base())
     }
 
     #[inline]
     pub unsafe fn as_object_mut(&self) -> &'static mut JObject {
-        &mut *((crate::arena::arena_base() as *mut JObject).byte_add((self.0 & OFFSET_MAX) as usize)
-            as *mut JObject)
+        &mut *self.ptr_in::<JObject>(crate::arena::arena_base())
     }
 
     #[inline]
     pub unsafe fn as_array(&self) -> &'static JArray {
-        &*((crate::arena::arena_base() as *mut JArray).byte_add((self.0 & OFFSET_MAX) as usize)
-            as *const JArray)
+        &*self.ptr_in::<JArray>(crate::arena::arena_base())
     }
 
     #[inline]
     pub unsafe fn as_array_mut(&self) -> &'static mut JArray {
-        &mut *((crate::arena::arena_base() as *mut JArray).byte_add((self.0 & OFFSET_MAX) as usize)
-            as *mut JArray)
+        &mut *self.ptr_in::<JArray>(crate::arena::arena_base())
     }
 
     #[inline]
     pub unsafe fn as_function(&self) -> &'static JFunction {
-        &*((crate::arena::arena_base() as *mut JFunction).byte_add((self.0 & OFFSET_MAX) as usize)
-            as *const JFunction)
+        &*self.ptr_in::<JFunction>(crate::arena::arena_base())
     }
 
     #[inline]
     pub unsafe fn as_function_mut(&self) -> &'static mut JFunction {
-        &mut *((crate::arena::arena_base() as *mut JFunction).byte_add((self.0 & OFFSET_MAX) as usize)
-            as *mut JFunction)
+        &mut *self.ptr_in::<JFunction>(crate::arena::arena_base())
     }
 
     #[inline]
     pub unsafe fn as_cell_mut(&self) -> &'static mut JCell {
-        &mut *((crate::arena::arena_base() as *mut JCell).byte_add((self.0 & OFFSET_MAX) as usize)
-            as *mut JCell)
+        &mut *self.ptr_in::<JCell>(crate::arena::arena_base())
     }
 
     pub fn as_str(&self) -> Option<&'static str> {
@@ -408,9 +439,13 @@ impl Value {
 
     /// `===`. Pointer identity for references.
     pub fn strict_eq(&self, other: &Value) -> bool {
-        if self.is_number() && other.is_number() { return self.as_f64() == other.as_f64(); }
+        if self.is_number() && other.is_number() {
+            return self.as_f64() == other.as_f64();
+        }
         if self.is_string() && other.is_string() {
-            return unsafe { self.as_string() }.code_units().eq(unsafe { other.as_string() }.code_units());
+            return unsafe { self.as_string() }
+                .code_units()
+                .eq(unsafe { other.as_string() }.code_units());
         }
         self.0 == other.0
     }
@@ -418,7 +453,8 @@ impl Value {
     /// `Object.is`-style: signed zeros differ; NaNs compare equal.
     pub fn same_value(&self, other: &Value) -> bool {
         if self.is_number() && other.is_number() {
-            return (self.is_nan() && other.is_nan()) || self.as_f64().to_bits() == other.as_f64().to_bits();
+            return (self.is_nan() && other.is_nan())
+                || self.as_f64().to_bits() == other.as_f64().to_bits();
         }
         self.strict_eq(other)
     }
@@ -467,11 +503,19 @@ impl Value {
                 // iteration (`i % 1000` in a loop was the single hottest leaf
                 // in the array/string/sort benchmarks). Zero still has to go
                 // through the f64 path so it yields NaN, not a panic.
-                ArithOp::Mod if b != 0 => Some(if a < 0 && a % b == 0 { Value::from_f64(-0.0) } else { Value::from_i64(a % b) }),
+                ArithOp::Mod if b != 0 => Some(if a < 0 && a % b == 0 {
+                    Value::from_f64(-0.0)
+                } else {
+                    Value::from_i64(a % b)
+                }),
                 ArithOp::Mul => {
                     if let Some(r) = a.checked_mul(b) {
                         if r >= -(1i64 << 43) && r < (1i64 << 43) {
-                            return Some(if r == 0 && (a < 0 || b < 0) { Value::from_f64(-0.0) } else { Value::from_i64(r) });
+                            return Some(if r == 0 && (a < 0 || b < 0) {
+                                Value::from_f64(-0.0)
+                            } else {
+                                Value::from_i64(r)
+                            });
                         }
                     }
                     Some(Value::from_f64((a as f64) * (b as f64)))
@@ -537,10 +581,27 @@ pub fn f64_to_js_string(f: f64) -> String {
         return "NaN".to_string();
     }
     if f.is_infinite() {
-        return if f < 0.0 { "-Infinity".to_string() } else { "Infinity".to_string() };
+        return if f < 0.0 {
+            "-Infinity".to_string()
+        } else {
+            "Infinity".to_string()
+        };
     }
     if f == 0.0 {
         return "0".to_string();
+    }
+    // ECMA-262: decimal form only when the exponent k satisfies -6 <= k < 21;
+    // outside that, exponential (`1e+21`, `1e-7`). Rust switches at 1e16 and
+    // writes `1e21` with no sign, so this cannot be delegated to `{}`.
+    {
+        let mag = f.abs();
+        if mag >= 1e21 || mag < 1e-6 {
+            let mut s = format!("{:e}", f);
+            if !s.contains("e-") {
+                s = s.replacen('e', "e+", 1);
+            }
+            return s;
+        }
     }
     if f.fract() == 0.0 && f.abs() < 1e21 {
         let i = f as i64;

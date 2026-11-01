@@ -2,17 +2,17 @@
 //! Full three-layer resolver available via feature flag.
 
 pub mod betti_numbers;
-pub mod idea_benchmark;
-pub mod io_benchmark;
-pub mod priority_benchmark;
 pub mod conflict_explainer;
 pub mod core_guided_lp;
 pub mod core_guided_solver;
+pub mod idea_benchmark;
+pub mod io_benchmark;
 pub mod jagr_resolver;
 pub mod knot;
 pub mod maxsat_solver;
 pub mod mayer_vietoris;
 pub mod ol3p_solver;
+pub mod priority_benchmark;
 pub mod resolution_differential;
 pub mod simplicial_normal_form;
 pub mod tropical_math;

@@ -1,0 +1,24 @@
+{
+  "fixture": "turbo-app",
+  "expectedStatus": "pass",
+  "notes": "framework matrix fixture for Turborepo",
+  "expectedGraph": {
+    "root": {
+      "name": "jhol-fixture-turbo-app",
+      "version": "1.0.0"
+    },
+    "edges": [
+      {
+        "from": "$root",
+        "to": "turbo",
+        "spec": "2.0.6",
+        "type": "devDependencies"
+      }
+    ],
+    "overrides": {},
+    "workspaces": [
+      "apps/*",
+      "packages/*"
+    ]
+  }
+}

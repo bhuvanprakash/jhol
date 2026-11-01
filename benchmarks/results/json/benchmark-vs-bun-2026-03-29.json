@@ -1,0 +1,32 @@
+{
+  "date": "2026-03-29",
+  "fixture": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "next": "15.1.0",
+    "typescript": "5.7.2",
+    "express": "4.21.2"
+  },
+  "jhol": {
+    "cold_s": 10.918260750011541,
+    "cold_code": 0,
+    "warm_s": 0.027821625000797212,
+    "warm_code": 0
+  },
+  "bun": {
+    "cold_s": 11.387905250012409,
+    "cold_code": 0,
+    "warm_s": 0.21031420800136402,
+    "warm_code": 0
+  },
+  "ratio": {
+    "cold_jhol_over_bun": 0.9587593600675282,
+    "warm_jhol_over_bun": 0.1322859984838341
+  },
+  "stderr_tail": {
+    "jhol_cold": "[2026-03-29 12:01:55] Installing dependencies from package.json\n",
+    "jhol_warm": "[2026-03-29 12:02:06] Installing dependencies from package.json\n",
+    "bun_cold": "Resolving dependencies\nResolved, downloaded and extracted [452]\nSaved lockfile\n",
+    "bun_warm": "Saved lockfile\n"
+  }
+}

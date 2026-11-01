@@ -1,0 +1,23 @@
+{
+  "fixture": "overrides-app",
+  "expectedStatus": "pass",
+  "notes": "covers overrides edge",
+  "expectedGraph": {
+    "root": {
+      "name": "jhol-fixture-overrides-app",
+      "version": "1.0.0"
+    },
+    "edges": [
+      {
+        "from": "$root",
+        "to": "is-odd",
+        "spec": "3.0.1",
+        "type": "dependencies"
+      }
+    ],
+    "overrides": {
+      "is-number": "7.0.0"
+    },
+    "workspaces": []
+  }
+}

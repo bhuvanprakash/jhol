@@ -39,6 +39,7 @@ fn main() {
     let (mut parsed, mut parse_fail, mut fmt_fail, mut reparse_fail, mut non_idem) =
         (0usize, 0usize, 0usize, 0usize, 0usize);
     for f in &files {
+        eprintln!("CURRENT {}", f.display());
         let src = match fs::read_to_string(f) {
             Ok(s) => s,
             Err(_) => continue, // non-UTF8: the runtime rejects these already
@@ -47,7 +48,7 @@ fn main() {
             Ok(p) => p,
             Err(e) => {
                 parse_fail += 1;
-                if parse_fail <= 15 {
+                if true {
                     println!("PARSE  {}: {}", f.display(), e);
                 }
                 continue;
@@ -69,7 +70,7 @@ fn main() {
         // The formatted output must itself parse.
         if let Err(e) = jhol_vm::parser::parse_program(&out) {
             reparse_fail += 1;
-            if reparse_fail <= 15 {
+            if true {
                 println!("REPARSE {}: {}", f.display(), e);
             }
             continue;
@@ -79,7 +80,7 @@ fn main() {
             Ok(out2) if out2 == out => {}
             _ => {
                 non_idem += 1;
-                if non_idem <= 15 {
+                if true {
                     println!("IDEM   {}", f.display());
                 }
             }

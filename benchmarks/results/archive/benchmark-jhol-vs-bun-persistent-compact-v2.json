@@ -1,0 +1,39 @@
+{
+  "base_dir": "/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld",
+  "jhol_strict_cold": {
+    "elapsed_s": 42.991,
+    "returncode": 0,
+    "profile": {
+      "fetch_metadata.network": 57,
+      "jagr3.resolve_graph": 20325,
+      "jhol-native-download": 17196,
+      "extract_selective": 3094,
+      "extract_tarball_to_dir": 3243,
+      "ensure_unpacked_in_store": 3243,
+      "extract_manifest_minimal": 3239,
+      "jhol-native-link": 3248
+    },
+    "stderr_tail": "r/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-cold-cache/store_unpacked/sri-346ef3668cd70a7c files=837\n[2026-03-12 05:45:43] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=3100 tarball=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-cold-cache/store/sri-346ef3668cd70a7c.tgz unpacked=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-cold-cache/store_unpacked/sri-346ef3668cd70a7c\n[2026-03-12 05:45:43] Installed caniuse-lite@1.0.30001777 (native)\n[2026-03-12 05:45:43] [jhol-cold-profile] stage=extract_manifest_minimal elapsed_ms=2767 tarball=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-cold-cache/store/sri-f6696b6092aec2db.tgz files=65 dest=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-cold-cache/store_unpacked/sri-f6696b6092aec2db\n[2026-03-12 05:45:43] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=2767 tarball=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-cold-cache/store/sri-f6696b6092aec2db.tgz dest=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-cold-cache/store_unpacked/sri-f6696b6092aec2db files=65\n[2026-03-12 05:45:43] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=2776 tarball=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-cold-cache/store/sri-f6696b6092aec2db.tgz unpacked=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-cold-cache/store_unpacked/sri-f6696b6092aec2db\n[2026-03-12 05:45:43] [jhol-cold-profile] stage=extract_manifest_minimal elapsed_ms=3239 tarball=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-cold-cache/store/sri-e48d6e5b5fdfa0fc.tgz files=2 dest=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-cold-cache/store_unpacked/sri-e48d6e5b5fdfa0fc\n[2026-03-12 05:45:43] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=3243 tarball=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-cold-cache/store/sri-e48d6e5b5fdfa0fc.tgz dest=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-cold-cache/store_unpacked/sri-e48d6e5b5fdfa0fc files=2\n[2026-03-12 05:45:43] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=3243 tarball=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-cold-cache/store/sri-e48d6e5b5fdfa0fc.tgz unpacked=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-cold-cache/store_unpacked/sri-e48d6e5b5fdfa0fc\n[2026-03-12 05:45:43] Installed next@15.1.0 (native)\n[2026-03-12 05:45:43] Installed @next/swc-darwin-arm64@15.1.0 (native)\n[jhol-native-link] 3248ms\n"
+  },
+  "bun_strict_cold": {
+    "elapsed_s": 66.598,
+    "returncode": 0,
+    "stderr_tail": "Resolving dependencies\nResolved, downloaded and extracted [452]\nSaved lockfile\n",
+    "stdout_tail": "bun install v1.3.4 (5eb2145b)\n\n+ express@4.21.2 (v5.2.1 available)\n+ next@15.1.0 (v16.1.6 available)\n+ react@18.3.1 (v19.2.4 available)\n+ react-dom@18.3.1 (v19.2.4 available)\n+ typescript@5.7.2 (v5.9.3 available)\n\n101 packages installed [65.76s]\n"
+  },
+  "jhol_fresh_local_warm_compact": {
+    "elapsed_s": 52.744,
+    "returncode": 0,
+    "profile": {
+      "jagr3.resolve_graph": 12486,
+      "jhol-native-download": 25640,
+      "extract_selective": 13974,
+      "extract_tarball_to_dir": 13974,
+      "ensure_unpacked_in_store": 13974,
+      "extract_manifest_minimal": 13142,
+      "jhol-native-link": 14107
+    },
+    "stderr_tail": "ri-f6696b6092aec2db files=65\n[2026-03-12 05:47:42] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=12360 tarball=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-compact-warm-cache/store/sri-f6696b6092aec2db.tgz unpacked=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-compact-warm-cache/store_unpacked/sri-f6696b6092aec2db\n[2026-03-12 05:47:42] Installed next@15.1.0 (native)\n[2026-03-12 05:47:42] [jhol-cold-profile] stage=extract_manifest_minimal elapsed_ms=13142 tarball=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-compact-warm-cache/store/sri-e48d6e5b5fdfa0fc.tgz files=2 dest=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-compact-warm-cache/store_unpacked/sri-e48d6e5b5fdfa0fc\n[2026-03-12 05:47:42] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=13143 tarball=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-compact-warm-cache/store/sri-e48d6e5b5fdfa0fc.tgz dest=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-compact-warm-cache/store_unpacked/sri-e48d6e5b5fdfa0fc files=2\n[2026-03-12 05:47:42] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=13143 tarball=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-compact-warm-cache/store/sri-e48d6e5b5fdfa0fc.tgz unpacked=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-compact-warm-cache/store_unpacked/sri-e48d6e5b5fdfa0fc\n[2026-03-12 05:47:42] Installed @next/swc-darwin-arm64@15.1.0 (native)\n[2026-03-12 05:47:43] [jhol-cold-profile] stage=extract_selective elapsed_ms=13974 tarball=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-compact-warm-cache/store/sri-346ef3668cd70a7c.tgz files=837 dest=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-compact-warm-cache/store_unpacked/sri-346ef3668cd70a7c\n[2026-03-12 05:47:43] [jhol-cold-profile] stage=extract_tarball_to_dir elapsed_ms=13974 tarball=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-compact-warm-cache/store/sri-346ef3668cd70a7c.tgz dest=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-compact-warm-cache/store_unpacked/sri-346ef3668cd70a7c files=837\n[2026-03-12 05:47:43] [jhol-cold-profile] stage=ensure_unpacked_in_store elapsed_ms=13974 tarball=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-compact-warm-cache/store/sri-346ef3668cd70a7c.tgz unpacked=/var/folders/lk/_df6kxn13j1cq3bs7rg63h640000gn/T/jhol_persistent_compact_v2_s0fct2ld/jhol-compact-warm-cache/store_unpacked/sri-346ef3668cd70a7c\n[2026-03-12 05:47:43] Installed caniuse-lite@1.0.30001777 (native)\n[jhol-native-link] 14107ms\n"
+  },
+  "compact_file_count": 52
+}

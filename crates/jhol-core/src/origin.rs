@@ -37,25 +37,71 @@ pub(crate) fn packument_dir() -> PathBuf {
 
 /// Stable, collision-resistant cache key for a package's packument.
 ///
-/// The key hashes the package name (so a scoped and an unscoped name
-/// never collide) plus a flag distinguishing the abbreviated packument
-/// from the full one — they are different documents with different
-/// freshness, so they get different files.
+/// Hash the full package name, document mode, registry and credential identity.
+/// Frame fields to avoid ambiguous concatenation; raw URLs and tokens never
+/// appear in filenames. Older name-only cache files remain ordinary misses.
+pub(crate) fn packument_key_for(
+    package: &str,
+    abbreviated: bool,
+    registry: &str,
+    token: Option<&str>,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(b"jhol-packument-v2\0");
+    hash.update([u8::from(abbreviated), u8::from(token.is_some())]);
+    for field in [
+        registry.trim().trim_end_matches('/'),
+        package,
+        token.unwrap_or(""),
+    ] {
+        hash.update((field.len() as u64).to_le_bytes());
+        hash.update(field.as_bytes());
+    }
+    format!("{:x}", hash.finalize())
+}
+
 pub(crate) fn packument_key(package: &str, abbreviated: bool) -> String {
-    let h = xxhash_rust::xxh3::xxh3_64(package.as_bytes()).wrapping_add(if abbreviated {
-        1u64
-    } else {
-        0u64
-    });
-    format!("{:016x}", h)
+    packument_key_with_identity(
+        package,
+        abbreviated,
+        &crate::registry::RegistryIdentity::for_package(package),
+    )
+}
+
+pub(crate) fn packument_key_with_identity(
+    package: &str,
+    abbreviated: bool,
+    identity: &crate::registry::RegistryIdentity,
+) -> String {
+    packument_key_for(
+        package,
+        abbreviated,
+        &identity.registry,
+        identity.token.as_deref(),
+    )
 }
 
 /// Path of a package's cached packument file.
+#[allow(dead_code)] // Captured metadata fetches use the identity-aware variant.
 pub(crate) fn packument_path(package: &str, abbreviated: bool) -> PathBuf {
-    packument_dir().join(format!("{}.json", packument_key(package, abbreviated)))
+    packument_path_with_identity(
+        package,
+        abbreviated,
+        &crate::registry::RegistryIdentity::for_package(package),
+    )
 }
 
-
+pub(crate) fn packument_path_with_identity(
+    package: &str,
+    abbreviated: bool,
+    identity: &crate::registry::RegistryIdentity,
+) -> PathBuf {
+    packument_dir().join(format!(
+        "{}.json",
+        packument_key_with_identity(package, abbreviated, identity)
+    ))
+}
 
 // ── origin policy (shared with content) ─────────────────────────────
 
@@ -86,6 +132,7 @@ pub(crate) fn durable_roots() -> Vec<PathBuf> {
 
 /// Copy a packument cache file from a durable jhol root (login-home)
 /// when the current `JHOL_CACHE_DIR` has never seen this package.
+#[allow(dead_code)] // Compatibility helper for callers without a captured identity.
 pub(crate) fn harvest_packument_file(package: &str, abbreviated: bool) -> Option<Vec<u8>> {
     if !harvest_enabled() {
         return None;
@@ -101,6 +148,82 @@ pub(crate) fn harvest_packument_file(package: &str, abbreviated: bool) -> Option
                 return Some(bytes);
             }
         }
+    }
+    None
+}
+
+/// Write `bytes` to `dst` and stamp it with `src`'s modification time.
+/// Returns false if either step fails (the caller then discards `dst`).
+fn write_keeping_mtime(src: &Path, dst: &Path, bytes: &[u8]) -> bool {
+    let Ok(mtime) = std::fs::metadata(src).and_then(|m| m.modified()) else {
+        return false;
+    };
+    std::fs::write(dst, bytes).is_ok()
+        && std::fs::OpenOptions::new()
+            .write(true)
+            .open(dst)
+            .and_then(|f| f.set_modified(mtime))
+            .is_ok()
+}
+
+/// Harvest a packument from the durable origin **into `dst`, keeping the
+/// origin file's modification time**.
+///
+/// `packument_fresh` and the TTL fast path in `fetch_packument_with_etag` judge
+/// freshness by the cache file's mtime. A plain `fs::write` of a harvested copy
+/// stamps it "now", which launders a weeks-old packument into a fresh one: with
+/// a 17-day-old `~/.jhol-cache`, `qs ^6.14.0` kept resolving 6.16.0 while the
+/// registry had 6.16.1 (measured 2026-10-24). Preserving the mtime keeps stale
+/// metadata stale, so the request becomes a conditional GET carrying the
+/// harvested ETag (normally a few-byte 304) instead of a silent stale answer.
+///
+/// If the mtime cannot be carried over, the copy is not kept: the body is still
+/// returned for ETag revalidation, but nothing on disk can pose as fresh.
+#[allow(dead_code)] // Captured metadata fetches use the identity-aware variant.
+pub(crate) fn harvest_packument_into(
+    package: &str,
+    abbreviated: bool,
+    dst: &Path,
+) -> Option<Vec<u8>> {
+    harvest_packument_into_with_identity(
+        package,
+        abbreviated,
+        dst,
+        &crate::registry::RegistryIdentity::for_package(package),
+    )
+}
+
+pub(crate) fn harvest_packument_into_with_identity(
+    package: &str,
+    abbreviated: bool,
+    dst: &Path,
+    identity: &crate::registry::RegistryIdentity,
+) -> Option<Vec<u8>> {
+    if !harvest_enabled() {
+        return None;
+    }
+    let filename = format!(
+        "{}.json",
+        packument_key_with_identity(package, abbreviated, identity)
+    );
+    for root in durable_roots() {
+        let src = root.join("packuments").join(&filename);
+        let Ok(bytes) = std::fs::read(&src) else {
+            continue;
+        };
+        if bytes.is_empty() {
+            continue;
+        }
+        if std::env::var("JHOL_DEBUG_HARVEST").is_ok() {
+            eprintln!("[HARVEST] packument {} <- {}", package, src.display());
+        }
+        if let Some(parent) = dst.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if !write_keeping_mtime(&src, dst, &bytes) {
+            let _ = std::fs::remove_file(dst);
+        }
+        return Some(bytes);
     }
     None
 }
@@ -168,8 +291,33 @@ pub(crate) fn gunzip_bytes(data: &[u8]) -> Vec<u8> {
 /// behaviour); unset uses the default.  Offline, the cache is never
 /// invalidated: there is nothing to revalidate against, and a stale
 /// answer beats no answer.
+#[allow(dead_code)] // Captured metadata fetches use the identity-aware variant.
 pub(crate) fn packument_fresh(package: &str, abbreviated: bool) -> bool {
-    let p = packument_path(package, abbreviated);
+    packument_fresh_with_identity(
+        package,
+        abbreviated,
+        &crate::registry::RegistryIdentity::for_package(package),
+    )
+}
+
+pub(crate) fn packument_fresh_with_identity(
+    package: &str,
+    abbreviated: bool,
+    identity: &crate::registry::RegistryIdentity,
+) -> bool {
+    within_metadata_ttl(&packument_path_with_identity(
+        package,
+        abbreviated,
+        identity,
+    ))
+}
+
+/// Is the file at `p` young enough to trust without revalidating against the
+/// registry? Single owner of the metadata-age policy, shared by the packument
+/// cache and the resolved-bundle (`.jres`) replay cache so a resolution can
+/// never outlive the metadata it was derived from. Offline: always trusted.
+/// `JHOL_PACKUMENT_TTL_SECS=0`: trusted forever. Default 3600 s.
+pub(crate) fn within_metadata_ttl(p: &Path) -> bool {
     if !p.exists() {
         return false;
     }
@@ -183,7 +331,7 @@ pub(crate) fn packument_fresh(package: &str, abbreviated: bool) -> bool {
     if ttl == 0 {
         return true;
     }
-    match std::fs::metadata(&p).and_then(|m| m.modified()) {
+    match std::fs::metadata(p).and_then(|m| m.modified()) {
         Ok(written) => written
             .elapsed()
             .map(|age| age.as_secs() < ttl)
@@ -204,18 +352,28 @@ pub(crate) fn read_packument_cache(
     package: &str,
     abbreviated: bool,
 ) -> (Option<Vec<u8>>, Option<String>) {
-    let body_path = packument_path(package, abbreviated);
+    read_packument_cache_with_identity(
+        package,
+        abbreviated,
+        &crate::registry::RegistryIdentity::for_package(package),
+    )
+}
+
+pub(crate) fn read_packument_cache_with_identity(
+    package: &str,
+    abbreviated: bool,
+    identity: &crate::registry::RegistryIdentity,
+) -> (Option<Vec<u8>>, Option<String>) {
+    let body_path = packument_path_with_identity(package, abbreviated, identity);
     let raw = match std::fs::read(&body_path) {
         Ok(d) => d,
         Err(_) => {
             // Fair cold benches pin an empty JHOL_CACHE_DIR; still reuse
             // the login-home packument cache (same durable-root idea as
             // tarball harvest).
-            if let Some(raw) = harvest_packument_file(package, abbreviated) {
-                if let Some(parent) = body_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let _ = std::fs::write(&body_path, &raw);
+            if let Some(raw) =
+                harvest_packument_into_with_identity(package, abbreviated, &body_path, identity)
+            {
                 raw
             } else {
                 return (None, None);
@@ -262,7 +420,23 @@ pub(crate) fn write_packument_cache(
     body: &[u8],
     etag: Option<&str>,
 ) -> Result<(), String> {
-    let body_path = packument_path(package, abbreviated);
+    write_packument_cache_with_identity(
+        package,
+        abbreviated,
+        body,
+        etag,
+        &crate::registry::RegistryIdentity::for_package(package),
+    )
+}
+
+pub(crate) fn write_packument_cache_with_identity(
+    package: &str,
+    abbreviated: bool,
+    body: &[u8],
+    etag: Option<&str>,
+    identity: &crate::registry::RegistryIdentity,
+) -> Result<(), String> {
+    let body_path = packument_path_with_identity(package, abbreviated, identity);
     if let Some(parent) = body_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -570,7 +744,118 @@ mod tests {
         assert_eq!(a, packument_key("lodash", true));
         assert_ne!(a, b, "abbreviated and full are different documents");
         assert_ne!(a, c, "scoped and unscoped names must not collide");
-        assert_eq!(a.len(), 16, "keys are 16 hex chars (64-bit hash)");
+        assert_eq!(a.len(), 64);
+        let key = |registry, token| packument_key_for("lodash", true, registry, token);
+        assert_ne!(
+            key("https://a.example", None),
+            key("https://b.example", None)
+        );
+        assert_ne!(
+            key("https://a.example", None),
+            key("https://a.example", Some("secret"))
+        );
+        assert_ne!(
+            key("https://a.example", Some("secret")),
+            key("https://a.example", Some("other"))
+        );
+        assert!(!key("https://a.example", Some("secret")).contains("secret"));
+    }
+
+    #[test]
+    fn packument_disk_cache_isolated_across_registry_and_credentials() {
+        const TEST: &str =
+            "origin::tests::packument_disk_cache_isolated_across_registry_and_credentials";
+        if let Ok(action) = std::env::var("JHOL_TEST_ORIGIN_ACTION") {
+            let package = "jhol-cache-isolation-fixture";
+            if action == "write" {
+                write_packument_cache(package, true, br#"{"versions":{"1.0.0":{}}}"#, None)
+                    .unwrap();
+            } else {
+                let (body, _) = read_packument_cache(package, true);
+                assert_eq!(body.is_some(), action == "hit");
+            }
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let binary = std::env::current_exe().unwrap();
+        for (action, registry, token) in [
+            ("write", "https://a.example", "token-a"),
+            ("hit", "https://a.example", "token-a"),
+            ("miss", "https://b.example", "token-a"),
+            ("miss", "https://a.example", "token-b"),
+        ] {
+            let status = std::process::Command::new(&binary)
+                .arg("--exact")
+                .arg(TEST)
+                .env("JHOL_TEST_ORIGIN_ACTION", action)
+                .env("JHOL_CACHE_DIR", dir.path())
+                .env("JHOL_NO_HARVEST", "1")
+                .env("JHOL_REGISTRY", registry)
+                .env("NPM_TOKEN", token)
+                .env_remove("NPM_CONFIG_REGISTRY")
+                .env_remove("NODE_AUTH_TOKEN")
+                .status()
+                .unwrap();
+            assert!(status.success(), "cache isolation probe {action} failed");
+        }
+    }
+
+    #[test]
+    fn harvest_copy_keeps_origin_mtime_so_stale_stays_stale() {
+        let dir =
+            std::env::temp_dir().join(format!("jhol-origin-{}-{}", std::process::id(), line!()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("src.json");
+        let dst = dir.join("dst.json");
+        fs::write(&src, b"{\"versions\":{}}").unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(17 * 86_400);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&src)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+
+        assert!(write_keeping_mtime(&src, &dst, b"{\"versions\":{}}"));
+        let got = fs::metadata(&dst).unwrap().modified().unwrap();
+        let age = std::time::SystemTime::now().duration_since(got).unwrap();
+        assert!(
+            age.as_secs() > 16 * 86_400,
+            "copy must not look fresh (age {age:?})"
+        );
+
+        // A missing source cannot vouch for freshness: report failure.
+        assert!(!write_keeping_mtime(
+            &dir.join("missing"),
+            &dir.join("d2"),
+            b"x"
+        ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn metadata_ttl_rejects_old_files_and_missing_files() {
+        if crate::registry::offline_mode() || std::env::var("JHOL_PACKUMENT_TTL_SECS").is_ok() {
+            return; // environment overrides the default policy under test
+        }
+        let dir =
+            std::env::temp_dir().join(format!("jhol-origin-{}-{}", std::process::id(), line!()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("x.jres");
+        assert!(!within_metadata_ttl(&f), "missing file is never fresh");
+        fs::write(&f, b"{}").unwrap();
+        assert!(within_metadata_ttl(&f), "just-written file is fresh");
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&f)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert!(!within_metadata_ttl(&f), "2 h old exceeds the 1 h default");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

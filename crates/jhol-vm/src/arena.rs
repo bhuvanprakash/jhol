@@ -38,6 +38,62 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
+
+/// Deterministic non-cryptographic 64-bit hasher (FX-style) for the VM's
+/// process-local maps. Profiling showed the default SipHash as the single
+/// hottest frame — every interned-key property write hashed string bytes
+/// through it. These tables are not attacker-facing; distribution just needs
+/// to be good, not collision-proof, and `HashMap` stays correct either way.
+#[derive(Clone, Default)]
+pub struct FastH(u64);
+
+pub type FMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<FastH>>;
+
+impl std::hash::Hasher for FastH {
+    fn finish(&self) -> u64 {
+        // Murmur3 fmix64 finalizer: without full avalanche, sequential keys
+        // (`key0`…`keyN`, small integers) land in strided buckets and wide
+        // maps degrade toward linear scans.
+        let mut h = self.0;
+        h ^= h >> 33;
+        h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        h ^= h >> 33;
+        h = h.wrapping_mul(0xc4ceb9fe1a85ec53);
+        h ^= h >> 33;
+        h
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        let mut h =
+            (self.0 ^ (bytes.len() as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)).rotate_left(31);
+        let mut i = 0;
+        while i + 8 <= bytes.len() {
+            let mut b = [0u8; 8];
+            b.copy_from_slice(&bytes[i..i + 8]);
+            h = (h ^ u64::from_le_bytes(b).wrapping_mul(0xff51_afd7_ed55_8ccd)).rotate_left(31);
+            i += 8;
+        }
+        if i < bytes.len() {
+            let mut b = [0u8; 8];
+            b[..bytes.len() - i].copy_from_slice(&bytes[i..]);
+            h = (h ^ u64::from_le_bytes(b).wrapping_mul(0xc4ce_b9fe_1a85_ec53)).rotate_left(31);
+        }
+        self.0 = h;
+    }
+    fn write_u64(&mut self, n: u64) {
+        self.0 = (self.0 ^ n.wrapping_mul(0x9e37_79b9_7f4a_7c15)).rotate_left(31);
+    }
+    fn write_u32(&mut self, n: u32) {
+        self.write_u64(n as u64);
+    }
+    fn write_u128(&mut self, n: u128) {
+        self.write_u64(n as u64);
+        self.write_u64((n >> 64) as u64);
+    }
+    fn write_usize(&mut self, n: usize) {
+        self.write_u64(n as u64);
+    }
+}
+#[cfg(feature = "stats")]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::objects::*;
@@ -47,6 +103,7 @@ use crate::value::{Value, OFFSET_MAX};
 const CLASS_MAX: usize = 512;
 const NCLASSES: usize = 65;
 
+#[cfg(feature = "stats")]
 static ALLOCS: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
@@ -104,10 +161,12 @@ pub struct Arena {
     base: *mut u8,
     reserved: usize,
     bump: usize,
-    free: Vec<Vec<u32>>,
-    symbols: HashMap<Box<str>, u32>,
+    #[cfg(windows)]
+    committed: usize,
+    free: Vec<Vec<usize>>,
+    symbols: FMap<Box<str>, u32>,
     symbol_names: Vec<Box<str>>,
-    transitions: HashMap<u128, u32>,
+    transitions: FMap<u128, u32>,
     /// Direct-mapped caches for the two lookups every property store performs.
     /// Object literals replay the same `(shape, key)` and accessor-key
     /// sequences on every iteration, so a few dozen slots capture nearly all of
@@ -122,20 +181,128 @@ pub struct Arena {
     /// `(parent shape, key)`, so identity is structural and nothing else needs
     /// to be stored per shape.
     next_shape: u32,
-    accessor_map: HashMap<u64, u32>,
-    atoms: HashMap<Box<str>, Value>,
+    accessor_map: FMap<u64, u32>,
+    atoms: FMap<Box<str>, Value>,
     atom_roots: Vec<Value>,
     live_bytes: usize,
     peak_bytes: usize,
     collections: u64,
+    property_epoch: u64,
+    collection_remaining: usize,
+    live_external_bytes: usize,
+    external_pressure: usize,
+    root_mode: RootMode,
+    temporary_roots: Vec<Value>,
+    host_roots: Vec<Value>,
     total_alloc: u64,
     total_freed: u64,
     heap_limit: usize,
     gc_disabled: bool,
 }
 
+impl Drop for Arena {
+    fn drop(&mut self) {
+        // Unmapping bytes alone leaks the Rust-owned vectors, maps and function
+        // prototypes inside live objects. Finalize them before releasing pages.
+        let mut off = 0;
+        while off < self.bump {
+            let header = unsafe { self.block(off) };
+            let size = unsafe { (*header).size as usize };
+            if size < std::mem::size_of::<ObjHeader>() || size > self.bump - off {
+                break;
+            }
+            unsafe { drop_block(header) };
+            off += size;
+        }
+        unmap(self.base, self.reserved);
+    }
+}
+
+#[inline]
+unsafe fn drop_block(header: *mut ObjHeader) {
+    match (*header).tag {
+        TAG_STRING => std::ptr::drop_in_place(header as *mut JString),
+        TAG_OBJECT => std::ptr::drop_in_place(header as *mut JObject),
+        TAG_ARRAY => std::ptr::drop_in_place(header as *mut JArray),
+        TAG_FUNCTION => std::ptr::drop_in_place(header as *mut JFunction),
+        TAG_CELL => std::ptr::drop_in_place(header as *mut JCell),
+        _ => {}
+    }
+}
+
+/// Owned container capacity, excluding bytes already inside the arena block.
+/// Hash tables use a conservative bucket/control-byte allowance.
+#[inline]
+unsafe fn external_bytes(header: *const ObjHeader) -> usize {
+    use std::mem::size_of;
+    match (*header).tag {
+        TAG_OBJECT => {
+            let o = &*header.cast::<JObject>();
+            o.spill.as_ref().map_or(0, |v| {
+                size_of::<Vec<(PropKey, Value)>>() + v.capacity() * size_of::<(PropKey, Value)>()
+            }) + o.index.as_ref().map_or(0, |m| {
+                size_of::<FMap<PropKey, u32>>() + m.capacity() * 2 * size_of::<(PropKey, u32)>()
+            })
+        }
+        TAG_ARRAY => {
+            let a = &*header.cast::<JArray>();
+            a.data.capacity() * size_of::<Value>()
+                + a.sparse
+                    .as_ref()
+                    .map_or(0, |m| m.capacity() * 2 * size_of::<(u32, Value)>())
+                + a.props.as_ref().map_or(0, |p| {
+                    size_of::<Vec<(PropKey, Value)>>()
+                        + p.capacity() * size_of::<(PropKey, Value)>()
+                })
+        }
+        TAG_FUNCTION => {
+            let f = &*header.cast::<JFunction>();
+            f.keys.capacity() * size_of::<PropKey>()
+                + f.vals.capacity() * size_of::<Value>()
+                + f.bound.capacity() * size_of::<Value>()
+                + f.upvalues.capacity() * size_of::<*mut JCell>()
+        }
+        _ => 0,
+    }
+}
+
+#[inline]
+pub(crate) fn note_external_allocation(bytes: usize) {
+    if bytes == 0 {
+        return;
+    }
+    let arena = active_ptr();
+    if !arena.is_null() {
+        unsafe { &mut *arena }.note_external_allocation(bytes);
+    }
+}
+
 unsafe impl Send for Arena {}
 unsafe impl Sync for Arena {}
+
+/// Stack-owned roots for Rust code that can re-enter JavaScript. No reference
+/// into a VM vector is held across re-entry; the installed arena stays fixed.
+#[derive(Clone, Copy)]
+enum RootMode {
+    None,
+    Host,
+    Temporary,
+}
+
+pub(crate) struct RootScope {
+    arena: *mut Arena,
+    start: usize,
+    mode: RootMode,
+}
+
+impl Drop for RootScope {
+    #[inline]
+    fn drop(&mut self) {
+        let arena = unsafe { &mut *self.arena };
+        arena.temporary_roots.truncate(self.start);
+        arena.root_mode = self.mode;
+    }
+}
 
 /// Reservation sizes to try, largest first.
 ///
@@ -183,21 +350,34 @@ impl Arena {
             base,
             reserved,
             bump: 0,
+            #[cfg(windows)]
+            committed: 0,
             free: (0..=NCLASSES).map(|_| Vec::new()).collect(),
-            symbols: HashMap::new(),
+            symbols: HashMap::default(),
             symbol_names: Vec::new(),
-            transitions: HashMap::new(),
+            transitions: HashMap::default(),
             trans_ic: [(0, 0); 32],
             trans_ic_used: 0,
             acc_ic: [(0, 0); 32],
             acc_ic_used: 0,
             next_shape: 1,
-            accessor_map: HashMap::new(),
-            atoms: HashMap::new(),
+            accessor_map: HashMap::default(),
+            atoms: HashMap::default(),
             atom_roots: Vec::new(),
             live_bytes: 0,
             peak_bytes: 0,
             collections: 0,
+            property_epoch: 0,
+            collection_remaining: if std::env::var("JHOL_VM_NO_GC").is_ok() {
+                usize::MAX
+            } else {
+                heap_limit
+            },
+            live_external_bytes: 0,
+            external_pressure: 0,
+            root_mode: RootMode::None,
+            temporary_roots: Vec::new(),
+            host_roots: Vec::new(),
             total_alloc: 0,
             total_freed: 0,
             heap_limit,
@@ -226,9 +406,92 @@ impl Arena {
         self.reserved
     }
 
+    #[inline]
+    pub(crate) fn property_epoch(&self) -> u64 {
+        self.property_epoch
+    }
+
+    pub(crate) fn invalidate_property_caches(&mut self) {
+        self.property_epoch = self.property_epoch.wrapping_add(1);
+    }
+
+    pub(crate) fn attach_vm(&mut self) {
+        self.root_mode = RootMode::Host;
+    }
+
+    #[inline]
+    pub(crate) fn collection_due(&self) -> bool {
+        self.collection_remaining == 0
+    }
+
+    #[inline]
+    pub(crate) fn note_external_allocation(&mut self, bytes: usize) {
+        if bytes != 0 {
+            self.external_pressure = self.external_pressure.saturating_add(bytes);
+            self.collection_remaining = self.collection_remaining.saturating_sub(bytes);
+        }
+    }
+
+    pub fn collection_count(&self) -> u64 {
+        self.collections
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_collection_budget(&mut self, bytes: usize) {
+        self.heap_limit = bytes;
+        self.collection_remaining = if self.gc_disabled { usize::MAX } else { bytes };
+    }
+
+    #[inline]
+    pub(crate) fn retain_value(&mut self, value: Value) {
+        if !matches!(self.root_mode, RootMode::None) && value.is_ptr() {
+            self.retain_value_slow(value);
+        }
+    }
+
+    #[cold]
+    fn retain_value_slow(&mut self, value: Value) {
+        match self.root_mode {
+            RootMode::Temporary => self.temporary_roots.push(value),
+            RootMode::Host => self.host_roots.push(value),
+            RootMode::None => {}
+        }
+    }
+
+    #[inline]
+    pub(crate) fn pin_temporaries(&mut self, values: &[Value]) {
+        if matches!(self.root_mode, RootMode::Temporary) {
+            self.temporary_roots
+                .extend(values.iter().copied().filter(Value::is_ptr));
+        }
+    }
+
+    #[inline]
+    pub(crate) fn root_scope(&mut self, values: &[Value]) -> RootScope {
+        let scope = RootScope {
+            arena: self,
+            start: self.temporary_roots.len(),
+            mode: self.root_mode,
+        };
+        self.root_mode = RootMode::Temporary;
+        self.pin_temporaries(values);
+        scope
+    }
+
+    #[inline]
+    pub(crate) fn guest_scope(&mut self) -> RootScope {
+        let scope = RootScope {
+            arena: self,
+            start: self.temporary_roots.len(),
+            mode: self.root_mode,
+        };
+        self.root_mode = RootMode::None;
+        scope
+    }
+
     pub fn stats(&self) -> String {
         format!(
-            "heap: {}B live / {}B peak / {}B reserved, bump={}B, collections={}, alloc={}B, freed={}B, symbols={}, shapes={}",
+            "heap: {}B live / {}B peak / {}B reserved, bump={}B, collections={}, alloc={}B, freed={}B, external_live={}B, external_growth={}B, symbols={}, shapes={}",
             self.live_bytes,
             self.peak_bytes,
             self.reserved,
@@ -236,6 +499,8 @@ impl Arena {
             self.collections,
             self.total_alloc,
             self.total_freed,
+            self.live_external_bytes,
+            self.external_pressure,
             self.symbols.len(),
             self.next_shape - 1
         )
@@ -256,8 +521,6 @@ impl Arena {
             }
             c.set(std::ptr::null_mut());
             unsafe {
-                let a = &mut *p;
-                unmap(a.base, a.reserved);
                 drop(Box::from_raw(p));
             }
         });
@@ -268,8 +531,6 @@ impl Arena {
             let old = c.get();
             if !old.is_null() {
                 unsafe {
-                    let doomed = &mut *old;
-                    unmap(doomed.base, doomed.reserved);
                     drop(Box::from_raw(old));
                 }
             }
@@ -281,13 +542,17 @@ impl Arena {
 
     // ---------------- allocation ----------------
 
-    fn take_block(&mut self, need: usize) -> Option<u32> {
+    #[inline]
+    fn take_block(&mut self, need: usize) -> Option<usize> {
         let cls = class_of(need);
         if cls == NCLASSES {
             let mut best: Option<(usize, usize)> = None;
             for (i, &off) in self.free[NCLASSES].iter().enumerate() {
-                let sz = unsafe { (*self.block(off as usize)).size as usize };
-                if sz >= need && (best.is_none() || sz < best.unwrap().1) {
+                let sz = unsafe { (*self.block(off)).size as usize };
+                // A remainder must hold a complete header for the linear sweep.
+                if (sz == need || sz >= need + std::mem::size_of::<ObjHeader>())
+                    && (best.is_none() || sz < best.unwrap().1)
+                {
                     best = Some((i, sz));
                 }
             }
@@ -304,39 +569,58 @@ impl Arena {
     }
 
     /// Hand out `need` bytes (rounded up to 8) and return its arena offset.
-    pub fn alloc_raw(&mut self, need: usize) -> u32 {
-        let need = need.div_ceil(8) * 8;
+    #[inline]
+    pub fn alloc_raw(&mut self, need: usize) -> usize {
+        let need = need
+            .max(std::mem::size_of::<ObjHeader>())
+            .checked_add(7)
+            .map(|size| size & !7)
+            .filter(|&size| size <= u32::MAX as usize)
+            .unwrap_or_else(|| self.oom());
         if let Some(off) = self.take_block(need) {
-            let actual = unsafe { (*self.block(off as usize)).size as usize };
+            let actual = unsafe { (*self.block(off)).size as usize };
             if actual > need {
                 let rem = actual - need;
                 unsafe {
                     std::ptr::write(
-                        self.block(off as usize + need),
+                        self.block(off + need),
                         ObjHeader::new(0, rem as u32, FLAG_FREELIST),
                     );
                 }
-                self.free[class_of(rem)].push((off as usize + need) as u32);
+                self.free[class_of(rem)].push(off + need);
             }
             self.account(need);
             return off;
         }
         let off = self.bump;
-        let end = off + need;
-        if end > self.reserved {
+        let end = off.checked_add(need).unwrap_or_else(|| self.oom());
+        if end > self.reserved || end - 1 > OFFSET_MAX as usize {
             self.oom();
+        }
+        #[cfg(windows)]
+        if end > self.committed {
+            // Commit in 64 KiB chunks, bounded by the reservation.
+            let to = (end.saturating_add(65535) & !65535).min(self.reserved);
+            if !commit(self.base, self.committed, to) {
+                self.oom();
+            }
+            self.committed = to;
         }
         self.bump = end;
         self.account(need);
-        off as u32
+        off
     }
 
+    #[inline]
     fn account(&mut self, need: usize) {
         self.live_bytes += need;
+        // Charge allocations once; hot loop/call polls become one comparison.
+        self.collection_remaining = self.collection_remaining.saturating_sub(need);
         self.total_alloc += need as u64;
         if self.live_bytes > self.peak_bytes {
             self.peak_bytes = self.live_bytes;
         }
+        #[cfg(feature = "stats")]
         ALLOCS.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -348,21 +632,28 @@ impl Arena {
     }
 
     /// Allocate a `#[repr(C)]` object and return the raw pointer.
+    #[inline]
     pub fn alloc_obj<T: HasHeader>(&mut self, make: impl FnOnce() -> T) -> *mut T {
         let need = std::mem::size_of::<T>().div_ceil(8) * 8;
+        let value = make();
         let off = self.alloc_raw(need);
         unsafe {
-            let p = self.block(off as usize) as *mut T;
-            std::ptr::write(p, make());
+            let p = self.block(off) as *mut T;
+            std::ptr::write(p, value);
             (*p).hdr_mut().size = need as u32;
+            self.note_external_allocation(external_bytes(p.cast()));
+            self.retain_value(Value::from_ptr_in(p, self.base));
             p
         }
     }
 
     /// Strings keep their bytes inline after the (8-aligned) header.
     pub fn alloc_string(&mut self, s: &str) -> *mut JString {
-        if s.is_ascii() { self.alloc_string_data(s, None) }
-        else { self.alloc_string_data(s, Some(&s.encode_utf16().collect::<Vec<_>>())) }
+        if s.is_ascii() {
+            self.alloc_string_data(s, None)
+        } else {
+            self.alloc_string_data(s, Some(&s.encode_utf16().collect::<Vec<_>>()))
+        }
     }
 
     pub fn alloc_string_utf16(&mut self, units: &[u16]) -> *mut JString {
@@ -380,21 +671,29 @@ impl Arena {
         let need = (32 + payload).div_ceil(8) * 8;
         let off = self.alloc_raw(need);
         unsafe {
-            let p = self.block(off as usize) as *mut JString;
-            std::ptr::write(p, JString {
-                hdr: ObjHeader::new(TAG_STRING, need as u32, 0),
-                len: s.len() as u32,
-                hash: hash_bytes(s.as_bytes()),
-                is_atom: 0,
-                ascii: units.is_none() as u8,
-                pad: [0; 2],
-                utf16_len: units.map_or(s.len(), |u| u.len()) as u32,
-            });
+            let p = self.block(off) as *mut JString;
+            std::ptr::write(
+                p,
+                JString {
+                    hdr: ObjHeader::new(TAG_STRING, need as u32, 0),
+                    len: s.len() as u32,
+                    hash: hash_bytes(s.as_bytes()),
+                    is_atom: 0,
+                    ascii: units.is_none() as u8,
+                    pad: [0; 2],
+                    utf16_len: units.map_or(s.len(), |u| u.len()) as u32,
+                },
+            );
             let data = (p as *mut u8).add(32);
             std::ptr::copy_nonoverlapping(s.as_ptr(), data, s.len());
             if let Some(u) = units {
-                std::ptr::copy_nonoverlapping(u.as_ptr(), data.add(units_off).cast::<u16>(), u.len());
+                std::ptr::copy_nonoverlapping(
+                    u.as_ptr(),
+                    data.add(units_off).cast::<u16>(),
+                    u.len(),
+                );
             }
+            self.retain_value(Value::from_ptr_in(p, self.base));
             p
         }
     }
@@ -408,7 +707,10 @@ impl Arena {
     }
 
     pub fn alloc_cell(&mut self, v: Value) -> *mut JCell {
-        self.alloc_obj(|| JCell { hdr: ObjHeader::new(TAG_CELL, 0, 0), v })
+        self.alloc_obj(|| JCell {
+            hdr: ObjHeader::new(TAG_CELL, 0, 0),
+            v,
+        })
     }
 
     pub fn alloc_function(&mut self, f: JFunction) -> *mut JFunction {
@@ -429,10 +731,16 @@ impl Arena {
     }
 
     pub(crate) fn intern_atom_utf16(&mut self, units: &[u16]) -> Value {
-        if let Ok(s)=String::from_utf16(units) { return self.intern_atom(&s); }
-        let p=self.alloc_string_utf16(units);
-        unsafe { (*p).is_atom=1; }
-        let v=Value::from_ptr(p);self.atom_roots.push(v);v
+        if let Ok(s) = String::from_utf16(units) {
+            return self.intern_atom(&s);
+        }
+        let p = self.alloc_string_utf16(units);
+        unsafe {
+            (*p).is_atom = 1;
+        }
+        let v = Value::from_ptr(p);
+        self.atom_roots.push(v);
+        v
     }
 
     pub fn sym_name(&self, id: u32) -> &str {
@@ -484,7 +792,9 @@ impl Arena {
     pub fn accessor_sym(&mut self, base: u32, prefix: &str) -> u32 {
         // The cache key must distinguish "#get:" from "#set:" — encoding only
         // the length would alias them (both are five bytes long).
-        let k = (base as u64) | ((prefix.len() as u64) << 32) | ((hash_bytes(prefix.as_bytes()) as u64) << 40);
+        let k = (base as u64)
+            | ((prefix.len() as u64) << 32)
+            | ((hash_bytes(prefix.as_bytes()) as u64) << 40);
         let slot = ((k ^ (k >> 32)) as usize) & 31;
         let bit = 1u32 << slot;
         if self.acc_ic_used & bit != 0 {
@@ -511,15 +821,29 @@ impl Arena {
     /// Mark-sweep. `roots` are slices of live `Value`s (register frames, the
     /// global object set, …). Atoms are always rooted by the arena itself.
     pub fn collect(&mut self, roots: &[&[Value]]) {
+        self.collect_with(roots, |_, _, _| 0);
+    }
+
+    pub(crate) fn collect_with(
+        &mut self,
+        roots: &[&[Value]],
+        mut external: impl FnMut(&Arena, usize, &mut Vec<*mut ObjHeader>) -> usize,
+    ) {
         if self.gc_disabled {
             return;
         }
         self.collections += 1;
+        self.live_external_bytes = 0;
+        // Freed prototype addresses may be reused with a different chain.
+        self.invalidate_property_caches();
         let mut work: Vec<*mut ObjHeader> = Vec::new();
         for r in roots {
             for v in *r {
                 self.mark_value(*v, &mut work);
             }
+        }
+        for &value in self.temporary_roots.iter().chain(self.host_roots.iter()) {
+            self.mark_value(value, &mut work);
         }
         for v in self.atom_roots.clone() {
             self.mark_value(v, &mut work);
@@ -529,12 +853,20 @@ impl Arena {
                 unsafe { (*h).mark = MARK_LIVE };
                 let off = (h as usize) - (self.base as usize);
                 self.trace(off, &mut work);
+                if unsafe { (*h).flags & FLAG_GENERATOR != 0 } {
+                    self.live_external_bytes = self
+                        .live_external_bytes
+                        .saturating_add(external(self, off, &mut work));
+                }
             }
         }
         self.sweep();
+        self.external_pressure = 0;
+        let live = self.live_bytes.saturating_add(self.live_external_bytes);
+        self.collection_remaining = self.heap_limit.max(live / 2).max(64 * 1024);
     }
 
-    fn mark_value(&mut self, v: Value, work: &mut Vec<*mut ObjHeader>) {
+    pub(crate) fn mark_value(&self, v: Value, work: &mut Vec<*mut ObjHeader>) {
         if !v.is_ptr() {
             return;
         }
@@ -584,12 +916,29 @@ impl Arena {
                             self.mark_value(*val, work);
                         }
                     }
+                    if let Some(p) = &a.props {
+                        for (_, val) in p.iter() {
+                            self.mark_value(*val, work);
+                        }
+                    }
                 }
                 TAG_FUNCTION => {
                     let f = &*(self.block(off) as *const JFunction);
                     self.mark_value(f.name, work);
                     self.mark_value(f.this_val, work);
+                    self.mark_value(f.bound_this, work);
+                    self.mark_value(f.proto, work);
                     self.mark_value(f.proto_obj, work);
+                    for &value in &f.vals {
+                        self.mark_value(value, work);
+                    }
+                    if let FnKind::Bytecode(proto) = &f.kind {
+                        for constant in &proto.consts {
+                            if let crate::bytecode::ConstVal::Str(value) = constant {
+                                self.mark_value(*value, work);
+                            }
+                        }
+                    }
                     for b in f.bound.iter() {
                         self.mark_value(*b, work);
                     }
@@ -619,22 +968,18 @@ impl Arena {
             }
             if unsafe { (*h).mark } == MARK_LIVE {
                 alive += sz;
+                self.live_external_bytes = self
+                    .live_external_bytes
+                    .saturating_add(unsafe { external_bytes(h) });
                 unsafe { (*h).mark = MARK_DEAD };
             } else if unsafe { (*h).tag } != 0 {
                 unsafe {
-                    match (*h).tag {
-                        TAG_STRING => std::ptr::drop_in_place(h as *mut JString),
-                        TAG_OBJECT => std::ptr::drop_in_place(h as *mut JObject),
-                        TAG_ARRAY => std::ptr::drop_in_place(h as *mut JArray),
-                        TAG_FUNCTION => std::ptr::drop_in_place(h as *mut JFunction),
-                        TAG_CELL => std::ptr::drop_in_place(h as *mut JCell),
-                        _ => {}
-                    }
+                    drop_block(h);
                     (*h).tag = 0;
                     (*h).flags = FLAG_FREELIST;
                     (*h).mark = MARK_DEAD;
                 }
-                self.free[class_of(sz)].push(off as u32);
+                self.free[class_of(sz)].push(off);
                 freed += sz;
             }
             off += sz;
@@ -644,7 +989,7 @@ impl Arena {
     }
 
     pub fn maybe_collect(&mut self, roots: &[&[Value]]) {
-        if self.live_bytes > self.heap_limit {
+        if self.collection_due() {
             self.collect(roots);
         }
     }
@@ -652,7 +997,7 @@ impl Arena {
 
 /// Header accessor so `Arena::alloc_obj` can stamp the block size after the
 /// constructor has run.
-trait HasHeader {
+pub trait HasHeader {
     fn hdr_mut(&mut self) -> &mut ObjHeader;
 }
 macro_rules! impl_has_header {
@@ -689,6 +1034,7 @@ pub fn hash_bytes(b: &[u8]) -> u32 {
 /// permission to an anonymous `PROT_NONE` mapping. `MAP_NORESERVE` gives the
 /// same "pages exist only when touched" behaviour everywhere and needs no
 /// second syscall on the allocation path.
+#[cfg(unix)]
 fn reserve(bytes: usize) -> Option<*mut u8> {
     unsafe {
         let p = libc::mmap(
@@ -711,20 +1057,142 @@ fn reserve(bytes: usize) -> Option<*mut u8> {
 /// lazily populated, only the swap accounting differs).
 #[cfg(target_os = "linux")]
 const NORESERVE: i32 = libc::MAP_NORESERVE;
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(unix, not(target_os = "linux")))]
 const NORESERVE: i32 = 0;
 
 #[allow(dead_code)]
-fn commit(base: *mut u8, from: usize, to: usize) {
+#[cfg(unix)]
+fn commit(base: *mut u8, from: usize, to: usize) -> bool {
     let _ = (base, from, to);
+    true
 }
 
 /// Release a reservation back to the OS.
+#[cfg(unix)]
 fn unmap(base: *mut u8, len: usize) {
     if base.is_null() || len == 0 {
         return;
     }
     unsafe {
         libc::munmap(base.cast(), len);
+    }
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::*;
+
+    #[test]
+    fn offsets_above_four_gib_do_not_wrap_or_alias() {
+        let mut arena = Arena::new();
+        let high = 1usize << 32;
+        assert!(
+            arena.reserved > high + 65536,
+            "test needs a sparse reservation above 4 GiB"
+        );
+        arena.bump = high;
+        #[cfg(windows)]
+        {
+            assert!(commit(arena.base, high, high + 65536));
+            arena.committed = high + 65536;
+        }
+        let size = std::mem::size_of::<JCell>();
+        let offset = arena.alloc_raw(size);
+        assert_eq!(
+            offset, high,
+            "arena offsets must retain all 44 payload bits"
+        );
+        unsafe {
+            arena
+                .block(offset)
+                .write(ObjHeader::new(TAG_CELL, size as u32, 0));
+        }
+        arena.free[class_of(size)].push(offset);
+        assert_eq!(
+            arena.alloc_raw(size),
+            high,
+            "recycled offsets must not truncate either"
+        );
+        // This sparse-offset probe deliberately left the preceding 4 GiB
+        // untouched; it is not a valid linear heap for finalization.
+        arena.bump = 0;
+    }
+
+    #[test]
+    fn oversized_blocks_fail_before_mutating_the_arena() {
+        let mut arena = Arena::new();
+        for need in [usize::MAX, u32::MAX as usize + 1] {
+            assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                || arena.alloc_raw(need)
+            ))
+            .is_err());
+            assert_eq!(arena.bump, 0);
+            assert_eq!(arena.live_bytes, 0);
+        }
+    }
+
+    #[test]
+    fn recycled_tail_always_fits_a_complete_header() {
+        let mut arena = Arena::new();
+        let size = 1024;
+        let offset = arena.alloc_raw(size);
+        unsafe {
+            arena
+                .block(offset)
+                .write(ObjHeader::new(TAG_CELL, size as u32, 0));
+        }
+        arena.free[class_of(size)].push(offset);
+        assert_ne!(
+            arena.alloc_raw(size - 8),
+            offset,
+            "an eight-byte tail cannot hold its header"
+        );
+        assert_eq!(
+            arena.alloc_raw(size),
+            offset,
+            "the unsplit block stays reusable"
+        );
+    }
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn VirtualAlloc(
+        address: *mut std::ffi::c_void,
+        bytes: usize,
+        allocation_type: u32,
+        protection: u32,
+    ) -> *mut std::ffi::c_void;
+    fn VirtualFree(address: *mut std::ffi::c_void, bytes: usize, free_type: u32) -> i32;
+}
+
+#[cfg(windows)]
+fn reserve(bytes: usize) -> Option<*mut u8> {
+    // MEM_RESERVE reserves address space without charging for untouched pages.
+    let p = unsafe { VirtualAlloc(std::ptr::null_mut(), bytes, 0x2000, 0x04) };
+    if p.is_null() {
+        None
+    } else {
+        Some(p.cast())
+    }
+}
+
+#[cfg(windows)]
+fn commit(base: *mut u8, from: usize, to: usize) -> bool {
+    if from >= to {
+        return true;
+    }
+    // MEM_COMMIT + PAGE_READWRITE; the OS rounds this range to page boundaries.
+    !unsafe { VirtualAlloc(base.add(from).cast(), to - from, 0x1000, 0x04) }.is_null()
+}
+
+#[cfg(windows)]
+fn unmap(base: *mut u8, len: usize) {
+    if !base.is_null() && len != 0 {
+        // MEM_RELEASE requires the original reservation address and size zero.
+        unsafe {
+            VirtualFree(base.cast(), 0, 0x8000);
+        }
     }
 }

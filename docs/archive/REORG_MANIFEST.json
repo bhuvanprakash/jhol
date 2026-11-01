@@ -1,0 +1,594 @@
+[
+  {
+    "from": "Documentation/main.md",
+    "to": "docs/user/main.md"
+  },
+  {
+    "from": "Documentation/SCOPE_AND_STABILITY.md",
+    "to": "docs/user/SCOPE_AND_STABILITY.md"
+  },
+  {
+    "from": "Documentation/BOTTLENECKS_JHOL_VS_BUN.md",
+    "to": "docs/engineering/BOTTLENECKS_JHOL_VS_BUN.md"
+  },
+  {
+    "from": "Documentation/LOCKFILE_DESIGN.md",
+    "to": "docs/engineering/LOCKFILE_DESIGN.md"
+  },
+  {
+    "from": "Documentation/BOTTLENECKS_AND_PRODUCTION_READINESS.md",
+    "to": "docs/engineering/BOTTLENECKS_AND_PRODUCTION_READINESS.md"
+  },
+  {
+    "from": "Documentation/BENCHMARK_IDEAS_APPLIED.md",
+    "to": "docs/engineering/BENCHMARK_IDEAS_APPLIED.md"
+  },
+  {
+    "from": "Documentation/JAGR2_SEMANTICS.md",
+    "to": "docs/engineering/JAGR2_SEMANTICS.md"
+  },
+  {
+    "from": "for-windows.md",
+    "to": "docs/user/for-windows.md"
+  },
+  {
+    "from": "KCC_KNOT_COHOMOLOGY_CLASSIFIER_PLAN.md",
+    "to": "docs/plans/KCC_KNOT_COHOMOLOGY_CLASSIFIER_PLAN.md"
+  },
+  {
+    "from": "JAGR2_STRATEGIC_ROADMAP.md",
+    "to": "docs/plans/JAGR2_STRATEGIC_ROADMAP.md"
+  },
+  {
+    "from": "JAGR_INFINITE_PLAN.md",
+    "to": "docs/plans/JAGR_INFINITE_PLAN.md"
+  },
+  {
+    "from": "ROADMAP.md",
+    "to": "docs/plans/ROADMAP.md"
+  },
+  {
+    "from": "2025_RESEARCH_OPTIMIZATION_PLAN.md",
+    "to": "docs/plans/2025_RESEARCH_OPTIMIZATION_PLAN.md"
+  },
+  {
+    "from": "JAGR3_NEXT_GEN_PROPOSAL.md",
+    "to": "docs/plans/JAGR3_NEXT_GEN_PROPOSAL.md"
+  },
+  {
+    "from": "ULTIMATE_OPTIMIZATION_PLAN.md",
+    "to": "docs/plans/ULTIMATE_OPTIMIZATION_PLAN.md"
+  },
+  {
+    "from": "SMCC_DESIGN.md",
+    "to": "docs/plans/SMCC_DESIGN.md"
+  },
+  {
+    "from": "implementation_plan.md",
+    "to": "docs/plans/implementation_plan.md"
+  },
+  {
+    "from": "JAGR3_PURE_MATH_IMPROVEMENTS.md",
+    "to": "docs/plans/JAGR3_PURE_MATH_IMPROVEMENTS.md"
+  },
+  {
+    "from": "COMPLETE_OPTIMIZATION_MASTER_PLAN.md",
+    "to": "docs/plans/COMPLETE_OPTIMIZATION_MASTER_PLAN.md"
+  },
+  {
+    "from": "README-highdata.md",
+    "to": "docs/archive/misc/README-highdata.md"
+  },
+  {
+    "from": "slow-to-fast-documentary.md",
+    "to": "docs/archive/misc/slow-to-fast-documentary.md"
+  },
+  {
+    "from": "QWEN.md",
+    "to": "docs/archive/misc/QWEN.md"
+  },
+  {
+    "from": "profile_cold_install.py",
+    "to": "scripts/bench/profile_cold_install.py"
+  },
+  {
+    "from": "fair_bench.py",
+    "to": "scripts/bench/fair_bench.py"
+  },
+  {
+    "from": "run_jagr_benchmark.sh",
+    "to": "scripts/bench/run_jagr_benchmark.sh"
+  },
+  {
+    "from": "benchmark_jagr_comparison.py",
+    "to": "scripts/bench/benchmark_jagr_comparison.py"
+  },
+  {
+    "from": "bench_jhol.py",
+    "to": "scripts/bench/bench_jhol.py"
+  },
+  {
+    "from": "simple_jagr_benchmark.py",
+    "to": "scripts/bench/simple_jagr_benchmark.py"
+  },
+  {
+    "from": "benchmark_large_workload.py",
+    "to": "scripts/bench/benchmark_large_workload.py"
+  },
+  {
+    "from": "quick_bench.py",
+    "to": "scripts/bench/quick_bench.py"
+  },
+  {
+    "from": "brutal-bench.sh",
+    "to": "scripts/bench/brutal-bench.sh"
+  },
+  {
+    "from": "professional_bench.py",
+    "to": "scripts/bench/professional_bench.py"
+  },
+  {
+    "from": "scientific_bench.py",
+    "to": "scripts/bench/scientific_bench.py"
+  },
+  {
+    "from": "final_accurate_bench.py",
+    "to": "scripts/bench/final_accurate_bench.py"
+  },
+  {
+    "from": "bench_vs_bun.sh",
+    "to": "scripts/bench/bench_vs_bun.sh"
+  },
+  {
+    "from": "deep_profiler.py",
+    "to": "scripts/bench/deep_profiler.py"
+  },
+  {
+    "from": "benchmark_repeat.py",
+    "to": "scripts/bench/benchmark_repeat.py"
+  },
+  {
+    "from": "ultra_clean_bench.py",
+    "to": "scripts/bench/ultra_clean_bench.py"
+  },
+  {
+    "from": "4_WEEK_OPTIMIZATION_FINAL_RESULTS.md",
+    "to": "docs/archive/2025-optimization/4_WEEK_OPTIMIZATION_FINAL_RESULTS.md"
+  },
+  {
+    "from": "ALL_ISSUES_FIXED_FINAL.md",
+    "to": "docs/archive/2025-optimization/ALL_ISSUES_FIXED_FINAL.md"
+  },
+  {
+    "from": "BENCHMARK_VALIDATION_REPORT.md",
+    "to": "docs/archive/2025-optimization/BENCHMARK_VALIDATION_REPORT.md"
+  },
+  {
+    "from": "BEST_IN_CLASS_OPTIMIZATIONS_FINAL.md",
+    "to": "docs/archive/2025-optimization/BEST_IN_CLASS_OPTIMIZATIONS_FINAL.md"
+  },
+  {
+    "from": "BRUTAL_HONEST_ARCHITECTURAL_ANALYSIS.md",
+    "to": "docs/archive/2025-optimization/BRUTAL_HONEST_ARCHITECTURAL_ANALYSIS.md"
+  },
+  {
+    "from": "COMPLETE_FIX_REPORT.md",
+    "to": "docs/archive/2025-optimization/COMPLETE_FIX_REPORT.md"
+  },
+  {
+    "from": "COMPLETE_OPTIMIZATION_SUMMARY.md",
+    "to": "docs/archive/2025-optimization/COMPLETE_OPTIMIZATION_SUMMARY.md"
+  },
+  {
+    "from": "COMPLETE_OPTIMIZATION_SUMMARY_FINAL.md",
+    "to": "docs/archive/2025-optimization/COMPLETE_OPTIMIZATION_SUMMARY_FINAL.md"
+  },
+  {
+    "from": "COMPLETE_VICTORY_REPORT.md",
+    "to": "docs/archive/2025-optimization/COMPLETE_VICTORY_REPORT.md"
+  },
+  {
+    "from": "COMPREHENSIVE_BENCHMARK_ANALYSIS.md",
+    "to": "docs/archive/2025-optimization/COMPREHENSIVE_BENCHMARK_ANALYSIS.md"
+  },
+  {
+    "from": "COMPREHENSIVE_BENCHMARK_REPORT.md",
+    "to": "docs/archive/2025-optimization/COMPREHENSIVE_BENCHMARK_REPORT.md"
+  },
+  {
+    "from": "COMPREHENSIVE_OPTIMIZATION_AUDIT.md",
+    "to": "docs/archive/2025-optimization/COMPREHENSIVE_OPTIMIZATION_AUDIT.md"
+  },
+  {
+    "from": "COMPREHENSIVE_OPTIMIZATION_SUMMARY.md",
+    "to": "docs/archive/2025-optimization/COMPREHENSIVE_OPTIMIZATION_SUMMARY.md"
+  },
+  {
+    "from": "COMPREHENSIVE_XXHASH_OPTIMIZATION_COMPLETE.md",
+    "to": "docs/archive/2025-optimization/COMPREHENSIVE_XXHASH_OPTIMIZATION_COMPLETE.md"
+  },
+  {
+    "from": "DASHMAP_IMPLEMENTATION_COMPLETE.md",
+    "to": "docs/archive/2025-optimization/DASHMAP_IMPLEMENTATION_COMPLETE.md"
+  },
+  {
+    "from": "DEEP_DIVE_CRITICAL_ISSUES.md",
+    "to": "docs/archive/2025-optimization/DEEP_DIVE_CRITICAL_ISSUES.md"
+  },
+  {
+    "from": "DEEP_DIVE_OPTIMIZATION_ANALYSIS.md",
+    "to": "docs/archive/2025-optimization/DEEP_DIVE_OPTIMIZATION_ANALYSIS.md"
+  },
+  {
+    "from": "FINAL_BENCHMARK_ANALYSIS_AND_BOTTLENECKS.md",
+    "to": "docs/archive/2025-optimization/FINAL_BENCHMARK_ANALYSIS_AND_BOTTLENECKS.md"
+  },
+  {
+    "from": "FINAL_BENCHMARK_RESULTS_LATEST.md",
+    "to": "docs/archive/2025-optimization/FINAL_BENCHMARK_RESULTS_LATEST.md"
+  },
+  {
+    "from": "FINAL_COMPREHENSIVE_ANALYSIS.md",
+    "to": "docs/archive/2025-optimization/FINAL_COMPREHENSIVE_ANALYSIS.md"
+  },
+  {
+    "from": "FINAL_IMPLEMENTATION_REPORT.md",
+    "to": "docs/archive/2025-optimization/FINAL_IMPLEMENTATION_REPORT.md"
+  },
+  {
+    "from": "FINAL_OPTIMIZATION_REPORT_COMPLETE.md",
+    "to": "docs/archive/2025-optimization/FINAL_OPTIMIZATION_REPORT_COMPLETE.md"
+  },
+  {
+    "from": "FINAL_VICTORY_REPORT.md",
+    "to": "docs/archive/2025-optimization/FINAL_VICTORY_REPORT.md"
+  },
+  {
+    "from": "FUNDAMENTAL_CORE_LEVEL_ANALYSIS.md",
+    "to": "docs/archive/2025-optimization/FUNDAMENTAL_CORE_LEVEL_ANALYSIS.md"
+  },
+  {
+    "from": "FUNDAMENTAL_OPTIMIZATIONS_RESULTS.md",
+    "to": "docs/archive/2025-optimization/FUNDAMENTAL_OPTIMIZATIONS_RESULTS.md"
+  },
+  {
+    "from": "GLOBAL_CACHE_FINAL_RESULTS.md",
+    "to": "docs/archive/2025-optimization/GLOBAL_CACHE_FINAL_RESULTS.md"
+  },
+  {
+    "from": "IMPLEMENTATION_COMPLETE.md",
+    "to": "docs/archive/2025-optimization/IMPLEMENTATION_COMPLETE.md"
+  },
+  {
+    "from": "JAGR2_COMPLETE_IMPLEMENTATION.md",
+    "to": "docs/archive/2025-optimization/JAGR2_COMPLETE_IMPLEMENTATION.md"
+  },
+  {
+    "from": "JAGR2_FINAL_RESULTS.md",
+    "to": "docs/archive/2025-optimization/JAGR2_FINAL_RESULTS.md"
+  },
+  {
+    "from": "JAGR2_IMPLEMENTATION_STATUS.md",
+    "to": "docs/archive/2025-optimization/JAGR2_IMPLEMENTATION_STATUS.md"
+  },
+  {
+    "from": "JAGR2_PHASE1_COMPLETE.md",
+    "to": "docs/archive/2025-optimization/JAGR2_PHASE1_COMPLETE.md"
+  },
+  {
+    "from": "JAGR3_ALL_OPTIMIZATIONS_COMPLETE.md",
+    "to": "docs/archive/2025-optimization/JAGR3_ALL_OPTIMIZATIONS_COMPLETE.md"
+  },
+  {
+    "from": "JAGR3_COMPLETE_FINAL_REPORT.md",
+    "to": "docs/archive/2025-optimization/JAGR3_COMPLETE_FINAL_REPORT.md"
+  },
+  {
+    "from": "JAGR_IMPLEMENTATION_SUMMARY.md",
+    "to": "docs/archive/2025-optimization/JAGR_IMPLEMENTATION_SUMMARY.md"
+  },
+  {
+    "from": "JHOL_BEATS_BUN_FINAL_VICTORY_REPORT.md",
+    "to": "docs/archive/2025-optimization/JHOL_BEATS_BUN_FINAL_VICTORY_REPORT.md"
+  },
+  {
+    "from": "JHOL_BINARY_REBUILT_FINAL_RESULTS.md",
+    "to": "docs/archive/2025-optimization/JHOL_BINARY_REBUILT_FINAL_RESULTS.md"
+  },
+  {
+    "from": "JHOL_OPTIMIZATION_JOURNEY_SUMMARY.md",
+    "to": "docs/archive/2025-optimization/JHOL_OPTIMIZATION_JOURNEY_SUMMARY.md"
+  },
+  {
+    "from": "JHOL_TRUE_PERFORMANCE_REVEALED.md",
+    "to": "docs/archive/2025-optimization/JHOL_TRUE_PERFORMANCE_REVEALED.md"
+  },
+  {
+    "from": "JHOL_ULTIMATE_OPTIMIZATION_COMPLETE.md",
+    "to": "docs/archive/2025-optimization/JHOL_ULTIMATE_OPTIMIZATION_COMPLETE.md"
+  },
+  {
+    "from": "OPTIMIZATIONS_IMPLEMENTED.md",
+    "to": "docs/archive/2025-optimization/OPTIMIZATIONS_IMPLEMENTED.md"
+  },
+  {
+    "from": "OPTIMIZATION_COMPLETE_FINAL_STATUS.md",
+    "to": "docs/archive/2025-optimization/OPTIMIZATION_COMPLETE_FINAL_STATUS.md"
+  },
+  {
+    "from": "OPTIMIZATION_FINAL_REPORT.md",
+    "to": "docs/archive/2025-optimization/OPTIMIZATION_FINAL_REPORT.md"
+  },
+  {
+    "from": "PERFORMANCE_ANALYSIS_REPORT.md",
+    "to": "docs/archive/2025-optimization/PERFORMANCE_ANALYSIS_REPORT.md"
+  },
+  {
+    "from": "PERFORMANCE_DEEP_DIVE.md",
+    "to": "docs/archive/2025-optimization/PERFORMANCE_DEEP_DIVE.md"
+  },
+  {
+    "from": "PHASE_1_4_COMPLETION_REPORT.md",
+    "to": "docs/archive/2025-optimization/PHASE_1_4_COMPLETION_REPORT.md"
+  },
+  {
+    "from": "SLOW_INTERNET_ANALYSIS_AND_FIXES.md",
+    "to": "docs/archive/2025-optimization/SLOW_INTERNET_ANALYSIS_AND_FIXES.md"
+  },
+  {
+    "from": "ULTIMATE_VICTORY_REPORT.md",
+    "to": "docs/archive/2025-optimization/ULTIMATE_VICTORY_REPORT.md"
+  },
+  {
+    "from": "WHAT_WE_DISCOVERED_AND_WHATS_NEXT.md",
+    "to": "docs/archive/2025-optimization/WHAT_WE_DISCOVERED_AND_WHATS_NEXT.md"
+  },
+  {
+    "from": "XXHASH_OPTIMIZATION_100_PERCENT_COMPLETE.md",
+    "to": "docs/archive/2025-optimization/XXHASH_OPTIMIZATION_100_PERCENT_COMPLETE.md"
+  },
+  {
+    "from": "benchmark-results-all.md",
+    "to": "docs/archive/2025-optimization/benchmark-results-all.md"
+  },
+  {
+    "from": "benchmark-results-medium.md",
+    "to": "docs/archive/2025-optimization/benchmark-results-medium.md"
+  },
+  {
+    "from": "benchmark-results-step0.md",
+    "to": "docs/archive/2025-optimization/benchmark-results-step0.md"
+  },
+  {
+    "from": "benchmark-results.md",
+    "to": "docs/archive/2025-optimization/benchmark-results.md"
+  },
+  {
+    "from": "bench_smoke.json",
+    "to": "benchmarks/results/json/bench_smoke.json"
+  },
+  {
+    "from": "benchmark-jhol-improvement-2026-03-29.json",
+    "to": "benchmarks/results/json/benchmark-jhol-improvement-2026-03-29.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-after-compact-revert.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-after-compact-revert.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-after-native-improvements-2026-03-29.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-after-native-improvements-2026-03-29.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-artifact-identity-experiment.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-artifact-identity-experiment.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-artifact-identity-seq.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-artifact-identity-seq.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-cold-median3-2026-03-29.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-cold-median3-2026-03-29.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-cold-median3-truecold-2026-03-29.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-cold-median3-truecold-2026-03-29.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-compact-current.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-compact-current.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-nobundle-artifact-plan-v2.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-nobundle-artifact-plan-v2.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-nobundle-artifact-prune.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-nobundle-artifact-prune.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-nobundle-math-dedup-fair.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-nobundle-math-dedup-fair.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-nobundle-math-dedup-fair2.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-nobundle-math-dedup-fair2.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-nobundle-math-dedup.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-nobundle-math-dedup.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-nobundle-math-queue.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-nobundle-math-queue.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-nobundle-resolver-arc-fair.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-nobundle-resolver-arc-fair.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-nobundle-resolver-arc-rerun.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-nobundle-resolver-arc-rerun.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-nobundle-resolver-arc.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-nobundle-resolver-arc.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-nobundle-streamed-v2.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-nobundle-streamed-v2.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-nobundle-streamed.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-nobundle-streamed.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-nobundle-two-phase.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-nobundle-two-phase.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-persistent-compact-v2.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-persistent-compact-v2.json"
+  },
+  {
+    "from": "benchmark-jhol-vs-bun-persistent-compact.json",
+    "to": "benchmarks/results/json/benchmark-jhol-vs-bun-persistent-compact.json"
+  },
+  {
+    "from": "benchmark-results-all.json",
+    "to": "benchmarks/results/json/benchmark-results-all.json"
+  },
+  {
+    "from": "benchmark-results-medium.json",
+    "to": "benchmarks/results/json/benchmark-results-medium.json"
+  },
+  {
+    "from": "benchmark-results-step0.json",
+    "to": "benchmarks/results/json/benchmark-results-step0.json"
+  },
+  {
+    "from": "benchmark-results.json",
+    "to": "benchmarks/results/json/benchmark-results.json"
+  },
+  {
+    "from": "benchmark-vs-bun-2026-03-29.json",
+    "to": "benchmarks/results/json/benchmark-vs-bun-2026-03-29.json"
+  },
+  {
+    "from": "benchmark-vs-bun-no-binarypkgs-2026-03-29.json",
+    "to": "benchmarks/results/json/benchmark-vs-bun-no-binarypkgs-2026-03-29.json"
+  },
+  {
+    "from": "benchmark_jagr3_summary.json",
+    "to": "benchmarks/results/json/benchmark_jagr3_summary.json"
+  },
+  {
+    "from": "jhol-streamed-concurrency-sweep.json",
+    "to": "benchmarks/results/json/jhol-streamed-concurrency-sweep.json"
+  },
+  {
+    "from": "resolver-parity-report.json",
+    "to": "benchmarks/results/json/resolver-parity-report.json"
+  },
+  {
+    "from": "jhol-async-prefetch-joined-profile.txt",
+    "to": "benchmarks/profiles/jhol-async-prefetch-joined-profile.txt"
+  },
+  {
+    "from": "jhol-async-prefetch-profile.txt",
+    "to": "benchmarks/profiles/jhol-async-prefetch-profile.txt"
+  },
+  {
+    "from": "jhol-cold-profile-after-artifact-plan.txt",
+    "to": "benchmarks/profiles/jhol-cold-profile-after-artifact-plan.txt"
+  },
+  {
+    "from": "jhol-cold-profile-artifact-identity-verbose.txt",
+    "to": "benchmarks/profiles/jhol-cold-profile-artifact-identity-verbose.txt"
+  },
+  {
+    "from": "jhol-cold-profile-artifact-identity.txt",
+    "to": "benchmarks/profiles/jhol-cold-profile-artifact-identity.txt"
+  },
+  {
+    "from": "jhol-cold-profile-artifact-prune-fair.txt",
+    "to": "benchmarks/profiles/jhol-cold-profile-artifact-prune-fair.txt"
+  },
+  {
+    "from": "jhol-cold-profile-artifact-prune.txt",
+    "to": "benchmarks/profiles/jhol-cold-profile-artifact-prune.txt"
+  },
+  {
+    "from": "jhol-cold-profile-math-dedup.txt",
+    "to": "benchmarks/profiles/jhol-cold-profile-math-dedup.txt"
+  },
+  {
+    "from": "jhol-cold-profile-math-queue.txt",
+    "to": "benchmarks/profiles/jhol-cold-profile-math-queue.txt"
+  },
+  {
+    "from": "jhol-compact-summary-profile.txt",
+    "to": "benchmarks/profiles/jhol-compact-summary-profile.txt"
+  },
+  {
+    "from": "jhol-current-root-bottleneck-profile.txt",
+    "to": "benchmarks/profiles/jhol-current-root-bottleneck-profile.txt"
+  },
+  {
+    "from": "jhol-metadata-reqwest-profile.txt",
+    "to": "benchmarks/profiles/jhol-metadata-reqwest-profile.txt"
+  },
+  {
+    "from": "jhol-persistent-compact-cold-profile.txt",
+    "to": "benchmarks/profiles/jhol-persistent-compact-cold-profile.txt"
+  },
+  {
+    "from": "jhol-persistent-compact-v2-cold-profile.txt",
+    "to": "benchmarks/profiles/jhol-persistent-compact-v2-cold-profile.txt"
+  },
+  {
+    "from": "jhol-persistent-compact-v2-warm-profile.txt",
+    "to": "benchmarks/profiles/jhol-persistent-compact-v2-warm-profile.txt"
+  },
+  {
+    "from": "jhol-persistent-compact-warm-profile.txt",
+    "to": "benchmarks/profiles/jhol-persistent-compact-warm-profile.txt"
+  },
+  {
+    "from": "0.5",
+    "to": "docs/archive/junk/0.5"
+  },
+  {
+    "from": "=",
+    "to": "docs/archive/junk/="
+  },
+  {
+    "from": "CODEBASE_STRUCTURE_TREE.md",
+    "to": "docs/archive/misc/CODEBASE_STRUCTURE_TREE.md"
+  },
+  {
+    "from": "INNOVATION_LOG.md",
+    "to": "docs/internal/INNOVATION_LOG.md"
+  },
+  {
+    "from": "PRODUCTION_HARDENING_RECORD.md",
+    "to": "docs/archive/reports/PRODUCTION_HARDENING_RECORD.md"
+  },
+  {
+    "from": "RESULTS.md",
+    "to": "docs/archive/reports/RESULTS.md"
+  },
+  {
+    "from": "RESEARCH_PAPER_HOLOGRAPHIC_DEPENDENCY_RESOLUTION.pdf",
+    "to": "docs/research/RESEARCH_PAPER_HOLOGRAPHIC_DEPENDENCY_RESOLUTION.pdf"
+  },
+  {
+    "from": "profile-log.txt",
+    "to": "docs/archive/junk/profile-log.txt"
+  },
+  {
+    "from": "reasonix.toml",
+    "to": ".reasonix/reasonix.toml"
+  }
+]

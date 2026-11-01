@@ -383,28 +383,27 @@ pub fn frontier_add(packages: &[String], quiet: bool) -> Result<(), String> {
         };
 
         // Check zero-copy metadata first
-        let (version, tarball_url, integrity) = if let Some(meta) =
-            crate::zero_copy_metadata::MmapMetadataStore::lookup_packument(name)
-        {
-            if let Some(v) = resolve_version_from_meta(spec, &meta) {
-                let url = if meta.dist.tarball_url.is_empty() {
-                    lockfile_tarball_url(name, &v)
+        let (version, tarball_url, integrity) =
+            if let Some(meta) = crate::registry::lookup_zero_copy_packument(name) {
+                if let Some(v) = resolve_version_from_meta(spec, &meta) {
+                    let url = if meta.dist.tarball_url.is_empty() {
+                        lockfile_tarball_url(name, &v)
+                    } else {
+                        meta.dist.tarball_url.clone()
+                    };
+                    (v, url, meta.dist.integrity)
                 } else {
-                    meta.dist.tarball_url.clone()
-                };
-                (v, url, meta.dist.integrity)
+                    return Err(format!(
+                        "package {}@{} not found in zero-copy store",
+                        name, spec
+                    ));
+                }
             } else {
                 return Err(format!(
-                    "package {}@{} not found in zero-copy store",
-                    name, spec
+                    "package {} not cached; run full install first",
+                    name
                 ));
-            }
-        } else {
-            return Err(format!(
-                "package {} not cached; run full install first",
-                name
-            ));
-        };
+            };
 
         // Download tarball to JAGR-S store
         let pkg_key = format!("{}@{}", name, version);
@@ -602,14 +601,13 @@ pub fn predictive_prefetch(context_pkgs: &[String], limit: usize) {
     for (_priority, p) in scored {
         crate::daemon_cache::DaemonCache::prefetch(&p.package, true);
         // Store in zero-copy metadata mmap for instant packument lookup
-        if let Some(meta) =
-            crate::zero_copy_metadata::MmapMetadataStore::lookup_packument(&p.package)
-        {
+        if let Some(meta) = crate::registry::lookup_zero_copy_packument(&p.package) {
             // Already cached — no-op
             let _ = meta;
         }
         // Lattice / GRM warm
-        if let Some(v) = crate::lattice_cache::lookup_lattice(&p.package, "latest") {
+        if let Some(v) = crate::registry::lookup_lattice_for_current_identity(&p.package, "latest")
+        {
             let _ = lock_free_grm::store_global(ResolutionRecord {
                 package_spec: p.package.clone(),
                 resolved_version: v,
@@ -670,57 +668,10 @@ fn madvise_willneed(path: &Path) {
 pub fn grm_lattice_assemble(
     deps: &HashMap<String, String>,
 ) -> Option<HashMap<String, crate::lockfile_write::ResolvedPackage>> {
-    if deps.is_empty() {
-        return None;
-    }
-    let gate = spectral_gate_from_deps(deps);
-    if !gate.can_skip_resolve() {
-        return None;
-    }
-    let mut resolved = HashMap::new();
-    for (name, spec) in deps {
-        // GRM first
-        if let Some(rec) = grm_lookup(name) {
-            if crate::registry::version_satisfies(spec, &rec.resolved_version) {
-                crate::lattice_cache::remember(name, spec, &rec.resolved_version);
-                resolved.insert(
-                    name.clone(),
-                    crate::lockfile_write::ResolvedPackage {
-                        version: rec.resolved_version,
-                        resolved: String::new(),
-                        integrity: None,
-                        dependencies: rec.dependencies.clone(),
-                        peer_dependencies: HashMap::new(),
-                        peer_dependencies_meta: HashMap::new(),
-                    },
-                );
-                continue;
-            }
-        }
-        // Lattice fallback
-        if let Some(v) = crate::lattice_cache::lookup_lattice(name, spec) {
-            if crate::registry::version_satisfies(spec, &v) {
-                resolved.insert(
-                    name.clone(),
-                    crate::lockfile_write::ResolvedPackage {
-                        version: v,
-                        resolved: String::new(),
-                        integrity: None,
-                        dependencies: HashMap::new(),
-                        peer_dependencies: HashMap::new(),
-                        peer_dependencies_meta: HashMap::new(),
-                    },
-                );
-                continue;
-            }
-        }
-        return None;
-    }
-    if resolved.len() == deps.len() {
-        Some(resolved)
-    } else {
-        None
-    }
+    // This legacy API has no project or registry identity. Cross-project GRM
+    // records cannot prove that a package came from the configured source.
+    let _ = deps;
+    None
 }
 
 /// Full spectral analysis of a resolved package graph using

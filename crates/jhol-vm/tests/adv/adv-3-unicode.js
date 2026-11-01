@@ -1,0 +1,11 @@
+const s = "aé中😀";
+console.log(s.length, s[0], s[4]);
+console.log("\ud83d\ude00".length, "\ud83d".length);
+console.log(JSON.stringify(s), JSON.parse(JSON.stringify(s)) === s);
+console.log("ABC".toLowerCase(), "àé".toUpperCase());
+console.log("\x41\x7A", "\u{1F600}".length);
+const ws = "  x  ";
+console.log(ws.trim() === "x", "\t\n".trim() === "");
+console.log("a-b-c".split("-").length, "abc".split("").length);
+console.log("\0".length, "ab".length);
+console.log(s.charCodeAt(0), s.charCodeAt(4));

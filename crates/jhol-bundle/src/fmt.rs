@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 /// Bumping the crate version alone is NOT enough — the cache must die when
 /// output semantics change without a release (proven: comment/quote/spacing
 /// passes were added while a stale cache kept serving old-forever output).
-pub const FMT_ENGINE: &str = concat!("jhol-fmt-", env!("CARGO_PKG_VERSION"), ".sem4");
+pub const FMT_ENGINE: &str = concat!("jhol-fmt-", env!("CARGO_PKG_VERSION"), ".sem6");
 
 // ── Config ──────────────────────────────────────────────────────────────
 
@@ -67,10 +67,9 @@ pub fn load_config(dir: &Path) -> FmtConfig {
             merge_json(&mut cfg, &c);
         }
     }
-    if let Some(c) = read_json_config(&dir.join(".jholrc")).and_then(|v| {
-        v.get("fmt")
-            .and_then(|f| serde_json::to_value(f).ok())
-    }) {
+    if let Some(c) = read_json_config(&dir.join(".jholrc"))
+        .and_then(|v| v.get("fmt").and_then(|f| serde_json::to_value(f).ok()))
+    {
         merge_json(&mut cfg, &c);
     }
     cfg
@@ -224,7 +223,8 @@ fn source_facts(source: &str) -> SourceFacts {
         } else if t.starts_with("/*") {
             match t.find("*/") {
                 Some(e) => {
-                    f.own_line_comments.insert(t[..e + 2].to_string(), was_blank);
+                    f.own_line_comments
+                        .insert(t[..e + 2].to_string(), was_blank);
                 }
                 None => {
                     f.own_line_comments.insert(t.to_string(), was_blank);
@@ -277,7 +277,10 @@ fn post_process_js(src: &str, cfg: &FmtConfig, facts: &mut SourceFacts) -> Strin
                     // Prettier/Bun preserve source-multiline objects: if the
                     // prefix had a newline after `{` in the original source,
                     // keep it expanded (fall through to trailing-comma path).
-                    if !facts.multiline_obj_prefixes.contains(prefix_of(&obj_lines[0])) {
+                    if !facts
+                        .multiline_obj_prefixes
+                        .contains(prefix_of(&obj_lines[0]))
+                    {
                         out.push(collapsed);
                         i = end + 1;
                         continue;
@@ -380,7 +383,12 @@ fn try_collapse_object(obj_lines: &[&str], max_width: usize) -> Option<String> {
     if !last.starts_with('}') {
         return None;
     }
-    let leading = obj_lines.last().unwrap().chars().take_while(|c| *c == ' ').count();
+    let leading = obj_lines
+        .last()
+        .unwrap()
+        .chars()
+        .take_while(|c| *c == ' ')
+        .count();
     let indent = " ".repeat(leading);
     let suffix = if last.len() > 1 { &last[1..] } else { "" };
 
@@ -459,9 +467,7 @@ fn normalize_spacing(src: &str, facts: &mut SourceFacts) -> String {
                         let text = line[j..].trim_end().to_string();
                         let code = line[..j].trim_end();
                         if !code.is_empty() {
-                            if let Some(blank_before) =
-                                facts.own_line_comments.remove(&text)
-                            {
+                            if let Some(blank_before) = facts.own_line_comments.remove(&text) {
                                 split = Some((code.to_string(), text, blank_before));
                             }
                         }
@@ -472,9 +478,7 @@ fn normalize_spacing(src: &str, facts: &mut SourceFacts) -> String {
                             let text = line[j..j + 2 + end + 2].to_string();
                             let code = line[..j].trim_end();
                             if !code.is_empty() {
-                                if let Some(blank_before) =
-                                    facts.own_line_comments.remove(&text)
-                                {
+                                if let Some(blank_before) = facts.own_line_comments.remove(&text) {
                                     split = Some((code.to_string(), text, blank_before));
                                 }
                             }
@@ -507,10 +511,7 @@ fn normalize_spacing(src: &str, facts: &mut SourceFacts) -> String {
             }
         } else {
             let key: String = line.trim_start().chars().take(24).collect();
-            if !key.is_empty()
-                && facts.blank_before_stmts.contains(&key)
-                && prev_ends_stmt
-            {
+            if !key.is_empty() && facts.blank_before_stmts.contains(&key) && prev_ends_stmt {
                 out.push(String::new());
             }
         }
@@ -592,8 +593,9 @@ fn normalize_var_breaks(src: &str, max_width: usize) -> String {
     for line in src.lines() {
         let trimmed = line.trim_start();
         let indent = line.chars().take_while(|c| *c == ' ').count();
-        let is_decl =
-            trimmed.starts_with("var ") || trimmed.starts_with("let ") || trimmed.starts_with("const ");
+        let is_decl = trimmed.starts_with("var ")
+            || trimmed.starts_with("let ")
+            || trimmed.starts_with("const ");
         let over = line.len() > max_width;
         let plain = trimmed.matches('"').count() % 2 == 0
             && trimmed.matches('\'').count() % 2 == 0
@@ -685,33 +687,37 @@ pub fn format_json(source: &str, cfg: &FmtConfig) -> BundleResult<String> {
     let v: serde_json::Value = serde_json::from_str(source).map_err(|e| {
         BundleError::TransformError("json".to_string(), format!("JSON parse: {}", e))
     })?;
-    let pretty = if cfg.use_tabs {
-        serde_json::to_string_pretty(&v)
-            .map_err(|e| BundleError::TransformError("json".to_string(), e.to_string()))?
-            .replace("    ", "\t")
+    let indent = if cfg.use_tabs {
+        "\t".to_string()
     } else {
-        let spaces = " ".repeat(cfg.tab_width.max(1));
-        serde_json::to_string_pretty(&v)
-            .map_err(|e| BundleError::TransformError("json".to_string(), e.to_string()))?
-            .replace("    ", &spaces)
+        " ".repeat(cfg.tab_width.max(1))
     };
+    let fmt = serde_json::ser::PrettyFormatter::with_indent(indent.as_bytes());
+    let mut buf = Vec::new();
+    let mut ser = serde_json::Serializer::with_formatter(&mut buf, fmt);
+    serde::Serialize::serialize(&v, &mut ser)
+        .map_err(|e| BundleError::TransformError("json".to_string(), e.to_string()))?;
+    let pretty = String::from_utf8(buf)
+        .map_err(|e| BundleError::TransformError("json".to_string(), e.to_string()))?;
     Ok(format!("{}\n", pretty))
 }
 
 // ── CSS ─────────────────────────────────────────────────────────────────
 
-#[cfg(feature = "lightningcss")]
+/// CSS is deliberately conservative: this pass never reflows declarations or
+/// drops anything it does not fully understand. It normalises the trailing
+/// newline and trims trailing spaces, which keeps `jhol fmt` non-destructive on
+/// `.css`, `.scss` and `.less` even without the optional lightningcss engine.
 pub fn format_css(source: &str, _cfg: &FmtConfig) -> BundleResult<String> {
-    _ = source;
-    Ok(String::new())
-}
-
-#[cfg(not(feature = "lightningcss"))]
-pub fn format_css(_source: &str, _cfg: &FmtConfig) -> BundleResult<String> {
-    Err(BundleError::TransformError(
-        "css".to_string(),
-        "lightningcss feature disabled".to_string(),
-    ))
+    let mut out = String::with_capacity(source.len() + 1);
+    for line in source.lines() {
+        out.push_str(line.trim_end());
+        out.push('\n');
+    }
+    if out.is_empty() || out == "\n" {
+        return Ok(String::new());
+    }
+    Ok(out)
 }
 
 // ── Dispatch ────────────────────────────────────────────────────────────
@@ -727,7 +733,15 @@ pub fn format_source(source: &str, filename: &str, cfg: &FmtConfig) -> BundleRes
         {
             // JholVM's own parser formats the language JholVM runs — no
             // third-party codegen and no regex patch-up pass to corrupt it.
-            return jhol_vm::formatter::format_source(source, filename)
+            let opts = jhol_vm::formatter::FormatOptions {
+                print_width: cfg.print_width,
+                tab_width: cfg.tab_width,
+                use_tabs: cfg.use_tabs,
+                semi: cfg.semi,
+                single_quote: cfg.single_quote,
+                trailing_comma: cfg.trailing_comma.clone(),
+            };
+            return jhol_vm::formatter::format_source_with_options(source, filename, &opts)
                 .map_err(|e| BundleError::TransformError(filename.to_string(), e));
         }
         #[cfg(not(feature = "native-fmt"))]
@@ -750,15 +764,21 @@ pub fn is_supported(path: &Path) -> bool {
         .and_then(|n| n.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    lower.ends_with(".js")
-        || lower.ends_with(".jsx")
-        || lower.ends_with(".ts")
-        || lower.ends_with(".tsx")
-        || lower.ends_with(".mjs")
-        || lower.ends_with(".cjs")
-        || lower.ends_with(".mts")
-        || lower.ends_with(".cts")
-        || lower.ends_with(".json")
+    let js = if cfg!(feature = "native-fmt") {
+        // JholVM's parser covers JavaScript, not TypeScript or JSX. Claiming
+        // those extensions would hand `jhol fmt` files it cannot parse.
+        lower.ends_with(".js") || lower.ends_with(".mjs") || lower.ends_with(".cjs")
+    } else {
+        lower.ends_with(".js")
+            || lower.ends_with(".jsx")
+            || lower.ends_with(".ts")
+            || lower.ends_with(".tsx")
+            || lower.ends_with(".mjs")
+            || lower.ends_with(".cjs")
+            || lower.ends_with(".mts")
+            || lower.ends_with(".cts")
+    };
+    js || lower.ends_with(".json")
         || lower.ends_with(".css")
         || lower.ends_with(".scss")
         || lower.ends_with(".less")
@@ -781,7 +801,13 @@ pub fn external_tool(ext: &str) -> Option<(&'static str, Vec<&'static str>)> {
 // ── Ignore rules ────────────────────────────────────────────────────────
 
 const IGNORED_DIRS: &[&str] = &[
-    "node_modules", ".git", "target", "dist", "build", ".jhol", "archive",
+    "node_modules",
+    ".git",
+    "target",
+    "dist",
+    "build",
+    ".jhol",
+    "archive",
 ];
 const LOCKFILES: &[&str] = &[
     "package-lock.json",
@@ -888,7 +914,11 @@ mod fmt_tests {
     fn test_var_break() {
         let src = "var baseCreate = require(\"./_baseCreate\"), getPrototype = require(\"./_getPrototype\"), isPrototype = require(\"./_isPrototype\");\n";
         let out = normalize_var_breaks(src, 80);
-        assert!(out.contains(",\n  "), "want 2-space continuation, got:\n{}", out);
+        assert!(
+            out.contains(",\n  "),
+            "want 2-space continuation, got:\n{}",
+            out
+        );
     }
 
     #[test]
@@ -903,6 +933,35 @@ mod fmt_tests {
         let src = "const x = {\n  a: 1,\n  b: 2\n};\n";
         let out = post_process_js(src, &FmtConfig::default(), &mut SourceFacts::default());
         assert_eq!(out.trim(), "const x = { a: 1, b: 2 };");
+    }
+
+    #[test]
+    fn json_indent_does_not_rewrite_string_contents() {
+        let cfg = FmtConfig::default();
+        let src = "{\"s\":\"a    b\",\"n\":{\"x\":1}}";
+        let out = format_json(src, &cfg).expect("format json");
+        assert!(out.contains("\"a    b\""), "string spaces preserved: {out}");
+        assert!(out.contains("\n  \"n\""), "object indented: {out}");
+        let again = format_json(&out, &cfg).expect("reformat json");
+        assert_eq!(out, again, "json formatting must be idempotent");
+    }
+
+    #[test]
+    fn css_formatting_never_returns_empty_for_nonempty_input() {
+        let src = "a {  color: red;  }\n\nb { color: blue; }\n";
+        let out = format_css(src, &FmtConfig::default()).expect("css");
+        assert!(!out.is_empty());
+        assert!(out.contains("color: red;"));
+    }
+
+    #[test]
+    fn js_options_reach_the_native_formatter() {
+        let mut cfg = FmtConfig::default();
+        cfg.single_quote = true;
+        cfg.semi = false;
+        let out = format_source("const s = \"hi\";\n", "t.js", &cfg).expect("format js");
+        assert!(out.contains("'hi'"), "{out}");
+        assert!(!out.contains(";"), "{out}");
     }
 
     #[test]

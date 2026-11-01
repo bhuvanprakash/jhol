@@ -1,0 +1,23 @@
+{
+  "fixture": "workspace-app",
+  "expectedStatus": "pass",
+  "notes": "covers workspaces edge",
+  "expectedGraph": {
+    "root": {
+      "name": "jhol-fixture-workspace-app",
+      "version": "1.0.0"
+    },
+    "edges": [
+      {
+        "from": "$root",
+        "to": "lodash",
+        "spec": "4.17.21",
+        "type": "dependencies"
+      }
+    ],
+    "overrides": {},
+    "workspaces": [
+      "packages/*"
+    ]
+  }
+}

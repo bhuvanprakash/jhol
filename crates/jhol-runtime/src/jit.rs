@@ -18,7 +18,12 @@ use regex_lite::Regex;
 /// only way to measure engine-vs-engine without the pattern swap.
 pub fn enabled() -> bool {
     std::env::var("JHOL_RUNTIME_JIT")
-        .map(|v| v != "0" && !v.is_empty() && !v.eq_ignore_ascii_case("false") && !v.eq_ignore_ascii_case("off"))
+        .map(|v| {
+            v != "0"
+                && !v.is_empty()
+                && !v.eq_ignore_ascii_case("false")
+                && !v.eq_ignore_ascii_case("off")
+        })
         .unwrap_or(true)
 }
 

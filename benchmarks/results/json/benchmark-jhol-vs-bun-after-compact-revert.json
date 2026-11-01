@@ -1,0 +1,14 @@
+{
+  "jhol": {
+    "elapsed_s": 44.344,
+    "returncode": 0,
+    "stdout_tail": "",
+    "stderr_tail": "[jhol-native-download] 25292ms\n[jhol-native-link] 1110ms\n"
+  },
+  "bun": {
+    "elapsed_s": 29.716,
+    "returncode": 0,
+    "stdout_tail": "bun install v1.3.4 (5eb2145b)\n\n+ express@4.21.2 (v5.2.1 available)\n+ next@15.1.0 (v16.1.6 available)\n+ react@18.3.1 (v19.2.4 available)\n+ react-dom@18.3.1 (v19.2.4 available)\n+ typescript@5.7.2 (v5.9.3 available)\n\n101 packages installed [29.66s]\n",
+    "stderr_tail": "Resolving dependencies\nResolved, downloaded and extracted [452]\nSaved lockfile\n"
+  }
+}

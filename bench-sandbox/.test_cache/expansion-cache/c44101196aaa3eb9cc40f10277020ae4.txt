@@ -1,0 +1,4 @@
+debug@4.4.3
+mime-types@3.0.2
+---VARIANTS---
+[]

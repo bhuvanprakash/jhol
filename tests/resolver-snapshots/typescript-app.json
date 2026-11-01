@@ -1,0 +1,27 @@
+{
+  "fixture": "typescript-app",
+  "expectedStatus": "pass",
+  "notes": "baseline typescript toolchain graph",
+  "expectedGraph": {
+    "root": {
+      "name": "jhol-fixture-typescript-app",
+      "version": "1.0.0"
+    },
+    "edges": [
+      {
+        "from": "$root",
+        "to": "lodash",
+        "spec": "4.17.21",
+        "type": "dependencies"
+      },
+      {
+        "from": "$root",
+        "to": "typescript",
+        "spec": "5.4.5",
+        "type": "devDependencies"
+      }
+    ],
+    "overrides": {},
+    "workspaces": []
+  }
+}

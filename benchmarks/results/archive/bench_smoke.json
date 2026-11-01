@@ -1,0 +1,8 @@
+{
+  "jhol_add_cold": {
+    "seconds": 0.0183,
+    "code": 0,
+    "tail": "Package(s) added."
+  },
+  "error": "Traceback (most recent call last):\n  File \"<stdin>\", line 16, in <module>\n  File \"<stdin>\", line 11, in timed\n  File \"/opt/homebrew/anaconda3/lib/python3.13/subprocess.py\", line 556, in run\n    stdout, stderr = process.communicate(input, timeout=timeout)\n                     ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/homebrew/anaconda3/lib/python3.13/subprocess.py\", line 1222, in communicate\n    stdout, stderr = self._communicate(input, endtime, timeout)\n                     ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/homebrew/anaconda3/lib/python3.13/subprocess.py\", line 2129, in _communicate\n    self._check_timeout(endtime, orig_timeout, stdout, stderr)\n    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/homebrew/anaconda3/lib/python3.13/subprocess.py\", line 1269, in _check_timeout\n    raise TimeoutExpired(\n    ...<2 lines>...\n            stderr=b''.join(stderr_seq) if stderr_seq else None)\nsubprocess.TimeoutExpired: Command '['bun', 'add', 'react', 'next', 'typescript', 'express']' timed out after 180 seconds\n"
+}

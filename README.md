@@ -210,6 +210,7 @@ In CI, `jhol cache key` is the cache key. `jhol ci` skips resolution and packume
 | `crates/jhol-bundle` | TypeScript, JSX, and CSS bundler |
 | `crates/jhol-vm` | Bytecode engine |
 | `crates/jhol-graph` `jhol-policy` `jhol-receipt` `jhol-adapters` `jhol-task` `jhol-env` `jhol-diff` `jhol-ai` `jhol-db` | Foundation crates |
+| `crates/jhol-cloud` | Offline control-plane domain model (workspace member, no server) |
 | `crates/jhol-remote` | Optional remote store |
 | `crates/jhol-trampoline` | Small release helper |
 | `docs/user/` | Command reference |

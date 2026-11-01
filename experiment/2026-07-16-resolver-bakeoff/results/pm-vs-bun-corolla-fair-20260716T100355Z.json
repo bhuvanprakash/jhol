@@ -1,0 +1,28 @@
+{
+  "fixture": "express-app",
+  "arms": {
+    "jhol_corolla_s": [
+      1.159,
+      1.015,
+      1.0
+    ],
+    "jhol_nocorolla_s": [
+      1.63,
+      1.805,
+      1.449
+    ],
+    "bun_s": [
+      3.556,
+      3.493,
+      3.526
+    ]
+  },
+  "expand_ms_corolla": [
+    946,
+    826,
+    823
+  ],
+  "warm_jhol_s": 0.072,
+  "express": "4.18.2",
+  "notes": "H2 abbreviated packuments + Corolla download-only helix; store_index flush"
+}

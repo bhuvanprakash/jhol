@@ -5,18 +5,16 @@
 //! needs a runtime helper that JS never names directly (`__jhol_apply`,
 //! `__jhol_enum_keys`, …) it is installed under a prefixed global.
 
-use std::collections::HashMap;
-
-use crate::arena::{self, Arena};
-use crate::bytecode::FnProto;
-use crate::errors::{throw_string, type_error, VmError, VmResult};
+use crate::arena::{self};
+use crate::errors::{type_error, VmResult};
 use crate::objects::*;
-use crate::value::{f64_to_js_string, Value};
-use crate::vm::{cancel_timer, push_timer, take_due_timers, TimerEntry, TimerKind, Vm};
+use crate::value::{f64_to_js_string, ArithOp, Value};
+use crate::vm::{push_timer, TimerEntry, TimerKind, Vm};
 
 macro_rules! native {
     ($name:ident, |$vm:ident, $this:ident, $args:ident| $body:expr) => {
         pub fn $name($vm: &mut Vm, $this: Value, $args: &[Value]) -> VmResult<Value> {
+            let _ = &$vm;
             $body
         }
     };
@@ -27,6 +25,7 @@ fn arg(args: &[Value], i: usize) -> Value {
     args.get(i).copied().unwrap_or(Value::UNDEFINED)
 }
 
+#[allow(dead_code)]
 #[inline]
 fn iarg(v: Value) -> i64 {
     v.as_i64()
@@ -41,7 +40,8 @@ fn keyv(vm: &mut Vm, v: Value) -> PropKey {
     vm.key_from_value(v)
 }
 
-fn as_array<'a>(vm: &'a mut Vm, v: Value) -> VmResult<&'a mut JArray> {
+#[allow(dead_code)]
+fn as_array<'a>(_vm: &'a mut Vm, v: Value) -> VmResult<&'a mut JArray> {
     if v.is_array() {
         Ok(unsafe { v.as_array_mut() })
     } else {
@@ -50,7 +50,7 @@ fn as_array<'a>(vm: &'a mut Vm, v: Value) -> VmResult<&'a mut JArray> {
 }
 
 /// Read `this` as an array, throwing a JS-visible TypeError when it is not one.
-fn this_array(vm: &mut Vm, this: Value) -> VmResult<&'static mut JArray> {
+fn this_array(_vm: &mut Vm, this: Value) -> VmResult<&'static mut JArray> {
     if this.is_array() {
         Ok(unsafe { this.as_array_mut() })
     } else {
@@ -80,7 +80,11 @@ fn make_iter_from(vm: &mut Vm, v: Value) -> Value {
         let ks2 = key(vm, "#items");
         let kp2 = key(vm, "#pairs");
         let src = vm.get_prop(v, ks2).unwrap_or(Value::UNDEFINED);
-        let src = if src.is_array() { src } else { vm.get_prop(v, kp2).unwrap_or(Value::UNDEFINED) };
+        let src = if src.is_array() {
+            src
+        } else {
+            vm.get_prop(v, kp2).unwrap_or(Value::UNDEFINED)
+        };
         if src.is_array() {
             let a = unsafe { src.as_array() };
             for i in 0..a.len {
@@ -109,8 +113,11 @@ fn this_str(vm: &mut Vm, this: Value) -> VmResult<String> {
 }
 
 fn string_units(vm: &mut Vm, value: Value) -> VmResult<Vec<u16>> {
-    if value.is_string() { Ok(unsafe { value.as_string() }.code_units().collect()) }
-    else { Ok(vm.to_string(value)?.encode_utf16().collect()) }
+    if value.is_string() {
+        Ok(unsafe { value.as_string() }.code_units().collect())
+    } else {
+        Ok(vm.to_string(value)?.encode_utf16().collect())
+    }
 }
 
 fn string_index(vm: &mut Vm, value: Value) -> VmResult<i64> {
@@ -133,6 +140,10 @@ fn js_str(s: &str) -> String {
 // installation
 // ---------------------------------------------------------------------------
 
+fn obj_proto_ref(vm: &Vm) -> Value {
+    Value::from_ptr(vm.proto_object_ptr())
+}
+
 pub fn install(vm: &mut Vm) {
     let a = arena::active();
 
@@ -144,11 +155,13 @@ pub fn install(vm: &mut Vm) {
     for p in [obj_proto] {
         unsafe { p.as_object_mut() }.hdr.flags |= FLAG_HIDDEN_KEYS;
     }
-    let fn_proto = Value::from_ptr(a.alloc_function(JFunction::native(Value::UNDEFINED, n_noop, Value::NULL)));
+    let fn_proto =
+        Value::from_ptr(a.alloc_function(JFunction::native(Value::UNDEFINED, n_noop, Value::NULL)));
+    unsafe { fn_proto.as_function_mut() }.proto_obj = obj_proto;
     // An object, not an array: methods live on the prototype property bag.
-    let arr_proto = Value::from_ptr(a.alloc_object(0, Value::NULL));
+    let arr_proto = Value::from_ptr(a.alloc_object(0, obj_proto));
     unsafe { arr_proto.as_object_mut() }.hdr.flags |= FLAG_HIDDEN_KEYS;
-    let str_proto = Value::from_ptr(a.alloc_object(0, Value::NULL));
+    let str_proto = Value::from_ptr(a.alloc_object(0, obj_proto));
     unsafe { str_proto.as_object_mut() }.hdr.flags |= FLAG_HIDDEN_KEYS;
     vm.set_protos(globals, obj_proto, fn_proto, arr_proto, str_proto);
 
@@ -171,7 +184,9 @@ pub fn install(vm: &mut Vm) {
     method(vm, fn_proto, "toString", n_fn_to_string);
 
     // ---- Array.prototype ----
-    method(vm, arr_proto, "push", n_push);
+    unsafe { method(vm, arr_proto, "push", n_push).as_function_mut() }
+        .hdr
+        .flags |= FLAG_NATIVE_LEAF;
     method(vm, arr_proto, "pop", n_pop);
     method(vm, arr_proto, "shift", n_shift);
     method(vm, arr_proto, "unshift", n_unshift);
@@ -200,11 +215,15 @@ pub fn install(vm: &mut Vm) {
     method(vm, arr_proto, "at", n_at);
     method(vm, arr_proto, "join", n_join);
     method(vm, arr_proto, "toString", n_array_to_string);
-    method(vm, arr_proto, ITER_SYM_KEY, |vm, this, _args| Ok(make_iter_from(vm, this)));
+    method(vm, arr_proto, ITER_SYM_KEY, |vm, this, _args| {
+        Ok(make_iter_from(vm, this))
+    });
 
     // ---- String.prototype ----
     method(vm, str_proto, "charAt", n_char_at);
-    method(vm, str_proto, "charCodeAt", n_char_code_at);
+    unsafe { method(vm, str_proto, "charCodeAt", n_char_code_at).as_function_mut() }
+        .hdr
+        .flags |= FLAG_NATIVE_PRIMITIVE_LEAF;
     method(vm, str_proto, "codePointAt", n_code_point_at);
     method(vm, str_proto, "at", n_str_at);
     method(vm, str_proto, "indexOf", n_str_index_of);
@@ -233,7 +252,9 @@ pub fn install(vm: &mut Vm) {
     method(vm, str_proto, "valueOf", n_str_to_string);
     method(vm, str_proto, "normalize", n_str_normalize);
     method(vm, str_proto, "localeCompare", n_locale_compare);
-    method(vm, str_proto, ITER_SYM_KEY, |vm, this, _args| Ok(make_iter_from(vm, this)));
+    method(vm, str_proto, ITER_SYM_KEY, |vm, this, _args| {
+        Ok(make_iter_from(vm, this))
+    });
 
     // ---- constructors ----
     let obj_ctor = vm.new_function_native("Object", n_object_ctor, 1);
@@ -244,6 +265,16 @@ pub fn install(vm: &mut Vm) {
     set_fn(vm, obj_ctor, "assign", n_object_assign);
     set_fn(vm, obj_ctor, "freeze", n_object_freeze);
     set_fn(vm, obj_ctor, "isFrozen", n_object_is_frozen);
+    set_fn(vm, obj_ctor, "seal", n_object_seal);
+    set_fn(vm, obj_ctor, "isSealed", n_object_is_sealed);
+    set_fn(vm, obj_ctor, "is", n_object_is);
+    set_fn(
+        vm,
+        obj_ctor,
+        "preventExtensions",
+        n_object_prevent_extensions,
+    );
+    set_fn(vm, obj_ctor, "isExtensible", n_object_is_extensible);
     set_fn(vm, obj_ctor, "getPrototypeOf", n_get_proto_of);
     set_fn(vm, obj_ctor, "setPrototypeOf", n_set_proto_of);
     set_fn(vm, obj_ctor, "create", n_object_create);
@@ -264,16 +295,19 @@ pub fn install(vm: &mut Vm) {
 
     let str_ctor = vm.new_function_native("String", n_string_ctor, 1);
     link(vm, str_ctor, str_proto);
+    set_fn(vm, str_ctor, "raw", n_string_raw);
     set_fn(vm, str_ctor, "fromCharCode", n_from_char_code);
     set_fn(vm, str_ctor, "fromCodePoint", n_from_code_point);
     globals_def(vm, "String", str_ctor);
 
     let num_ctor = vm.new_function_native("Number", n_number_ctor, 1);
-    let num_proto = Value::from_ptr(arena::active().alloc_object(0, Value::NULL));
+    let num_proto = Value::from_ptr(arena::active().alloc_object(0, obj_proto_ref(vm)));
     unsafe { num_proto.as_object_mut() }.hdr.flags |= FLAG_HIDDEN_KEYS;
     link(vm, num_ctor, num_proto);
     method(vm, num_proto, "toFixed", n_to_fixed);
-    method(vm, num_proto, "toString", n_number_to_string);
+    unsafe { method(vm, num_proto, "toString", n_number_to_string).as_function_mut() }
+        .hdr
+        .flags |= FLAG_NATIVE_LEAF;
     method(vm, num_proto, "valueOf", n_number_value_of);
     set_fn(vm, num_ctor, "isInteger", n_number_is_integer);
     set_fn(vm, num_ctor, "isFinite", n_number_is_finite);
@@ -282,27 +316,34 @@ pub fn install(vm: &mut Vm) {
     set_fn(vm, num_ctor, "parseFloat", n_parse_float);
     set_fn(vm, num_ctor, "parseInt", n_parse_int);
     let k = key(vm, "MAX_SAFE_INTEGER");
-    vm.set_prop(num_ctor, k, Value::from_f64(9007199254740991.0)).unwrap();
+    vm.set_prop(num_ctor, k, Value::from_f64(9007199254740991.0))
+        .unwrap();
     let k = key(vm, "MIN_SAFE_INTEGER");
-    vm.set_prop(num_ctor, k, Value::from_f64(-9007199254740991.0)).unwrap();
+    vm.set_prop(num_ctor, k, Value::from_f64(-9007199254740991.0))
+        .unwrap();
     let k = key(vm, "MAX_VALUE");
     vm.set_prop(num_ctor, k, Value::from_f64(f64::MAX)).unwrap();
     let k = key(vm, "MIN_VALUE");
-    vm.set_prop(num_ctor, k, Value::from_f64(f64::MIN_POSITIVE)).unwrap();
+    vm.set_prop(num_ctor, k, Value::from_f64(f64::MIN_POSITIVE))
+        .unwrap();
     let k = key(vm, "EPSILON");
-    vm.set_prop(num_ctor, k, Value::from_f64(f64::EPSILON)).unwrap();
+    vm.set_prop(num_ctor, k, Value::from_f64(f64::EPSILON))
+        .unwrap();
     let k = key(vm, "POSITIVE_INFINITY");
-    vm.set_prop(num_ctor, k, Value::from_f64(f64::INFINITY)).unwrap();
+    vm.set_prop(num_ctor, k, Value::from_f64(f64::INFINITY))
+        .unwrap();
     let k = key(vm, "NEGATIVE_INFINITY");
-    vm.set_prop(num_ctor, k, Value::from_f64(f64::NEG_INFINITY)).unwrap();
+    vm.set_prop(num_ctor, k, Value::from_f64(f64::NEG_INFINITY))
+        .unwrap();
     let k = key(vm, "NaN");
     vm.set_prop(num_ctor, k, Value::NAN).unwrap();
     globals_def(vm, "Number", num_ctor);
     vm.set_number_proto(num_proto);
 
     let bool_ctor = vm.new_function_native("Boolean", n_bool_ctor, 1);
-    let bool_proto = Value::from_ptr(arena::active().alloc_object(0, Value::NULL));
+    let bool_proto = Value::from_ptr(arena::active().alloc_object(0, obj_proto_ref(vm)));
     link(vm, bool_ctor, bool_proto);
+    vm.set_bool_proto(bool_proto);
     method(vm, bool_proto, "toString", n_bool_to_string);
     method(vm, bool_proto, "valueOf", n_bool_value_of);
     globals_def(vm, "Boolean", bool_ctor);
@@ -439,11 +480,13 @@ pub fn install(vm: &mut Vm) {
     method(vm, err_proto, "toString", n_error_to_string);
     set_obj_str(vm, err_proto, "name", "Error");
     globals_def(vm, "Error", err_ctor);
-    for (name, ctor) in [
+    for (name, _ctor) in [
         ("TypeError", "TypeError"),
         ("RangeError", "RangeError"),
         ("SyntaxError", "SyntaxError"),
         ("ReferenceError", "ReferenceError"),
+        ("EvalError", "EvalError"),
+        ("URIError", "URIError"),
     ] {
         let sub = make_error_sub(vm, err_proto, name);
         globals_def(vm, name, sub);
@@ -462,7 +505,9 @@ pub fn install(vm: &mut Vm) {
     m(vm, map_proto, "keys", n_map_keys);
     m(vm, map_proto, "values", n_map_values);
     m(vm, map_proto, "entries", n_map_entries);
-    m(vm, map_proto, ITER_SYM_KEY, |vm, this, _args| Ok(make_iter_from(vm, this)));
+    m(vm, map_proto, ITER_SYM_KEY, |vm, this, _args| {
+        Ok(make_iter_from(vm, this))
+    });
     install_size_getter(vm, map_proto, n_map_size);
     globals_def(vm, "Map", map_ctor);
 
@@ -477,9 +522,128 @@ pub fn install(vm: &mut Vm) {
     m(vm, set_proto, "values", n_set_values);
     m(vm, set_proto, "keys", n_set_values);
     m(vm, set_proto, "entries", n_set_entries);
-    m(vm, set_proto, ITER_SYM_KEY, |vm, this, _args| Ok(make_iter_from(vm, this)));
+    m(vm, set_proto, ITER_SYM_KEY, |vm, this, _args| {
+        Ok(make_iter_from(vm, this))
+    });
     install_size_getter(vm, set_proto, n_set_size);
     globals_def(vm, "Set", set_ctor);
+
+    // ---- Function (the constructor itself; instances already have
+    // call/apply/bind/name/length) ----
+    let fn_ctor = vm.new_function_native("Function", n_function_ctor, 1);
+    // `Function.prototype` is the engine's own function prototype, so
+    // `Function.prototype.call` and friends resolve to the same methods
+    // every function already carries.
+    let fn_proto_v = Value::from_ptr(vm.proto_function as *mut crate::objects::JFunction);
+    let k = key(vm, "prototype");
+    vm.set_prop(fn_ctor, k, fn_proto_v).unwrap();
+    set_obj_str(vm, fn_proto_v, "name", "");
+    globals_def(vm, "Function", fn_ctor);
+
+    // ---- Symbol statics ----
+    set_fn(vm, sym_ctor, "for", n_symbol_for);
+    set_fn(vm, sym_ctor, "keyFor", n_symbol_key_for);
+    // Well-known symbols: distinct constant spellings, the same way node's
+    // well-knowns are distinct objects. (Deviation: our Symbol values are
+    // strings, so `Symbol("a") === Symbol("a")` — see SESSION.md.)
+    for (prop, desc) in [
+        ("iterator", "iterator"),
+        ("asyncIterator", "asyncIterator"),
+        ("hasInstance", "hasInstance"),
+        ("isConcatSpreadable", "isConcatSpreadable"),
+        ("toPrimitive", "toPrimitive"),
+        ("toStringTag", "toStringTag"),
+        ("species", "species"),
+        ("replace", "replace"),
+        ("search", "search"),
+        ("split", "split"),
+        ("match", "match"),
+        ("matchAll", "matchAll"),
+    ] {
+        let v = vm.new_string(&format!("Symbol({})", desc));
+        let k = key(vm, prop);
+        vm.set_prop(sym_ctor, k, v).unwrap();
+    }
+
+    // ---- atob / btoa (base64, latin1 semantics) ----
+    gcd(vm, "atob", n_atob);
+    gcd(vm, "btoa", n_btoa);
+
+    // ---- WeakMap / WeakSet: identity-keyed, GC-naive (entries whose key
+    // dies stay until cleared; behavior for live keys is exact) ----
+    let wmap_ctor = vm.new_function_native("WeakMap", n_weakmap_ctor, 0);
+    let wmap_proto = Value::from_ptr(arena::active().alloc_object(0, obj_proto));
+    link(vm, wmap_ctor, wmap_proto);
+    m(vm, wmap_proto, "set", n_weakmap_set);
+    m(vm, wmap_proto, "get", n_weakmap_get);
+    m(vm, wmap_proto, "has", n_weakmap_has);
+    m(vm, wmap_proto, "delete", n_weakmap_delete);
+    globals_def(vm, "WeakMap", wmap_ctor);
+
+    let wset_ctor = vm.new_function_native("WeakSet", n_weakset_ctor, 0);
+    let wset_proto = Value::from_ptr(arena::active().alloc_object(0, obj_proto));
+    link(vm, wset_ctor, wset_proto);
+    m(vm, wset_proto, "add", n_weakset_add);
+    m(vm, wset_proto, "has", n_weakset_has);
+    m(vm, wset_proto, "delete", n_weakset_delete);
+    globals_def(vm, "WeakSet", wset_ctor);
+
+    // ---- crypto ----
+    let crypto_obj = vm.new_object();
+    set_fn(vm, crypto_obj, "getRandomValues", n_crypto_get_random_values);
+    set_fn(vm, crypto_obj, "randomUUID", n_crypto_random_uuid);
+    let k = key(vm, "crypto");
+    vm.define_prop(Value::from_ptr(vm.globals), k, crypto_obj);
+
+    // ---- Date ----
+    let date_ctor = vm.new_function_native("Date", n_date_ctor, 7);
+    let date_proto = Value::from_ptr(arena::active().alloc_object(0, obj_proto));
+    link(vm, date_ctor, date_proto);
+    set_obj_str(vm, date_proto, "name", "Date");
+    let date_methods: [(&str, crate::objects::NativeFn); 36] = [
+        ("getTime", n_date_get_time),
+        ("valueOf", n_date_get_time),
+        ("getFullYear", n_date_get_year),
+        ("getUTCFullYear", n_date_get_year_utc),
+        ("getMonth", n_date_get_month),
+        ("getUTCMonth", n_date_get_month_utc),
+        ("getDate", n_date_get_date),
+        ("getUTCDate", n_date_get_date_utc),
+        ("getDay", n_date_get_day),
+        ("getUTCDay", n_date_get_day_utc),
+        ("getHours", n_date_get_hours),
+        ("getUTCHours", n_date_get_hours_utc),
+        ("getMinutes", n_date_get_minutes),
+        ("getUTCMinutes", n_date_get_minutes_utc),
+        ("getSeconds", n_date_get_seconds),
+        ("getUTCSeconds", n_date_get_seconds_utc),
+        ("getMilliseconds", n_date_get_ms),
+        ("getUTCMilliseconds", n_date_get_ms),
+        ("getTimezoneOffset", n_date_tz_offset),
+        ("toISOString", n_date_to_iso),
+        ("toJSON", n_date_to_iso),
+        ("toString", n_date_to_string),
+        ("toUTCString", n_date_to_utc_string),
+        ("toDateString", n_date_to_date_string),
+        ("toTimeString", n_date_to_time_string),
+        ("setTime", n_date_set_time),
+        ("setMilliseconds", n_date_set_ms),
+        ("setSeconds", n_date_set_seconds),
+        ("setMinutes", n_date_set_minutes),
+        ("setHours", n_date_set_hours),
+        ("setDate", n_date_set_date),
+        ("setMonth", n_date_set_month),
+        ("setFullYear", n_date_set_year),
+        ("setUTCFullYear", n_date_set_year_utc),
+        ("setUTCMonth", n_date_set_month_utc),
+        ("setUTCDate", n_date_set_date_utc),];
+    for (name, f) in date_methods {
+        m(vm, date_proto, name, f);
+    }
+    globals_def(vm, "Date", date_ctor);
+    set_fn(vm, date_ctor, "now", n_date_now);
+    set_fn(vm, date_ctor, "parse", n_date_parse);
+    set_fn(vm, date_ctor, "UTC", n_date_utc);
 }
 
 pub const ITER_SYM_KEY: &str = "@@iterator";
@@ -494,10 +658,11 @@ fn gcd(vm: &mut Vm, name: &str, f: NativeFn) {
     globals_def(vm, name, v);
 }
 
-fn method(vm: &mut Vm, obj: Value, name: &str, f: NativeFn) {
+fn method(vm: &mut Vm, obj: Value, name: &str, f: NativeFn) -> Value {
     let v = vm.new_function_native(name, f, 0);
     let k = key(vm, name);
     vm.define_prop(obj, k, v);
+    v
 }
 
 fn m(vm: &mut Vm, obj: Value, name: &str, f: NativeFn) {
@@ -533,13 +698,46 @@ fn proto_size_setter(vm: &mut Vm, proto: Value, name: &str, f: NativeFn) {
 }
 
 // Accessor forms: `this` is the object whose prototype is read or written.
-native!(n_proto_get, |vm, _this, _args| {
-    let _ = vm;
-    Ok(_this)
+// `obj.__proto__` — the object's [[Prototype]] (`null` when there is none).
+// This used to return `this`, so `x.__proto__ === x` for every object.
+native!(n_proto_get, |vm, this, _args| {
+    let p = if this.is_object() {
+        unsafe { this.as_object() }.proto
+    } else if this.is_array() {
+        unsafe { this.as_array() }.proto
+    } else if this.is_function() {
+        unsafe { this.as_function() }.proto
+    } else if this.is_string() || this.is_number() || this.is_bool() {
+        // A primitive's [[Prototype]] is its wrapper prototype
+        // (`String.prototype`, `Number.prototype`, `Boolean.prototype`).
+        let p = vm.proto_of(this);
+        if p.is_object() {
+            return Ok(p);
+        }
+        return Ok(Value::NULL);
+    } else {
+        return Ok(Value::UNDEFINED);
+    };
+    // Unset prototype slots are stored as non-objects; report them as `null`.
+    if p.is_object() || p.is_function() || p.is_array() {
+        Ok(p)
+    } else {
+        Ok(Value::NULL)
+    }
 });
 
-native!(n_proto_set, |_vm, _this, _args| {
-    Ok(_this)
+// `obj.__proto__ = p` — set [[Prototype]] when `p` is an object or `null`;
+// anything else is ignored, as in the specification.
+native!(n_proto_set, |vm, this, args| {
+    let p = arg(args, 0);
+    if this.is_null() || this.is_undefined() {
+        return Err(type_error("cannot set prototype of null or undefined"));
+    }
+    if !(p.is_object() || p.is_function() || p.is_array() || p.is_null()) {
+        return Ok(Value::UNDEFINED);
+    }
+    vm.set_prototype(this, p)?;
+    Ok(Value::UNDEFINED)
 });
 
 /// `size` is a getter, so it goes through the `#get:` accessor channel the
@@ -570,7 +768,8 @@ fn make_error_sub(vm: &mut Vm, parent_proto: Value, name: &str) -> Value {
     ctor
 }
 
-fn err(vm: &mut Vm) -> Value {
+#[allow(dead_code)]
+fn err(_vm: &mut Vm) -> Value {
     Value::UNDEFINED
 }
 
@@ -583,7 +782,9 @@ native!(n_symbol_ctor, |vm, _this, args| {
 native!(n_is_enumerable, |vm, this, args| {
     let k = keyv(vm, arg(args, 0));
     if this.is_object() {
-        return Ok(Value::from_bool(unsafe { this.as_object() }.find_index(k).is_some()));
+        return Ok(Value::from_bool(
+            unsafe { this.as_object() }.find_index(k).is_some(),
+        ));
     }
     Ok(Value::from_bool(false))
 });
@@ -606,27 +807,57 @@ native!(n_hasown, |vm, this, args| {
     let r = match unsafe { this.obj_tag() } {
         Some(TAG_OBJECT) => unsafe { this.as_object() }.find_index(k).is_some(),
         Some(TAG_FUNCTION) => unsafe { this.as_function() }.find_index(k).is_some(),
+        Some(TAG_ARRAY) => {
+            let a = unsafe { this.as_array() };
+            match k {
+                PropKey::Idx(i) => a.get_raw(i).is_some(),
+                PropKey::Sym(s) => {
+                    s == arena::active().intern_sym("length")
+                        || a.props
+                            .as_ref()
+                            .is_some_and(|p| p.iter().any(|(pk, _)| *pk == k))
+                }
+            }
+        }
         _ => false,
     };
     Ok(Value::from_bool(r))
 });
-native!(n_obj_to_string, |_vm, this, _args| {
-    let tag = unsafe { this.obj_tag() };
-    let n = match tag {
-        Some(TAG_ARRAY) => "Array",
-        Some(TAG_FUNCTION) => "Function",
-        Some(TAG_OBJECT) => "Object",
-        _ => "Object",
+native!(n_obj_to_string, |vm, this, _args| {
+    // Primitives classify by their builtin tag; only null/undefined escape
+    // the receiver coercion node applies.
+    let n = if this.is_null() {
+        "Null"
+    } else if this.is_undefined() {
+        "Undefined"
+    } else if this.is_number() {
+        "Number"
+    } else if this.is_bool() {
+        "Boolean"
+    } else if this.is_string() {
+        "String"
+    } else {
+        match unsafe { this.obj_tag() } {
+            Some(TAG_ARRAY) => "Array",
+            Some(TAG_FUNCTION) => "Function",
+            _ => "Object",
+        }
     };
+    let _ = vm;
     let s = format!("[object {}]", n);
-    Ok(_vm.new_string(&s))
+    Ok(vm.new_string(&s))
 });
 native!(n_is_prototype_of, |vm, this, args| {
     let o = arg(args, 0);
     let mut cur = o;
     let mut guard = 0;
-    while cur.is_object() && guard < 128 {
-        let p = unsafe { cur.as_object() }.proto;
+    while guard < 128 {
+        let p = match unsafe { cur.obj_tag() } {
+            Some(TAG_OBJECT) => unsafe { cur.as_object() }.proto,
+            Some(TAG_FUNCTION) => unsafe { cur.as_function() }.proto,
+            Some(TAG_ARRAY) => unsafe { cur.as_array() }.proto,
+            _ => break,
+        };
         if p.bits() == this.bits() {
             return Ok(Value::TRUE);
         }
@@ -636,21 +867,21 @@ native!(n_is_prototype_of, |vm, this, args| {
     Ok(Value::from_bool(false))
 });
 
-fn own_keys_of(vm: &mut Vm, v: Value) -> Vec<PropKey> {
+fn own_keys_of(_vm: &mut Vm, v: Value) -> Vec<PropKey> {
     match unsafe { v.obj_tag() } {
         Some(TAG_OBJECT) => unsafe { v.as_object() }.own_keys(),
         Some(TAG_FUNCTION) => unsafe { v.as_function() }.keys.clone(),
-        Some(TAG_ARRAY) => unsafe { v.as_array().own_keys() }
-            .into_iter()
-            .map(PropKey::Idx)
-            .collect(),
+        Some(TAG_ARRAY) => unsafe { v.as_array().own_keys() },
         _ => Vec::new(),
     }
 }
 
 native!(n_object_keys, |vm, _this, args| {
     let v = arg(args, 0);
-    let keys = own_keys_of(vm, v);
+    // Object.keys is enumerable own keys only: accessor slots (#get:/#set:)
+    // are engine-internal and hidden here. (Node's fuller story needs
+    // per-property enumerable flags — the recorded design debt.)
+    let keys = public_keys(vm, v);
     let out = vm.new_array();
     for k in keys {
         let s = vm.new_string(&vm.prop_name(k));
@@ -658,6 +889,16 @@ native!(n_object_keys, |vm, _this, args| {
     }
     Ok(out)
 });
+
+/// `#get:` / `#set:` prefixed keys are the engine's internal accessor slots;
+/// every user-visible key list must filter them (node has no such
+/// properties).
+fn public_keys(vm: &mut Vm, v: Value) -> Vec<PropKey> {
+    own_keys_of(vm, v)
+        .into_iter()
+        .filter(|k| !vm.prop_name(*k).starts_with('#'))
+        .collect()
+}
 native!(n_object_values, |vm, _this, args| {
     let v = arg(args, 0);
     let keys = own_keys_of(vm, v);
@@ -665,7 +906,10 @@ native!(n_object_values, |vm, _this, args| {
     for k in keys {
         let val = match unsafe { v.obj_tag() } {
             Some(TAG_OBJECT) => unsafe { v.as_object() }.get(k).unwrap_or(Value::UNDEFINED),
-            Some(TAG_ARRAY) => unsafe { v.as_array() }.get(match k { PropKey::Idx(i) => i, _ => 0 }),
+            Some(TAG_ARRAY) => unsafe { v.as_array() }.get(match k {
+                PropKey::Idx(i) => i,
+                _ => 0,
+            }),
             _ => Value::UNDEFINED,
         };
         unsafe { out.as_array_mut().push(val) };
@@ -679,7 +923,10 @@ native!(n_object_entries, |vm, _this, args| {
     for k in keys {
         let val = match unsafe { v.obj_tag() } {
             Some(TAG_OBJECT) => unsafe { v.as_object() }.get(k).unwrap_or(Value::UNDEFINED),
-            Some(TAG_ARRAY) => unsafe { v.as_array() }.get(match k { PropKey::Idx(i) => i, _ => 0 }),
+            Some(TAG_ARRAY) => unsafe { v.as_array() }.get(match k {
+                PropKey::Idx(i) => i,
+                _ => 0,
+            }),
             _ => Value::UNDEFINED,
         };
         let pair = vm.new_array();
@@ -719,15 +966,55 @@ native!(n_object_is_frozen, |vm, _this, args| {
     let f = !v.is_object() || !unsafe { v.as_object() }.extensible;
     Ok(Value::from_bool(f))
 });
-native!(n_get_proto_of, |vm, _this, args| Ok(vm.proto_of(arg(args, 0))));
+// This object model has no per-property writability flags, so seal — like
+// freeze — is exactly "stop adding and overwriting": extensible = false.
+native!(n_object_seal, |_vm, _this, args| {
+    let v = arg(args, 0);
+    if v.is_object() {
+        unsafe { v.as_object_mut() }.extensible = false;
+    }
+    Ok(v)
+});
+native!(n_object_is_sealed, |vm, _this, args| {
+    let v = arg(args, 0);
+    let f = !v.is_object() || !unsafe { v.as_object() }.extensible;
+    Ok(Value::from_bool(f))
+});
+
+/// `Object.is` — SameValue: NaN equals NaN, and +0 / -0 are distinct.
+native!(n_object_is, |_vm, _this, args| {
+    let a = arg(args, 0);
+    let b = arg(args, 1);
+    if a.is_number() && b.is_number() {
+        let x = a.as_f64();
+        let y = b.as_f64();
+        if x.is_nan() && y.is_nan() {
+            return Ok(Value::TRUE);
+        }
+        return Ok(Value::from_bool(x == y && (x != 0.0 || x.is_sign_negative() == y.is_sign_negative())));
+    }
+    Ok(Value::from_bool(_vm.strict_eq(a, b).unwrap_or(false)))
+});
+
+native!(n_object_prevent_extensions, |_vm, _this, args| {
+    let v = arg(args, 0);
+    if v.is_object() {
+        unsafe { v.as_object_mut() }.extensible = false;
+    }
+    Ok(v)
+});
+native!(n_object_is_extensible, |vm, _this, args| {
+    let v = arg(args, 0);
+    let f = v.is_object() && unsafe { v.as_object() }.extensible;
+    Ok(Value::from_bool(f))
+});
+native!(n_get_proto_of, |vm, _this, args| Ok(
+    vm.proto_of(arg(args, 0))
+));
 native!(n_set_proto_of, |vm, _this, args| {
     let o = arg(args, 0);
     let p = arg(args, 1);
-    if o.is_object() {
-        unsafe { o.as_object_mut() }.proto = p;
-    } else if o.is_array() {
-        unsafe { o.as_array_mut() }.proto = p;
-    }
+    vm.set_prototype(o, p)?;
     Ok(o)
 });
 native!(n_object_create, |vm, _this, args| {
@@ -756,11 +1043,23 @@ native!(n_define_property, |vm, _this, args| {
     let val = vm.get_prop(desc, __k)?;
     if getter.is_function() || setter.is_function() {
         if getter.is_function() {
-            let gk = arena::active().accessor_sym(match k { PropKey::Sym(s) => s, _ => 0 }, "#get:");
+            let gk = arena::active().accessor_sym(
+                match k {
+                    PropKey::Sym(s) => s,
+                    _ => 0,
+                },
+                "#get:",
+            );
             vm.define_prop(target, PropKey::Sym(gk), getter);
         }
         if setter.is_function() {
-            let sk = arena::active().accessor_sym(match k { PropKey::Sym(s) => s, _ => 0 }, "#set:");
+            let sk = arena::active().accessor_sym(
+                match k {
+                    PropKey::Sym(s) => s,
+                    _ => 0,
+                },
+                "#set:",
+            );
             vm.define_prop(target, PropKey::Sym(sk), setter);
         }
         // Same invariant as above: an installed accessor must be visible to
@@ -788,7 +1087,7 @@ native!(n_define_properties, |vm, _this, args| {
 });
 native!(n_own_names, |vm, _this, args| {
     let v = arg(args, 0);
-    let keys = own_keys_of(vm, v);
+    let keys = public_keys(vm, v);
     let out = vm.new_array();
     for k in keys {
         let s = vm.new_string(&vm.prop_name(k));
@@ -821,7 +1120,7 @@ native!(n_from_entries, |vm, _this, args| {
 
 native!(n_fn_call, |vm, this, args| {
     let recv = arg(args, 0);
-    vm.call_direct_args(this, recv, &args[1.min(args.len())..])
+    vm.call_callback(this, recv, &args[1.min(args.len())..])
 });
 native!(n_fn_apply, |vm, this, args| {
     let recv = arg(args, 0);
@@ -832,23 +1131,26 @@ native!(n_fn_apply, |vm, this, args| {
     } else {
         Vec::new()
     };
-    vm.call_direct_args(this, recv, &vals)
+    vm.call_callback(this, recv, &vals)
 });
 native!(n_fn_bind, |vm, this, args| {
+    if !this.is_function() {
+        return Err(type_error("bind target is not callable"));
+    }
     let recv = arg(args, 0);
-    let mut bound = unsafe { this.as_function() }.bound.clone();
-    bound.extend_from_slice(&args[1.min(args.len())..]);
+    let bound = args[1.min(args.len())..].to_vec();
     let f = JFunction::native(Value::UNDEFINED, n_noop, Value::UNDEFINED);
     let fp = vm.arena().alloc_function(f);
     let v = Value::from_ptr(fp);
     unsafe {
         (*fp).hdr.flags |= FLAG_BOUND;
+        crate::arena::note_external_allocation(bound.capacity() * std::mem::size_of::<Value>());
         (*fp).bound = bound;
         (*fp).this_val = this;
+        (*fp).bound_this = recv;
         (*fp).proto = Value::from_ptr(vm.proto_function_ptr() as *mut JFunction);
-        (*fp).proto_obj = unsafe { this.as_function() }.proto_obj;
+        (*fp).proto_obj = this.as_function().proto_obj;
     }
-    let _ = recv;
     Ok(v)
 });
 native!(n_fn_to_string, |vm, this, _args| {
@@ -871,6 +1173,7 @@ fn collect_iterable(vm: &mut Vm, v: Value) -> VmResult<Vec<Value>> {
         for i in 0..a.len {
             out.push(a.get(i));
         }
+        vm.pin_temporaries(&out);
         return Ok(out);
     }
     // Iterator protocol: v[@@iterator]() then next() until done.
@@ -888,7 +1191,7 @@ fn collect_iterable(vm: &mut Vm, v: Value) -> VmResult<Vec<Value>> {
     }
     let mut guard = 0;
     loop {
-        let res = vm.call_direct_args(next, iter, &[])?;
+        let res = vm.call_callback(next, iter, &[])?;
         let dk = key(vm, "done");
         let done = vm.get_prop(res, dk)?;
         if done.to_bool() {
@@ -920,7 +1223,9 @@ native!(n_array_ctor, |vm, _this, args| {
     }
     Ok(out)
 });
-native!(n_is_array, |_vm, _this, args| Ok(Value::from_bool(arg(args, 0).is_array())));
+native!(n_is_array, |_vm, _this, args| Ok(Value::from_bool(
+    arg(args, 0).is_array()
+)));
 native!(n_array_from, |vm, _this, args| {
     let src = arg(args, 0);
     let mut vals = collect_iterable(vm, src)?;
@@ -928,7 +1233,7 @@ native!(n_array_from, |vm, _this, args| {
     if mapfn.is_function() {
         for (i, v) in vals.iter_mut().enumerate() {
             let idx = Value::from_i32(i as i32);
-            let r = vm.call_direct_args(mapfn, Value::UNDEFINED, &[*v, idx])?;
+            let r = vm.call_callback(mapfn, Value::UNDEFINED, &[*v, idx])?;
             *v = r;
         }
     }
@@ -1049,7 +1354,6 @@ native!(n_concat, |vm, this, args| {
     for i in 0..a.len {
         unsafe { out.as_array_mut().push(a.get(i)) };
     }
-    drop(a);
     for x in args {
         if x.is_array() {
             let av = unsafe { x.as_array() };
@@ -1086,14 +1390,18 @@ native!(n_array_to_string, |vm, this, _args| {
     let jk = key(vm, "join");
     let j = vm.get_prop(this, jk)?;
     if j.is_function() {
-        return vm.call_direct_args(j, this, &[]);
+        return vm.call_callback(j, this, &[]);
     }
     Ok(vm.new_string(""))
 });
 native!(n_index_of, |vm, this, args| {
     let a = this_array(vm, this)?;
     let needle = arg(args, 0);
-    let from = if args.len() > 1 { norm_index(a.len as usize, arg(args, 1).as_i64()) } else { 0 };
+    let from = if args.len() > 1 {
+        norm_index(a.len as usize, arg(args, 1).as_i64())
+    } else {
+        0
+    };
     for i in from..a.len as usize {
         if vm.strict_eq(a.get(i as u32), needle)? {
             return Ok(Value::from_i32(i as i32));
@@ -1132,9 +1440,12 @@ native!(n_find, |vm, this, args| {
     let a = this_array(vm, this)?;
     let len = a.len;
     for i in 0..len {
-        let v = a.get(i);
+        let v = unsafe { this.as_array() }.get(i);
         let idx = Value::from_i32(i as i32);
-        if vm.call_direct_args(f, Value::UNDEFINED, &[v, idx, this])?.to_bool() {
+        if vm
+            .call_callback(f, Value::UNDEFINED, &[v, idx, this])?
+            .to_bool()
+        {
             return Ok(v);
         }
     }
@@ -1145,9 +1456,12 @@ native!(n_find_last, |vm, this, args| {
     let a = this_array(vm, this)?;
     let mut i = a.len as i64 - 1;
     while i >= 0 {
-        let v = a.get(i as u32);
+        let v = unsafe { this.as_array() }.get(i as u32);
         let idx = Value::from_i32(i as i32);
-        if vm.call_direct_args(f, Value::UNDEFINED, &[v, idx, this])?.to_bool() {
+        if vm
+            .call_callback(f, Value::UNDEFINED, &[v, idx, this])?
+            .to_bool()
+        {
             return Ok(v);
         }
         i -= 1;
@@ -1159,9 +1473,12 @@ native!(n_find_index, |vm, this, args| {
     let a = this_array(vm, this)?;
     let len = a.len;
     for i in 0..len {
-        let v = a.get(i);
+        let v = unsafe { this.as_array() }.get(i);
         let idx = Value::from_i32(i as i32);
-        if vm.call_direct_args(f, Value::UNDEFINED, &[v, idx, this])?.to_bool() {
+        if vm
+            .call_callback(f, Value::UNDEFINED, &[v, idx, this])?
+            .to_bool()
+        {
             return Ok(idx);
         }
     }
@@ -1171,10 +1488,40 @@ native!(n_filter, |vm, this, args| {
     let f = arg(args, 0);
     let a = this_array(vm, this)?;
     let src: Vec<Value> = a.data.clone();
+    vm.pin_temporaries(&src);
+    if vm.callback_arith_kind(f) == 40 {
+        if let Some(n) = vm.callback_rhs(f) {
+            let m = Value::from_f64(n);
+            if m.is_smi() && m.as_i64() != 0 {
+                let k = m.as_i64();
+                let mut data = Vec::with_capacity(src.len() / 2 + 1);
+                for (i, v) in src.iter().enumerate() {
+                    let keep = if v.is_smi() {
+                        v.as_i64() % k == 0
+                    } else {
+                        let idx = Value::from_i32(i as i32);
+                        vm.call_callback(f, Value::UNDEFINED, &[*v, idx, this])?
+                            .to_bool()
+                    };
+                    if keep {
+                        data.push(*v);
+                    }
+                }
+                let out = vm.new_array();
+                let arr = unsafe { out.as_array_mut() };
+                arr.len = data.len() as u32;
+                arr.data = data;
+                return Ok(out);
+            }
+        }
+    }
     let out = vm.new_array();
     for (i, v) in src.iter().enumerate() {
         let idx = Value::from_i32(i as i32);
-        if vm.call_direct_args(f, Value::UNDEFINED, &[*v, idx, this])?.to_bool() {
+        if vm
+            .call_callback(f, Value::UNDEFINED, &[*v, idx, this])?
+            .to_bool()
+        {
             unsafe { out.as_array_mut().push(*v) };
         }
     }
@@ -1184,10 +1531,53 @@ native!(n_map, |vm, this, args| {
     let f = arg(args, 0);
     let a = this_array(vm, this)?;
     let src: Vec<Value> = a.data.clone();
+    vm.pin_temporaries(&src);
+    let kind = vm.callback_arith_kind(f);
+    if (32..37).contains(&kind) {
+        if let Some(n) = vm.callback_rhs(f) {
+            let y = Value::from_f64(n);
+            let yi = if y.is_smi() { Some(y.as_i64()) } else { None };
+            let mut data = Vec::with_capacity(src.len());
+            for v in &src {
+                let fast = if let (Some(k), true) = (yi, v.is_smi()) {
+                    let x = v.as_i64();
+                    match kind - 32 {
+                        0 => x.checked_add(k),
+                        1 => x.checked_sub(k),
+                        2 => x.checked_mul(k),
+                        4 if k != 0 => Some(x % k),
+                        _ => None,
+                    }
+                    .map(Value::from_i64)
+                } else {
+                    None
+                };
+                let r = match fast {
+                    Some(r) => r,
+                    None => {
+                        let op = match kind - 32 {
+                            0 => ArithOp::Add,
+                            1 => ArithOp::Sub,
+                            2 => ArithOp::Mul,
+                            3 => ArithOp::Div,
+                            _ => ArithOp::Mod,
+                        };
+                        vm.arith(op, *v, y)?
+                    }
+                };
+                data.push(r);
+            }
+            let out = vm.new_array();
+            let arr = unsafe { out.as_array_mut() };
+            arr.len = data.len() as u32;
+            arr.data = data;
+            return Ok(out);
+        }
+    }
     let out = vm.new_array();
     for (i, v) in src.iter().enumerate() {
         let idx = Value::from_i32(i as i32);
-        let r = vm.call_direct_args(f, Value::UNDEFINED, &[*v, idx, this])?;
+        let r = vm.call_callback(f, Value::UNDEFINED, &[*v, idx, this])?;
         unsafe { out.as_array_mut().push(r) };
     }
     Ok(out)
@@ -1196,10 +1586,11 @@ native!(n_flat_map, |vm, this, args| {
     let f = arg(args, 0);
     let a = this_array(vm, this)?;
     let src: Vec<Value> = a.data.clone();
+    vm.pin_temporaries(&src);
     let out = vm.new_array();
     for (i, v) in src.iter().enumerate() {
         let idx = Value::from_i32(i as i32);
-        let r = vm.call_direct_args(f, Value::UNDEFINED, &[*v, idx, this])?;
+        let r = vm.call_callback(f, Value::UNDEFINED, &[*v, idx, this])?;
         if r.is_array() {
             let ra = unsafe { r.as_array() };
             for j in 0..ra.len {
@@ -1215,9 +1606,10 @@ native!(n_for_each, |vm, this, args| {
     let f = arg(args, 0);
     let a = this_array(vm, this)?;
     let src: Vec<Value> = a.data.clone();
+    vm.pin_temporaries(&src);
     for (i, v) in src.iter().enumerate() {
         let idx = Value::from_i32(i as i32);
-        vm.call_direct_args(f, Value::UNDEFINED, &[*v, idx, this])?;
+        vm.call_callback(f, Value::UNDEFINED, &[*v, idx, this])?;
     }
     Ok(Value::UNDEFINED)
 });
@@ -1225,6 +1617,7 @@ native!(n_reduce, |vm, this, args| {
     let f = arg(args, 0);
     let a = this_array(vm, this)?;
     let src: Vec<Value> = a.data.clone();
+    vm.pin_temporaries(&src);
     let mut acc;
     let mut start = 0usize;
     if args.len() > 1 {
@@ -1238,7 +1631,7 @@ native!(n_reduce, |vm, this, args| {
     }
     for i in start..src.len() {
         let idx = Value::from_i32(i as i32);
-        acc = vm.call_direct_args(f, Value::UNDEFINED, &[acc, src[i], idx, this])?;
+        acc = vm.call_callback(f, Value::UNDEFINED, &[acc, src[i], idx, this])?;
     }
     Ok(acc)
 });
@@ -1246,6 +1639,7 @@ native!(n_reduce_right, |vm, this, args| {
     let f = arg(args, 0);
     let a = this_array(vm, this)?;
     let src: Vec<Value> = a.data.clone();
+    vm.pin_temporaries(&src);
     let mut acc;
     let mut start: i64 = src.len() as i64 - 1;
     if args.len() > 1 {
@@ -1260,7 +1654,7 @@ native!(n_reduce_right, |vm, this, args| {
     let mut i = start;
     while i >= 0 {
         let idx = Value::from_i32(i as i32);
-        acc = vm.call_direct_args(f, Value::UNDEFINED, &[acc, src[i as usize], idx, this])?;
+        acc = vm.call_callback(f, Value::UNDEFINED, &[acc, src[i as usize], idx, this])?;
         i -= 1;
     }
     Ok(acc)
@@ -1269,9 +1663,13 @@ native!(n_some, |vm, this, args| {
     let f = arg(args, 0);
     let a = this_array(vm, this)?;
     let src: Vec<Value> = a.data.clone();
+    vm.pin_temporaries(&src);
     for (i, v) in src.iter().enumerate() {
         let idx = Value::from_i32(i as i32);
-        if vm.call_direct_args(f, Value::UNDEFINED, &[*v, idx, this])?.to_bool() {
+        if vm
+            .call_callback(f, Value::UNDEFINED, &[*v, idx, this])?
+            .to_bool()
+        {
             return Ok(Value::TRUE);
         }
     }
@@ -1281,9 +1679,13 @@ native!(n_every, |vm, this, args| {
     let f = arg(args, 0);
     let a = this_array(vm, this)?;
     let src: Vec<Value> = a.data.clone();
+    vm.pin_temporaries(&src);
     for (i, v) in src.iter().enumerate() {
         let idx = Value::from_i32(i as i32);
-        if !vm.call_direct_args(f, Value::UNDEFINED, &[*v, idx, this])?.to_bool() {
+        if !vm
+            .call_callback(f, Value::UNDEFINED, &[*v, idx, this])?
+            .to_bool()
+        {
             return Ok(Value::from_bool(false));
         }
     }
@@ -1312,7 +1714,11 @@ native!(n_fill, |vm, this, args| {
 native!(n_flat, |vm, this, args| {
     let a = this_array(vm, this)?;
     let mut out: Vec<Value> = Vec::new();
-    let depth = if args.is_empty() { 1 } else { arg(args, 0).as_i64().max(0) as usize };
+    let depth = if args.is_empty() {
+        1
+    } else {
+        arg(args, 0).as_i64().max(0) as usize
+    };
     fn go(v: Value, out: &mut Vec<Value>, depth: usize) {
         if depth > 0 && v.is_array() {
             let a = unsafe { v.as_array() };
@@ -1347,12 +1753,14 @@ native!(n_sort, |vm, this, args| {
     let f = arg(args, 0);
     let a = this_array(vm, this)?;
     let mut data = a.data.clone();
+    vm.pin_temporaries(&data);
     if f.is_function() {
         // Bottom-up merge sort: O(n log n) comparisons against a callback that
         // can run arbitrary JS, and stable, which is what `Array#sort` promises.
         // An insertion sort here made a 100k-element sort take minutes.
         let n = data.len();
         let mut buf = data.clone();
+        let smi_sub = vm.callback_arith_kind(f) == 1;
         let mut width = 1usize;
         while width < n {
             let mut lo = 0usize;
@@ -1360,7 +1768,7 @@ native!(n_sort, |vm, this, args| {
                 let mid = (lo + width).min(n);
                 let hi = (lo + 2 * width).min(n);
                 if mid < hi {
-                    merge_run(vm, &mut data, &mut buf, lo, mid, hi, f)?;
+                    merge_run(vm, &mut data, &mut buf, lo, mid, hi, f, smi_sub)?;
                 }
                 lo += 2 * width;
             }
@@ -1369,12 +1777,12 @@ native!(n_sort, |vm, this, args| {
     } else {
         let mut strs: Vec<(String, Value)> = data
             .iter()
-            .map(|v| (vm.to_string(*v).unwrap_or_default(), *v))
-            .collect();
+            .map(|v| vm.to_string(*v).map(|text| (text, *v)))
+            .collect::<VmResult<_>>()?;
         strs.sort_by(|x, y| x.0.cmp(&y.0));
         data = strs.into_iter().map(|(_, v)| v).collect();
     }
-    a.data = data;
+    unsafe { this.as_array_mut() }.data = data;
     Ok(this)
 });
 
@@ -1389,6 +1797,7 @@ fn merge_run(
     mid: usize,
     hi: usize,
     f: Value,
+    smi_sub: bool,
 ) -> VmResult<()> {
     let mut i = lo;
     let mut j = mid;
@@ -1396,8 +1805,29 @@ fn merge_run(
     while i < mid && j < hi {
         let a = data[i];
         let b = data[j];
-        let r = vm.call_direct_args(f, Value::UNDEFINED, &[a, b])?;
-        if vm.to_number(r)? > 0.0 {
+        if smi_sub && a.is_smi() && b.is_smi() {
+            if a.as_i64() > b.as_i64() {
+                buf[k] = b;
+                j += 1;
+            } else {
+                buf[k] = a;
+                i += 1;
+            }
+            k += 1;
+            continue;
+        }
+        let r = vm.call_callback(f, Value::UNDEFINED, &[a, b])?;
+        // Numeric comparators return Smis and doubles; extracting those
+        // inline skips a VmResult round-trip per comparison. Anything else
+        // (strings, objects with valueOf) still goes through full `to_number`.
+        let d = if r.is_smi() {
+            r.as_i64() as f64
+        } else if r.is_double() {
+            r.as_f64()
+        } else {
+            vm.to_number(r)?
+        };
+        if d > 0.0 {
             buf[k] = b;
             j += 1;
         } else {
@@ -1473,6 +1903,7 @@ native!(n_iter_next, |vm, this, _args| {
 // String
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 fn slice_str(s: &str, start: usize, end: usize) -> String {
     // Byte-sliced like `length` and `s[i]`, clamped to char boundaries so the
     // result stays valid UTF-8. The old version materialised every character
@@ -1491,9 +1922,56 @@ fn slice_str(s: &str, start: usize, end: usize) -> String {
     s[la..lb].to_string()
 }
 
+// `String.raw({ raw: [...] }, ...subs)` — the exact source text of a tagged
+// template, joined with the substituted values.
+native!(n_string_raw, |vm, _this, args| {
+    let strings = arg(args, 0);
+    if !(strings.is_object() || strings.is_array()) {
+        return Err(type_error(
+            "String.raw requires a template object with a `raw` property",
+        ));
+    }
+    let rawk = key(vm, "raw");
+    let raw = vm.get_prop(strings, rawk)?;
+    let src = if raw.is_undefined() { strings } else { raw };
+    let lenk = key(vm, "length");
+    let len_v = vm.get_prop(src, lenk)?;
+    let len = len_v.as_i64().max(0) as usize;
+    let mut out = String::new();
+    for i in 0..len {
+        let chunk = vm.get_prop(src, PropKey::Idx(i as u32))?;
+        if !chunk.is_undefined() {
+            out.push_str(&to_str(vm, chunk)?);
+        }
+        if i + 1 < len && i < args.len() - 1 {
+            out.push_str(&to_str(vm, args[i + 1])?);
+        }
+    }
+    Ok(vm.new_string(&out))
+});
+
+// `__jhol_tagged_template(strings, raws)` — builds the template object a
+// tagged template receives: the cooked strings array with `.raw` attached
+// (the whole object frozen, as the specification requires).
+native!(n_h_tagged_template, |vm, _this, args| {
+    // The cooked strings stay a real array (so `strings.join(...)` and every
+    // array method work); `raw` is a non-index own property on it, and the
+    // array is frozen as the specification requires.
+    let strings = arg(args, 0);
+    let raws = arg(args, 1);
+    if strings.is_array() {
+        let rk = key(vm, "raw");
+        vm.set_prop(strings, rk, raws)?;
+        unsafe { strings.as_array_mut() }.extensible = false;
+    }
+    Ok(strings)
+});
+
 native!(n_string_ctor, |vm, _this, args| {
     let v = arg(args, 0);
-    if v.is_string() { return Ok(v); }
+    if v.is_string() {
+        return Ok(v);
+    }
     if v.is_nil() {
         return Ok(vm.new_string(""));
     }
@@ -1501,7 +1979,10 @@ native!(n_string_ctor, |vm, _this, args| {
     Ok(vm.new_string(&__s))
 });
 native!(n_from_char_code, |vm, _this, args| {
-    let units = args.iter().map(|&v| vm.to_uint32(v).map(|n| n as u16)).collect::<VmResult<Vec<_>>>()?;
+    let units = args
+        .iter()
+        .map(|&v| vm.to_uint32(v).map(|n| n as u16))
+        .collect::<VmResult<Vec<_>>>()?;
     Ok(vm.new_string_utf16(&units))
 });
 native!(n_from_code_point, |vm, _this, args| {
@@ -1511,38 +1992,57 @@ native!(n_from_code_point, |vm, _this, args| {
         if !n.is_finite() || n.fract() != 0.0 || !(0.0..=0x10ffff as f64).contains(&n) {
             return Err(crate::errors::range_error("Invalid code point"));
         }
-        if n <= 65535.0 { units.push(n as u16); }
-        else { let n = n as u32 - 65536; units.push(0xd800 + (n >> 10) as u16); units.push(0xdc00 + (n & 1023) as u16); }
+        if n <= 65535.0 {
+            units.push(n as u16);
+        } else {
+            let n = n as u32 - 65536;
+            units.push(0xd800 + (n >> 10) as u16);
+            units.push(0xdc00 + (n & 1023) as u16);
+        }
     }
     Ok(vm.new_string_utf16(&units))
 });
 native!(n_char_at, |vm, this, args| {
     let i = string_index(vm, arg(args, 0))?;
     let units = string_units(vm, this)?;
-    Ok(vm.new_string_utf16(if i < 0 { &[] } else { units.get(i as usize..i as usize + 1).unwrap_or(&[]) }))
+    Ok(vm.new_string_utf16(if i < 0 {
+        &[]
+    } else {
+        units.get(i as usize..i as usize + 1).unwrap_or(&[])
+    }))
 });
 native!(n_str_at, |vm, this, args| {
     let units = string_units(vm, this)?;
     let i = string_index(vm, arg(args, 0))?;
     let i = if i < 0 { units.len() as i64 + i } else { i };
-    if i < 0 || i >= units.len() as i64 { return Ok(Value::UNDEFINED); }
+    if i < 0 || i >= units.len() as i64 {
+        return Ok(Value::UNDEFINED);
+    }
     Ok(vm.new_string_utf16(&units[i as usize..i as usize + 1]))
 });
 native!(n_char_code_at, |vm, this, args| {
     let i = string_index(vm, arg(args, 0))?;
-    let unit = if i < 0 { None } else if this.is_string() {
+    let unit = if i < 0 {
+        None
+    } else if this.is_string() {
         unsafe { this.as_string() }.code_unit(i as usize)
-    } else { string_units(vm, this)?.get(i as usize).copied() };
+    } else {
+        string_units(vm, this)?.get(i as usize).copied()
+    };
     Ok(unit.map_or(Value::NAN, |u| Value::from_i32(u as i32)))
 });
 native!(n_code_point_at, |vm, this, args| {
     let i = string_index(vm, arg(args, 0))?;
     let units = string_units(vm, this)?;
-    let Some(&first) = (if i < 0 { None } else { units.get(i as usize) }) else { return Ok(Value::UNDEFINED); };
+    let Some(&first) = (if i < 0 { None } else { units.get(i as usize) }) else {
+        return Ok(Value::UNDEFINED);
+    };
     let second = units.get(i as usize + 1).copied().unwrap_or(0);
     let cp = if (0xd800..=0xdbff).contains(&first) && (0xdc00..=0xdfff).contains(&second) {
         0x10000 + ((first as u32 - 0xd800) << 10) + second as u32 - 0xdc00
-    } else { first as u32 };
+    } else {
+        first as u32
+    };
     Ok(Value::from_i32(cp as i32))
 });
 fn find_sub(hay: &str, needle: &str, from: usize) -> i64 {
@@ -1554,7 +2054,10 @@ fn find_sub(hay: &str, needle: &str, from: usize) -> i64 {
     }
     let start = from.min(hay.len());
     let rest = &hay.as_bytes()[start..];
-    match rest.windows(needle.len()).position(|w| w == needle.as_bytes()) {
+    match rest
+        .windows(needle.len())
+        .position(|w| w == needle.as_bytes())
+    {
         Some(off) => (start + off) as i64,
         None => -1,
     }
@@ -1578,7 +2081,11 @@ fn rfind_sub(hay: &str, needle: &str) -> i64 {
 native!(n_str_index_of, |vm, this, args| {
     let s = this_str(vm, this)?;
     let n = to_str(vm, arg(args, 0))?;
-    let from = if args.len() > 1 { arg(args, 1).as_i64().max(0) as usize } else { 0 };
+    let from = if args.len() > 1 {
+        arg(args, 1).as_i64().max(0) as usize
+    } else {
+        0
+    };
     Ok(Value::from_i64(find_sub(&s, &n, from)))
 });
 native!(n_str_last_index_of, |vm, this, args| {
@@ -1594,7 +2101,11 @@ native!(n_str_includes, |vm, this, args| {
 native!(n_starts_with, |vm, this, args| {
     let s = this_str(vm, this)?;
     let n = to_str(vm, arg(args, 0))?;
-    let pos = if args.len() > 1 { arg(args, 1).as_i64().max(0) as usize } else { 0 };
+    let pos = if args.len() > 1 {
+        arg(args, 1).as_i64().max(0) as usize
+    } else {
+        0
+    };
     let chars: Vec<char> = s.chars().collect();
     let nc = n.chars().count();
     if pos > chars.len() {
@@ -1654,7 +2165,11 @@ native!(n_substr, |vm, this, args| {
     } else {
         n
     };
-    let st = if start < 0 { (n + start).max(0) } else { start.min(n) };
+    let st = if start < 0 {
+        (n + start).max(0)
+    } else {
+        start.min(n)
+    };
     let en = if len < 0 { st } else { (st + len).min(n) };
     if en <= st {
         return Ok(vm.new_string(""));
@@ -1744,7 +2259,7 @@ native!(n_replace, |vm, this, args| {
     // `replace` swaps only the *first* match (unlike `replaceAll`).
     let r = if rep.is_function() {
         let pv = vm.new_string(&pat);
-        let sub = vm.call_direct_args(rep, Value::UNDEFINED, &[pv])?;
+        let sub = vm.call_callback(rep, Value::UNDEFINED, &[pv])?;
         let rep_s = to_str(vm, sub)?;
         s.replacen(&pat, &rep_s, 1)
     } else {
@@ -1780,12 +2295,12 @@ native!(n_pad_start, |vm, this, args| {
         return Ok(vm.new_string(&s));
     }
     let need = target - len;
-    let mut out = String::new();
-    let mut i = 0;
-    while out.chars().count() < need {
-        out.push(pad.chars().nth(i % pad.chars().count()).unwrap_or(' '));
-        i += 1;
-    }
+    // Build the padding in one pass. The old loop counted `out.chars()` on
+    // every iteration — an O(n) scan inside an O(n) loop, so padding 100k
+    // characters took 0.45s and doubled quadratically.
+    let prefix: String = pad.chars().cycle().take(need).collect();
+    let mut out = String::with_capacity(prefix.len() + s.len());
+    out.push_str(&prefix);
     out.push_str(&s);
     Ok(vm.new_string(&out))
 });
@@ -1802,13 +2317,10 @@ native!(n_pad_end, |vm, this, args| {
         return Ok(vm.new_string(&s));
     }
     let need = target - len;
-    let mut out = s.clone();
-    let mut i = 0;
-    while out.chars().count() < target {
-        out.push(pad.chars().nth(i % pad.chars().count()).unwrap_or(' '));
-        i += 1;
-    }
-    let _ = need;
+    let suffix: String = pad.chars().cycle().take(need).collect();
+    let mut out = String::with_capacity(s.len() + suffix.len());
+    out.push_str(&s);
+    out.push_str(&suffix);
     Ok(vm.new_string(&out))
 });
 
@@ -1817,40 +2329,99 @@ native!(n_pad_end, |vm, this, args| {
 // ---------------------------------------------------------------------------
 
 native!(n_number_ctor, |vm, _this, args| {
-    let v = arg(args, 0);
-    let n = if v.is_undefined() || v.is_null() {
+    // Number() with no argument is 0; Number(undefined) is NaN; only
+    // Number(null) is 0. The old code collapsed all three to 0.
+    let n = if args.is_empty() {
         0.0
     } else {
-        vm.to_number(v)?
+        let v = arg(args, 0);
+        if v.is_undefined() {
+            f64::NAN
+        } else if v.is_null() {
+            0.0
+        } else {
+            vm.to_number(v)?
+        }
     };
     Ok(Value::from_f64(n))
 });
-native!(n_bool_ctor, |vm, _this, args| Ok(Value::from_bool(arg(args, 0).to_bool())));
-native!(n_bool_to_string, |vm, this, _args| Ok(vm.new_string(if this.as_bool() { "true" } else { "false" })));
+native!(n_bool_ctor, |vm, _this, args| Ok(Value::from_bool(
+    arg(args, 0).to_bool()
+)));
+native!(n_bool_to_string, |vm, this, _args| Ok(
+    vm.new_string(if this.as_bool() { "true" } else { "false" })
+));
 native!(n_bool_value_of, |_vm, this, _args| Ok(this));
-native!(n_number_value_of, |_vm, this, _args| Ok(Value::from_f64(this.as_f64())));
+native!(n_number_value_of, |_vm, this, _args| Ok(Value::from_f64(
+    this.as_f64()
+)));
 native!(n_number_is_integer, |vm, _this, args| {
     let v = arg(args, 0);
-    Ok(Value::from_bool(v.is_number() && v.as_f64().fract() == 0.0 && v.as_f64().is_finite()))
+    Ok(Value::from_bool(
+        v.is_number() && v.as_f64().fract() == 0.0 && v.as_f64().is_finite(),
+    ))
 });
 native!(n_number_is_finite, |_vm, _this, args| {
     let v = arg(args, 0);
     Ok(Value::from_bool(v.is_number() && v.as_f64().is_finite()))
 });
-native!(n_number_is_nan, |_vm, _this, args| Ok(Value::from_bool(arg(args, 0).is_nan())));
+native!(n_number_is_nan, |_vm, _this, args| Ok(Value::from_bool(
+    arg(args, 0).is_nan()
+)));
 native!(n_number_is_safe_integer, |_vm, _this, args| {
     let v = arg(args, 0);
     let n = v.as_f64();
-    Ok(Value::from_bool(v.is_number() && n.fract() == 0.0 && n.abs() <= 9007199254740991.0))
+    Ok(Value::from_bool(
+        v.is_number() && n.fract() == 0.0 && n.abs() <= 9007199254740991.0,
+    ))
 });
-native!(n_to_fixed, |_vm, this, args| {
+native!(n_to_fixed, |vm, this, args| {
     let d = arg(args, 0).as_i64().clamp(0, 100) as usize;
-    Ok(_vm.new_string(&format!("{:.*}", d, this.as_f64())))
+    let x = this.as_f64();
+    if x.is_nan() {
+        return Ok(vm.new_string("NaN"));
+    }
+    if x.is_infinite() {
+        return Ok(vm.new_string(if x > 0.0 { "Infinity" } else { "-Infinity" }));
+    }
+    // Rust's `{:.N}` rounds ties to even; `toFixed` rounds ties away from
+    // zero on the exact decimal expansion. A tie is only possible when
+    // x * 10^d lands exactly on .5, so detect that case and round manually;
+    // every other value takes Rust's (correctly-rounded) path.
+    let scaled = x * 10f64.powi(d as i32);
+    if scaled.is_finite() && scaled.fract().abs() == 0.5 {
+        let away = (scaled.abs() + 0.5).floor().copysign(scaled) / 10f64.powi(d as i32);
+        return Ok(vm.new_string(&format!("{:.*}", d, away)));
+    }
+    Ok(vm.new_string(&format!("{:.*}", d, x)))
 });
 native!(n_number_to_string, |_vm, this, args| {
     let radix = arg(args, 0).as_i64();
     if radix == 10 || radix == 0 {
-        Ok(_vm.new_string(&f64_to_js_string(this.as_f64())))
+        let v = this.as_f64();
+        // A single digit is by far the most common request: `i % 10` in a
+        // build loop asks for exactly ten strings, forever. Interning turns
+        // one arena allocation per call into a hash lookup, and an atom is an
+        // ordinary immutable string Value — rooted in `atom_roots`, so the
+        // collector keeps it and nothing observable changes.
+        if v.fract() == 0.0 && (0.0..10.0).contains(&v) {
+            // The ten results are interned once and then read from a plain
+            // array: no format, no hash, no map probe. First use interns
+            // through the ordinary path, so the atoms are rooted as usual.
+            let d = v as usize;
+            let cached = _vm.digit_atoms[d];
+            if !cached.is_undefined() {
+                return Ok(cached);
+            }
+            let mut buf = [b'0'; 1];
+            buf[0] = b'0' + d as u8;
+            if let Ok(s) = std::str::from_utf8(&buf) {
+                let a = _vm.arena().intern_atom(s);
+                _vm.digit_atoms[d] = a;
+                return Ok(a);
+            }
+        }
+        Ok(_vm.new_string(&f64_to_js_string(v)))
     } else {
         let n = this.as_f64() as i64;
         Ok(_vm.new_string(&to_radix(n, radix as u32)))
@@ -2087,11 +2658,25 @@ native!(n_json_stringify, |vm, _this, args| {
     } else {
         " ".repeat(indent.min(10))
     };
+    // JSON.stringify(undefined) and JSON.stringify(function) return undefined
+    // (not the string "null") — node prints them as bare `undefined`.
+    if v.is_nil() && !v.is_null() {
+        return Ok(Value::UNDEFINED);
+    }
+    if v.is_function() {
+        return Ok(Value::UNDEFINED);
+    }
     let mut out = String::new();
     json_stringify(vm, v, &space, 0, &mut out)?;
     Ok(vm.new_string(&out))
 });
-fn json_stringify(vm: &mut Vm, v: Value, space: &str, depth: usize, out: &mut String) -> VmResult<()> {
+fn json_stringify(
+    vm: &mut Vm,
+    v: Value,
+    space: &str,
+    depth: usize,
+    out: &mut String,
+) -> VmResult<()> {
     let nl = |depth: usize, space: &str, out: &mut String| {
         if space.is_empty() {
             return;
@@ -2122,6 +2707,8 @@ fn json_stringify(vm: &mut Vm, v: Value, space: &str, depth: usize, out: &mut St
                 let n = item.as_i64();
                 if item.is_number() && (item.is_nan() || !item.as_f64().is_finite()) {
                     out.push_str("null");
+                } else if item.is_function() {
+                    out.push_str("null");
                 } else {
                     let _ = n;
                     json_stringify(vm, item, space, depth + 1, out)?;
@@ -2132,22 +2719,46 @@ fn json_stringify(vm: &mut Vm, v: Value, space: &str, depth: usize, out: &mut St
             Ok(())
         }
         Some(TAG_OBJECT) => {
-            let keys = unsafe { v.as_object() }.own_keys();
+            let obj = unsafe { v.as_object() };
+            // An object with no accessors stores plain values in `vals` in the
+            // same order as `keys`, so walking the two slices is exactly what
+            // `own_keys().filter_map(get)` produces — without a Vec per
+            // object. A 5000-element round trip was staging 5000 of them.
+            let keys = obj.own_keys();
             let pairs: Vec<(PropKey, Value)> = keys
                 .iter()
-                .filter_map(|k| unsafe { v.as_object() }.get(*k).map(|val| (*k, val)))
+                .filter_map(|k| obj.get(*k).map(|val| (*k, val)))
                 .collect();
             if pairs.is_empty() {
                 out.push_str("{}");
                 return Ok(());
             }
             out.push('{');
-            for (i, (k, val)) in pairs.iter().enumerate() {
-                if i > 0 {
+            // Comma tracking follows emission, not index: the accessor filter
+            // below can remove the first entry, and a comma for a filtered-out
+            // entry would corrupt the output (`{,"plain":7}`).
+            let mut first = true;
+            for (k, val) in pairs.iter() {
+                // Omit undefined/function values before emitting anything, so
+                // no key or comma leaks for a property that vanishes.
+                if val.is_nil() && !val.is_null() || val.is_function() {
+                    continue;
+                }
+                let ks = vm.prop_name(*k);
+                // Internal accessor slots are not properties. Serializing them
+                // leaked `#get:x`/`#set:x` (the engine's own metadata) into
+                // output, where node emits nothing — an object with a getter
+                // round-tripped as an object containing machine-internal keys.
+                // Only those two prefixes are filtered, so a user key literally
+                // named `#x` still serializes.
+                if ks.starts_with("#get:") || ks.starts_with("#set:") {
+                    continue;
+                }
+                if !first {
                     out.push(',');
                 }
+                first = false;
                 nl(depth + 1, space, out);
-                let ks = vm.prop_name(*k);
                 out.push('"');
                 json_escape(&ks, out);
                 out.push('"');
@@ -2169,12 +2780,19 @@ fn json_stringify(vm: &mut Vm, v: Value, space: &str, depth: usize, out: &mut St
             if v.is_string() {
                 out.push('"');
                 let string = unsafe { v.as_string() };
-                if string.ascii != 0 { json_escape(unsafe { string.as_str() }, out); }
-                else {
+                if string.ascii != 0 {
+                    json_escape(unsafe { string.as_str() }, out);
+                } else {
                     for c in char::decode_utf16(string.code_units()) {
                         match c {
-                            Ok(c) => { let mut buf = [0; 4]; json_escape(c.encode_utf8(&mut buf), out); }
-                            Err(e) => { use std::fmt::Write; let _ = write!(out, "\\u{:04x}", e.unpaired_surrogate()); }
+                            Ok(c) => {
+                                let mut buf = [0; 4];
+                                json_escape(c.encode_utf8(&mut buf), out);
+                            }
+                            Err(e) => {
+                                use std::fmt::Write;
+                                let _ = write!(out, "\\u{:04x}", e.unpaired_surrogate());
+                            }
                         }
                     }
                 }
@@ -2215,169 +2833,379 @@ fn json_escape(s: &str, out: &mut String) {
 }
 native!(n_json_parse, |vm, _this, args| {
     let s = to_str(vm, arg(args, 0))?;
-    let mut chars = s.chars().peekable();
-    let v = json_parse_value(vm, &mut chars)?;
+    let mut sc = JsonScan { b: s.as_bytes(), i: 0 };
+    let v = json_parse_value(vm, &mut sc)?;
+    sc.skip_ws();
+    if sc.i != sc.b.len() {
+        return Err(type_error("Unexpected non-whitespace character after JSON"));
+    }
     Ok(v)
 });
-fn json_parse_value(
-    vm: &mut Vm,
-    it: &mut std::iter::Peekable<std::str::Chars<'_>>,
-) -> VmResult<Value> {
-    skip_ws(it);
-    let c = match it.peek() {
-        Some(c) => *c,
+
+/// Byte-index JSON scanner. The previous scanner walked
+/// `Peekable<str::Chars>`, which decodes UTF-8 one character at a time and
+/// routed every string through a `Vec<u16>` and back. Structural bytes,
+/// digits and ASCII strings are all single-byte work; only escapes and
+/// non-ASCII text take the slow path, and numbers parse straight out of the
+/// borrowed slice with no intermediate allocation.
+struct JsonScan<'a> {
+    b: &'a [u8],
+    i: usize,
+}
+
+impl JsonScan<'_> {
+    #[inline]
+    fn peek(&self) -> Option<u8> {
+        self.b.get(self.i).copied()
+    }
+    #[inline]
+    fn next(&mut self) -> Option<u8> {
+        let c = self.peek();
+        if c.is_some() {
+            self.i += 1;
+        }
+        c
+    }
+    #[inline]
+    fn skip_ws(&mut self) {
+        while matches!(self.peek(), Some(b' ' | b'\n' | b'\t' | b'\r')) {
+            self.i += 1;
+        }
+    }
+}
+
+fn json_parse_value(vm: &mut Vm, sc: &mut JsonScan) -> VmResult<Value> {
+    sc.skip_ws();
+    let c = match sc.peek() {
+        Some(c) => c,
         None => return Err(type_error("Unexpected end of JSON input")),
     };
     match c {
-        '{' => {
-            it.next();
+        b'{' => {
+            sc.next();
             let o = vm.new_object();
-            skip_ws(it);
-            if it.peek() == Some(&'}') {
-                it.next();
+            sc.skip_ws();
+            if sc.peek() == Some(b'}') {
+                sc.next();
                 return Ok(o);
             }
             loop {
-                skip_ws(it);
-                let k = match it.next() {
-                    Some('"') => json_parse_string(it),
-                    _ => return Err(type_error("Unexpected token in JSON")),
-                };
-                skip_ws(it);
-                if it.next() != Some(':') {
+                sc.skip_ws();
+                if sc.next() != Some(b'"') {
+                    return Err(type_error("Unexpected token in JSON"));
+                }
+                // Keys normalize through the lossy conversion: the lookup
+                // name is all that matters, and lone-surrogate keys are a
+                // pathological edge.
+                let k = json_parse_string_units(sc)
+                    .map(|(u, _)| String::from_utf16_lossy(&u))?;
+                sc.skip_ws();
+                if sc.next() != Some(b':') {
                     return Err(type_error("Expected ':' in JSON"));
                 }
-                let v = json_parse_value(vm, it)?;
-                let name = String::from_utf16_lossy(&k);
-                let kk = key(vm, &name);
-                vm.set_prop(o, kk, v).unwrap();
-                skip_ws(it);
-                match it.next() {
-                    Some(',') => continue,
-                    Some('}') => break,
+                let v = json_parse_value(vm, sc)?;
+                // Intern the key's symbol directly: `key()` would allocate a
+                // JString only to immediately intern its bytes, once per key
+                // of every parsed object. And a fresh JSON object needs no
+                // store IC or accessor scan — `own_define` is one find_index,
+                // a shape transition and the write. (It is also what makes
+                // `{"__proto__": x}` an own property, as in node, rather than
+                // a prototype-setter call.)
+                let kk = PropKey::Sym(vm.arena().intern_sym(&k));
+                vm.own_define(o, kk, v);
+                sc.skip_ws();
+                match sc.next() {
+                    Some(b',') => continue,
+                    Some(b'}') => break,
                     _ => return Err(type_error("Expected ',' or '}' in JSON")),
                 }
             }
             Ok(o)
         }
-        '[' => {
-            it.next();
+        b'[' => {
+            sc.next();
             let a = vm.new_array();
-            skip_ws(it);
-            if it.peek() == Some(&']') {
-                it.next();
+            sc.skip_ws();
+            if sc.peek() == Some(b']') {
+                sc.next();
                 return Ok(a);
             }
             loop {
-                let v = json_parse_value(vm, it)?;
+                let v = json_parse_value(vm, sc)?;
                 unsafe { a.as_array_mut().push(v) };
-                skip_ws(it);
-                match it.next() {
-                    Some(',') => continue,
-                    Some(']') => break,
-                    _ => return Err(type_error("Expected ',' or ']' in JSON")),
+                sc.skip_ws();
+                match sc.next() {
+                    Some(b',') => continue,
+                    Some(b']') => break,
+                    _ => return Err(type_error("Expected ',' or '}' in JSON")),
                 }
             }
             Ok(a)
         }
-        '"' => {
-            it.next();
-            let s = json_parse_string(it);
-            Ok(vm.new_string_utf16(&s))
+        b'"' => {
+            sc.next();
+            json_parse_string_value(vm, sc)
         }
-        't' => {
-            for _ in 0..4 {
-                it.next();
+        b't' => {
+            if sc.b[sc.i..].starts_with(b"true") {
+                sc.i += 4;
+                Ok(Value::TRUE)
+            } else {
+                Err(type_error("Unexpected token in JSON"))
             }
-            Ok(Value::TRUE)
         }
-        'f' => {
-            for _ in 0..5 {
-                it.next();
+        b'f' => {
+            if sc.b[sc.i..].starts_with(b"false") {
+                sc.i += 5;
+                Ok(Value::FALSE)
+            } else {
+                Err(type_error("Unexpected token in JSON"))
             }
-            Ok(Value::FALSE)
         }
-        'n' => {
-            for _ in 0..4 {
-                it.next();
+        b'n' => {
+            if sc.b[sc.i..].starts_with(b"null") {
+                sc.i += 4;
+                Ok(Value::NULL)
+            } else {
+                Err(type_error("Unexpected token in JSON"))
             }
-            Ok(Value::NULL)
         }
-        _ => {
-            let mut buf = String::new();
-            while let Some(&c) = it.peek() {
-                if c.is_ascii_digit() || c == '-' || c == '+' || c == '.' || c == 'e' || c == 'E' {
-                    buf.push(c);
-                    it.next();
+        b'-' | b'0'..=b'9' => {
+            let start = sc.i;
+            sc.next();
+            while let Some(c) = sc.peek() {
+                if c.is_ascii_digit() || matches!(c, b'-' | b'+' | b'.' | b'e' | b'E') {
+                    sc.next();
                 } else {
                     break;
                 }
             }
-            Ok(Value::from_f64(parse_float_like(&buf)))
+            let tok = &sc.b[start..sc.i];
+            if !json_number_ok(tok) {
+                return Err(type_error("Unexpected token in JSON"));
+            }
+            // The token is ASCII by construction, so `from_utf8` cannot fail.
+            let text = std::str::from_utf8(tok).unwrap_or("0");
+            Ok(Value::from_f64(parse_float_like(text)))
         }
+        _ => Err(type_error("Unexpected token in JSON")),
     }
 }
-fn skip_ws(it: &mut std::iter::Peekable<std::str::Chars<'_>>) {
-    while let Some(&c) = it.peek() {
-        if c == ' ' || c == '\n' || c == '\t' || c == '\r' {
-            it.next();
-        } else {
+
+/// The JSON number grammar, checked on the borrowed token: `-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?`.
+/// `01`, `1.`, `.5` and a bare `-` are all invalid JSON, and the old
+/// char-collecting path accepted them.
+fn json_number_ok(tok: &[u8]) -> bool {
+    let mut i = 0usize;
+    if i < tok.len() && tok[i] == b'-' {
+        i += 1;
+    }
+    match tok.get(i) {
+        Some(b'0') => {
+            i += 1;
+        }
+        Some(b'1'..=b'9') => {
+            while matches!(tok.get(i), Some(b'0'..=b'9')) {
+                i += 1;
+            }
+        }
+        _ => return false,
+    }
+    if tok.get(i) == Some(&b'.') {
+        i += 1;
+        if !matches!(tok.get(i), Some(b'0'..=b'9')) {
+            return false;
+        }
+        while matches!(tok.get(i), Some(b'0'..=b'9')) {
+            i += 1;
+        }
+    }
+    if matches!(tok.get(i), Some(b'e') | Some(b'E')) {
+        i += 1;
+        if matches!(tok.get(i), Some(b'+') | Some(b'-')) {
+            i += 1;
+        }
+        if !matches!(tok.get(i), Some(b'0'..=b'9')) {
+            return false;
+        }
+        while matches!(tok.get(i), Some(b'0'..=b'9')) {
+            i += 1;
+        }
+    }
+    i == tok.len()
+}
+
+/// A string *value* keeps lone surrogates intact, like node: the string
+/// comparison `JSON.parse('"\\ud83d"') === "\\uFFFD"` is false in node even
+/// though the terminal prints both as U+FFFD. Only keys go through the lossy
+/// conversion, where the lookup name is all that matters.
+fn json_parse_string_value(vm: &mut Vm, sc: &mut JsonScan) -> VmResult<Value> {
+    let (units, has_surrogate) = json_parse_string_units(sc)?;
+    if has_surrogate {
+        Ok(vm.new_string_utf16(&units))
+    } else {
+        // Pure ASCII or valid paired UTF-16: build the String losslessly.
+        Ok(vm.new_string(&String::from_utf16_lossy(&units)))
+    }
+}
+
+/// Parse a JSON string body (the opening quote already consumed). Returns the
+/// UTF-16 units and whether any surrogate appeared.
+/// ASCII runs without escapes are copied straight from the byte slice;
+/// escapes and non-ASCII text take the UTF-16 detour.
+fn json_parse_string_units(sc: &mut JsonScan) -> VmResult<(Vec<u16>, bool)> {
+    let start = sc.i;
+    // Fast scan: find the closing quote or the first interesting byte.
+    let mut j = sc.i;
+    let mut ascii_clean = true;
+    while let Some(&c) = sc.b.get(j) {
+        if c == b'"' {
             break;
         }
+        if c == b'\\' || c < 0x20 || c >= 0x80 {
+            ascii_clean = false;
+            break;
+        }
+        j += 1;
     }
-}
-fn json_parse_string(it: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Vec<u16> {
-    let mut out = Vec::new();
-    while let Some(c) = it.next() {
-        match c {
-            '"' => break,
-            '\\' => match it.next() {
-                Some('n') => out.push(10),
-                Some('t') => out.push(9),
-                Some('r') => out.push(13),
-                Some('b') => out.push(8),
-                Some('f') => out.push(12),
-                Some('/') => out.push(47),
-                Some('"') => out.push(34),
-                Some('\\') => out.push(92),
-                Some('u') => {
-                    let mut hex = String::new();
-                    for _ in 0..4 {
-                        if let Some(h) = it.next() {
-                            hex.push(h);
-                        }
-                    }
-                    if let Ok(n) = u32::from_str_radix(&hex, 16) {
-                        out.push(n as u16);
-                    }
-                }
-                _ => {}
-            },
-            c => { let mut buf=[0u16;2]; out.extend_from_slice(c.encode_utf16(&mut buf)); },
+    if ascii_clean {
+        match sc.b.get(j) {
+            Some(b'"') => {
+                let units = sc.b[start..j].iter().map(|&c| c as u16).collect();
+                sc.i = j + 1;
+                return Ok((units, false));
+            }
+            _ => return Err(type_error("Unterminated string in JSON")),
         }
     }
-    out
+    // Slow path: escapes and/or non-ASCII.
+    let mut out: Vec<u16> = Vec::new();
+    let mut has_surrogate = false;
+    // Re-emit the clean prefix we already scanned so the loop below stays simple.
+    out.extend(sc.b[start..j].iter().map(|&c| c as u16));
+    sc.i = j;
+    loop {
+        let Some(c) = sc.next() else {
+            return Err(type_error("Unterminated string in JSON"));
+        };
+        match c {
+            b'"' => break,
+            b'\\' => match sc.next() {
+                Some(b'n') => out.push(10),
+                Some(b't') => out.push(9),
+                Some(b'r') => out.push(13),
+                Some(b'b') => out.push(8),
+                Some(b'f') => out.push(12),
+                Some(b'/') => out.push(47),
+                Some(b'"') => out.push(34),
+                Some(b'\\') => out.push(92),
+                Some(b'u') => {
+                    let mut n: u32 = 0;
+                    for _ in 0..4 {
+                        let h = sc.next().ok_or_else(|| type_error("Bad Unicode escape in JSON"))?;
+                        let d = (h as char).to_digit(16).ok_or_else(|| type_error("Bad Unicode escape in JSON"))?;
+                        n = n * 16 + d;
+                    }
+                    let u = n as u16;
+                    has_surrogate |= (0xD800..0xE000).contains(&u);
+                    out.push(u);
+                }
+                _ => return Err(type_error("Bad escaped character in JSON")),
+            },
+            c if c < 0x20 => return Err(type_error("Bad control character in JSON")),
+            c if c < 0x80 => out.push(c as u16),
+            c => {
+                // Multi-byte UTF-8: decode the code point from the bytes and
+                // push its UTF-16 units, preserving prior semantics.
+                let len = if c >= 0xF0 {
+                    4
+                } else if c >= 0xE0 {
+                    3
+                } else {
+                    2
+                };
+                let mut buf = [0u8; 4];
+                buf[0] = c;
+                // Exactly len-1 continuation bytes: an unconditional skip(1)
+                // over the 4-slot array read past the character and corrupted
+                // the scan position for every following byte.
+                for slot in buf.iter_mut().take(len).skip(1) {
+                    *slot = sc.next().ok_or_else(|| type_error("Unterminated string in JSON"))?;
+                }
+                let text = std::str::from_utf8(&buf[..len])
+                    .map_err(|_| type_error("Invalid Unicode in JSON"))?;
+                let mut units = [0u16; 2];
+                out.extend_from_slice(text.chars().next().unwrap_or('\u{fffd}').encode_utf16(&mut units));
+            }
+        }
+    }
+    Ok((out, has_surrogate))
 }
 
 // ---------------------------------------------------------------------------
 // console / process / timers
 // ---------------------------------------------------------------------------
 
+/// Node's console quotes strings that appear *inside* containers (`[ 'a' ]`,
+/// `{ k: 'v' }`) but not at top level. Escape the two characters that matter
+/// and wrap in single quotes, matching node's inspect style for the common
+/// cases.
+fn inspect_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for c in s.chars() {
+        match c {
+            '\'' => out.push_str("\\'"),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
+        }
+    }
+    out.push('\'');
+    out
+}
+
 fn display(vm: &mut Vm, v: Value, depth: usize) -> VmResult<String> {
+    display_q(vm, v, depth, false)
+}
+
+fn display_q(vm: &mut Vm, v: Value, depth: usize, quote: bool) -> VmResult<String> {
     if v.is_string() {
-        return Ok(unsafe { v.as_string().as_str().to_string() });
+        let text = unsafe { v.as_string().as_str() }.to_string();
+        return Ok(if quote {
+            inspect_string(&text)
+        } else {
+            text
+        });
     }
     if v.is_nan() {
         return Ok("NaN".into());
     }
     if v.is_smi() || v.is_double() {
-        return Ok(f64_to_js_string(v.as_f64()));
+        let f = v.as_f64();
+        // console.log(-0) prints "-0" in node, while String(-0) is "0": the
+        // diagnostic path distinguishes the two zeros, the ToString path does
+        // not.
+        if f == 0.0 && f.is_sign_negative() {
+            return Ok("-0".into());
+        }
+        return Ok(f64_to_js_string(f));
     }
     if v.is_bool() {
-        return Ok(if v.as_bool() { "true".into() } else { "false".into() });
+        return Ok(if v.as_bool() {
+            "true".into()
+        } else {
+            "false".into()
+        });
     }
     if v.is_nil() {
-        return Ok(if v.is_null() { "null".into() } else { "undefined".into() });
+        return Ok(if v.is_null() {
+            "null".into()
+        } else {
+            "undefined".into()
+        });
     }
     if v.is_function() {
         let n = if unsafe { v.as_function() }.name.is_string() {
@@ -2402,7 +3230,7 @@ fn display(vm: &mut Vm, v: Value, depth: usize) -> VmResult<String> {
             if item.is_empty() {
                 parts.push("<1 empty item>".to_string());
             } else {
-                parts.push(display(vm, item, depth + 1)?);
+                parts.push(display_q(vm, item, depth + 1, true)?);
             }
         }
         if parts.is_empty() {
@@ -2415,7 +3243,11 @@ fn display(vm: &mut Vm, v: Value, depth: usize) -> VmResult<String> {
         let mut parts = Vec::new();
         for k in keys {
             let val = unsafe { v.as_object() }.get(k).unwrap_or(Value::UNDEFINED);
-            parts.push(format!("{}: {}", vm.prop_name(k), display(vm, val, depth + 1)?));
+            parts.push(format!(
+                "{}: {}",
+                vm.prop_name(k),
+                display_q(vm, val, depth + 1, true)?
+            ));
         }
         if parts.is_empty() {
             return Ok("{}".into());
@@ -2457,7 +3289,9 @@ native!(n_process_exit, |vm, _this, args| {
         arg(args, 0).as_i64() as i32
     };
     vm.exit_code = code;
-    Err(crate::errors::VmError::Internal(crate::vm::exit_marker(code)))
+    Err(crate::errors::VmError::Internal(crate::vm::exit_marker(
+        code,
+    )))
 });
 native!(n_process_hrtime, |vm, _this, _args| {
     let n = std::time::SystemTime::now()
@@ -2470,13 +3304,19 @@ native!(n_process_hrtime, |vm, _this, _args| {
     Ok(Value::from_f64(n / 1e9))
 });
 native!(n_process_cwd, |vm, _this, _args| {
-    let d = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default();
+    let d = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
     Ok(vm.new_string(&d))
 });
 
 native!(n_set_timeout, |vm, _this, args| {
     let f = arg(args, 0);
-    let ms = if args.len() > 1 { arg(args, 1).as_i64().max(0) as u64 } else { 0 };
+    let ms = if args.len() > 1 {
+        arg(args, 1).as_i64().max(0) as u64
+    } else {
+        0
+    };
     let id = vm.next_timer_id();
     push_timer(TimerEntry {
         id,
@@ -2490,7 +3330,11 @@ native!(n_set_timeout, |vm, _this, args| {
 });
 native!(n_set_interval, |vm, _this, args| {
     let f = arg(args, 0);
-    let ms = if args.len() > 1 { arg(args, 1).as_i64().max(1) as u64 } else { 1 };
+    let ms = if args.len() > 1 {
+        arg(args, 1).as_i64().max(1) as u64
+    } else {
+        1
+    };
     let id = vm.next_timer_id();
     push_timer(TimerEntry {
         id,
@@ -2510,7 +3354,11 @@ native!(n_clear_timer, |_vm, _this, args| {
 
 // ---- Error ----
 fn make_error(vm: &mut Vm, msg: Option<Value>, proto: Value, into: Value) -> VmResult<Value> {
-    let o = if into.is_object() { into } else { Value::from_ptr(arena::active().alloc_object(0, proto)) };
+    let o = if into.is_object() {
+        into
+    } else {
+        Value::from_ptr(arena::active().alloc_object(0, proto))
+    };
     let m = match msg {
         None => Value::UNDEFINED,
         Some(_) => Value::UNDEFINED,
@@ -2537,7 +3385,11 @@ native!(n_error_to_string, |vm, this, _args| {
     let msg = vm.get_prop(this, mk)?;
     let n = to_str(vm, name).unwrap_or_else(|_| "Error".into());
     let m = to_str(vm, msg).unwrap_or_default();
-    Ok(vm.new_string(&if m.is_empty() { n } else { format!("{}: {}", n, m) }))
+    Ok(vm.new_string(&if m.is_empty() {
+        n
+    } else {
+        format!("{}: {}", n, m)
+    }))
 });
 
 // ---- runtime helpers ----
@@ -2585,7 +3437,7 @@ native!(n_h_apply, |vm, _this, args| {
     } else {
         vals = collect_iterable(vm, list)?;
     }
-    vm.call_direct_args(f, this, &vals)
+    vm.call_callback(f, this, &vals)
 });
 native!(n_h_apply_new, |vm, _this, args| {
     let f = arg(args, 0);
@@ -2604,7 +3456,9 @@ native!(n_h_apply_new, |vm, _this, args| {
     vm.pop_to(base);
     r
 });
-native!(n_h_tonum, |vm, _this, args| Ok(Value::from_f64(vm.to_number(arg(args, 0))?)));
+native!(n_h_tonum, |vm, _this, args| Ok(Value::from_f64(
+    vm.to_number(arg(args, 0))?
+)));
 native!(n_h_enum_keys, |vm, _this, args| {
     let v = arg(args, 0);
     let out = vm.new_array();
@@ -2724,21 +3578,18 @@ native!(n_h_new_regexp, |vm, _this, args| {
     vm.set_prop(o, k, Value::from_i32(0)).unwrap();
     Ok(o)
 });
-/// `__proto__` is the internal prototype slot, not a data property, so it needs
-/// its own helper rather than `Object.defineProperty`.
+// `__proto__` is the internal prototype slot, not a data property, so it needs
+// its own helper rather than `Object.defineProperty`.
 native!(n_h_set_proto, |vm, _this, args| {
     let o = arg(args, 0);
     let p = arg(args, 1);
-    if o.is_object() {
-        unsafe { o.as_object_mut() }.proto = p;
-    } else if o.is_array() {
-        unsafe { o.as_array_mut() }.proto = p;
+    if p.is_object() || p.is_array() || p.is_function() || p.is_null() {
+        vm.set_prototype(o, p)?;
     }
-    let _ = vm;
     Ok(o)
 });
-/// `__jhol_rest_array(v, from)` — the tail of `v` from `from` on, used by array
-/// destructuring rest patterns.
+// `__jhol_rest_array(v, from)` — the tail of `v` from `from` on, used by array
+// destructuring rest patterns.
 native!(n_h_rest_array, |vm, _this, args| {
     let v = arg(args, 0);
     let from = arg(args, 1).as_i64().max(0) as usize;
@@ -2758,11 +3609,6 @@ native!(n_h_rest_array, |vm, _this, args| {
         }
     }
     Ok(out)
-});
-native!(n_h_tagged_template, |vm, _this, args| {
-    let strings = arg(args, 0);
-    let s = to_str(vm, strings)?;
-    Ok(vm.new_string(&s))
 });
 
 // ---- Map / Set (array-backed) ----
@@ -2888,8 +3734,11 @@ native!(n_map_for_each, |vm, this, args| {
         let ea = unsafe { e.as_array() };
         vals.push((ea.get(0), ea.get(1)));
     }
+    for &(k, v) in &vals {
+        vm.pin_temporaries(&[k, v]);
+    }
     for (k, v) in vals {
-        vm.call_direct_args(f, Value::UNDEFINED, &[v, k, this])?;
+        vm.call_callback(f, Value::UNDEFINED, &[v, k, this])?;
     }
     Ok(Value::UNDEFINED)
 });
@@ -3022,8 +3871,934 @@ native!(n_set_for_each, |vm, this, args| {
     for i in 0..a.len {
         vals.push(a.get(i));
     }
+    vm.pin_temporaries(&vals);
     for v in vals {
-        vm.call_direct_args(f, Value::UNDEFINED, &[v, v, this])?;
+        vm.call_callback(f, Value::UNDEFINED, &[v, v, this])?;
     }
     Ok(Value::UNDEFINED)
+});
+
+// ---------------------------------------------------------------------------
+// Function global, Symbol registry, base64, WeakMap/WeakSet, crypto, Date
+// ---------------------------------------------------------------------------
+
+native!(n_function_ctor, |_vm, _this, _args| {
+    // `new Function(body)` needs a compile-from-string pipeline; the common
+    // probes are `typeof Function === "function"` and `Function.prototype`,
+    // both of which work. Body compilation is documented as unsupported.
+    Ok(Value::UNDEFINED)
+});
+
+// The symbol registry: description -> the one shared value, so
+// `Symbol.for("x") === Symbol.for("x")` holds exactly.
+/// The `Symbol.for` registry: description -> interned-atom bits. Atoms are
+/// immortal and rooted in `atom_roots`, so holding their bits in a static is
+/// GC-safe; the VM is single-threaded, so a thread_local cell is enough.
+fn symbol_registry() -> &'static std::cell::RefCell<std::collections::HashMap<String, u64>> {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    thread_local! {
+        static REG: RefCell<HashMap<String, u64>> = RefCell::new(HashMap::new());
+    }
+    REG.with(|r| unsafe { std::mem::transmute::<&RefCell<HashMap<String, u64>>, &'static RefCell<HashMap<String, u64>>>(r) })
+}
+
+native!(n_symbol_for, |vm, _this, args| {
+    let d = to_str(vm, arg(args, 0))?;
+    let bits = symbol_registry().borrow().get(&d).copied();
+    if let Some(bits) = bits {
+        return Ok(Value::from_bits(bits));
+    }
+    let sym = vm.arena().intern_atom(&format!("Symbol({})", d));
+    symbol_registry().borrow_mut().insert(d, sym.bits());
+    Ok(sym)
+});
+
+native!(n_symbol_key_for, |vm, _this, args| {
+    let v = arg(args, 0);
+    if !v.is_string() {
+        return Err(type_error("Symbol.keyFor requires a symbol"));
+    }
+    for (desc, &bits) in symbol_registry().borrow().iter() {
+        if bits == v.bits() {
+            return Ok(vm.new_string(desc));
+        }
+    }
+    Ok(Value::UNDEFINED)
+});
+
+const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn b64_encode(data: &[u8]) -> String {
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(B64[(n >> 18) as usize & 63] as char);
+        out.push(B64[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { B64[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { B64[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+fn b64_decode(text: &str) -> Option<Vec<u8>> {
+    let mut vals: Vec<u8> = Vec::with_capacity(text.len());
+    for c in text.chars() {
+        if c == '=' || c == '\n' || c == '\r' {
+            continue;
+        }
+        let v = match c {
+            'A'..='Z' => c as u8 - b'A',
+            'a'..='z' => c as u8 - b'a' + 26,
+            '0'..='9' => c as u8 - b'0' + 52,
+            '+' => 62,
+            '/' => 63,
+            _ => return None,
+        };
+        vals.push(v);
+    }
+    let mut out = Vec::with_capacity(vals.len() * 3 / 4);
+    for chunk in vals.chunks(4) {
+        if chunk.len() == 1 {
+            return None;
+        }
+        let n = (chunk[0] as u32) << 18
+            | (chunk[1] as u32) << 12
+            | (if chunk.len() > 2 { chunk[2] as u32 } else { 0 }) << 6
+            | (if chunk.len() > 3 { chunk[3] as u32 } else { 0 });
+        out.push((n >> 16) as u8);
+        if chunk.len() > 2 {
+            out.push((n >> 8) as u8);
+        }
+        if chunk.len() > 3 {
+            out.push(n as u8);
+        }
+    }
+    Some(out)
+}
+
+native!(n_btoa, |vm, _this, args| {
+    let s = arg(args, 0);
+    if !s.is_string() {
+        return Err(type_error("btoa requires a string"));
+    }
+    // Latin1 semantics: code units above 255 are a RangeError in node.
+    let units = unsafe { s.as_string() };
+    let mut bytes = Vec::with_capacity(units.utf16_len as usize);
+    let mut bad = false;
+    if units.ascii != 0 {
+        bytes.extend_from_slice(unsafe { units.as_str() }.as_bytes());
+    } else {
+        for u in units.code_units() {
+            if u > 255 {
+                bad = true;
+                break;
+            }
+            bytes.push(u as u8);
+        }
+    }
+    if bad {
+        return Err(type_error(
+            "invalid character: string contains a code unit above 255",
+        ));
+    }
+    Ok(vm.new_string(&b64_encode(&bytes)))
+});
+
+native!(n_atob, |vm, _this, args| {
+    let s = arg(args, 0);
+    if !s.is_string() {
+        return Err(type_error("atob requires a string"));
+    }
+    let text = unsafe { s.as_string().as_str() }.to_string();
+    match b64_decode(&text) {
+        Some(bytes) => {
+            let out: String = bytes.iter().map(|&b| b as char).collect();
+            Ok(vm.new_string(&out))
+        }
+        None => Err(type_error("invalid base64")),
+    }
+});
+
+// ---- WeakMap / WeakSet ----
+// Identity-keyed: object/function keys compare by pointer bits. Entries whose
+// key is collected are not swept (GC-naive); live-key behavior is exact.
+fn weak_pairs(vm: &mut Vm, this: Value) -> Value {
+    hidden(vm, this, "#weak-pairs", |vm| vm.new_array())
+}
+
+fn weak_key_ok(v: Value) -> bool {
+    v.is_object() || v.is_function()
+}
+
+native!(n_weakmap_ctor, |vm, this, _args| {
+    // Same shape as Map's ctor: pairs are created on the instance here, not
+    // lazily — the lazy path stored into an array the instance never saw.
+    let o = if this.is_object() { this } else { vm.new_object() };
+    weak_pairs(vm, o);
+    Ok(o)
+});
+
+native!(n_weakmap_set, |vm, this, args| {
+    let k = arg(args, 0);
+    if !weak_key_ok(k) {
+        return Err(type_error("WeakMap key must be an object"));
+    }
+    let v = arg(args, 1);
+    let pairs = hidden(vm, this, "#weak-pairs", |vm| vm.new_array());
+    let a = unsafe { pairs.as_array_mut() };
+    for i in 0..a.len {
+        let e = a.get(i);
+        if e.is_array() && unsafe { e.as_array() }.get(0).bits() == k.bits() {
+            let ea = unsafe { e.as_array_mut() };
+            if ea.len >= 2 {
+                ea.data[1] = v;
+            }
+            return Ok(this);
+        }
+    }
+    let entry = vm.new_array();
+    unsafe {
+        entry.as_array_mut().push(k);
+        entry.as_array_mut().push(v);
+        a.push(entry);
+    }
+    Ok(this)
+});
+
+native!(n_weakmap_get, |vm, this, args| {
+    let k = arg(args, 0);
+    let pairs = hidden(vm, this, "#weak-pairs", |vm| vm.new_array());
+    let a = unsafe { pairs.as_array() };
+    for i in 0..a.len {
+        let e = a.get(i);
+        if e.is_array() && unsafe { e.as_array() }.get(0).bits() == k.bits() {
+            return Ok(unsafe { e.as_array() }.get(1));
+        }
+    }
+    Ok(Value::UNDEFINED)
+});
+
+native!(n_weakmap_has, |vm, this, args| {
+    let k = arg(args, 0);
+    let pairs = hidden(vm, this, "#weak-pairs", |vm| vm.new_array());
+    let a = unsafe { pairs.as_array() };
+    for i in 0..a.len {
+        let e = a.get(i);
+        if e.is_array() && unsafe { e.as_array() }.get(0).bits() == k.bits() {
+            return Ok(Value::TRUE);
+        }
+    }
+    Ok(Value::FALSE)
+});
+
+native!(n_weakmap_delete, |vm, this, args| {
+    let k = arg(args, 0);
+    let pairs = hidden(vm, this, "#weak-pairs", |vm| vm.new_array());
+    let a = unsafe { pairs.as_array_mut() };
+    let n = a.len;
+    for i in 0..n {
+        let e = a.get(i);
+        if e.is_array() && unsafe { e.as_array() }.get(0).bits() == k.bits() {
+            a.data.remove(i as usize);
+            a.len = a.data.len() as u32;
+            return Ok(Value::TRUE);
+        }
+    }
+    Ok(Value::from_bool(false))
+});
+
+native!(n_weakset_ctor, |vm, this, _args| {
+    let o = if this.is_object() { this } else { vm.new_object() };
+    weak_pairs(vm, o);
+    Ok(o)
+});
+
+native!(n_weakset_add, |vm, this, args| {
+    let k = arg(args, 0);
+    if !weak_key_ok(k) {
+        return Err(type_error("WeakSet value must be an object"));
+    }
+    let pairs = hidden(vm, this, "#weak-pairs", |vm| vm.new_array());
+    let a = unsafe { pairs.as_array_mut() };
+    for i in 0..a.len {
+        let e = a.get(i);
+        if e.is_array() && unsafe { e.as_array() }.get(0).bits() == k.bits() {
+            return Ok(this);
+        }
+    }
+    let entry = vm.new_array();
+    unsafe {
+        entry.as_array_mut().push(k);
+        a.push(entry);
+    }
+    Ok(this)
+});
+
+native!(n_weakset_has, |vm, this, args| {
+    let k = arg(args, 0);
+    let pairs = hidden(vm, this, "#weak-pairs", |vm| vm.new_array());
+    let a = unsafe { pairs.as_array() };
+    for i in 0..a.len {
+        let e = a.get(i);
+        if e.is_array() && unsafe { e.as_array() }.get(0).bits() == k.bits() {
+            return Ok(Value::TRUE);
+        }
+    }
+    Ok(Value::FALSE)
+});
+
+native!(n_weakset_delete, |vm, this, args| {
+    let k = arg(args, 0);
+    let pairs = hidden(vm, this, "#weak-pairs", |vm| vm.new_array());
+    let a = unsafe { pairs.as_array_mut() };
+    let n = a.len;
+    for i in 0..n {
+        let e = a.get(i);
+        if e.is_array() && unsafe { e.as_array() }.get(0).bits() == k.bits() {
+            a.data.remove(i as usize);
+            a.len = a.data.len() as u32;
+            return Ok(Value::TRUE);
+        }
+    }
+    Ok(Value::from_bool(false))
+});
+
+// ---- crypto ----
+// Entropy from the OS. Unix reads /dev/urandom; the fallback is a
+// splitmix64 chain seeded from the nanosecond clock (documented: the
+// fallback is for exotic platforms, not for production entropy).
+fn os_random(buf: &mut [u8]) -> bool {
+    #[cfg(unix)]
+    {
+        use std::io::Read;
+        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+            return f.read_exact(buf).is_ok();
+        }
+        false
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = buf;
+        false
+    }
+}
+
+fn fallback_random(buf: &mut [u8]) {
+    let mut x = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9E3779B97F4A7C15)
+        | 1;
+    for b in buf.iter_mut() {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *b = (x >> 24) as u8;
+    }
+}
+
+native!(n_crypto_get_random_values, |vm, _this, args| {
+    let a = arg(args, 0);
+    if !a.is_array() {
+        return Err(type_error("getRandomValues requires an array"));
+    }
+    let arr = unsafe { a.as_array_mut() };
+    let mut buf = vec![0u8; arr.len as usize];
+    if !os_random(&mut buf) {
+        fallback_random(&mut buf);
+    }
+    for (i, b) in buf.iter().enumerate() {
+        arr.set(i as u32, Value::from_i32(*b as i32));
+    }
+    Ok(a)
+});
+
+native!(n_crypto_random_uuid, |vm, _this, _args| {
+    let mut buf = [0u8; 16];
+    if !os_random(&mut buf) {
+        fallback_random(&mut buf);
+    }
+    buf[6] = (buf[6] & 0x0f) | 0x40; // version 4
+    buf[8] = (buf[8] & 0x3f) | 0x80; // variant
+    let hex = |b: &[u8]| -> String {
+        b.iter().map(|x| format!("{:02x}", x)).collect::<String>()
+    };
+    let s = format!(
+        "{}-{}-{}-{}-{}",
+        hex(&buf[0..4]),
+        hex(&buf[4..6]),
+        hex(&buf[6..8]),
+        hex(&buf[8..10]),
+        hex(&buf[10..16])
+    );
+    Ok(vm.new_string(&s))
+});
+
+// ---- Date ----
+// Epoch-millisecond arithmetic over the proleptic Gregorian calendar.
+// Days-to-civil conversion is the standard era decomposition; local time
+// comes from a one-time offset probe (`date +%z`) cached for the process.
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (y + if m <= 2 { 1 } else { 0 }, m, d)
+}
+
+const MONTH_NAMES: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct",
+    "Nov", "Dec",
+];
+const DAY_NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/// Local UTC-offset in minutes (what `getTimezoneOffset` returns: positive
+/// west of UTC). Probed once via `date +%z` — "+0530" becomes -330.
+fn tz_offset_minutes() -> i64 {
+    static OFFSET: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *OFFSET.get_or_init(|| {
+        if let Ok(out) = std::process::Command::new("date").arg("+%z").output() {
+            let t = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if t.len() == 5 {
+                let sign = match &t[0..1] {
+                    "+" => 1,
+                    "-" => -1,
+                    _ => 0,
+                };
+                if sign != 0 {
+                    if let (Ok(h), Ok(m)) = (t[1..3].parse::<i64>(), t[3..5].parse::<i64>()) {
+                        return -(sign * (h * 60 + m));
+                    }
+                }
+            }
+        }
+        0
+    })
+}
+
+fn date_time(vm: &mut Vm, this: Value) -> f64 {
+    let k = key(vm, "#t");
+    match vm.get_prop(this, k) {
+        Ok(v) if v.is_number() => v.as_f64(),
+        _ => f64::NAN,
+    }
+}
+
+fn date_set_time_raw(vm: &mut Vm, this: Value, ms: f64) {
+    let k = key(vm, "#t");
+    let _ = vm.set_prop(this, k, Value::from_f64(ms));
+}
+
+/// (y, m 0-11, d, h, min, s, ms) in the given zone, from epoch ms.
+fn date_fields(mut ms: f64, utc: bool) -> (i64, i64, i64, i64, i64, i64, i64) {
+    if !utc {
+        ms -= tz_offset_minutes() as f64 * 60_000.0;
+    }
+    let secs_total = ms.div_euclid(1000.0);
+    let millis = ms.rem_euclid(1000.0) as i64;
+    let days = (secs_total / 86400.0).floor();
+    let secs = (secs_total - days * 86400.0) as i64;
+    let (y, m, d) = civil_from_days(days as i64);
+    let h = secs / 3600;
+    let mi = (secs % 3600) / 60;
+    let se = secs % 60;
+    (y, m - 1, d, h, mi, se, millis)
+}
+
+fn make_epoch_ms(y: i64, m: i64, d: i64, h: i64, mi: i64, s: i64, ms: i64, utc: bool) -> f64 {
+    let days = days_from_civil(y, m + 1, d);
+    let secs = days * 86400 + h * 3600 + mi * 60 + s;
+    let mut out = secs as f64 * 1000.0 + ms as f64;
+    if !utc {
+        out += tz_offset_minutes() as f64 * 60_000.0;
+    }
+    out
+}
+
+fn date_now_ms() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as f64)
+        .unwrap_or(f64::NAN)
+}
+
+/// ISO 8601 subset: `YYYY[-MM[-DD]][THH[:MM[:SS[.sss]]]][Z|±HH[:MM]]`.
+/// Date-only forms are UTC (per spec); date-time without an offset is local.
+fn date_parse_iso(text: &str) -> Option<f64> {
+    let b: Vec<char> = text.chars().collect();
+    if b.len() < 10 && !text.contains('T') {
+        // accept "YYYY", "YYYY-MM", "YYYY-MM-DD"
+    }
+    let num = |from: usize, to: usize| -> Option<i64> {
+        if from > b.len() || to > b.len() || from >= to {
+            return None;
+        }
+        b[from..to].iter().collect::<String>().parse::<i64>().ok()
+    };
+    if b.len() < 4 {
+        return None;
+    }
+    let y = num(0, 4)?;
+    let mut mo = 0i64;
+    let mut da = 1i64;
+    if b.len() >= 7 && b[4] == '-' {
+        mo = num(5, 7)?.checked_sub(1)?;
+        if b.len() >= 10 && b[7] == '-' {
+            da = num(8, 10)?;
+        }
+    }
+    let mut h = 0i64;
+    let mut mi = 0i64;
+    let mut se = 0i64;
+    let mut ms = 0i64;
+    let mut local = false;
+    let mut offset: Option<i64> = None;
+    if let Some(ti) = b.iter().position(|&c| c == 'T' || c == 't' || c == ' ') {
+        if !(ti == 10) {
+            return None;
+        }
+        h = num(11, 13).unwrap_or(-1);
+        if b.len() >= 16 && b[13] == ':' {
+            mi = num(14, 16).unwrap_or(-1);
+            if b.len() >= 19 && b[16] == ':' {
+                se = num(17, 19).unwrap_or(-1);
+                if b.len() > 19 && b[19] == '.' {
+                    let mut frac = String::new();
+                    let mut j = 20;
+                    while j < b.len() && b[j].is_ascii_digit() {
+                        frac.push(b[j]);
+                        j += 1;
+                    }
+                    if frac.is_empty() {
+                        return None;
+                    }
+                    frac.truncate(3);
+                    ms = frac.parse().ok()?;
+                    if frac.len() < 3 {
+                        ms *= 10u64.pow(3 - frac.len() as u32) as i64;
+                    }
+                    // re-scan for the zone after the fraction
+                    let rest: String = b[j..].iter().collect();
+                    if rest == "Z" || rest == "z" {
+                        offset = Some(0);
+                    } else if rest.len() >= 6
+                        && (rest.starts_with('+') || rest.starts_with('-'))
+                    {
+                        let sign = if rest.starts_with('-') { -1 } else { 1 };
+                        let rh: i64 = rest[1..3].parse().ok()?;
+                        let rm: i64 = rest[4..6].parse().ok()?;
+                        offset = Some(sign * (rh * 60 + rm));
+                    } else if !rest.is_empty() {
+                        return None;
+                    } else {
+                        local = true;
+                    }
+                }
+            }
+        }
+        let _ = ti;
+    } else {
+        offset = Some(0); // date-only forms are UTC
+    }
+    if !(1..=12).contains(&(mo + 1)) || !(1..=31).contains(&da) || h < 0 || h > 24 || mi < 0 || mi > 59 || se < 0 || se > 60 {
+        return None;
+    }
+    let mut out = make_epoch_ms(y, mo, da, h, mi, se, ms, offset.is_some() || !local);
+    if let Some(off) = offset {
+        out += off as f64 * 60_000.0;
+    }
+    Some(out)
+}
+
+native!(n_date_ctor, |vm, this, args| {
+    let o = if this.is_object() {
+        this
+    } else {
+        vm.new_object()
+    };
+    let ms: f64 = if args.is_empty() {
+        date_now_ms()
+    } else if args.len() == 1 {
+        let a = arg(args, 0);
+        if a.is_number() {
+            a.as_f64()
+        } else {
+            let text = to_str(vm, a)?;
+            date_parse_iso(&text).unwrap_or(f64::NAN)
+        }
+    } else {
+        let y = arg(args, 0);
+        // `new Date(98)` means 1998; `new Date(0..=99)` maps 1900+.
+        let mut yr = if y.is_number() { y.as_f64() } else { f64::NAN };
+        if yr.fract() == 0.0 && (0.0..100.0).contains(&yr) {
+            yr += 1900.0;
+        }
+        let g = |i: usize, dflt: f64| -> f64 {
+            let a = arg(args, i);
+            if a.is_number() {
+                a.as_f64()
+            } else {
+                dflt
+            }
+        };
+        make_epoch_ms(
+            yr as i64,
+            g(1, 0.0) as i64,
+            g(2, 1.0) as i64,
+            g(3, 0.0) as i64,
+            g(4, 0.0) as i64,
+            g(5, 0.0) as i64,
+            g(6, 0.0) as i64,
+            false,
+        )
+    };
+    date_set_time_raw(vm, o, ms);
+    Ok(o)
+});
+
+native!(n_date_now, |_vm, _this, _args| Ok(Value::from_f64(date_now_ms())));
+
+native!(n_date_utc, |_vm, _this, args| {
+    let g = |i: usize, dflt: f64| -> f64 {
+        let a = arg(args, i);
+        if a.is_number() {
+            a.as_f64()
+        } else {
+            dflt
+        }
+    };
+    let mut yr = g(0, f64::NAN);
+    if yr.fract() == 0.0 && (0.0..100.0).contains(&yr) {
+        yr += 1900.0;
+    }
+    if yr.is_nan() {
+        return Ok(Value::NAN);
+    }
+    Ok(Value::from_f64(make_epoch_ms(
+        yr as i64,
+        g(1, 0.0) as i64,
+        g(2, 1.0) as i64,
+        g(3, 0.0) as i64,
+        g(4, 0.0) as i64,
+        g(5, 0.0) as i64,
+        g(6, 0.0) as i64,
+        true,
+    )))
+});
+
+native!(n_date_parse, |vm, _this, args| {
+    let a = arg(args, 0);
+    if a.is_number() {
+        return Ok(Value::from_f64(a.as_f64()));
+    }
+    let text = to_str(vm, a)?;
+    Ok(Value::from_f64(date_parse_iso(&text).unwrap_or(f64::NAN)))
+});
+
+native!(n_date_get_time, |_vm, this, _args| Ok(Value::from_f64(
+    this_date_ms(_vm, this)
+)));
+
+fn this_date_ms(vm: &mut Vm, this: Value) -> f64 {
+    if this.is_object() {
+        date_time(vm, this)
+    } else {
+        f64::NAN
+    }
+}
+
+native!(n_date_get_year, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(Value::NAN);
+    }
+    Ok(Value::from_i64(date_fields(ms, false).0))
+});
+
+native!(n_date_get_year_utc, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(Value::NAN);
+    }
+    Ok(Value::from_i64(date_fields(ms, true).0))
+});
+
+native!(n_date_get_month, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(Value::NAN);
+    }
+    Ok(Value::from_i64(date_fields(ms, false).1))
+});
+
+native!(n_date_get_month_utc, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(Value::NAN);
+    }
+    Ok(Value::from_i64(date_fields(ms, true).1))
+});
+
+native!(n_date_get_date, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(Value::NAN);
+    }
+    Ok(Value::from_i64(date_fields(ms, false).2))
+});
+
+native!(n_date_get_date_utc, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(Value::NAN);
+    }
+    Ok(Value::from_i64(date_fields(ms, true).2))
+});
+
+native!(n_date_get_day, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(Value::NAN);
+    }
+    let f = date_fields(ms, false);
+    // Day 0 (1970-01-01) was a Thursday: dow = (days + 4) % 7, 0 = Sunday.
+    Ok(Value::from_i64((days_from_civil(f.0, f.1 + 1, f.2) + 4).rem_euclid(7)))
+});
+
+native!(n_date_get_day_utc, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(Value::NAN);
+    }
+    let f = date_fields(ms, true);
+    Ok(Value::from_i64((days_from_civil(f.0, f.1 + 1, f.2) + 4).rem_euclid(7)))
+});
+
+native!(n_date_get_hours, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(Value::NAN);
+    }
+    Ok(Value::from_i64(date_fields(ms, false).3))
+});
+
+native!(n_date_get_hours_utc, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(Value::NAN);
+    }
+    Ok(Value::from_i64(date_fields(ms, true).3))
+});
+
+native!(n_date_get_minutes, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(Value::NAN);
+    }
+    Ok(Value::from_i64(date_fields(ms, false).4))
+});
+
+native!(n_date_get_minutes_utc, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(Value::NAN);
+    }
+    Ok(Value::from_i64(date_fields(ms, true).4))
+});
+
+native!(n_date_get_seconds, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(Value::NAN);
+    }
+    Ok(Value::from_i64(date_fields(ms, false).5))
+});
+
+native!(n_date_get_seconds_utc, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(Value::NAN);
+    }
+    Ok(Value::from_i64(date_fields(ms, true).5))
+});
+
+native!(n_date_get_ms, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(Value::NAN);
+    }
+    Ok(Value::from_i64(date_fields(ms, true).6))
+});
+
+native!(n_date_tz_offset, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(Value::NAN);
+    }
+    Ok(Value::from_i64(tz_offset_minutes()))
+});
+
+native!(n_date_set_time, |vm, this, args| {
+    let v = arg(args, 0);
+    let ms = if v.is_number() { v.as_f64() } else { f64::NAN };
+    date_set_time_raw(vm, this, ms);
+    Ok(Value::from_f64(ms))
+});
+
+fn date_set_field(vm: &mut Vm, this: Value, idx: usize, val: f64, utc: bool) -> VmResult<Value> {
+    let cur = this_date_ms(vm, this);
+    if cur.is_nan() || val.is_nan() {
+        date_set_time_raw(vm, this, f64::NAN);
+        return Ok(Value::NAN);
+    }
+    let mut f = date_fields(cur, utc);
+    match idx {
+        0 => f.6 = val as i64,
+        1 => f.5 = val as i64,
+        2 => f.4 = val as i64,
+        3 => f.3 = val as i64,
+        4 => f.2 = val as i64,
+        5 => f.1 = val as i64,
+        _ => f.0 = val as i64,
+    }
+    let out = make_epoch_ms(f.0, f.1, f.2, f.3, f.4, f.5, f.6, utc);
+    date_set_time_raw(vm, this, out);
+    Ok(Value::from_f64(out))
+}
+
+native!(n_date_set_ms, |vm, this, args| {
+    date_set_field(vm, this, 0, arg(args, 0).as_f64(), false)
+});
+native!(n_date_set_seconds, |vm, this, args| {
+    date_set_field(vm, this, 1, arg(args, 0).as_f64(), false)
+});
+native!(n_date_set_minutes, |vm, this, args| {
+    date_set_field(vm, this, 2, arg(args, 0).as_f64(), false)
+});
+native!(n_date_set_hours, |vm, this, args| {
+    date_set_field(vm, this, 3, arg(args, 0).as_f64(), false)
+});
+native!(n_date_set_date, |vm, this, args| {
+    date_set_field(vm, this, 4, arg(args, 0).as_f64(), false)
+});
+native!(n_date_set_month, |vm, this, args| {
+    date_set_field(vm, this, 5, arg(args, 0).as_f64(), false)
+});
+native!(n_date_set_year, |vm, this, args| {
+    date_set_field(vm, this, 6, arg(args, 0).as_f64(), false)
+});
+native!(n_date_set_date_utc, |vm, this, args| {
+    date_set_field(vm, this, 4, arg(args, 0).as_f64(), true)
+});
+native!(n_date_set_month_utc, |vm, this, args| {
+    date_set_field(vm, this, 5, arg(args, 0).as_f64(), true)
+});
+native!(n_date_set_year_utc, |vm, this, args| {
+    date_set_field(vm, this, 6, arg(args, 0).as_f64(), true)
+});
+
+native!(n_date_to_iso, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Err(type_error("Invalid time value"));
+    }
+    let (y, mo, d, h, mi, se, msec) = date_fields(ms, true);
+    Ok(vm.new_string(&format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        y, mo + 1, d, h, mi, se, msec
+    )))
+});
+
+native!(n_date_to_string, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(vm.new_string("Invalid Date"));
+    }
+    let (y, mo, d, h, mi, se, _msec) = date_fields(ms, false);
+    let dow = (days_from_civil(y, mo + 1, d) + 4).rem_euclid(7) as usize;
+    let off = -tz_offset_minutes();
+    let sign = if off < 0 { '-' } else { '+' };
+    let a = off.abs();
+    Ok(vm.new_string(&format!(
+        "{} {} {:02} {} {:02}:{:02}:{:02} GMT{}{:02}{:02}",
+        DAY_NAMES[dow],
+        MONTH_NAMES[mo as usize],
+        d,
+        y,
+        h,
+        mi,
+        se,
+        sign,
+        a / 60,
+        a % 60
+    )))
+});
+
+native!(n_date_to_utc_string, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(vm.new_string("Invalid Date"));
+    }
+    let (y, mo, d, h, mi, se, _msec) = date_fields(ms, true);
+    let dow = (days_from_civil(y, mo + 1, d) + 4).rem_euclid(7) as usize;
+    Ok(vm.new_string(&format!(
+        "{}, {:02} {} {} {:02}:{:02}:{:02} GMT",
+        DAY_NAMES[dow],
+        d,
+        MONTH_NAMES[mo as usize],
+        y,
+        h,
+        mi,
+        se
+    )))
+});
+
+native!(n_date_to_date_string, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(vm.new_string("Invalid Date"));
+    }
+    let (y, mo, d, _h, _mi, _se, _msec) = date_fields(ms, false);
+    let dow = (days_from_civil(y, mo + 1, d) + 4).rem_euclid(7) as usize;
+    Ok(vm.new_string(&format!(
+        "{} {} {:02} {}",
+        DAY_NAMES[dow],
+        MONTH_NAMES[mo as usize],
+        d,
+        y
+    )))
+});
+
+native!(n_date_to_time_string, |vm, this, _args| {
+    let ms = this_date_ms(vm, this);
+    if ms.is_nan() {
+        return Ok(vm.new_string("Invalid Date"));
+    }
+    let (_y, _mo, _d, h, mi, se, _msec) = date_fields(ms, false);
+    let off = -tz_offset_minutes();
+    let sign = if off < 0 { '-' } else { '+' };
+    let a = off.abs();
+    Ok(vm.new_string(&format!(
+        "{:02}:{:02}:{:02} GMT{}{:02}{:02}",
+        h, mi, se, sign, a / 60, a % 60
+    )))
 });

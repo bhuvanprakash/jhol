@@ -36,11 +36,16 @@ pub fn project_identity(root: &Path) -> Option<String> {
                 hash.update((bytes.len() as u64).to_le_bytes());
                 hash.update(bytes);
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => hash.update(u64::MAX.to_le_bytes()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                hash.update(u64::MAX.to_le_bytes())
+            }
             Err(_) => return None,
         }
     }
-    if let Some(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).ok() {
+    if let Some(home) = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()
+    {
         for name in [".jholrc", ".npmrc"] {
             hash.update(b"user-config\0");
             hash.update(name.as_bytes());
@@ -63,8 +68,15 @@ pub fn project_identity(root: &Path) -> Option<String> {
         "JHOL_STRICT_PEER_DEPS",
         "JHOL_ENV",
         "NODE_ENV",
-        "JHOL_LINK", "JHOL_OS", "JHOL_CPU", "JHOL_LIBC",
-        "npm_config_os", "npm_config_platform", "npm_config_cpu", "npm_config_arch", "npm_config_libc",
+        "JHOL_LINK",
+        "JHOL_OS",
+        "JHOL_CPU",
+        "JHOL_LIBC",
+        "npm_config_os",
+        "npm_config_platform",
+        "npm_config_cpu",
+        "npm_config_arch",
+        "npm_config_libc",
     ] {
         hash.update(name.as_bytes());
         hash.update([0]);
@@ -177,14 +189,26 @@ pub fn locked_layout_is_valid(root: &Path, node_modules: &Path) -> bool {
         else {
             return false;
         };
-        if let Some(expected_version) = entry.get("version").and_then(serde_json::Value::as_str) {
-            if installed_manifest
-                .get("version")
-                .and_then(serde_json::Value::as_str)
-                != Some(expected_version)
-            {
-                return false;
-            }
+        let Some(expected_name) = locked_package_name(relative, entry) else {
+            return false;
+        };
+        if installed_manifest
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            != Some(expected_name.as_str())
+        {
+            return false;
+        }
+        let Some(expected_version) = entry.get("version").and_then(serde_json::Value::as_str)
+        else {
+            return false;
+        };
+        if installed_manifest
+            .get("version")
+            .and_then(serde_json::Value::as_str)
+            != Some(expected_version)
+        {
+            return false;
         }
         if entry.get("link").and_then(serde_json::Value::as_bool) == Some(true)
             && !std::fs::canonicalize(installed).is_ok()
@@ -195,23 +219,88 @@ pub fn locked_layout_is_valid(root: &Path, node_modules: &Path) -> bool {
     true
 }
 
+fn locked_package_name(relative: &str, entry: &serde_json::Value) -> Option<String> {
+    if let Some(name) = entry.get("name").and_then(serde_json::Value::as_str) {
+        return (!name.is_empty()).then(|| name.to_owned());
+    }
+
+    // npm aliases install under the requested path but lock the real package
+    // name in the entry. For ordinary packages, the last node_modules segment
+    // identifies the expected manifest name.
+    let tail = relative.rsplit("node_modules/").next()?;
+    let mut segments = tail.split('/');
+    let first = segments.next()?;
+    if first.starts_with('@') {
+        let second = segments.next()?;
+        if segments.next().is_some() {
+            return None;
+        }
+        Some(format!("{first}/{second}"))
+    } else if segments.next().is_none() {
+        Some(first.to_owned())
+    } else {
+        None
+    }
+}
 
 fn optional_is_incompatible(entry: &serde_json::Value) -> bool {
-    let os = match std::env::consts::OS { "macos" => "darwin", "windows" => "win32", other => other };
-    let cpu = match std::env::consts::ARCH { "aarch64" => "arm64", "x86_64" => "x64", "x86" => "ia32", other => other };
-    let libc = if cfg!(target_env = "musl") { "musl" } else { "glibc" };
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        "windows" => "win32",
+        other => other,
+    };
+    let cpu = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "x64",
+        "x86" => "ia32",
+        other => other,
+    };
+    let libc = if cfg!(target_env = "musl") {
+        "musl"
+    } else {
+        "glibc"
+    };
     for (field, variables, default) in [
-        ("os", &["JHOL_OS", "npm_config_os", "npm_config_platform"][..], os),
-        ("cpu", &["JHOL_CPU", "npm_config_cpu", "npm_config_arch"][..], cpu),
+        (
+            "os",
+            &["JHOL_OS", "npm_config_os", "npm_config_platform"][..],
+            os,
+        ),
+        (
+            "cpu",
+            &["JHOL_CPU", "npm_config_cpu", "npm_config_arch"][..],
+            cpu,
+        ),
         ("libc", &["JHOL_LIBC", "npm_config_libc"][..], libc),
     ] {
-        let Some(selector) = entry.get(field).and_then(serde_json::Value::as_array) else { continue };
-        let target = variables.iter().find_map(|name| std::env::var(name).ok().filter(|value| !value.trim().is_empty()))
+        let Some(selector) = entry.get(field).and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        let target = variables
+            .iter()
+            .find_map(|name| {
+                std::env::var(name)
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            })
             .unwrap_or_else(|| default.to_string());
-        let values: Vec<_> = selector.iter().filter_map(serde_json::Value::as_str).collect();
-        let excluded = values.iter().any(|value| value.strip_prefix('!') == Some(target.trim()));
-        let positives: Vec<_> = values.iter().filter(|value| !value.starts_with('!')).collect();
-        if excluded || (!positives.is_empty() && !positives.iter().any(|value| **value == target.trim() || **value == "any")) {
+        let values: Vec<_> = selector
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        let excluded = values
+            .iter()
+            .any(|value| value.strip_prefix('!') == Some(target.trim()));
+        let positives: Vec<_> = values
+            .iter()
+            .filter(|value| !value.starts_with('!'))
+            .collect();
+        if excluded
+            || (!positives.is_empty()
+                && !positives
+                    .iter()
+                    .any(|value| **value == target.trim() || **value == "any"))
+        {
             return true;
         }
     }
@@ -357,21 +446,27 @@ pub fn try_direct_bundle_projection(root: &Path) -> bool {
         }
     }
 
-    if matches!(std::env::var("JHOL_JGRID").as_deref(), Ok("0") | Ok("false") | Ok("no"))
-        || matches!(std::env::var("JHOL_JGRID_L0").as_deref(), Ok("0") | Ok("false") | Ok("no"))
-    {
+    if matches!(
+        std::env::var("JHOL_JGRID").as_deref(),
+        Ok("0") | Ok("false") | Ok("no")
+    ) || matches!(
+        std::env::var("JHOL_JGRID_L0").as_deref(),
+        Ok("0") | Ok("false") | Ok("no")
+    ) {
         return false;
     }
-    let Some(identity) = project_identity(root) else { return false };
+    let Some(identity) = project_identity(root) else {
+        return false;
+    };
     let bundle_path = cache_dir().join("grid").join("bundles").join(&identity);
     let bundle_nm = bundle_path.join("node_modules");
-    if !bundle_path.join(".jhol-complete").is_file()
-        || !locked_layout_is_valid(root, &bundle_nm)
-    {
+    if !bundle_path.join(".jhol-complete").is_file() || !locked_layout_is_valid(root, &bundle_nm) {
         return false;
     }
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default().as_nanos();
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
     let candidate = root.join(format!(".jhol-projection-{}-{nonce}", std::process::id()));
     if clone_directory(&bundle_nm, &candidate).is_err()
         || std::fs::write(candidate.join(".jhol-ok"), &identity).is_err()
@@ -384,38 +479,13 @@ pub fn try_direct_bundle_projection(root: &Path) -> bool {
     true
 }
 
-/// Platform-native atomic directory clone
-/// Materialise a tree as a HARDLINK farm: every file shares the bundle inode.
-/// The jhol-native complement to CoW clonefile: identical content by
-/// construction (content-addressed bundle), ~1 syscall per node instead of a
-/// kernel metadata copy. Combined with read-only bundle files, plain writes
-/// fail EACCES (safe), unlink/rename stay project-local (safe), and drift is
-/// detectable by content hash with the CAS copy as the healing source.
-fn hardlink_farm(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir(dst)?;
-    let mut stack = vec![(src.to_path_buf(), dst.to_path_buf())];
-    while let Some((s, d)) = stack.pop() {
-        for entry in std::fs::read_dir(&s)? {
-            let entry = entry?;
-            let from = entry.path();
-            let to = d.join(entry.file_name());
-            let meta = std::fs::symlink_metadata(&from)?;
-            if meta.file_type().is_dir() {
-                std::fs::create_dir(&to)?;
-                stack.push((from, to));
-            } else if meta.file_type().is_symlink() {
-                #[cfg(unix)]
-                if let Ok(target) = std::fs::read_link(&from) {
-                    let _ = std::os::unix::fs::symlink(target, &to);
-                }
-            } else {
-                std::fs::hard_link(&from, &to)?;
-            }
-        }
-    }
-    Ok(())
+/// Preserve project isolation for the legacy replay-farm setting. Hard links
+/// share writable file data with the bundle, so this route copies instead.
+fn isolated_replay_copy(src: &Path, dst: &Path) -> std::io::Result<()> {
+    copy_dir_recursive(src, dst)
 }
 
+/// Platform-native atomic directory clone
 pub fn clone_directory(src: &Path, dst: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
     {
@@ -446,10 +516,9 @@ pub fn clone_directory(src: &Path, dst: &Path) -> std::io::Result<()> {
                 .map(|m| m.file_type().is_symlink())
                 .unwrap_or(false)
             {
-                if let Ok(target) = std::fs::read_link(src) {
-                    let _ = std::os::unix::fs::symlink(&target, dst);
-                    return Ok(());
-                }
+                let target = std::fs::read_link(src)?;
+                std::os::unix::fs::symlink(&target, dst)?;
+                return Ok(());
             }
             Err(Box::new(err))
         }
@@ -465,7 +534,12 @@ pub fn clone_directory(src: &Path, dst: &Path) -> std::io::Result<()> {
         if entries.is_empty() {
             return std::fs::create_dir_all(dst);
         }
-        if std::fs::create_dir(dst).is_err() && dst.read_dir().map(|mut r| r.next().is_some()).unwrap_or(true) {
+        if std::fs::create_dir(dst).is_err()
+            && dst
+                .read_dir()
+                .map(|mut r| r.next().is_some())
+                .unwrap_or(true)
+        {
             // dst already existed with content — treat as failure, caller cleans up.
             return Err(std::io::Error::other("clone destination exists"));
         }
@@ -481,8 +555,7 @@ pub fn clone_directory(src: &Path, dst: &Path) -> std::io::Result<()> {
                         let name = e.file_name();
                         if let Err(err) = clone_one(&e.path(), &dst.join(&name)) {
                             if first_err.is_none() {
-                                first_err =
-                                    Some(std::io::Error::other(format!("{name:?}: {err}")));
+                                first_err = Some(std::io::Error::other(format!("{name:?}: {err}")));
                             }
                         }
                     }
@@ -547,7 +620,14 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
             #[cfg(windows)]
             {
                 let link_target = std::fs::read_link(&src_path)?;
-                std::os::windows::fs::symlink_file(&link_target, &dst_path)?;
+                if std::fs::metadata(&src_path)
+                    .map(|target| target.is_dir())
+                    .unwrap_or(false)
+                {
+                    std::os::windows::fs::symlink_dir(&link_target, &dst_path)?;
+                } else {
+                    std::os::windows::fs::symlink_file(&link_target, &dst_path)?;
+                }
             }
         } else if meta.is_dir() {
             copy_dir_recursive(&src_path, &dst_path)?;
@@ -560,6 +640,36 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn bundle_replay_age_rule_declines_old_markers() {
+        if std::env::var("JHOL_OFFLINE").is_ok() || std::env::var("JHOL_PACKUMENT_TTL_SECS").is_ok()
+        {
+            return; // environment overrides the default policy under test
+        }
+        let dir = std::env::temp_dir().join(format!("jhol-tramp-ttl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join(".jhol-complete");
+        assert!(
+            !super::bundle_within_ttl(&marker),
+            "missing marker is never fresh"
+        );
+        std::fs::write(&marker, b"x").unwrap();
+        assert!(super::bundle_within_ttl(&marker), "new marker is fresh");
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&marker)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        assert!(
+            !super::bundle_within_ttl(&marker),
+            "2 h old exceeds the 1 h default"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     use super::*;
     use tempfile::tempdir;
 
@@ -568,12 +678,20 @@ mod tests {
         let root = tempdir().unwrap();
         let path = root.path().join(".jholrc");
         assert!(!config_requires_cli(&path));
-        for input in [r#"{"hooks":{"preInstall":"check"}}"#, r#"{"noScripts":false}"#,
-            r#"{"install":{"noScripts":false}}"#, "invalid"] {
+        for input in [
+            r#"{"hooks":{"preInstall":"check"}}"#,
+            r#"{"noScripts":false}"#,
+            r#"{"install":{"noScripts":false}}"#,
+            "invalid",
+        ] {
             std::fs::write(&path, input).unwrap();
             assert!(config_requires_cli(&path));
         }
-        std::fs::write(&path, r#"{"output":{"quiet":true},"install":{"noScripts":true}}"#).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"output":{"quiet":true},"install":{"noScripts":true}}"#,
+        )
+        .unwrap();
         assert!(!config_requires_cli(&path));
     }
 
@@ -612,6 +730,111 @@ mod tests {
     }
 
     #[test]
+    fn locked_layout_checks_package_names_and_preserves_aliases() {
+        let dir = tempdir().unwrap();
+        let node_modules = dir.path().join("node_modules");
+        std::fs::write(
+            dir.path().join("package-lock.json"),
+            r#"{"lockfileVersion":3,"packages":{
+                "node_modules/my-lodash":{"name":"lodash","version":"4.17.21"},
+                "node_modules/@scope/widget":{"version":"2.0.0"}
+            }}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(node_modules.join("my-lodash")).unwrap();
+        std::fs::write(
+            node_modules.join("my-lodash/package.json"),
+            r#"{"name":"lodash","version":"4.17.21"}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(node_modules.join("@scope/widget")).unwrap();
+        std::fs::write(
+            node_modules.join("@scope/widget/package.json"),
+            r#"{"name":"@scope/widget","version":"2.0.0"}"#,
+        )
+        .unwrap();
+
+        assert!(locked_layout_is_valid(dir.path(), &node_modules));
+
+        std::fs::write(
+            node_modules.join("my-lodash/package.json"),
+            r#"{"name":"my-lodash","version":"4.17.21"}"#,
+        )
+        .unwrap();
+        assert!(!locked_layout_is_valid(dir.path(), &node_modules));
+
+        std::fs::write(
+            node_modules.join("my-lodash/package.json"),
+            r#"{"name":"lodash","version":"4.17.21"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            node_modules.join("@scope/widget/package.json"),
+            r#"{"name":"wrong-widget","version":"2.0.0"}"#,
+        )
+        .unwrap();
+        assert!(!locked_layout_is_valid(dir.path(), &node_modules));
+
+        std::fs::write(
+            node_modules.join("@scope/widget/package.json"),
+            r#"{"name":"@scope/widget","version":"2.0.0"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("package-lock.json"),
+            r#"{"lockfileVersion":3,"packages":{"node_modules/@scope/widget":{}}}"#,
+        )
+        .unwrap();
+        assert!(!locked_layout_is_valid(dir.path(), &node_modules));
+    }
+
+    #[test]
+    fn replay_copy_keeps_project_writes_out_of_shared_bundle() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("bundle");
+        let destination = dir.path().join("project-node-modules");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("package.js"), b"bundle contents").unwrap();
+
+        isolated_replay_copy(&source, &destination).unwrap();
+        std::fs::write(destination.join("package.js"), b"project change").unwrap();
+
+        assert_eq!(
+            std::fs::read(source.join("package.js")).unwrap(),
+            b"bundle contents"
+        );
+        assert_eq!(
+            std::fs::read(destination.join("package.js")).unwrap(),
+            b"project change"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clone_directory_preserves_package_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("bundle");
+        let destination = dir.path().join("project-node-modules");
+        std::fs::create_dir_all(source.join("pkg")).unwrap();
+        std::fs::write(source.join("pkg/cli.js"), b"#!/usr/bin/env node\n").unwrap();
+        symlink("../pkg/cli.js", source.join("tool")).unwrap();
+
+        clone_directory(&source, &destination).unwrap();
+
+        let link = destination.join("tool");
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::read_link(link).unwrap(),
+            PathBuf::from("../pkg/cli.js")
+        );
+    }
+
+    #[test]
     fn unsafe_lock_paths_miss() {
         assert!(safe_lock_path("node_modules/a").is_some());
         assert!(safe_lock_path("node_modules/../outside").is_none());
@@ -626,10 +849,19 @@ mod tests {
             "node_modules/optional": {"version":"1.0.0", "optional":true, "os":["__unavailable_platform__"]}
         }});
         std::fs::write(dir.path().join("package-lock.json"), lock.to_string()).unwrap();
-        assert!(locked_layout_is_valid(dir.path(), &dir.path().join("node_modules")));
-        lock["packages"]["node_modules/optional"].as_object_mut().unwrap().remove("os");
+        assert!(locked_layout_is_valid(
+            dir.path(),
+            &dir.path().join("node_modules")
+        ));
+        lock["packages"]["node_modules/optional"]
+            .as_object_mut()
+            .unwrap()
+            .remove("os");
         std::fs::write(dir.path().join("package-lock.json"), lock.to_string()).unwrap();
-        assert!(!locked_layout_is_valid(dir.path(), &dir.path().join("node_modules")));
+        assert!(!locked_layout_is_valid(
+            dir.path(),
+            &dir.path().join("node_modules")
+        ));
     }
 
     #[test]
@@ -641,8 +873,11 @@ mod tests {
         let pj = dir.path().join("package.json");
         std::fs::write(&pj, r#"{"dependencies":{"lodash":"4.17.21"}}"#).unwrap();
 
-        std::fs::write(dir.path().join("package-lock.json"),
-            r#"{"lockfileVersion":3,"packages":{"node_modules/lodash":{"version":"4.17.21"}}}"#).unwrap();
+        std::fs::write(
+            dir.path().join("package-lock.json"),
+            r#"{"lockfileVersion":3,"packages":{"node_modules/lodash":{"version":"4.17.21"}}}"#,
+        )
+        .unwrap();
         let hash = project_identity(dir.path()).unwrap();
         let bundle_dir = cache.join("grid").join("bundles").join(&hash);
         let bundle_nm = bundle_dir.join("node_modules");
@@ -666,7 +901,10 @@ mod tests {
         std::fs::remove_dir_all(dir.path().join("node_modules")).unwrap();
         std::fs::write(dir.path().join("package-lock.json"),
             r#"{"lockfileVersion":3,"packages":{"node_modules/lodash":{"version":"4.17.21","integrity":"changed"}}}"#).unwrap();
-        assert!(!try_direct_bundle_projection(dir.path()), "replayed bundle across changed lock integrity");
+        assert!(
+            !try_direct_bundle_projection(dir.path()),
+            "replayed bundle across changed lock integrity"
+        );
 
         std::env::remove_var("JHOL_CACHE_DIR");
     }
@@ -712,7 +950,9 @@ pub fn try_fresh_project_bundle_replay(root: &Path) -> bool {
         return false;
     };
     let key = deps_manifest_key(&pj);
-    if timing { eprintln!("[tramp]   2b key: {:?}", tp.elapsed()); }
+    if timing {
+        eprintln!("[tramp]   2b key: {:?}", tp.elapsed());
+    }
     let tp = std::time::Instant::now();
     let bundles = cache_dir().join("grid").join("bundles");
     let bundle_dir = bundles.join(&key);
@@ -720,10 +960,18 @@ pub fn try_fresh_project_bundle_replay(root: &Path) -> bool {
     if !source.is_dir() || !bundle_dir.join(".jhol-complete").is_file() {
         return false;
     }
+    // Lockfile-less replay: same age rule as jhol-core's metadata TTL
+    // (`origin::within_metadata_ttl`; keep in sync). An old bundle may hold
+    // superseded picks, so decline and let the full path resolve live.
+    if !bundle_within_ttl(&bundle_dir.join(".jhol-complete")) {
+        return false;
+    }
     let Ok(lock_bytes) = std::fs::read(bundle_dir.join("package-lock.json")) else {
         return false;
     };
-    if timing { eprintln!("[tramp]   2b lookup+lock read: {:?}", tp.elapsed()); }
+    if timing {
+        eprintln!("[tramp]   2b lookup+lock read: {:?}", tp.elapsed());
+    }
     let tp = std::time::Instant::now();
 
     let nonce = std::time::SystemTime::now()
@@ -733,7 +981,7 @@ pub fn try_fresh_project_bundle_replay(root: &Path) -> bool {
     let candidate = root.join(format!(".jhol-replay-{}-{nonce}", std::process::id()));
     let farm_mode = std::env::var("JHOL_REPLAY_FARM").is_ok();
     let mat = if farm_mode {
-        hardlink_farm(&source, &candidate)
+        isolated_replay_copy(&source, &candidate)
     } else {
         clone_directory(&source, &candidate)
     };
@@ -749,7 +997,13 @@ pub fn try_fresh_project_bundle_replay(root: &Path) -> bool {
             return false;
         }
     }
-    if timing { eprintln!("[tramp]   2b {}: {:?}", if farm_mode {"farm"} else {"clone"}, tp.elapsed()); }
+    if timing {
+        eprintln!(
+            "[tramp]   2b {}: {:?}",
+            if farm_mode { "farm" } else { "clone" },
+            tp.elapsed()
+        );
+    }
     let tp = std::time::Instant::now();
     if std::fs::write(root.join("package-lock.json"), &lock_bytes).is_err() {
         let _ = std::fs::remove_dir_all(&candidate);
@@ -762,8 +1016,36 @@ pub fn try_fresh_project_bundle_replay(root: &Path) -> bool {
         let _ = std::fs::remove_dir_all(&candidate);
         return false;
     }
-    if timing { eprintln!("[tramp]   2b lock+identity+rename: {:?}", tp.elapsed()); }
+    if timing {
+        eprintln!("[tramp]   2b lock+identity+rename: {:?}", tp.elapsed());
+    }
     true
+}
+
+/// Age rule for lockfile-less bundle replay. Mirrors jhol-core's
+/// `origin::within_metadata_ttl`: `JHOL_OFFLINE` trusts any age,
+/// `JHOL_PACKUMENT_TTL_SECS` overrides the 3600 s default (0 = forever).
+fn bundle_within_ttl(marker: &Path) -> bool {
+    let offline = std::env::var("JHOL_OFFLINE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if offline {
+        return true;
+    }
+    let ttl = std::env::var("JHOL_PACKUMENT_TTL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(3600);
+    if ttl == 0 {
+        return true;
+    }
+    match std::fs::metadata(marker).and_then(|m| m.modified()) {
+        Ok(written) => written
+            .elapsed()
+            .map(|age| age.as_secs() < ttl)
+            .unwrap_or(true),
+        Err(_) => false,
+    }
 }
 
 /// Must match `BundleCache::deps_manifest_key` in jhol-core byte for byte.

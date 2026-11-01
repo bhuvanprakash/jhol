@@ -1,0 +1,77 @@
+{
+  "note": "After wave-parallel JMR expand + in-worker link + npm exact pins",
+  "runs": [
+    {
+      "label": "jhol-cold-1",
+      "tool": "jhol",
+      "mode": "cold",
+      "seconds": 4.57,
+      "exit": 0,
+      "nm_top": 96,
+      "express": true
+    },
+    {
+      "label": "jhol-warm-1",
+      "tool": "jhol",
+      "mode": "warm",
+      "seconds": 0.082,
+      "exit": 0,
+      "nm_top": 96,
+      "express": true
+    },
+    {
+      "label": "jhol-cold-2",
+      "tool": "jhol",
+      "mode": "cold",
+      "seconds": 4.979,
+      "exit": 0,
+      "nm_top": 96,
+      "express": true
+    },
+    {
+      "label": "jhol-warm-2",
+      "tool": "jhol",
+      "mode": "warm",
+      "seconds": 0.082,
+      "exit": 0,
+      "nm_top": 96,
+      "express": true
+    },
+    {
+      "label": "bun-cold-1",
+      "tool": "bun",
+      "mode": "cold",
+      "seconds": 5.615,
+      "exit": 0,
+      "nm_top": 95,
+      "express": true
+    },
+    {
+      "label": "bun-warm-1",
+      "tool": "bun",
+      "mode": "warm",
+      "seconds": 0.044,
+      "exit": 0,
+      "nm_top": 95,
+      "express": true
+    },
+    {
+      "label": "bun-cold-2",
+      "tool": "bun",
+      "mode": "cold",
+      "seconds": 4.22,
+      "exit": 0,
+      "nm_top": 95,
+      "express": true
+    },
+    {
+      "label": "bun-warm-2",
+      "tool": "bun",
+      "mode": "warm",
+      "seconds": 0.045,
+      "exit": 0,
+      "nm_top": 95,
+      "express": true
+    }
+  ]
+}

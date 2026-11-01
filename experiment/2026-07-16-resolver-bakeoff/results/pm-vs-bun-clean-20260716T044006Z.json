@@ -1,0 +1,117 @@
+{
+  "timestamp_utc": "20260716T044006Z",
+  "fixture": "tests/fixtures/express-app/package.json",
+  "bakeoff_root": "/tmp/jhol-bakeoff-18610",
+  "notes": [
+    "jhol exited 0 and wrote package-lock.json but node_modules had no express/nodemon package directories.",
+    "nm_pkgs counts non-dot direct child directories under node_modules."
+  ],
+  "runs": [
+    {
+      "tool": "jhol",
+      "mode": "cold",
+      "repeat": 1,
+      "seconds": 0.0,
+      "exit": 0,
+      "nm_pkgs": 0,
+      "express_present": false,
+      "nodemon_present": false,
+      "jhol_jagr_l1": "auto"
+    },
+    {
+      "tool": "jhol",
+      "mode": "cold",
+      "repeat": 2,
+      "seconds": 0.0,
+      "exit": 0,
+      "nm_pkgs": 0,
+      "express_present": false,
+      "nodemon_present": false,
+      "jhol_jagr_l1": "auto"
+    },
+    {
+      "tool": "jhol",
+      "mode": "cold-knot",
+      "repeat": 1,
+      "seconds": 0.0,
+      "exit": 0,
+      "nm_pkgs": 0,
+      "express_present": false,
+      "nodemon_present": false,
+      "jhol_jagr_l1": "knot"
+    },
+    {
+      "tool": "jhol",
+      "mode": "cold-knot",
+      "repeat": 2,
+      "seconds": 0.0,
+      "exit": 0,
+      "nm_pkgs": 0,
+      "express_present": false,
+      "nodemon_present": false,
+      "jhol_jagr_l1": "knot"
+    },
+    {
+      "tool": "jhol",
+      "mode": "warm",
+      "repeat": 1,
+      "seconds": 0.0,
+      "exit": 0,
+      "nm_pkgs": 0,
+      "express_present": false,
+      "nodemon_present": false,
+      "jhol_jagr_l1": "auto"
+    },
+    {
+      "tool": "jhol",
+      "mode": "warm",
+      "repeat": 2,
+      "seconds": 0.0,
+      "exit": 0,
+      "nm_pkgs": 0,
+      "express_present": true,
+      "nodemon_present": true,
+      "jhol_jagr_l1": "auto"
+    },
+    {
+      "tool": "bun",
+      "mode": "cold",
+      "repeat": 1,
+      "seconds": 0.0,
+      "exit": 0,
+      "nm_pkgs": 95,
+      "express_present": true,
+      "nodemon_present": true
+    },
+    {
+      "tool": "bun",
+      "mode": "cold",
+      "repeat": 2,
+      "seconds": 0.0,
+      "exit": 0,
+      "nm_pkgs": 95,
+      "express_present": true,
+      "nodemon_present": true
+    },
+    {
+      "tool": "bun",
+      "mode": "warm",
+      "repeat": 1,
+      "seconds": 0.0,
+      "exit": 0,
+      "nm_pkgs": 95,
+      "express_present": true,
+      "nodemon_present": true
+    },
+    {
+      "tool": "bun",
+      "mode": "warm",
+      "repeat": 2,
+      "seconds": 0.0,
+      "exit": 0,
+      "nm_pkgs": 95,
+      "express_present": true,
+      "nodemon_present": true
+    }
+  ]
+}

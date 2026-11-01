@@ -1,5 +1,17 @@
 # Production readiness — 2026-10-03
 
+Current continuation (2026-10-28): full-system readiness remains in progress.
+Verified local fixes cover formatter semantic preservation, static field and
+arrow-closure behavior, bounded Unicode lookahead, native-call dispatch, and
+JAGR replay validation, CPU/ABI gates, executable-memory publication and arena
+ownership/offset safety. Windows linking and Linux cross-checks pass; native
+runtime platform runs remain open. Current observations and remaining acceptance gates are
+kept in the [existing work state](../../.agents/work/performance/papers-to-runtime/state.json).
+Promises/microtasks, complete generator delegation, Unicode identifier-property
+validation, override/layout consistency, the platform matrix, and the full speed
+target still require evidence. Historical checks below certify their stated
+scope only.
+
 Workstream W2 of the production-ready upgrade. Scope: the five blockers that
 would embarrass a production user or reviewer today. Duplication is W1;
 archive/record is W3. Nothing was deleted, no git write was performed, and the
@@ -94,28 +106,22 @@ against its MANIFEST.
 
 ---
 
-## 3. Orphan crate `crates/jhol-cloud/`
+## 3. Formerly empty `crates/jhol-cloud/` (resolved 2026-10-24)
 
 **Before.** `crates/jhol-cloud/` was on disk but absent from `Cargo.toml`
-workspace members, so it was never built or tested.
+workspace members, so it was never built or tested. It contained no files.
 
-**Finding: it is an empty directory — zero files.**
+**Resolved.** The crate now has a manifest, `src/lib.rs`, and a workspace
+`members` entry. It implements an offline tenant/token/quota/routing domain
+model and request/response envelopes; 12 targeted tests pass.
 
-```sh
-find crates/jhol-cloud -type f | wc -l   # -> 0
-```
+**Still not delivered.** No server, persistence, transport security, live
+authorization, provider integration, or deployed `jhol cloud` service exists.
+Its token generator is explicitly not a CSPRNG and must be replaced before
+deployment.
 
-**Action: none, by the owner's rule.** Nothing looks removably unusable here
-because nothing is there: no `Cargo.toml`, no source, no `.gitkeep`. Adding
-`crates/jhol-cloud` to `Cargo.toml` members would break
-`cargo check --workspace --all-targets` (a member must contain a manifest), so
-the workspace was **not** touched. No file was deleted.
-
-**Request for W3:** record `crates/jhol-cloud/` in
-`docs/archive-record/UNWIRED_BUT_KEPT.md` as an empty directory (no files, no
-manifest, not a workspace member). Archive it as an *empty directory* only if
-`archive/` can represent that; if not, the record alone is the correct outcome —
-there is no content to preserve.
+**Historical note.** `docs/archive-record/UNWIRED_BUT_KEPT.md` C1 keeps the
+original empty-directory finding and now records the resolution.
 
 ---
 
@@ -233,8 +239,9 @@ the orchestrator's final reconciliation.
    runs from `archive/scripts/` in CI but is not part of the live `scripts/`
    surface. Restoring them into `scripts/` (and deciding their ownership) is a
    real decision the owner should make; the W2 fix is honest-docs only.
-4. **`crates/jhol-cloud/`** — empty directory, not a workspace member. W3 records
-   it; there is nothing to restore.
+4. **`crates/jhol-cloud/`** — resolved as a buildable workspace member with an
+   offline domain model and 12 tests. Deployment remains open; there is no live
+   service to restore or verify.
 5. **Two `## [Unreleased]` sections** in `CHANGELOG.md` (line 26 and line 1810)
    with identical compare links. Left as-is deliberately (see §4).
 6. **`--resolver` real dispatch.** If the owner wants six genuinely distinct,

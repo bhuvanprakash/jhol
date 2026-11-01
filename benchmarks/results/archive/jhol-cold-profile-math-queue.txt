@@ -1,0 +1,63 @@
+exit=1 elapsed=19.008s
+
+STDERR
+[2026-03-12 02:41:16] Installing dependencies from package.json
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=268 package=loose-envify bytes=4759
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=269 package=sharp bytes=251098
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=300 package=caniuse-lite bytes=1190304
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=38 package=content-type bytes=5536
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=40 package=vary bytes=4471
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=45 package=methods bytes=3634
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=47 package=escape-html bytes=2563
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=104 package=range-parser bytes=7601
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=109 package=parseurl bytes=7304
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=116 package=proxy-addr bytes=23445
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=116 package=type-is bytes=27215
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=118 package=encodeurl bytes=2943
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=180 package=etag bytes=9009
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=188 package=accepts bytes=26951
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=540 package=scheduler bytes=2604466
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=39 package=picocolors bytes=5887
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=39 package=streamsearch bytes=5718
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=42 package=js-tokens bytes=18314
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=44 package=source-map-js bytes=7731
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=63 package=tslib bytes=42915
+[2026-03-12 02:41:17] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=64 package=mime-types bytes=54950
+[2026-03-12 02:41:18] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=71 package=nanoid bytes=144434
+[2026-03-12 02:41:18] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=56 package=side-channel bytes=10144
+[2026-03-12 02:41:18] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=37 package=ms bytes=29397
+[2026-03-12 02:41:18] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=37 package=safer-buffer bytes=3543
+[2026-03-12 02:41:18] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=67 package=side-channel-list bytes=1191
+[2026-03-12 02:41:18] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=46 package=side-channel-map bytes=2423
+[2026-03-12 02:41:18] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=46 package=object-inspect bytes=41631
+[2026-03-12 02:41:18] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=39 package=side-channel-weakmap bytes=3731
+[2026-03-12 02:41:18] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=31 package=es-errors bytes=4277
+[2026-03-12 02:41:18] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=57 package=call-bound bytes=4871
+[2026-03-12 02:41:18] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=39 package=get-intrinsic bytes=27579
+[2026-03-12 02:41:18] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=39 package=call-bind-apply-helpers bytes=3677
+[2026-03-12 02:41:19] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=39 package=has-symbols bytes=7061
+[2026-03-12 02:41:19] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=48 package=math-intrinsics bytes=2182
+[2026-03-12 02:41:20] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=1202 package=gopd bytes=3782
+[2026-03-12 02:41:20] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=38 package=es-define-property bytes=1985
+[2026-03-12 02:41:20] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=33 package=async-generator-function bytes=1116
+[2026-03-12 02:41:20] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=40 package=function-bind bytes=3724
+[2026-03-12 02:41:20] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=41 package=es-object-atoms bytes=3800
+[2026-03-12 02:41:20] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=48 package=hasown bytes=3513
+[2026-03-12 02:41:20] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=36 package=get-proto bytes=1965
+[2026-03-12 02:41:20] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=64 package=async-function bytes=1536
+[2026-03-12 02:41:20] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=46 package=generator-function bytes=2659
+[2026-03-12 02:41:21] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=933 package=dunder-proto bytes=2071
+[2026-03-12 02:41:21] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=53 package=detect-libc bytes=17663
+[2026-03-12 02:41:21] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=77 package=semver bytes=96449
+[2026-03-12 02:41:21] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=358 package=color bytes=44794
+[2026-03-12 02:41:23] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=368 package=color-string bytes=38170
+[2026-03-12 02:41:23] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=60 package=color-convert bytes=26557
+[2026-03-12 02:41:24] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=959 package=simple-swizzle bytes=3493
+[2026-03-12 02:41:24] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=45 package=color-name bytes=7908
+[2026-03-12 02:41:24] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=39 package=is-arrayish bytes=6137
+[2026-03-12 02:41:24] warning: JAGR-3 resolver failed, falling back to pubgrub-v2: Dependency conflict: Dependency conflict for ms (constraints: 2.0.0, 2.1.3).
+[2026-03-12 02:41:30] [jhol-cold-profile] stage=fetch_metadata.network elapsed_ms=166 package=unpipe bytes=673
+Configuration error in resolve_full_graph: JAGR-3 failed: Dependency conflict: Dependency conflict for ms (constraints: 2.0.0, 2.1.3).; pubgrub-v2 failed: Dependency conflict: send requires encodeurl ~1.0.2, resolved 2.0.0; debug requires ms 2.0.0, resolved 2.1.3 (field: package.json)
+
+
+STDOUT

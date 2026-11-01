@@ -1,0 +1,56 @@
+{
+  "name": "topo_vs_pulse_microbench",
+  "note": "Structural cost only. Not resolver correctness.",
+  "dual_geometry_proxy_cubic": [
+    {
+      "n": 32,
+      "seconds_median": 0.00024070893414318562,
+      "model": "dense_gf2_elim"
+    },
+    {
+      "n": 64,
+      "seconds_median": 0.0009753750637173653,
+      "model": "dense_gf2_elim"
+    },
+    {
+      "n": 96,
+      "seconds_median": 0.003140666987746954,
+      "model": "dense_gf2_elim"
+    },
+    {
+      "n": 128,
+      "seconds_median": 0.00579904206097126,
+      "model": "dense_gf2_elim"
+    }
+  ],
+  "pulse_force_wave": [
+    {
+      "packages": 50,
+      "versions": 16,
+      "edges": 200,
+      "seconds_median": 9.212503209710121e-05,
+      "model": "bitset_force_wave"
+    },
+    {
+      "packages": 200,
+      "versions": 16,
+      "edges": 800,
+      "seconds_median": 0.00039662490598857403,
+      "model": "bitset_force_wave"
+    },
+    {
+      "packages": 500,
+      "versions": 16,
+      "edges": 2000,
+      "seconds_median": 0.0013228749157860875,
+      "model": "bitset_force_wave"
+    },
+    {
+      "packages": 1000,
+      "versions": 16,
+      "edges": 4000,
+      "seconds_median": 0.002809499972499907,
+      "model": "bitset_force_wave"
+    }
+  ]
+}
