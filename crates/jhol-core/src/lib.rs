@@ -1,6 +1,7 @@
 //! Core library for Jhol: cache, install, doctor, registry, lockfile, backend, audit.
 //! Used by the CLI binary; can be reused by other tools (e.g. LSP, server).
 
+pub mod adversarial_install;
 pub mod audit;
 pub mod backend;
 pub mod bin_links;
@@ -46,6 +47,8 @@ pub mod prefetch;
 pub mod progress;
 pub mod pubgrub;
 pub mod registry;
+pub mod pack;
+pub mod registry_query;
 pub mod resolution_mirror;
 pub mod run;
 pub mod safe_file;

@@ -3995,14 +3995,17 @@ fn extract_tar_from_bytes(decompressed: &[u8], dest_dir: &Path) -> Result<(), St
         let (out_path, rel_path, entry_type, link_name_buf) = {
             let path_bytes = entry.path_bytes();
             let Ok(path_str) = std::str::from_utf8(&path_bytes) else {
-                continue;
+                return Err("Unsafe archive entry: non-UTF-8 path".into());
             };
+            // Fail closed on unnormalizable entries: a backslash-only path has
+            // no separator to strip, and silently omitting a file a package
+            // expects is itself an attack (breakage by omission).
             let Some(idx) = path_str.find('/') else {
-                continue;
+                return Err(format!("Unsafe archive entry path: {}", path_str));
             };
             let rel_str = &path_str[idx + 1..];
             if rel_str.is_empty() {
-                continue;
+                return Err("Unsafe archive entry path: empty after strip".into());
             }
 
             let parts: smallvec::SmallVec<[&str; 8]> =
@@ -4284,6 +4287,14 @@ pub fn ensure_unpacked_in_store(tarball_path: &Path, cache_dir: &Path) -> Result
 }
 
 /// Public full extract from in-memory tarball bytes (Soul Path / JAGR-S).
+/// SRI string for arbitrary bytes: `sha512-<base64(digest)>`. Used by the
+/// store GC to match content-addressed tarballs against lockfile integrities.
+pub fn sri_of_bytes(data: &[u8]) -> String {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use sha2::Sha512;
+    format!("sha512-{}", B64.encode(Sha512::digest(data)))
+}
+
 pub fn extract_tarball_bytes_public(tarball_data: &[u8], dest_dir: &Path) -> Result<(), String> {
     extract_tarball_bytes_to_dir(tarball_data, dest_dir)
 }

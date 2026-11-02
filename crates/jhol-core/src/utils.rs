@@ -1182,6 +1182,15 @@ pub fn verify_sri(path: &Path, sri: &str) -> bool {
 }
 
 /// SHA256 hash of file (hex)
+/// SHA-256 hex of a byte slice, matching `content_hash` for whole files.
+pub fn content_hash_bytes(data: &[u8]) -> String {
+    use sha2::Digest as _;
+    let mut h = Sha256::new();
+    h.update(data);
+    let d = h.finalize();
+    d.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
 pub fn content_hash(path: &Path) -> Result<String> {
     let mut f = File::open(path)?;
     let mut hasher = Sha256::new();

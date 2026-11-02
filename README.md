@@ -229,11 +229,29 @@ In CI, `jhol cache key` is the cache key. `jhol ci` skips resolution and packume
 | [Store v3](./docs/design/JAGRS_STORE_V3_BREAKTHROUGH_RECORD.md) | `.jagrs` layout |
 | [Instance model](./docs/plans/e145-instance-model.md) | Nested versions |
 | [Innovation log](./docs/internal/INNOVATION_LOG.md) | What was kept, and what was measured and dropped |
+| [How We Won](./HOW-WE-WON.md) | 11/11 vs Bun: standings, method, caught bugs |
 | [Changelog](./CHANGELOG.md) | Releases |
 
 ---
 
 ## Benchmarks
+
+### JholVM engine vs Bun — 11/11
+
+The JS engine inside `jhol run` beats Bun on **all 11** engine benchmarks in
+a simultaneous same-seconds A/B: **suite 390 ms vs 552 ms (1.42x ahead)**,
+with wins up to 2.7x (`gc_stress`). Correctness is pinned byte-for-byte
+against node: 44/44 corpus (JIT on and off), 86/86 unit tests, both quality
+gates PASS. The full record — method, per-fix measurements, the bugs the
+gate caught, and the honest open items — is
+**[HOW-WE-WON.md](./HOW-WE-WON.md)**.
+
+```sh
+cargo build --release --features jholvm
+crates/jhol-vm/bench/run_bench.sh --jholvm --bun --runs 5
+```
+
+### Install / package-manager benchmarks
 
 ```sh
 cargo build --release

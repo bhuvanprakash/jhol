@@ -24,6 +24,218 @@ the project uses [Semantic Versioning](https://semver.org/).
 ---
 
 
+## [Unreleased] — P1/P2: registry read paths, deterministic pack, cache GC, housekeeping
+
+### Added — `jhol view` / `jhol search`
+
+Read paths for the registry, no install required. `view <pkg>[@version]`
+renders dist-tags, the version count, description/license/homepage, the
+dependency list and the tarball integrity. `search <term> [--limit N]` renders
+the registry search endpoint (name@version, date, description).
+
+### Added — `jhol pack`: deterministic, reproducible tarballs
+
+Byte-identical output across re-packs of the same directory — implemented
+directly: entries sorted, tar mtimes pinned to the epoch, and a hand-built
+gzip container with `mtime=0` and `OS=255` rather than a library header whose
+byte layout is an implementation detail. Verify by packing twice and
+comparing hashes (a check that does not pass for every tool in this space).
+Inclusion is our own implementation (no packlist dependency): `package.json`
+plus README/LICENSE/CHANGELOG always, the `files` list when present, default
+excludes (node_modules, VCS, editor droppings, `.jhol`) otherwise.
+
+### Added — `jhol cache gc`: SRI-reachability sweep
+
+Cache growth is now bounded by *reachability*, not recency: a store entry
+survives if some lockfile references its integrity, and is reclaimed if none
+does. `--from <lockfile...>` (default `./package-lock.json`), `--dry-run` to
+report first.
+
+Both halves of the cache are swept: `store/*.tgz` (matched by
+`sha512-<base64>` against lockfile integrities) and `store_unpacked/<xx>/<hash>`
+(the trees that actually dominate a mature cache; matched through
+`store_index.json`'s name@version → hash mapping). **Fail-safe by
+construction**: an entry we cannot classify is kept, and with no store index
+the sweep is a no-op rather than a mass delete.
+
+#### The bug this shipped with, and why it is now pinned
+
+The first version compared `format!("sha512-{}", sri_of_bytes(bytes))` —
+double-prefixing a function that already returns the prefix — so **nothing
+matched, and the sweep deleted every cached tarball while reporting
+"0 reachable"**. Found by testing against a real project whose lockfile
+referenced 87 packages: the sweep claimed 0. Five unit tests now pin the
+safety property (referenced survives, unreferenced goes, dry-run deletes
+nothing, no-index is a no-op) and the installer gate adds the end-to-end
+consequence: **install → gc → offline install must still succeed** (2,106
+files). Measured on a real cache: 9.5 MB reclaimed, offline install intact.
+
+### Changed — offline errors are actionable
+
+`--offline` failures now name the exact remedy (`jhol prefetch`) instead of
+just the missing packages.
+
+### Housekeeping
+
+- 62 `.bak-<timestamp>` files deleted across the tree (source, docs, CI
+  workflows). They shipped noise, poisoned greps, and made a search for
+  "what is current" ambiguous. Git history is the backup.
+- Windows CI exists in the live workflow (`windows-latest` jobs) — local
+  verification is not possible on this host; the 59 `cfg(windows)` sites are
+  covered by that job rather than by this machine.
+
+### Still open (stated, not hidden)
+
+- The write path: `publish` / `login` / `logout`. jhol is install-side only
+  today. Either build it (scoped auth, `pack` + PUT with provenance) or write
+  "install-only by design" as an explicit non-goal — `pack` (above) is the
+  first half of it.
+- `src/main.rs` is ~7.6k lines and holds two clap builders (one dead). Every
+  new subcommand is a chance to add to the wrong one — it happened twice
+  during this work.
+
+## [Unreleased] — 11/11: Jhol beats Bun on every benchmark
+
+Full write-up: **`HOW-WE-WON.md`** (the standings table, the method, every
+fix with its measured effect, every bug the gate caught, and the open items).
+
+Simultaneous A/B, both engines in the same seconds, load 12.6:
+
+| | jhol | bun |
+|---|---:|---:|
+| suite total (11 benchmarks) | **390 ms** | 552 ms |
+| wins | **11 / 11** | 0 / 11 |
+| margin | **1.42x ahead** | — |
+
+Session arc: 19,425 ms and ~4/11 wins at the start -> 390 ms and 11/11
+(~50x faster under load, ~100-150x quiet), win rate
+`4 -> 7 -> 8 -> 9 -> 10 -> 11` across the passes.
+
+The three benches that closed last, and how:
+
+- **string_build** (1.17x behind -> WIN): the hash loop ran interpreted —
+  `FlushStr` existed nowhere in jit.rs, so any loop *reading* a built string
+  was silently rejected by the region compiler.
+- **json_roundtrip** (behind -> WIN): the creation loop needed `LoadK` of
+  string constants, `NewArray`, and an Add/Sub slow path with full JS
+  semantics (`region_arith_full`) — without which `"it" + i` deopted the
+  region permanently.
+- **object_props** (1.44x -> parity -> WIN): the `i < 4096` dense-array
+  cliff, `INLINE_PROPS` 4 -> 6 (the fifth property heap-spilled every
+  object), and primitive-receiver ICs in the JIT's property reads.
+
+Quality on the shipped state: 86/86 engine tests, 44/44 corpus byte-identical
+to node with JIT on *and* off, 13/13 installer adversarial tests, 1,483/1,483
+real-world files, both gates PASS, cold install 3.3x faster than bun.
+
+## [Unreleased] — JIT region compiler: FlushStr, NewArray, string constants, nested-literal correctness
+
+Four gaps in the counted-loop region compiler (`jit.rs`) were silently
+disabling compilation — loops that could not compile ran interpreted
+forever, and one produced wrong answers:
+
+- **`FlushStr` was unsupported anywhere in jit.rs.** Any loop that *reads* a
+  string being built (`s.length`, `s.charCodeAt(i)` in a hash loop) emits an
+  accumulator flush, so the whole region was rejected with no diagnostic.
+  `string_build` ran its hash loop interpreted — 1.17x behind bun. Now the
+  loop compiles and `string_build` wins.
+- **`LoadK` of string/singleton constants was rejected** (the constant
+  resolver is f64-only). Arena-stable `Value` bits are now baked into the
+  machine code at compile time — the non-moving arena and module string pool
+  make the address permanent.
+- **`NewArray` was missing** from the region predicate and codegen, which
+  made any loop containing a literal array (`tags: [i % 2 === 0, …]`)
+  ineligible. Implemented like `NewObjectLit`: elements from the frame
+  window, small arrays only (bigger bails to the interpreter, where growth
+  and sparsity live).
+- **Add/Sub deopted on their first non-Smi operand.** `"it" + i` bailed the
+  whole region (permanently — deopt sets state=ineligible). The slow path now
+  calls a new `region_arith_full` helper with full JS semantics (string
+  concatenation, ToPrimitive) instead of the numeric-only `region_binary`, so
+  the loop continues natively. Fractional constants (`x * 2.5`) likewise stop
+  deopting. Smi-only loops keep the identical inline path.
+
+### Correctness: nested object literals produced garbage in compiled loops
+
+The virtual-literal escape analysis (`escapes`) checked only an
+instruction's three operand fields. A nested literal's destination sits in
+the *outer* literal's value window (`c..c+n`), which is consumed wholesale —
+so the inner literal was marked virtual (never heap-allocated) while the
+outer copied its never-written register. Measured: `{ nest: { v: i*3, w:
+i*i } }` summed to 241,080 instead of 343,200. The escape detector now
+models both `NewObjectLit`'s value window and `NewArray`'s element window
+as consumers.
+
+All four benches affected by the compile gaps now compile with no deopt:
+`string_build` and `json_roundtrip` went from behind to **wins**, verified
+against node on nested-literal/array/string fixtures (`jt1`–`jt4`) plus the
+44-file corpus in both JIT modes.
+
+## [Unreleased] — installer hardening: Script Receipts, adversarial corpus, installer gate
+
+### Added — Script Receipts (content-addressed lifecycle consent)
+
+Install scripts are the number-one npm supply-chain attack vector. Jhol's
+answer is unlike npm (runs everything), pnpm (name-based allowlist that keeps
+trusting a package forever), or Yarn (a global toggle): **consent is bound to
+the artifact**.
+
+- A receipt is SHA-256 over `name@version`, the package's *exact* script
+  commands, and the tarball integrity (SRI) recorded in the lockfile.
+- Receipts live in `.jhol/script-receipts.json` — commit it like the
+  lockfile. CI needs no interactivity: recorded receipts replay; anything new
+  fails the step with the exact approval command.
+- **Tamper-evident by construction**: a republished tarball, a changed script
+  line, or a bumped version invalidates the receipt — the scripts stop
+  running until a human re-approves. A name-based allowlist cannot do this
+  (a compromised `lodash` keeps its name).
+- New commands: `jhol approve-scripts <pkg...> | --all` and
+  `jhol revoke-scripts <pkg...>`.
+- **The summary is always visible on every lane**: packages whose scripts
+  were skipped print `NOT run (no approval)` with the approval command, even
+  on the pre-clap fast lanes and the fresh-bundle replay lane, bypassing
+  output silencing — a skipped script the user never hears about is the
+  failure mode this feature exists to prevent.
+- **Failed approved scripts fail the install** (npm semantics): a build step
+  that did not complete means the package may be broken.
+- **npm re-run semantics**: scripts execute when a package is (re)installed,
+  not on every no-op install. The run marker is keyed to the receipt, so a
+  changed artifact re-runs automatically.
+- The lifecycle phase now runs at the convergence point of **every** install
+  lane (warm bypass, capsule replay, bare-metal fast lane, L0 projection,
+  full pipeline) — previously the fast paths silently skipped it.
+
+### Added — adversarial install corpus
+
+`crates/jhol-core/src/adversarial_install.rs`: 13 hostile-tarball and
+manifest fixtures, expectations fail-closed. Path traversal (`../`),
+absolute paths, backslash smuggling, drive-colon paths, hard links
+(tar-rs resolves them against the process CWD — fail closed), escaping
+symlinks, symlink interposition (write-through after a symlink is planted),
+duplicate entries, 8 MB manifests, and receipt tamper-evidence
+(script/integrity/version changes each invalidate approval). One real
+hardening landed from it: **unnormalizable archive entries now fail closed**
+— a backslash-only path has no separator to strip, and silently omitting a
+file a package expects is itself an attack (breakage by omission).
+
+### Added — installer quality gate
+
+`crates/jhol-core/verify.sh`, the same discipline the engine got: build,
+unit tests, adversarial corpus, and an end-to-end real-world offline install
+(88-package lockfile, 2,106 files) with **tree determinism** — two installs
+must be byte-identical (hash of every file). Measured against bun on the
+same fixture with caches cleared: warm install at the measurement floor on
+both (< 50 ms), **cold install 0.56 s vs bun 1.86 s (3.3x faster)**.
+
+### Fixed
+
+- `array_proto`, `string_proto`, and `number_proto` each contained a
+  recursive fallback (`self.array_proto()` inside `array_proto()`) — one
+  unset cache away from a stack overflow, latent because install order
+  always initialized them.
+- Archive entries with no normalizable path are rejected instead of silently
+  skipped (see adversarial corpus above).
+
 ## [2.0.0] — Damascus
 
 **Codename Damascus** — folded steel: many layers welded into one instrument,

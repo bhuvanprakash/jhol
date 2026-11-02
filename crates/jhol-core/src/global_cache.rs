@@ -325,6 +325,13 @@ impl GlobalCache {
     }
 }
 
+/// The root directory the global cache and content store live under.
+pub fn global_cache_dir() -> std::path::PathBuf {
+    dirs::cache_dir()
+        .map(|d| d.join("jhol"))
+        .unwrap_or_else(|| PathBuf::from("~/.cache/jhol"))
+}
+
 /// Cache statistics
 #[derive(Debug, Clone)]
 pub struct CacheStats {

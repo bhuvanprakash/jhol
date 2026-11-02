@@ -391,6 +391,21 @@ fn print_install_summary(
     }
 }
 
+fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = n as f64;
+    let mut u = 0;
+    while v >= 1024.0 && u < UNITS.len() - 1 {
+        v /= 1024.0;
+        u += 1;
+    }
+    if u == 0 {
+        format!("{} B", n)
+    } else {
+        format!("{:.1} {}", v, UNITS[u])
+    }
+}
+
 /// Print a friendly, actionable error with consistent formatting.
 fn print_error(cmd: &str, msg: &str) {
     if use_color() {
@@ -1784,6 +1799,25 @@ fn build_completions_cli() -> Command {
         .subcommand(Command::new("init").about("Initialize a new package.json"))
         .subcommand(Command::new("link").about("Link a local package directory"))
         .subcommand(Command::new("unlink").about("Remove a linked package"))
+        .subcommand(
+            Command::new("approve-scripts")
+                .about("Grant content-addressed consent for a package's install scripts")
+                .arg(Arg::new("packages")
+                    .num_args(0..)
+                    .value_name("PACKAGE")
+                    .help("Package names; omit with --all for every package with scripts"))
+                .arg(Arg::new("all").long("all").num_args(0)
+                    .help("Approve every package that currently ships install scripts")),
+        )
+        .subcommand(
+            Command::new("revoke-scripts")
+                .about("Revoke script consent for packages")
+                .arg(Arg::new("packages")
+                    .num_args(1..)
+                    .required(true)
+                    .value_name("PACKAGE")
+                    .help("Package names to revoke (as name or name@version)")),
+        )
         .subcommand(Command::new("prefetch").about("Download lockfile dependencies into cache"))
         .subcommand(Command::new("cache").about("Manage local package cache"))
         .subcommand(Command::new("import-lock").about("Import/convert lockfile formats"))
@@ -2095,6 +2129,13 @@ fn try_fast_install() -> Option<Result<(usize, usize), String>> {
         // 3. Bare-metal fast warm materialization via parallel APFS clonefile(2)
         jhol_core::fast_direct_warm_install()
     };
+    // Every lane here completed an install: run the lifecycle phase so script
+    // consent is enforced (and skipped scripts surfaced) on the fast path too.
+    if result.as_ref().map(|r| r.is_ok()).unwrap_or(false) {
+        if let Err(e) = jhol_core::install::run_post_install_lifecycle_default() {
+            return Some(Err(e));
+        }
+    }
     // All three lanes return before clap, so the install_package wrapper never
     // runs here — uphold the integrity promise for every successful fast lane.
     if let Some(Ok(())) = &result {
@@ -2503,6 +2544,23 @@ fn run() -> Result<(), String> {
                                 .long("keep")
                                 .value_parser(clap::value_parser!(usize))
                                 .help("Keep only N most recently used tarballs"),
+                        ),
+                )
+                .subcommand(
+                    Command::new("gc")
+                        .about("Sweep store tarballs not referenced by any given lockfile")
+                        .arg(
+                            Arg::new("from")
+                                .long("from")
+                                .num_args(1..)
+                                .value_name("LOCKFILE")
+                                .help("Lockfiles that mark reachability (default: ./package-lock.json)"),
+                        )
+                        .arg(
+                            Arg::new("dry-run")
+                                .long("dry-run")
+                                .num_args(0)
+                                .help("Report what would be freed without deleting"),
                         ),
                 )
                 .subcommand(
@@ -3232,6 +3290,55 @@ fn run() -> Result<(), String> {
                 .arg(Arg::new("package").required(true).help("Package name to unlink")),
         )
         .subcommand(
+            Command::new("approve-scripts")
+                .about("Grant content-addressed consent for install scripts")
+                .arg(
+                    Arg::new("packages")
+                        .num_args(0..)
+                        .value_name("PACKAGE")
+                        .help("Package names; omit with --all for every package with scripts"),
+                )
+                .arg(
+                    Arg::new("all")
+                        .long("all")
+                        .num_args(0)
+                        .help("Approve every package that currently ships install scripts"),
+                )
+            )
+            .subcommand(
+                Command::new("revoke-scripts")
+                    .about("Revoke script consent for packages")
+                    .arg(
+                        Arg::new("packages")
+                            .num_args(1..)
+                            .required(true)
+                            .value_name("PACKAGE")
+                            .help("Package names to revoke (name or name@version)"),
+                    )
+            )
+            .subcommand(
+                Command::new("view")
+                    .about("Inspect a package's registry metadata (versions, deps, integrity)")
+                    .arg(Arg::new("package").required(true).help("name or name@version")),
+            )
+            .subcommand(
+                Command::new("search")
+                    .about("Search the registry")
+                    .arg(Arg::new("term").required(true).help("Search terms"))
+                    .arg(
+                        Arg::new("limit")
+                            .long("limit")
+                            .value_parser(clap::value_parser!(usize))
+                            .default_value("20")
+                            .help("Max results"),
+                    ),
+            )
+            .subcommand(
+                Command::new("pack")
+                    .about("Build a deterministic, reproducible package tarball")
+                    .arg(Arg::new("dir").default_value(".").help("Package directory")),
+            )
+.subcommand(
             Command::new("sbom")
                 .about("Generate Software Bill of Materials")
                 .arg(
@@ -3695,6 +3802,32 @@ fn run() -> Result<(), String> {
                 let n = jhol_core::cache_prune(keep)
                     .map_err(|e| format!("Failed to prune cache: {}", e))?;
                 success(&format!("Pruned {} tarball(s).", n));
+            }
+            Some(("gc", gc_m)) => {
+                let dry = gc_m.get_flag("dry-run");
+                let mut lockfiles: Vec<std::path::PathBuf> = gc_m
+                    .get_many::<String>("from")
+                    .map(|v| v.map(std::path::PathBuf::from).collect())
+                    .unwrap_or_default();
+                if lockfiles.is_empty() {
+                    lockfiles.push(std::path::PathBuf::from("package-lock.json"));
+                }
+                match jhol_core::registry_query::store_gc(&lockfiles, dry) {
+                    Ok((kept, freed, files)) => {
+                        if dry {
+                            println!(
+                                "gc (dry run): {} tarball(s) reachable, {} file(s) / {} freeable",
+                                kept, files, human_bytes(freed)
+                            );
+                        } else {
+                            println!(
+                                "gc: {} tarball(s) kept, freed {} file(s) / {}",
+                                kept, files, human_bytes(freed)
+                            );
+                        }
+                    }
+                    Err(e) => return Err(format!("cache gc: {}", e)),
+                }
             }
             Some(("export", sub_exp)) => {
                 let dir = sub_exp
@@ -5186,6 +5319,141 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    if let Some(("view", sub_m)) = matches.subcommand() {
+        let pkg = sub_m.get_one::<String>("package").cloned().unwrap_or_default();
+        match jhol_core::registry_query::view(&pkg) {
+            Ok(text) => print!("{}", text),
+            Err(e) => {
+                eprintln!("view: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if let Some(("search", sub_m)) = matches.subcommand() {
+        let term = sub_m.get_one::<String>("term").cloned().unwrap_or_default();
+        let limit = sub_m.get_one::<usize>("limit").copied().unwrap_or(20);
+        match jhol_core::registry_query::search(&term, limit) {
+            Ok(text) => print!("{}", text),
+            Err(e) => {
+                eprintln!("search: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if let Some(("pack", sub_m)) = matches.subcommand() {
+        let dir = PathBuf::from(sub_m.get_one::<String>("dir").cloned().unwrap_or(".".into()));
+        match jhol_core::pack::pack_bytes(&dir) {
+            Ok((bytes, label, files)) => {
+                let filename = label.split(':').next().unwrap_or("package.tgz").to_string();
+                std::fs::write(&filename, &bytes).unwrap_or_else(|e| {
+                    eprintln!("pack: write {}: {}", filename, e);
+                    std::process::exit(1);
+                });
+                println!(
+                    "packed {} files -> {} ({} bytes)\nsha256: {}\nre-pack to verify: identical bytes, every time",
+                    files,
+                    filename,
+                    bytes.len(),
+                    label.split(':').nth(1).unwrap_or("?")
+                );
+            }
+            Err(e) => {
+                eprintln!("pack: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if let Some(("cache", sub_m)) = matches.subcommand() {
+        if let Some(("gc", gc_m)) = sub_m.subcommand() {
+            let dry = gc_m.get_flag("dry-run");
+            let mut lockfiles: Vec<PathBuf> = gc_m
+                .get_many::<String>("from")
+                .map(|v| v.map(PathBuf::from).collect())
+                .unwrap_or_default();
+            if lockfiles.is_empty() {
+                lockfiles.push(PathBuf::from("package-lock.json"));
+            }
+            let store_root = jhol_core::global_cache::global_cache_dir();
+            match jhol_core::registry_query::store_gc(&lockfiles, dry) {
+                Ok((kept, freed, files)) => {
+                    if dry {
+                        println!(
+                            "gc (dry run): {} tarball(s) reachable, {} file(s) / {} bytes freeable",
+                            kept,
+                            files,
+                            human_bytes(freed)
+                        );
+                    } else {
+                        println!(
+                            "gc: {} tarball(s) kept, freed {} file(s) / {} bytes",
+                            kept,
+                            files,
+                            human_bytes(freed)
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("cache gc: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
+    if let Some(("approve-scripts", sub_m)) = matches.subcommand() {
+        let want_all = sub_m.get_flag("all");
+        let asked: Vec<String> = sub_m
+            .get_many::<String>("packages")
+            .map(|v| v.cloned().collect())
+            .unwrap_or_default();
+        match jhol_core::lifecycle::approve_scripts(Path::new("."), &asked, want_all) {
+            Ok(granted) => {
+                if granted.is_empty() {
+                    println!("No packages with install scripts found to approve.");
+                } else {
+                    println!("Approved install scripts for {} package(s):", granted.len());
+                    for g in &granted {
+                        println!("  + {}", g);
+                    }
+                    println!(
+                        "Receipts recorded in {}. Commit this file: an approval is bound to the\npackage version, the exact script text, and the tarball integrity - any change\nrequires re-approval.",
+                        jhol_core::lifecycle::RECEIPTS_REL_PATH
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("approve-scripts: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if let Some(("revoke-scripts", sub_m)) = matches.subcommand() {
+        let asked: Vec<String> = sub_m
+            .get_many::<String>("packages")
+            .map(|v| v.cloned().collect())
+            .unwrap_or_default();
+        match jhol_core::lifecycle::revoke_scripts(Path::new("."), &asked) {
+            Ok(revoked) => {
+                if revoked.is_empty() {
+                    println!("No matching receipts to revoke.");
+                } else {
+                    println!("Revoked script consent for {} package(s):", revoked.len());
+                    for r in &revoked {
+                        println!("  - {}", r);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("revoke-scripts: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
     if let Some(("link", sub_m)) = matches.subcommand() {
         let package_dir = sub_m
             .get_one::<String>("package")
@@ -5713,6 +5981,12 @@ fn run() -> Result<(), String> {
                     // install_package on the daemon: measured +12 ms on
                     // fresh-replay-able installs.
                     if jhol_core::try_fresh_project_bundle_replay(Path::new(".")) {
+                        // The replayed bundle is byte-identical to the approved
+                        // install that published it, so script artifacts are
+                        // already inside. The lifecycle phase still runs: its
+                        // run-marker suppresses re-execution while keeping the
+                        // consent summary honest (new packages, new receipts).
+                        jhol_core::install::run_post_install_lifecycle_default()?;
                         Ok(())
                     } else {
                         let dr = daemon_try_install(root, &specs, &opts, daemon_auto_attach);

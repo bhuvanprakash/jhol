@@ -2102,7 +2102,7 @@ fn expand_with_transitive_dependencies(
                                     continue;
                                 }
                                 return Err(format!(
-                                    "Offline mode: package(s) not in cache: {}. Run online install first to cache dependencies.",
+                                    "Offline mode: package(s) not in the content store: {}. Fetch them once with:\n  jhol prefetch\n(keep package-lock.json committed for reproducible offline installs)",
                                     name
                                 ));
                             }
@@ -2152,7 +2152,7 @@ fn expand_with_transitive_dependencies(
                             continue;
                         }
                         return Err(format!(
-                            "Offline mode: package(s) not in cache: {}. Run online install first to cache dependencies.",
+                            "Offline mode: package(s) not in the content store: {}. Fetch them once with:\n  jhol prefetch\n(keep package-lock.json committed for reproducible offline installs)",
                             name
                         ));
                     }
@@ -3680,7 +3680,7 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
             "offline_lockfile_layout",
             None,
             &format!(
-                "Offline mode: package(s) not in cache: {}. Run online install first to cache dependencies.",
+                "Offline mode: package(s) not in the content store: {}. Fetch them once with:\n  jhol prefetch\n(keep package-lock.json committed for reproducible offline installs)",
                 missing_offline.join(", ")
             ),
         ));
@@ -6146,40 +6146,162 @@ fn record_install_log(packages: &[String], elapsed_ms: u64) {
     crate::install_log::append(&entry);
 }
 
-fn run_native_lifecycle_scripts(options: &InstallOptions) {
+/// Public lifecycle entry point for lanes that complete an install without
+/// reaching `install_package` (the fresh-bundle replay lane in the CLI).
+pub fn run_post_install_lifecycle(options: &InstallOptions) -> Result<(), String> {
+    run_native_lifecycle_scripts(options)
+}
+
+/// Lifecycle phase for the pre-clap fast lanes: they finish an install before
+/// CLI options exist, so this runs with defaults (receipts consent only —
+/// the legacy allowlist is a CLI-flag concept).
+pub fn run_post_install_lifecycle_default() -> Result<(), String> {
+    run_native_lifecycle_scripts(&InstallOptions::default())
+}
+
+fn run_native_lifecycle_scripts(options: &InstallOptions) -> Result<(), String> {
     use std::sync::atomic::{AtomicBool, Ordering};
     static DONE: AtomicBool = AtomicBool::new(false);
 
-    if options.no_scripts || options.lockfile_only {
-        return;
-    }
-    let allowed = options.script_allowlist.clone().unwrap_or_default();
-    if allowed.is_empty() {
-        return;
+    if options.lockfile_only {
+        return Ok(());
     }
     if DONE.swap(true, Ordering::SeqCst) {
-        return;
+        return Ok(());
     }
-    for (pkg, result) in
-        crate::lifecycle::run_all_install_scripts(Path::new("node_modules"), &allowed)
-    {
-        match result {
-            Ok(true) => {
-                if !options.quiet {
-                    utils::log(&format!("Ran install scripts for {}", pkg));
+
+    // Legacy one-shot consent: an explicit allowlist trusts names for this
+    // install only.
+    let allowlist = options.script_allowlist.clone().unwrap_or_default();
+
+    // Content-addressed consent: receipts from .jhol/script-receipts.json.
+    let project = Path::new(".");
+    let receipts = crate::lifecycle::load_receipts(project);
+
+    // Without either consent source there is nothing to run — but packages
+    // with scripts are still surfaced below so the skip is never silent.
+    let policy = crate::lifecycle::ScriptPolicy { allowlist, receipts };
+
+    // Integrity lookup from the lockfile: exact "node_modules/<name>" key
+    // only. A miss yields an empty integrity, which still hashes — the
+    // receipt just binds to scripts+version instead of tarball bytes, and a
+    // later integrity-presence change invalidates the approval (fail-safe).
+    let lock_integrity = load_lockfile_integrity_map(project);
+    let integrity_of = |name: &str, _version: &str| -> Option<String> {
+        lock_integrity.get(&format!("node_modules/{}", name)).cloned()
+    };
+
+    let results = crate::lifecycle::run_all_install_scripts(
+        Path::new("node_modules"),
+        project,
+        &integrity_of,
+        &policy,
+    );
+
+    // npm semantics: scripts execute when a package is (re)installed, not on
+    // every no-op install. The run marker is keyed to the receipt, so a
+    // changed artifact (new version / new script text / new tarball) re-runs.
+    let mut markers = crate::lifecycle::load_run_markers(project);
+    let version_of = |pkg: &str| -> String {
+        pkg.rsplit_once('@').map(|(_, v)| v.to_string()).unwrap_or_default()
+    };
+
+    let mut ran = Vec::new();
+    let mut needs: Vec<(String, String)> = Vec::new();
+    let mut failed = Vec::new();
+    for (pkg, outcome) in &results {
+        let key = format!(
+            "{}@{}",
+            pkg,
+            version_of(pkg)
+        );
+        match outcome {
+            crate::lifecycle::ScriptOutcome::Ran => {
+                // Key includes version; the receipt hash itself is the marker
+                // value so tamper re-runs automatically.
+                let integrity = integrity_of(pkg, "");
+                let receipt_for_marker = policy
+                    .receipts
+                    .get(&format!(
+                        "{}@{}",
+                        pkg,
+                        version_of(pkg)
+                    ))
+                    .cloned()
+                    .unwrap_or_else(|| "allowlisted".to_string());
+                let _ = &integrity;
+                if markers.get(&key) == Some(&receipt_for_marker) && !policy.force_all() {
+                    continue; // already ran for this exact artifact
                 }
+                ran.push(pkg.clone());
+                markers.insert(key, receipt_for_marker);
             }
-            Ok(false) => {}
-            Err(e) => {
-                if !options.quiet {
-                    utils::log(&format!(
-                        "warning: install scripts for {} failed: {}",
-                        pkg, e
-                    ));
-                }
+            crate::lifecycle::ScriptOutcome::NeedsApproval(hash) => {
+                needs.push((pkg.clone(), hash.clone()))
+            }
+            crate::lifecycle::ScriptOutcome::Failed(e) => failed.push((pkg.clone(), e.clone())),
+            _ => {}
+        }
+    }
+    crate::lifecycle::save_run_markers(project, &markers);
+
+    if !options.quiet {
+        for pkg in &ran {
+            // Visibility for executed scripts too: the user should always be
+            // able to see what ran on their machine, on every lane.
+            eprintln!("Ran install scripts for {}", pkg);
+        }
+        for (pkg, e) in &failed {
+            eprintln!("Script failed for {}: {}", pkg, e);
+        }
+        if !needs.is_empty() {
+            // Security message: bypass output silencing. A skipped install
+            // script the user never hears about is the npm supply-chain
+            // failure mode this feature exists to prevent.
+            eprintln!(
+                "{} package(s) have install scripts that were NOT run (no approval):",
+                needs.len()
+            );
+            for (pkg, _) in needs.iter().take(8) {
+                eprintln!("  - {}", pkg);
+            }
+            if needs.len() > 8 {
+                eprintln!("  ... and {} more", needs.len() - 8);
+            }
+            eprintln!("Review them, then run:  jhol approve-scripts <package ...> | --all");
+        }
+    }
+
+    if let Some((pkg, e)) = failed.first() {
+        // A failed approved script fails the install, exactly as npm treats
+        // it: the package may be broken (a build step did not complete).
+        return Err(format!(
+            "lifecycle script for {} failed: {}",
+            pkg, e
+        ));
+    }
+    Ok(())
+}
+
+/// "node_modules/<name>" -> integrity SRI, from package-lock.json.
+fn load_lockfile_integrity_map(
+    project: &Path,
+) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    let Ok(text) = std::fs::read_to_string(project.join("package-lock.json")) else {
+        return map;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return map;
+    };
+    if let Some(packages) = v.get("packages").and_then(|p| p.as_object()) {
+        for (k, entry) in packages {
+            if let Some(integ) = entry.get("integrity").and_then(|i| i.as_str()) {
+                map.insert(k.clone(), integ.to_string());
             }
         }
     }
+    map
 }
 
 fn materialize_downloaded_package(
@@ -6214,6 +6336,17 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     }
     if result.is_ok() {
         backfill_lockfile_integrity_after_install();
+        // The lifecycle phase belongs at the convergence point: every lane
+        // (warm bypass, capsule replay, bare-metal, full pipeline) reaches
+        // here, so scripts are never silently skipped by a fast path. A
+        // failed approved script fails the install, as in npm.
+        run_native_lifecycle_scripts(options).map_err(|e| {
+            crate::error_handling::utils::security_error(
+                "run install scripts",
+                None,
+                &e,
+            )
+        })?;
     }
     result
 }
@@ -7071,7 +7204,7 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
             "offline_install",
             None,
             &format!(
-                "Offline mode: package(s) not in cache: {}. Run online install first to cache dependencies.",
+                "Offline mode: package(s) not in the content store: {}. Fetch them once with:\n  jhol prefetch\n(keep package-lock.json committed for reproducible offline installs)",
                 missing_for_offline.join(", ")
             ),
         ));
@@ -7522,7 +7655,6 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
             None
         };
         sync_hidden_lockfile();
-        run_native_lifecycle_scripts(options);
         record_install_log(&requested_packages, profiler.total_ms());
         write_install_markers();
         #[cfg(feature = "pipeline")]

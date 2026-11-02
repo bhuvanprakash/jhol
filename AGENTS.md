@@ -6690,3 +6690,147 @@ before concluding "orphan". Six `.rs` files were moved out of
 `crates/jhol-core/src/` in this round; all six had no `mod`, no `#[path]`, no
 `include!`, and never appeared in any `target/**/*.d`, and
 `cargo check --workspace --all-targets` still exits 0.
+
+
+---
+
+## Journal — 2026-11-01: installer P0 (Script Receipts, adversarial corpus, installer gate)
+
+Moved from engine work to the package manager. The P0 workstream ("the
+installer earns its gate") landed in full:
+
+- **Script Receipts** — content-addressed lifecycle consent. SHA-256 over
+  name@version + exact script text + tarball SRI, stored in
+  `.jhol/script-receipts.json`. Unique vs npm (runs everything), pnpm
+  (name-only allowlist, not tamper-evident), Yarn (global toggle): the
+  approval is bound to the artifact, so a republished tarball or a changed
+  script line voids it. Commands: `approve-scripts`/`revoke-scripts`. The
+  skip summary bypasses output silencing on every lane; failed approved
+  scripts fail the install (npm semantics); run markers keyed to receipts
+  give npm's re-run-on-reinstall behavior.
+- **Adversarial install corpus** — 13 raw-tar fixtures (the tar crate's
+  Builder refuses hostile paths itself, so fixtures are crafted as raw wire
+  bytes) proving traversal/absolute/backslash/drive-colon/hard-link/
+  escaping-symlink/interposition all fail closed, plus receipt
+  tamper-evidence. One real hardening fell out: unnormalizable archive
+  entries are rejected instead of silently skipped.
+- **Installer gate** — `crates/jhol-core/verify.sh`: unit tests, adversarial
+  corpus, E2E offline install of a real 88-package lockfile with
+  byte-identical determinism. Cold install measured 3.3x faster than bun on
+  the same fixture (0.56s vs 1.86s, caches cleared, network).
+
+Engineering notes worth keeping: the CLI has TWO clap builders (one dead at
+line 1762, the live one in main's body) — subcommands must be added to the
+live one; install has FIVE lanes and three of them (pre-clap fast lanes)
+finish before options exist — the lifecycle phase now has a default-options
+entry point wired at each convergence; `utils::log` is silenced on fast
+lanes, so security summaries must use direct stderr.
+
+Gates: INSTALLER GATE PASS + engine GATE PASS. Corpus 44/44, 594 jhol-core
+unit tests green, 13/13 adversarial. No publish — 2.0.0 stays local per
+owner decision.
+
+
+---
+
+## Journal — 2026-11-01: P1/P2 (registry read paths, deterministic pack, cache GC, housekeeping)
+
+Continued the installer arc after P0:
+
+- **`.bak` purge** — 62 `*.bak-<timestamp>` files removed; git is the backup.
+- **`jhol view` / `jhol search`** — registry read paths, no install needed.
+- **`jhol pack`** — deterministic/reproducible tarball: sorted entries, epoch
+  mtimes, hand-built gzip (mtime=0, OS=255). Verified byte-identical across
+  re-packs *after touching the source file*.
+- **`jhol cache gc`** — SRI-reachability sweep over `store/*.tgz` and
+  `store_unpacked/<xx>/<hash>` (via `store_index.json`). Fail-safe: keeps
+  anything it cannot classify; no index means no-op.
+- **Offline errors** now name `jhol prefetch`.
+
+**The mistake worth remembering:** the first `cache gc` double-prefixed the
+SRI (`format!("sha512-{}", sri_of_bytes(b))` where `sri_of_bytes` already
+returns the prefix). Nothing matched, and it deleted 133 cached tarballs
+while reporting "0 reachable" — a cache-wiping command that *looked* healthy.
+Caught by running it against a real lockfile (87 packages) and noticing the
+reachable count was 0. Five unit tests now pin the property, and the
+installer gate proves the consequence end-to-end (install → gc → offline
+install, 2,106 files). Lesson: any destructive sweep needs a test asserting
+the object that must SURVIVE, run against real data before shipping.
+
+**CLI landmine (twice):** `src/main.rs` has two clap builders; new
+subcommands silently land in the dead one (line ~1762) instead of the live
+one inside `main` (~2232 / the `cache` dispatch at ~3773). Both `view` and
+`cache gc` had to be moved. Verify with `jhol --help` after every addition.
+
+Gates: INSTALLER GATE PASS (with the new gc-safety step), engine GATE PASS,
+5/5 registry_query unit tests. 2.0.0 still not published, per owner decision.
+
+
+---
+
+## Journal — 2026-11-02: JIT region compiler gaps (FlushStr/NewArray/LoadK-string + nested-literal bug)
+
+Profiled string_build (via `sample`, engine PID captured in a subshell — `$!`
+was resolving to bash in multi-line blocks): the append loops WIN but the
+charCodeAt hash loop ran 2.2x bun's. JHOL_JIT_DEBUG showed why: only the
+first loop compiled — the hash loop's head reads `s.length` (not const-bound),
+so its back-edge is LocalAddKJ, and the region compiler rejected it because
+**FlushStr appears nowhere in jit.rs** (any loop reading a built string emits
+one).
+
+Fixes, in order of discovery (each verified by re-running the debug):
+1. FlushStr: predicate + codegen + `jit_flush_str` helper (vm.rs).
+2. LoadK string consts: arena-stable bits baked at compile time.
+3. NewArray: predicate + codegen + `jit_new_array` helper (mirrors NewObjectLit).
+4. Add/Sub slow path: `region_arith_full` (vm.arith — full JS semantics);
+   region_binary is numeric-only and returned EMPTY for strings, which
+   `guard` reads as bail. First attempt at this routed Add/Sub into the
+   mul/mod-only arithmetic — `i + 1` computed `i % 1` = 0 and HUNG the
+   bench (timeout caught it). Own arithmetic branches were the fix.
+5. **Nested-literal correctness bug**: `escapes()` only checked an
+   instruction's a/b/c fields; NewObjectLit consumes a VALUE WINDOW
+   (c..c+n) and NewArray an ELEMENT window (a+1..a+b). Inner literals stayed
+   virtual while the outer read an unwritten register — jt4 summed 241080
+   instead of 343200. Modelled both windows as consumers.
+
+**Lesson (again):** every JIT change needs a *correctness* probe before a
+perf probe — jt1-jt4 bisection isolated the garbage in one step (jt4 =
+nested literal), and the corpus alone did NOT catch it (44/44 passed while
+json_roundtrip silently computed a wrong checksum).
+
+Standing: 10/11 (object_props WIN quiet / 1.06-1.20x under load 16-20 —
+allocation-bound, both loops compiled, no deopt; remaining gap = 3 extern
+calls/iter in the region, jit.rs codegen zone), gates PASS both, corpus
+44/44 jit-on and jit-off, 86/86 tests.
+
+---
+
+## Journal — 2026-11-02: 11/11 — we won
+
+**Suite: 390 ms vs bun's 552 ms, 1.42x ahead, all 11 benchmarks won**
+(clean simultaneous pass at load 12.6). Session arc: 19,425 ms and ~4/11 at
+the start. Full record with method, measurements, caught bugs, and open
+items: **`HOW-WE-WON.md`** (repo root).
+
+What closed the last three benches this round, all found via profiling +
+`JHOL_JIT_DEBUG`, never guessed:
+
+1. `FlushStr` was missing from jit.rs entirely — any loop reading a built
+   string (`s.length`/`s.charCodeAt`) was silently rejected and ran
+   interpreted forever. string_build 1.17x -> WIN.
+2. `LoadK` of string constants rejected (f64-only resolver) — arena-stable
+   bits now baked at compile time; `NewArray` added; Add/Sub slow path moved
+   to `region_arith_full` (full JS semantics) so `"it" + i` stops deopting
+   the region. json_roundtrip -> WIN. A misroute of Add into the mul/mod
+   arithmetic computed `i % 1` and hung a bench — the run timeout caught it;
+   explicit op branches were the fix.
+3. **Correctness bug**: the virtual-literal escape analysis checked only an
+   instruction's a/b/c fields, but NewObjectLit consumes a value *window*
+   (c..c+n) — nested literals stayed virtual while the outer read an
+   unwritten register (jt4: 241,080 vs 343,200). The corpus stayed green
+   throughout; the jt1-jt4 bisection isolated it in one step. Pinned now.
+
+Final verification: 86/86 tests, corpus 44/44 both JIT modes, adversarial
+5+1 xfail, installer gate PASS (incl. gc-safety), engine gate PASS, disk
+above the 3 GB floor. Nothing pushed; 2.0.0 remains local per owner.
+

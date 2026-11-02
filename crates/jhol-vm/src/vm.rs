@@ -318,6 +318,47 @@ impl Vm {
 
     /// ASCII `s += rhs` into the frame builder. Returns 1 when the JIT must
     /// leave the instruction to the interpreter (nothing was written).
+    /// `Op::NewArray` for JIT'd regions: elements live at `dest+1 .. dest+n`
+    /// in the frame (the compiler's window convention, same as the
+    /// interpreter handler), the array goes to `dest`. Allocation cannot
+    /// collect — only interpreter checkpoints do — so reading the elements
+    /// after `new_array` is safe.
+    pub(crate) fn jit_new_array(&mut self, regs: *mut Value, dest: u32, n: u32) -> u32 {
+        let v = self.new_array();
+        unsafe {
+            let arr = self.as_array_mut(v);
+            let base = dest as usize + 1;
+            for i in 0..n as usize {
+                arr.push(*regs.add(base + i));
+            }
+            *regs.add(dest as usize) = v;
+        }
+        0
+    }
+
+    /// Materialise the string accumulator in `slot` into a real string Value,
+    /// exactly as `Op::FlushStr` does in the interpreter. Called from JIT'd
+    /// loop regions that *read* a string being built (`s.length`,
+    /// `s.charCodeAt`) — without this the whole region was rejected and the
+    /// loop silently ran interpreted forever.
+    pub(crate) fn jit_flush_str(&mut self, slot: u32) -> u32 {
+        let Some(fi) = self.frames.len().checked_sub(1) else {
+            return 1;
+        };
+        let buf = self
+            .frames
+            .get(fi)
+            .and_then(|f| f.builders.get(slot as usize).and_then(|b| b.clone()));
+        if let Some(buf) = buf {
+            let sv = String::from_utf8(buf).unwrap_or_default();
+            let v = self.new_string(&sv);
+            self.frames[fi].builders[slot as usize] = None;
+            let reg_base = self.frames[fi].reg_base;
+            self.st(reg_base, slot, v);
+        }
+        0
+    }
+
     pub(crate) fn jit_append_str(&mut self, slot: u32, rhs: Value) -> u32 {
         let Some(fi) = self.frames.len().checked_sub(1) else {
             return 1;
@@ -2924,6 +2965,15 @@ impl Vm {
                                             arena_base as usize,
                                         )
                                     };
+                                    if std::env::var_os("JHOL_JIT_DEBUG").is_some() {
+                                        eprintln!(
+                                            "[jit] tail-trigger ip={} top={} region_ok={} head_op={:?}",
+                                            ip,
+                                            top,
+                                            region.is_some(),
+                                            proto.code.get(top).map(|x| x.op)
+                                        );
+                                    }
                                     if let Some(region) = region {
                                         ic.jit_code = region.code;
                                         ic.jit_exit = region.exit_ip as u32;

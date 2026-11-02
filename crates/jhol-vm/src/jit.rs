@@ -3145,6 +3145,30 @@ unsafe fn invoke_native_entry(
 // bytecode commits its result before the next guard. A failed guard returns the
 // exact bytecode IP, so the interpreter never repeats an observable operation.
 // Helpers neither allocate in the arena, collect, grow VM stacks nor call JS.
+/// Full JavaScript arithmetic for the slow path of Add/Sub/Mul/Mod: string
+/// concatenation, ToPrimitive, the works. `region_binary` above is numeric
+/// only and answers EMPTY for a string operand — which `guard` reads as "bail",
+/// deopting the loop on its first `"it" + i`. EMPTY here means a hard error
+/// (a throw): the interpreter re-runs the instruction and propagates it.
+extern "C" fn region_arith_full(a: u64, b: u64, op: u32) -> u64 {
+    use crate::value::ArithOp;
+    let vm = region_vm();
+    if vm.is_null() {
+        return Value::EMPTY.0;
+    }
+    let arith_op = match op {
+        0 => ArithOp::Add,
+        1 => ArithOp::Sub,
+        2 => ArithOp::Mul,
+        3 => ArithOp::Div,
+        _ => ArithOp::Mod,
+    };
+    match unsafe { &mut *vm }.arith(arith_op, Value(a), Value(b)) {
+        Ok(v) => v.0,
+        Err(_) => Value::EMPTY.0,
+    }
+}
+
 extern "C" fn region_binary(a: u64, b: u64, op: u32) -> u64 {
     use crate::value::ArithOp;
     let a = Value(a);
@@ -3502,6 +3526,22 @@ extern "C" fn region_append(slot: u32, rhs: u64) -> u32 {
     unsafe { &mut *vm }.jit_append_str(slot, Value(rhs))
 }
 
+extern "C" fn region_new_array(regs: *mut Value, dest: u32, n: u32) -> u32 {
+    let vm = region_vm();
+    if vm.is_null() {
+        return 1;
+    }
+    unsafe { &mut *vm }.jit_new_array(regs, dest, n)
+}
+
+extern "C" fn region_flush_str(slot: u32) -> u32 {
+    let vm = region_vm();
+    if vm.is_null() {
+        return 1;
+    }
+    unsafe { &mut *vm }.jit_flush_str(slot)
+}
+
 extern "C" fn region_new_lit(
     regs: *mut Value,
     dest: u32,
@@ -3656,7 +3696,27 @@ pub unsafe fn try_compile_region(
     for x in &ins[body_start..exit] {
         let valid = match x.op {
             Op::Move | Op::GetLocal | Op::SetLocal => slot(x.a) && slot(x.b),
-            Op::LoadK => slot(x.a) && consts(x.b as usize).is_some(),
+            Op::LoadK => {
+                if !slot(x.a) {
+                    false
+                } else if consts(x.b as usize).is_some() {
+                    true
+                } else {
+                    // String and singleton constants are arena-stable for the
+                    // function's lifetime, so their Value bits can be baked
+                    // into the code at compile time (see the LoadK codegen).
+                    let pool = REGION_CONSTS.with(|c| c.get());
+                    !pool.is_null()
+                        && matches!(
+                            unsafe { &*pool.add(x.b as usize) },
+                            crate::bytecode::ConstVal::Str(_)
+                                | crate::bytecode::ConstVal::Undefined
+                                | crate::bytecode::ConstVal::Null
+                                | crate::bytecode::ConstVal::True
+                                | crate::bytecode::ConstVal::False
+                        )
+                }
+            }
             Op::LoadTrue | Op::LoadFalse | Op::LoadNull | Op::LoadUndefined => slot(x.a),
             Op::LocalAdd => slot(x.a) && slot(x.b),
             Op::LocalAddK | Op::LocalAddKJ => {
@@ -3669,6 +3729,17 @@ pub unsafe fn try_compile_region(
             Op::GetIndex => slot(x.a) && slot(x.b) && slot(x.c),
             Op::SetProp => slot(x.a) && slot(x.c),
             Op::AppendStr => slot(x.a) && slot(x.b),
+            // The accumulator flush: any loop that *reads* a string being
+            // built emits it. Without this arm the whole region was rejected
+            // and the loop never compiled.
+            Op::FlushStr => slot(x.a),
+            // `dst` with elements at `dst+1 .. dst+n` (the compiler's window
+            // convention). Small arrays only: bigger ones bail to the
+            // interpreter, where growth and sparsity live.
+            Op::NewArray => {
+                let n = x.b as usize;
+                n <= 16 && slot(x.a) && (1..=n).all(|i| slot(x.a + i as u32))
+            }
             Op::NewObjectLit => {
                 slot(x.a)
                     && !REGION_CONSTS.with(|c| c.get().is_null())
@@ -3813,6 +3884,22 @@ pub unsafe fn try_compile_region(
                     let end = y.b.saturating_add(y.c).saturating_add(2);
                     dest >= y.b && dest < end
                 }
+                // A literal's VALUE WINDOW is consumed wholesale: the nested
+                // `{ nest: { … } }` case, where the inner literal's dest sits
+                // in the outer's `c..c+n`. Checking only the three instruction
+                // fields missed it, so the inner literal stayed virtual —
+                // never heap-allocated — while the outer copied garbage out of
+                // its dest register.
+                Op::NewObjectLit => {
+                    let n = match unsafe { &*pool.add(y.b as usize) } {
+                        crate::bytecode::ConstVal::Keys(k) => k.len() as u32,
+                        // Unknown window: assume it consumes dest.
+                        _ => return true,
+                    };
+                    dest >= y.c && dest < y.c.saturating_add(n)
+                }
+                // Same for an array's element window (`a+1 .. a+b`).
+                Op::NewArray => dest >= y.a && dest <= y.a.saturating_add(y.b),
                 Op::Jump => false,
                 Op::JumpIfTrue | Op::JumpIfFalse => y.a == dest,
                 _ => y.a == dest || y.b == dest || y.c == dest,
@@ -3992,7 +4079,12 @@ pub unsafe fn try_compile_region(
             // Mul/mod that leave Smi stay in registers. Overflow or a non-Smi
             // operand calls the same helper and continues; bailing here used
             // to disable the whole loop after one wide product.
-            if op == 2 || op == 4 {
+            // Add and Sub join Mul/Mod: a non-Smi operand (a string being
+            // concatenated, `"it" + i`) goes through region_binary — the full
+            // interpreter semantics — and the loop continues. Bailing here
+            // would deopt the region on its first string and disable it for
+            // the rest of the run.
+            if op == 0 || op == 1 || op == 2 || op == 4 {
                 let slow = a.label();
                 let done = a.label();
                 let smi_or_slow = |a: &mut Asm, regn: u32| {
@@ -4005,12 +4097,23 @@ pub unsafe fn try_compile_region(
                 if r.is_some() {
                     smi_or_slow(&mut a, 1);
                 } else {
+                    // A non-Smi constant (a fractional `x * 2.5`) is not a
+                    // reason to deopt the whole loop: slow reloads both
+                    // operands and runs the full helper, which handles f64.
                     a.ubfx(2, 1, 44, 20);
                     a.cmp(2, 23);
-                    a.b_cond(1, bailout);
+                    a.b_cond(1, slow);
                     a.sbfx44(1, 1);
                 }
-                if op == 2 {
+                if op == 0 {
+                    // Add: the operands are already Smi-checked and
+                    // sign-extended; the shared canonicalisation below decides
+                    // whether the result still fits (else slow, which handles
+                    // strings and doubles with full JS semantics).
+                    a.add_reg(0, 0, 1);
+                } else if op == 1 {
+                    a.sub_reg(0, 0, 1);
+                } else if op == 2 {
                     a.word(0x9b407c02 | (1 << 16));
                     a.eor_regs(5, 0, 1);
                     a.mul_reg(0, 0, 1);
@@ -4045,7 +4148,7 @@ pub unsafe fn try_compile_region(
                     a.mov_const(1, Value::from_f64(consts(k? as usize)?).0);
                 }
                 a.movz(2, op as u64);
-                call(&mut a, region_binary as *const () as usize);
+                call(&mut a, region_arith_full as *const () as usize);
                 guard(&mut a, bailout);
                 a.bind(done);
                 save(&mut a, dst, bailout);
@@ -4139,7 +4242,25 @@ pub unsafe fn try_compile_region(
                 save(&mut a, x.a, bailout);
             }
             Op::LoadK => {
-                a.mov_const(0, Value::from_f64(consts(x.b as usize)?).0);
+                let bits = if let Some(f) = consts(x.b as usize) {
+                    Value::from_f64(f).0
+                } else {
+                    let pool = REGION_CONSTS.with(|c| c.get());
+                    if pool.is_null() {
+                        return None;
+                    }
+                    match unsafe { &*pool.add(x.b as usize) } {
+                        // Arena-stable (non-moving arena + module string pool),
+                        // so the address is safe to embed in the machine code.
+                        crate::bytecode::ConstVal::Str(v) => v.bits(),
+                        crate::bytecode::ConstVal::Undefined => Value::UNDEFINED.0,
+                        crate::bytecode::ConstVal::Null => Value::NULL.0,
+                        crate::bytecode::ConstVal::True => Value::TRUE.0,
+                        crate::bytecode::ConstVal::False => Value::FALSE.0,
+                        _ => return None,
+                    }
+                };
+                a.mov_const(0, bits);
                 save(&mut a, x.a, bailout);
             }
             Op::LoadTrue | Op::LoadFalse | Op::LoadNull | Op::LoadUndefined => {
@@ -4450,6 +4571,18 @@ pub unsafe fn try_compile_region(
                 a.movz(0, x.a as u64);
                 a.ldr(1, 19, x.b * 8);
                 call(&mut a, region_append as *const () as usize);
+                a.cbnz(0, bailout);
+            }
+            Op::FlushStr => {
+                a.movz(0, x.a as u64);
+                call(&mut a, region_flush_str as *const () as usize);
+                a.cbnz(0, bailout);
+            }
+            Op::NewArray => {
+                a.mov_reg(0, 19);
+                a.movz(1, x.a as u64);
+                a.movz(2, x.b as u64);
+                call(&mut a, region_new_array as *const () as usize);
                 a.cbnz(0, bailout);
             }
             Op::SetProp if virt_skip[ip] => {
