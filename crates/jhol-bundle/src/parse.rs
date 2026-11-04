@@ -96,11 +96,13 @@ fn extract_with_jhol_parser(
     Vec<CasImportRecord>,
     Vec<CasImportRecord>,
 )> {
-    let program = jhol_vm::parser::parse_program(source).map_err(|e| crate::errors::BundleError::ParseError {
-        path: "inline".to_string(),
-        line: 0,
-        column: 0,
-        message: e,
+    let program = jhol_vm::parser::parse_program(source).map_err(|e| {
+        crate::errors::BundleError::ParseError {
+            path: "inline".to_string(),
+            line: 0,
+            column: 0,
+            message: e,
+        }
     })?;
 
     let mut imports = Vec::new();
@@ -127,7 +129,14 @@ fn extract_with_jhol_parser(
     let _ = &mut walk_expr;
 
     for stmt in &program.body {
-        collect_stmt(stmt, &mut imports, &mut reexports, &mut dynamic_imports, &mut requires, &record);
+        collect_stmt(
+            stmt,
+            &mut imports,
+            &mut reexports,
+            &mut dynamic_imports,
+            &mut requires,
+            &record,
+        );
     }
     Ok((imports, reexports, dynamic_imports, requires))
 }

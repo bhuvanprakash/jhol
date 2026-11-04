@@ -2826,23 +2826,50 @@ fn retry_after_synthetic_metadata<T>(
     }
 }
 
+/// Resolution trace switch.
+///
+/// `JHOL_JAGR_TRACE=1` is the documented knob; `JHOL_DEBUG_JINF` is the older
+/// name and still works, because the two had been the only way to see inside
+/// this resolver and scripts already use it.
+pub(crate) fn trace_enabled() -> bool {
+    std::env::var_os("JHOL_JAGR_TRACE").is_some() || std::env::var_os("JHOL_DEBUG_JINF").is_some()
+}
+
+/// One trace line, `[JAGR]`-prefixed, on stderr.
+pub(crate) fn trace(msg: impl std::fmt::Display) {
+    if trace_enabled() {
+        eprintln!("[JAGR] {msg}");
+    }
+}
+
 pub fn resolve_full_tree_jagr_infinite(
     package_json_path: &Path,
 ) -> Result<HashMap<String, ResolvedPackage>, String> {
+    let started = std::time::Instant::now();
     let mut synth_served = false;
     let first_result = resolve_full_tree_jagr_infinite_with_full_retry(
         package_json_path,
         false,
         &mut synth_served,
     );
-    retry_after_synthetic_metadata(first_result, synth_served, || {
+    let result = retry_after_synthetic_metadata(first_result, synth_served, || {
         let mut retry_synth_served = false;
         resolve_full_tree_jagr_infinite_with_full_retry(
             package_json_path,
             true,
             &mut retry_synth_served,
         )
-    })
+    });
+    match &result {
+        Ok(resolved) => trace(format!(
+            "done: {} packages in {:?} (synth retry: {})",
+            resolved.len(),
+            started.elapsed(),
+            if synth_served { "yes" } else { "no" }
+        )),
+        Err(e) => trace(format!("failed after {:?}: {}", started.elapsed(), e)),
+    }
+    result
 }
 
 pub(crate) fn resolve_full_tree_jagr_infinite_with_full_retry(
@@ -2856,11 +2883,22 @@ pub(crate) fn resolve_full_tree_jagr_infinite_with_full_retry(
     let deps = crate::lockfile::registry_only_deps(package_json_path)
         .ok_or("Could not read package.json dependencies")?;
     let overrides = crate::lockfile::read_overrides(package_json_path);
+    trace(format!(
+        "start: {} direct deps, {} overrides, full_retry={}",
+        deps.len(),
+        overrides.len(),
+        full_retry
+    ));
 
     // P2: committed lockfile that still satisfies every direct range → 0-fetch.
     // Reuse the existing resolution (t=1 already reached, no homotopy needed).
     if let Some(resolved) = try_lockfile_fast_path(package_json_path, &deps, &overrides) {
-        if std::env::var("JHOL_DEBUG_JINF").is_ok() {
+        trace(format!(
+            "layer=lockfile-fast-path (committed lockfile satisfies every direct range), {} packages, {:?}",
+            resolved.len(),
+            t0.elapsed()
+        ));
+        if trace_enabled() {
             eprintln!(
                 "[JINF] lockfile fast-path: {} packages, 0 fetch, {:?}",
                 resolved.len(),
@@ -2873,7 +2911,12 @@ pub(crate) fn resolve_full_tree_jagr_infinite_with_full_retry(
     // P1: persistent resolved-bundle cache — exact same dep-set resolved before?
     // Replay it (0 fetch, 0 atlas, 0 RVM). Lockfile-independent, cross-project.
     if let Some(resolved) = try_resolved_bundle(&deps, &overrides) {
-        if std::env::var("JHOL_DEBUG_JINF").is_ok() {
+        trace(format!(
+            "layer=resolved-bundle-cache (exact dep-set replayed, 0 fetch, 0 atlas, 0 RVM), {} packages, {:?}",
+            resolved.len(),
+            t0.elapsed()
+        ));
+        if trace_enabled() {
             eprintln!(
                 "[JINF] resolved-bundle cache: {} packages, 0 fetch, {:?}",
                 resolved.len(),
@@ -2886,7 +2929,7 @@ pub(crate) fn resolve_full_tree_jagr_infinite_with_full_retry(
     // Fetch packuments for the full transitive dependency tree (BFS).
     let fetch_started = std::time::Instant::now();
     let mut packuments = fetch_dep_tree(&deps)?;
-    if std::env::var("JHOL_DEBUG_JINF").is_ok() {
+    if trace_enabled() {
         eprintln!(
             "[JINF] fetch_dep_tree: {} packuments in {:?}",
             packuments.len(),
@@ -2962,7 +3005,7 @@ pub(crate) fn resolve_full_tree_jagr_infinite_with_full_retry(
     for (name, &id) in &name_to_id {
         id_to_pkg.entry(id).or_insert_with(|| name.clone());
     }
-    if std::env::var("JHOL_DEBUG_JINF").is_ok() {
+    if trace_enabled() {
         let chart_bytes = crate::jagr_infinite::atlas::estimate_chart_size(&final_chart);
         let package_count = final_chart.packages.len();
         let version_strings: usize = final_chart
@@ -3001,7 +3044,7 @@ pub(crate) fn resolve_full_tree_jagr_infinite_with_full_retry(
     // Topology/RG/Ricci values are diagnostic only: the compiled production RVM
     // does not emit ComputeBetti or consume these values. Keep the report opt-in
     // so ordinary resolution avoids graph allocation and spectral iterations.
-    if std::env::var("JHOL_DEBUG_JINF").is_ok() {
+    if trace_enabled() {
         let topology_started = std::time::Instant::now();
         let mut adj_map: HashMap<String, Vec<String>> = HashMap::new();
         let mut node_set: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -3065,7 +3108,12 @@ pub(crate) fn resolve_full_tree_jagr_infinite_with_full_retry(
                             &final_chart,
                             &packuments,
                         )?;
-                        if std::env::var("JHOL_DEBUG_JINF").is_ok() {
+                        trace(format!(
+                            "layer=homotopy (continued from lockfile) selection={} packages, {:?}",
+                            resolved.len(),
+                            solve_started.elapsed()
+                        ));
+                        if trace_enabled() {
                             eprintln!(
                                 "[JINF] homotopy + materialization in {:?}",
                                 solve_started.elapsed()
@@ -3073,7 +3121,7 @@ pub(crate) fn resolve_full_tree_jagr_infinite_with_full_retry(
                         }
                         let finalize_started = std::time::Instant::now();
                         let result = finalize_resolution(resolved, &packuments, &deps, &overrides);
-                        if std::env::var("JHOL_DEBUG_JINF").is_ok() {
+                        if trace_enabled() {
                             eprintln!("[JINF] finalization in {:?}", finalize_started.elapsed());
                             eprintln!("[JINF] full resolution in {:?}", t0.elapsed());
                         }
@@ -3125,9 +3173,19 @@ pub(crate) fn resolve_full_tree_jagr_infinite_with_full_retry(
     let program = program.unwrap();
     let mut rvm = RVM::new(program, atlas);
     let selection = rvm.run()?;
+    trace(format!(
+        "layer=rvm (tropical RVM over {} chart packages, {} versions), solve {:?}",
+        final_chart.packages.len(),
+        final_chart
+            .packages
+            .values()
+            .map(|p| p.versions.len())
+            .sum::<usize>(),
+        solve_started.elapsed()
+    ));
 
     let resolved = selection_to_resolved(selection, &id_to_pkg, &final_chart, &packuments)?;
-    if std::env::var("JHOL_DEBUG_JINF").is_ok() {
+    if trace_enabled() {
         eprintln!(
             "[JINF] resolved {} packages before finalization (solve + materialization {:?}, elapsed {:?})",
             resolved.len(),
@@ -3147,7 +3205,7 @@ pub(crate) fn resolve_full_tree_jagr_infinite_with_full_retry(
 
     let finalize_started = std::time::Instant::now();
     let result = finalize_resolution(resolved, &packuments, &deps, &overrides);
-    if std::env::var("JHOL_DEBUG_JINF").is_ok() {
+    if trace_enabled() {
         eprintln!("[JINF] finalization in {:?}", finalize_started.elapsed());
         eprintln!("[JINF] full resolution in {:?}", t0.elapsed());
     }
@@ -4787,7 +4845,7 @@ fn needs_escalation(
 fn fetch_one_packument(name: &str, constraints: &[String]) -> Result<serde_json::Value, String> {
     let constraints = canonical_constraints(constraints);
     if let Some(cached) = try_lattice_packument(name, &constraints) {
-        if std::env::var("JHOL_DEBUG_JINF").is_ok() {
+        if trace_enabled() {
             eprintln!("[JINF] lattice hit: {}", name);
         }
         return Ok(cached);

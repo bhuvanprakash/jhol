@@ -46,7 +46,7 @@ categories = ["command-line-utilities", "development-tools"]
 build = false
 
 [features]
-default = ["runtime", "bundle", "bundle-swc", "http-reqwest"]  # bundler + runtime ship in the box; http-reqwest enables the optional reqwest HTTP/2 download path. Measurement does not show a hot-path win (the changelog's "no longer default" entry is stale — the module is not called by default installs); set JHOL_NO_HTTP2=1 to force the ureq path.
+default = ["runtime", "bundle", "bundle-swc", "http-reqwest", "jholvm"]  # bundler + runtime + **the JholVM engine itself** ship in the box (2026-11-03: the default build silently lacked `jholruntime/jholvm`, so the flagship engine was unreproducible from a default build — see docs/engineering/PRODUCTION_READY_2026-11-03.md addendum); http-reqwest enables the optional reqwest HTTP/2 download path (set JHOL_NO_HTTP2=1 to force the ureq path)
 http-reqwest = ["jhol-core/http-reqwest"]
 hardware-sha = ["jhol-core/hardware-sha"]
 runtime = ["jhol-runtime"]

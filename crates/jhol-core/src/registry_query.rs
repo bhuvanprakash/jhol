@@ -34,13 +34,22 @@ pub fn view(package: &str) -> Result<String, String> {
 
     let mut out = String::new();
     out.push_str(&format!("{}@{}\n", name, chosen));
-    if let Some(desc) = entry.and_then(|e| e.get("description")).and_then(|d| d.as_str()) {
+    if let Some(desc) = entry
+        .and_then(|e| e.get("description"))
+        .and_then(|d| d.as_str())
+    {
         out.push_str(&format!("  {}\n", desc));
     }
-    if let Some(home) = entry.and_then(|e| e.get("homepage")).and_then(|d| d.as_str()) {
+    if let Some(home) = entry
+        .and_then(|e| e.get("homepage"))
+        .and_then(|d| d.as_str())
+    {
         out.push_str(&format!("  {}\n", home));
     }
-    if let Some(lic) = entry.and_then(|e| e.get("license")).and_then(|d| d.as_str()) {
+    if let Some(lic) = entry
+        .and_then(|e| e.get("license"))
+        .and_then(|d| d.as_str())
+    {
         out.push_str(&format!("  license: {}\n", lic));
     }
     let mut all: Vec<&String> = versions.keys().collect();
@@ -89,7 +98,10 @@ pub fn search(term: &str, limit: usize) -> Result<String, String> {
         .ok_or("search response missing objects")?;
     let mut out = String::new();
     for obj in objects {
-        let p = obj.get("package").cloned().unwrap_or(serde_json::Value::Null);
+        let p = obj
+            .get("package")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         let name = p.get("name").and_then(|n| n.as_str()).unwrap_or("?");
         let version = p.get("version").and_then(|n| n.as_str()).unwrap_or("?");
         let desc = p.get("description").and_then(|n| n.as_str()).unwrap_or("");
@@ -125,7 +137,10 @@ fn urlencoding_encode(s: &str) -> String {
 /// Marks every store tarball whose sha512-SRI appears in any of the given
 /// lockfiles, then deletes unreferenced ones. `dry_run` reports without
 /// deleting. Returns (kept, freed_bytes, freed_files).
-pub fn store_gc(lockfiles: &[std::path::PathBuf], dry_run: bool) -> Result<(usize, u64, usize), String> {
+pub fn store_gc(
+    lockfiles: &[std::path::PathBuf],
+    dry_run: bool,
+) -> Result<(usize, u64, usize), String> {
     // Reference set: every integrity string found in the lockfiles.
     let mut referenced: HashSet<String> = HashSet::new();
     for lf in lockfiles {
@@ -148,8 +163,7 @@ pub fn store_gc(lockfiles: &[std::path::PathBuf], dry_run: bool) -> Result<(usiz
         // is deleted once its tree is materialised). Entries are keyed by the
         // tarball content hash; `store_index.json` maps name@version to that
         // hash, so reachability is: a lockfile references the name@version.
-        let (k2, b2, f2) =
-            sweep_unpacked(&root, &referenced_packages(lockfiles), dry_run)?;
+        let (k2, b2, f2) = sweep_unpacked(&root, &referenced_packages(lockfiles), dry_run)?;
         kept += k2;
         freed_bytes += b2;
         freed_files += f2;
@@ -253,10 +267,7 @@ fn tree_looks_dead(
     index: &std::collections::HashMap<String, String>,
     referenced: &HashSet<String>,
 ) -> bool {
-    let live: HashSet<&String> = referenced
-        .iter()
-        .filter_map(|p| index.get(p))
-        .collect();
+    let live: HashSet<&String> = referenced.iter().filter_map(|p| index.get(p)).collect();
     !live.is_empty() && !live.iter().any(|h| h.as_str() == hash)
 }
 
@@ -400,13 +411,16 @@ mod tests {
         )
         .unwrap();
 
-        let (kept, freed_bytes, freed_files) =
-            sweep_one(&store, &{
+        let (kept, freed_bytes, freed_files) = sweep_one(
+            &store,
+            &{
                 let mut s = std::collections::HashSet::new();
                 s.insert(referenced_sri.clone());
                 s
-            }, false)
-            .unwrap();
+            },
+            false,
+        )
+        .unwrap();
         assert_eq!(kept, 1, "the referenced tarball must be kept");
         assert_eq!(freed_files, 1, "only the unreferenced tarball is freed");
         assert!(freed_bytes > 0);
@@ -436,7 +450,10 @@ mod tests {
 
         // Reachability must be read from the file, not passed in.
         let mut referenced = std::collections::HashSet::new();
-        collect_integries(&std::fs::read_to_string(&lockfile).unwrap(), &mut referenced);
+        collect_integries(
+            &std::fs::read_to_string(&lockfile).unwrap(),
+            &mut referenced,
+        );
         assert_eq!(referenced.len(), 1, "lockfile integrity must be collected");
         let (kept, _b, files) = sweep_one(&store, &referenced, false).unwrap();
         assert_eq!(kept, 1);

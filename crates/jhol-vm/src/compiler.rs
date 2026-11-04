@@ -71,6 +71,9 @@ enum FnCtx {
     Script,
     Func,
     Method,
+    /// A method inside a `class` body. Class bodies are always strict, unlike
+    /// object-literal methods, so the two need separate contexts.
+    ClassMethod,
     Ctor,
     DerivedCtor,
     Arrow,
@@ -134,6 +137,13 @@ pub struct Compiler {
     /// `super.m()` (found 2026-10-24; broken at HEAD too).
     home_stack: Vec<(String, bool)>,
     class_serial: u32,
+    /// Statements of the `finally` blocks currently being compiled, innermost
+    /// last. A `return` inside a `try` has to run them before it leaves, which
+    /// is what JS does on abrupt completion.
+    finally_stack: Vec<Vec<Stmt>>,
+    /// Depth of finally bodies being emitted right now, so a `return` inside a
+    /// `finally` cannot recurse into the same block.
+    in_finally: u32,
     /// Binding name offered to the *directly* initialising anonymous function,
     /// arrow or class (`const f = () => 1` names it "f"). Consumed by the first
     /// such expression compiled and cleared on any other expression, so it
@@ -149,8 +159,32 @@ pub fn compile(prog: &Func, name: &str) -> Result<Module, String> {
         home_stack: Vec::new(),
         class_serial: 0,
         name_hint: None,
+        finally_stack: Vec::new(),
+        in_finally: 0,
     };
     c.push_fn(prog, FnCtx::Script, Some(name.to_string()));
+    // A module entry can carry parameters (CommonJS wrappers are compiled
+    // through this path). Bind them exactly as `compile_fn` does — without
+    // this, the parameter names resolved as GLOBALS and a module body saw
+    // `undefined` for `module`/`exports`/`require`.
+    if !prog.params.is_empty() {
+        let base: u32 = if prog.is_arrow { 0 } else { 2 };
+        for _ in prog.params.iter() {
+            c.add_local("\u{0}param");
+        }
+        for (i, p) in prog.params.iter().enumerate() {
+            let slot = base + i as u32;
+            if let Target::Simple(n) = &p.target {
+                c.cur().scopes.last_mut().unwrap().names.push((
+                    n.clone(),
+                    Binding {
+                        slot,
+                        captured: false,
+                    },
+                ));
+            }
+        }
+    }
     let mut hoisted: Vec<String> = Vec::new();
     c.collect_vars(&prog.body, &mut hoisted);
     for h in &hoisted {
@@ -370,7 +404,19 @@ impl Compiler {
             accum_ok: std::collections::HashSet::new(),
         };
         fs.proto.is_arrow = f.is_arrow;
-        fs.proto.is_strict = true;
+        // Strictness is a property of the *function*, not a global switch.
+        // Classes, methods and constructors are always strict; a plain function
+        // is strict only when its body opens with the "use strict" directive.
+        // Everything else runs sloppy, which is how node runs CommonJS `.js`
+        // files — the difference is visible in `this` (globalThis vs undefined).
+        let has_directive = match f.body.first() {
+            Some(Stmt::Expr(e)) => matches!(e, Expr::Str(s) if s == "use strict"),
+            _ => false,
+        };
+        fs.proto.is_strict = matches!(
+            ctx,
+            FnCtx::ClassMethod | FnCtx::Ctor | FnCtx::DerivedCtor | FnCtx::Script
+        ) || has_directive;
         fs.proto.is_generator = f.is_generator;
         if !f.is_arrow {
             fs.scopes.push(Scope {
@@ -469,7 +515,14 @@ impl Compiler {
                 let slot = base + i as u32;
                 let cur = self.alloc_temp();
                 self.emit(Op::GetLocal, cur, slot, 0);
-                let und = self.const_undef();
+                // `const_undef` returns a *constant index*, not a register. It
+                // has to be loaded before the comparison; passing it straight to
+                // StrictEq compared the parameter against whatever sat in the
+                // register with that number, so a default fired for a parameter
+                // that had an argument and was skipped for one that did not.
+                let und = self.alloc_temp();
+                let ku = self.const_undef();
+                self.emit(Op::LoadK, und, ku, 0);
                 let cmp = self.alloc_temp();
                 self.emit(Op::StrictEq, cmp, cur, und);
                 let skip = self.emit(Op::JumpIfFalse, cmp, 0, 0);
@@ -939,6 +992,14 @@ impl Compiler {
                 // Now the loop variable exists: mark it captured so the *test*
                 // also goes through the cell.
                 let rebound = self.captured_loop_slots(init.as_deref(), body);
+                // NOTE: a `var` loop variable captured by a closure in the body is
+                // still boxed lazily *inside* the body, so the box is rebuilt every
+                // iteration and the body runs once. Moving the box before the loop
+                // head was attempted twice and panics inside value access
+                // (`assert!(self.is_ptr() && !base.is_null())`) — the cell must be
+                // created before any plain-slot access to that binding is emitted,
+                // which means a cellification pre-pass over the whole body, not a
+                // patch at the loop site. See PRODUCTION_READY_2026-11-03.md.
                 // Each loop variable gets a shadow register holding its plain
                 // value. The update expression writes that register, so the
                 // per-iteration cell it boxes stays untouched.
@@ -1105,6 +1166,27 @@ impl Compiler {
     /// `return` must unwind the runtime handler stack, so pop every handler still
     /// live in this function first.
     fn emit_return_with_handlers(&mut self, src: u32) {
+        // Abrupt completion: every enclosing `finally` runs before the return,
+        // innermost first. Without this, `try { return x } finally { … }`
+        // skipped the finally block entirely.
+        if self.in_finally == 0 && !self.finally_stack.is_empty() {
+            let pending: Vec<Vec<Stmt>> = self.finally_stack.clone();
+            for block in pending.iter().rev() {
+                self.in_finally += 1;
+                self.push_scope();
+                for st in block {
+                    if let Err(_e) = self.stmt(st) {
+                        // Finally bodies were already compiled at their site; a
+                        // duplicate emission failing here would be an internal
+                        // error, and swallowing it is better than emitting a
+                        // return without its finally.
+                        break;
+                    }
+                }
+                self.pop_scope();
+                self.in_finally -= 1;
+            }
+        }
         // Pop only the handlers that are still live *right here*; a try body's
         // `return` has already popped its own.
         let live = self.cur().handler_stack.len();
@@ -1220,11 +1302,23 @@ impl Compiler {
         catch: Option<&(Target, Box<Stmt>)>,
         finally: Option<&Stmt>,
     ) -> Result<(), String> {
+        let fin_stmts: Vec<Stmt> = finally
+            .map(|f| match f {
+                Stmt::Block(v) => v.clone(),
+                other => vec![other.clone()],
+            })
+            .unwrap_or_default();
+        if !fin_stmts.is_empty() {
+            self.finally_stack.push(fin_stmts);
+        }
         let run_finally = |c: &mut Compiler| -> Result<(), String> {
             if let Some(f) = finally {
+                c.in_finally += 1;
                 c.push_scope();
-                c.stmt(f)?;
+                let r = c.stmt(f);
                 c.pop_scope();
+                c.in_finally -= 1;
+                r?;
             }
             Ok(())
         };
@@ -1249,6 +1343,12 @@ impl Compiler {
         // block, matching JS evaluation order.
         match catch {
             None => {
+                // No catch: `finally` still runs, then the exception is
+                // rethrown. Emitting Throw first made the finally block dead
+                // code, so `try { throw x } finally { … }` never ran it.
+                // Reserve one temp so the finally body cannot reuse `exn`.
+                let _reserved = self.alloc_temp();
+                run_finally(self)?;
                 self.emit(Op::Throw, exn, 0, 0);
             }
             Some((param, cbody)) => {
@@ -1258,9 +1358,12 @@ impl Compiler {
                 self.bind(param, exn)?;
                 self.stmt(cbody)?;
                 self.pop_scope();
+                run_finally(self)?;
             }
         }
-        run_finally(self)?;
+        if !self.finally_stack.is_empty() {
+            self.finally_stack.pop();
+        }
         let end = self.here();
         self.patch_to(end_ip, end);
         Ok(())
@@ -1856,7 +1959,17 @@ impl Compiler {
                 }
                 Ok(ok)
             }
-            Stmt::Try(body, catch, _finally) => {
+            Stmt::Try(body, catch, finally) => {
+                let fin_stmts: Vec<Stmt> = finally
+                    .as_deref()
+                    .map(|f| match f {
+                        Stmt::Block(v) => v.clone(),
+                        other => vec![other.clone()],
+                    })
+                    .unwrap_or_default();
+                if !fin_stmts.is_empty() {
+                    self.finally_stack.push(fin_stmts);
+                }
                 // Compile the try body, then (if it throws) the catch clause,
                 // both writing their value into `dst`.
                 let exn = self.alloc_temp();
@@ -1882,6 +1995,21 @@ impl Compiler {
                 self.pop_scope();
                 self.emit(Op::PopTry, 0, 0, 0);
                 self.cur().handler_stack.pop();
+                // `finally` runs on the normal path too. This arm used to drop
+                // it, so a try/finally that was the last statement of its block
+                // silently skipped the finally block.
+                let run_finally = |c: &mut Compiler| -> Result<(), String> {
+                    if let Some(f) = finally {
+                        c.in_finally += 1;
+                        c.push_scope();
+                        let r = c.stmt(f);
+                        c.pop_scope();
+                        c.in_finally -= 1;
+                        r?;
+                    }
+                    Ok(())
+                };
+                run_finally(self)?;
                 let end_ip = self.emit(Op::Jump, 0, 0, 0);
                 let handler = self.here();
                 self.patch_to(catch_ip, handler);
@@ -1891,8 +2019,16 @@ impl Compiler {
                     self.bind(param, exn)?;
                     self.completion_value(&cbody, dst)?;
                     self.pop_scope();
+                    run_finally(self)?;
                 } else {
+                    // Rethrow only after `finally`, and keep `exn` alive across
+                    // the finally body's own temporaries.
+                    let _reserved = self.alloc_temp();
+                    run_finally(self)?;
                     self.emit(Op::Throw, exn, 0, 0);
+                }
+                if !self.finally_stack.is_empty() {
+                    self.finally_stack.pop();
                 }
                 let end = self.here();
                 self.patch_to(end_ip, end);
@@ -1981,15 +2117,40 @@ impl Compiler {
             Target::Object(fields) => {
                 for f in fields {
                     if f.rest {
+                        // `{a, ...rest}` must exclude the names bound by the
+                        // other fields. The call used to pass only the source,
+                        // so every property landed in `rest` as well.
+                        let excluded: Vec<String> = fields
+                            .iter()
+                            .filter(|o| !o.rest)
+                            .filter_map(|o| match &o.key {
+                                MemberKey::Dot(n) => Some(n.clone()),
+                                // `{a: x, ...r}` keys a literal string key the
+                                // same way a dot key is; only computed keys
+                                // cannot be known at compile time.
+                                MemberKey::Computed(e) => match e.as_ref() {
+                                    Expr::Str(n) => Some(n.clone()),
+                                    _ => None,
+                                },
+                            })
+                            .collect();
                         let g = self.alloc_temp();
                         let gk = self.const_str(REST_OBJ);
                         self.emit(Op::GetGlobal, g, gk, 0);
+                        // Call arguments must be contiguous starting at
+                        // `callee + 1`, so they are allocated before the result
+                        // temp: source first, then the excluded names.
                         let callee = self.alloc_temp();
-                        let arg = self.alloc_temp();
-                        let rest = self.alloc_temp();
                         self.emit(Op::Move, callee, g, 0);
-                        self.emit(Op::Move, arg, src, 0);
-                        self.emit(Op::Call, rest, callee, 1);
+                        let first = self.alloc_temp();
+                        self.emit(Op::Move, first, src, 0);
+                        for name in &excluded {
+                            let t = self.alloc_temp();
+                            let k = self.const_str(name);
+                            self.emit(Op::LoadK, t, k, 0);
+                        }
+                        let rest = self.alloc_temp();
+                        self.emit(Op::Call, rest, callee, 1 + excluded.len() as u32);
                         self.free_temps_to(g);
                         if let Some(t) = &f.target {
                             self.bind(t, rest)?;
@@ -2343,7 +2504,7 @@ impl Compiler {
             if let Some(h) = self.home_stack.last_mut() {
                 h.1 = is_static;
             }
-            let pidx = self.compile_fn(f, FnCtx::Method, Some(class_key_name(&m.key)))?;
+            let pidx = self.compile_fn(f, FnCtx::ClassMethod, Some(class_key_name(&m.key)))?;
             let kk = self.const_fn(pidx);
             self.emit(Op::NewClosure, t, kk, 0);
             match computed_key {
@@ -2404,7 +2565,7 @@ impl Compiler {
                         is_generator: false,
                         expr_body: Some(init.clone()),
                     };
-                    let pidx = self.compile_fn(&thunk, FnCtx::Method, None)?;
+                    let pidx = self.compile_fn(&thunk, FnCtx::ClassMethod, None)?;
                     let k = self.const_fn(pidx);
                     self.emit(Op::NewClosure, callee, k, 0);
                     let val = self.alloc_temp();
@@ -2432,7 +2593,7 @@ impl Compiler {
                     if let Some(h) = self.home_stack.last_mut() {
                         h.1 = true;
                     }
-                    let pidx = self.compile_fn(f, FnCtx::Method, Some("static".into()))?;
+                    let pidx = self.compile_fn(f, FnCtx::ClassMethod, Some("static".into()))?;
                     let k = self.const_fn(pidx);
                     self.emit(Op::NewClosure, callee, k, 0);
                     let r = self.alloc_temp();
@@ -2659,7 +2820,17 @@ impl Compiler {
                 let k = self.const_num(*i as f64);
                 self.emit(Op::LoadK, dst, k, 0);
             }
-            Expr::Ident(n) => self.load_name(n, dst)?,
+            Expr::Ident(n) => {
+                // `arguments` is not a real binding: it is an array of the
+                // current frame's arguments. `BuildRest` with start 0 builds
+                // exactly that from the frame's arg window, so no new opcode and
+                // no per-call allocation in functions that never mention it.
+                if n == "arguments" && self.find_binding("arguments").is_none() {
+                    self.emit(Op::BuildRest, dst, 0, 0);
+                } else {
+                    self.load_name(n, dst)?
+                }
+            }
             Expr::This | Expr::Super | Expr::NewTarget => {
                 if matches!(e, Expr::Super) {
                     let t = self.alloc_temp();

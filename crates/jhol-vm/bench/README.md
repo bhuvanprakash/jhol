@@ -10,7 +10,13 @@ Engine selection: JHOL_RUNTIME_ENGINE=qjs|jsc|jholvm drives the `jhol` CLI;
 node/bun run the .js files directly.
 
 ## Fixtures (what each measures)
-- fib_recursive.js    naive recursive fib(30): call / interpreter speed
+- fib_recursive.js    naive recursive fib(30) with a LITERAL argument. The VM
+                     constant-folds a pure call with a compile-time-known
+                     argument, so this row is bound by process startup and does
+                     NOT measure recursion. Measured fib(38) (126,491,971 calls,
+                     counts match node): folded <0.005 s; with `let n = 38` (JIT,
+                     pure) 0.14 s vs bun 0.17 s; with a captured counter (impure,
+                     interpreter fallback) 4.46 s = ~26x bun.
 - iter_sum.js         tight integer loop 0..50000000
 - string_build.js     string concat + full char-scan checksum
 - object_props.js     200k allocs, 4-prop read pattern

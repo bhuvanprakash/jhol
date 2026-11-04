@@ -6180,7 +6180,10 @@ fn run_native_lifecycle_scripts(options: &InstallOptions) -> Result<(), String> 
 
     // Without either consent source there is nothing to run — but packages
     // with scripts are still surfaced below so the skip is never silent.
-    let policy = crate::lifecycle::ScriptPolicy { allowlist, receipts };
+    let policy = crate::lifecycle::ScriptPolicy {
+        allowlist,
+        receipts,
+    };
 
     // Integrity lookup from the lockfile: exact "node_modules/<name>" key
     // only. A miss yields an empty integrity, which still hashes — the
@@ -6188,7 +6191,9 @@ fn run_native_lifecycle_scripts(options: &InstallOptions) -> Result<(), String> 
     // later integrity-presence change invalidates the approval (fail-safe).
     let lock_integrity = load_lockfile_integrity_map(project);
     let integrity_of = |name: &str, _version: &str| -> Option<String> {
-        lock_integrity.get(&format!("node_modules/{}", name)).cloned()
+        lock_integrity
+            .get(&format!("node_modules/{}", name))
+            .cloned()
     };
 
     let results = crate::lifecycle::run_all_install_scripts(
@@ -6203,18 +6208,16 @@ fn run_native_lifecycle_scripts(options: &InstallOptions) -> Result<(), String> 
     // changed artifact (new version / new script text / new tarball) re-runs.
     let mut markers = crate::lifecycle::load_run_markers(project);
     let version_of = |pkg: &str| -> String {
-        pkg.rsplit_once('@').map(|(_, v)| v.to_string()).unwrap_or_default()
+        pkg.rsplit_once('@')
+            .map(|(_, v)| v.to_string())
+            .unwrap_or_default()
     };
 
     let mut ran = Vec::new();
     let mut needs: Vec<(String, String)> = Vec::new();
     let mut failed = Vec::new();
     for (pkg, outcome) in &results {
-        let key = format!(
-            "{}@{}",
-            pkg,
-            version_of(pkg)
-        );
+        let key = format!("{}@{}", pkg, version_of(pkg));
         match outcome {
             crate::lifecycle::ScriptOutcome::Ran => {
                 // Key includes version; the receipt hash itself is the marker
@@ -6222,11 +6225,7 @@ fn run_native_lifecycle_scripts(options: &InstallOptions) -> Result<(), String> 
                 let integrity = integrity_of(pkg, "");
                 let receipt_for_marker = policy
                     .receipts
-                    .get(&format!(
-                        "{}@{}",
-                        pkg,
-                        version_of(pkg)
-                    ))
+                    .get(&format!("{}@{}", pkg, version_of(pkg)))
                     .cloned()
                     .unwrap_or_else(|| "allowlisted".to_string());
                 let _ = &integrity;
@@ -6275,18 +6274,13 @@ fn run_native_lifecycle_scripts(options: &InstallOptions) -> Result<(), String> 
     if let Some((pkg, e)) = failed.first() {
         // A failed approved script fails the install, exactly as npm treats
         // it: the package may be broken (a build step did not complete).
-        return Err(format!(
-            "lifecycle script for {} failed: {}",
-            pkg, e
-        ));
+        return Err(format!("lifecycle script for {} failed: {}", pkg, e));
     }
     Ok(())
 }
 
 /// "node_modules/<name>" -> integrity SRI, from package-lock.json.
-fn load_lockfile_integrity_map(
-    project: &Path,
-) -> std::collections::HashMap<String, String> {
+fn load_lockfile_integrity_map(project: &Path) -> std::collections::HashMap<String, String> {
     let mut map = std::collections::HashMap::new();
     let Ok(text) = std::fs::read_to_string(project.join("package-lock.json")) else {
         return map;
@@ -6341,11 +6335,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         // here, so scripts are never silently skipped by a fast path. A
         // failed approved script fails the install, as in npm.
         run_native_lifecycle_scripts(options).map_err(|e| {
-            crate::error_handling::utils::security_error(
-                "run install scripts",
-                None,
-                &e,
-            )
+            crate::error_handling::utils::security_error("run install scripts", None, &e)
         })?;
     }
     result

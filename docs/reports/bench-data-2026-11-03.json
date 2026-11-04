@@ -1,0 +1,72 @@
+{
+  "runs": 3,
+  "benchmarks": {
+    "jholvm": {
+      "array_ops.js": 19.0,
+      "closure_calls.js": 10.2,
+      "fib_recursive.js": 11.4,
+      "gc_stress.js": 17.4,
+      "iter_sum.js": 39.4,
+      "json_roundtrip.js": 21.0,
+      "method_calls.js": 14.1,
+      "object_props.js": 20.3,
+      "polymorphic_props.js": 14.0,
+      "sort_bench.js": 25.5,
+      "string_build.js": 17.4
+    },
+    "qjs": {
+      "array_ops.js": 27.2,
+      "closure_calls.js": 33.3,
+      "fib_recursive.js": 7.7,
+      "gc_stress.js": 699.0,
+      "iter_sum.js": 1369.4,
+      "json_roundtrip.js": 49.3,
+      "method_calls.js": 58.5,
+      "object_props.js": 99.4,
+      "polymorphic_props.js": 89.5,
+      "sort_bench.js": 64.0,
+      "string_build.js": 60.6
+    },
+    "jsc": {
+      "array_ops.js": 31.8,
+      "closure_calls.js": 28.0,
+      "fib_recursive.js": 9.8,
+      "gc_stress.js": 86.2,
+      "iter_sum.js": 312.2,
+      "json_roundtrip.js": 18.1,
+      "method_calls.js": 36.6,
+      "object_props.js": 47.2,
+      "polymorphic_props.js": 29.5,
+      "sort_bench.js": 37.8,
+      "string_build.js": 35.1
+    },
+    "node": {
+      "array_ops.js": 99.0,
+      "closure_calls.js": 96.5,
+      "fib_recursive.js": 95.5,
+      "gc_stress.js": 104.3,
+      "iter_sum.js": 417.0,
+      "json_roundtrip.js": 119.0,
+      "method_calls.js": 108.5,
+      "object_props.js": 135.4,
+      "polymorphic_props.js": 101.3,
+      "sort_bench.js": 121.6,
+      "string_build.js": 106.9
+    },
+    "bun": {
+      "array_ops.js": 13.4,
+      "closure_calls.js": 9.4,
+      "fib_recursive.js": 11.9,
+      "gc_stress.js": 16.5,
+      "iter_sum.js": 105.9,
+      "json_roundtrip.js": 10.5,
+      "method_calls.js": 12.1,
+      "object_props.js": 16.2,
+      "polymorphic_props.js": 13.6,
+      "sort_bench.js": 31.5,
+      "string_build.js": 15.8
+    }
+  },
+  "valid": true,
+  "failures": []
+}

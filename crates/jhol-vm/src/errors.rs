@@ -62,6 +62,16 @@ pub fn type_error(msg: &str) -> VmError {
     }))
 }
 
+/// `SyntaxError` — used by `JSON.parse` and the parser, so a caught parse
+/// failure reports the same name node does. It used to be raised as a
+/// `TypeError`, which is a different error class for callers that branch on it.
+pub fn syntax_error(msg: &str) -> VmError {
+    VmError::Exception(Box::new(Thrown {
+        value: Value::from_str_owned(format!("SyntaxError: {}", msg)),
+        stack: Vec::new(),
+    }))
+}
+
 pub fn range_error(msg: &str) -> VmError {
     VmError::Exception(Box::new(Thrown {
         value: Value::from_str_owned(format!("RangeError: {}", msg)),

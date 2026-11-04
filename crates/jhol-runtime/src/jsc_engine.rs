@@ -948,8 +948,21 @@ impl JscRuntime {
         );
 
         let ctx = self.context.as_ref().expect("context");
-        evaluate_script(ctx, script, None, filename, 1)
-            .map_err(|e| RuntimeError::ExecutionError(format!("{}:{:?}", filename, e)))?;
+        evaluate_script(ctx, script, None, filename, 1).map_err(|e| {
+            // Display carries the interpreted string when the exception is one;
+            // otherwise fall back to its `name` (TypeError, RangeError, ...)
+            // before the Debug dump — a hex-filled `JSException { value:
+            // JSValue { raw: ... } }` tells a user nothing.
+            let shown = e.to_string();
+            let shown = shown
+                .strip_prefix("JSException (interpreted as string): ")
+                .map(str::to_string)
+                .unwrap_or_else(|| match e.name() {
+                    Ok(n) => n.to_string(),
+                    Err(_) => shown,
+                });
+            RuntimeError::ExecutionError(format!("{}: {}", filename, shown))
+        })?;
         Ok(())
     }
 

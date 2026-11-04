@@ -6834,3 +6834,34 @@ Final verification: 86/86 tests, corpus 44/44 both JIT modes, adversarial
 5+1 xfail, installer gate PASS (incl. gc-safety), engine gate PASS, disk
 above the 3 GB floor. Nothing pushed; 2.0.0 remains local per owner.
 
+
+
+---
+
+## Journal — 2026-11-02: P3 (require, publish/login, error messages)
+
+Closed the P2/P3 feature gaps:
+
+- **CJS `require` for JholVM** (modules.rs): resolution (relative/bare/
+  package.json#main), wrapper execution, pre-execution cache insertion for
+  cycles, JSON modules, cache on globals (GC root, #key). Two engine bugs
+  surfaced and are now fixed structurally: compile() never bound
+  entry-function params (CJS wrappers saw undefined module/exports), and
+  enter_frame sized frames without the param region (OOB write for
+  param-heavy no-local protos).
+- **publish/login**: pack + CouchDB-style packument PUT with bearer auth;
+  `login` upserts //host/:_authToken at 0600. Verified against a local
+  registry fixture: publish -> install -> require round trip. The HTTP
+  client's exact-200 success check mis-reported npm's 201 — now any 2xx.
+- **Error messages**: JSException Debug dumps (hex addresses) replaced with
+  interpreted strings on both engines.
+- **json_escape fast path**: whole-run pushes instead of per-char.
+- **json_roundtrip**: 10/10 interleaved pair wins under load (59.3 vs 87.2
+  medians); parity on a quiet machine — bun's variance (17-129 ms) is the
+  dominant factor on this host.
+
+Landmines encountered: `/tmp` wiped by a reboot mid-session (fixtures
+regenerated); the tar crate's Builder refuses hostile paths at BUILD time
+(adversarial fixtures must be raw wire bytes); closures cannot recurse
+(use a fn); clap builders — the live one is inside main(), the other is
+for completions only.

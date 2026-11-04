@@ -260,6 +260,46 @@ impl HttpClient {
         Ok(buf)
     }
 
+    /// PUT a JSON body with an optional bearer token (npm publish protocol:
+    /// `PUT {registry}/{name}` with `Authorization: Bearer <token>`).
+    /// Accepts any 2xx; the response body is returned for the caller to
+    /// interpret (`{"ok":true}` on success).
+    pub fn put_json_with_bearer(
+        &self,
+        url: &str,
+        body: &[u8],
+        token: Option<&str>,
+    ) -> Result<Vec<u8>, String> {
+        let _guard = self.limit.acquire();
+        let resp = self.send_with_retry(|| {
+            let mut req = self
+                .agent
+                .put(url)
+                .set("Content-Type", "application/json")
+                .set("Accept", "application/json");
+            if let Some(t) = token {
+                if !t.is_empty() {
+                    req = req.set("Authorization", &format!("Bearer {}", t));
+                }
+            }
+            req.send_bytes(body)
+        })?;
+        let status = resp.status();
+        let mut buf = Vec::new();
+        resp.into_reader()
+            .read_to_end(&mut buf)
+            .map_err(|e| e.to_string())?;
+        if !(200..300).contains(&status) {
+            let msg = String::from_utf8_lossy(&buf);
+            return Err(format!(
+                "registry rejected publish (HTTP {}): {}",
+                status,
+                msg.chars().take(400).collect::<String>()
+            ));
+        }
+        Ok(buf)
+    }
+
     /// GET url and write body to file (for tarballs).
     pub fn get_to_file(&self, url: &str, dest: &Path) -> Result<(), String> {
         let _guard = self.limit.acquire();
@@ -527,7 +567,10 @@ impl HttpClient {
             attempt += 1;
             match send() {
                 Ok(resp) => {
-                    if resp.status() == 200 {
+                    // Any 2xx is success: npm's publish answers 201 Created,
+                    // and the old exact-200 check reported a successful
+                    // publish as a failure.
+                    if (200..300).contains(&resp.status()) {
                         self.limit.recover();
                         return Ok(resp);
                     }

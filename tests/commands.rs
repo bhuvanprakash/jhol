@@ -196,9 +196,15 @@ fn test_install_offline_without_cache_fails() {
         "jhol install --offline should fail on cache miss"
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
+    // Assert the semantics, not one phrasing: an offline miss must identify
+    // itself and name the package. The message moved from "not in cache" to
+    // "not in the content store" when the store was renamed, which broke this
+    // test while the behaviour stayed correct (exit 1, nothing installed).
     assert!(
-        stderr.contains("Offline mode: package(s) not in cache"),
-        "expected offline cache-miss error, got: {}",
+        stderr.contains("Offline mode:")
+            && (stderr.contains("not in the content store") || stderr.contains("not in cache"))
+            && stderr.contains("left-pad"),
+        "expected offline cache-miss error naming the package, got: {}",
         stderr
     );
 }

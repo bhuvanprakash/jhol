@@ -580,9 +580,7 @@ impl JArray {
                 Some(v)
             }
         } else {
-            self.sparse
-                .as_ref()
-                .and_then(|m| m.get(&i).copied())
+            self.sparse.as_ref().and_then(|m| m.get(&i).copied())
         }
     }
 

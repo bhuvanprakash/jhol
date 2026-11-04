@@ -46,7 +46,9 @@ fn is_excluded(rel: &str) -> bool {
     let p = Path::new(rel);
     for comp in p.components() {
         let c = comp.as_os_str().to_string_lossy();
-        if ALWAYS_EXCLUDE.iter().any(|e| c == *e) || c.starts_with('.') && c.len() > 1 && c.ends_with("~") {
+        if ALWAYS_EXCLUDE.iter().any(|e| c == *e)
+            || c.starts_with('.') && c.len() > 1 && c.ends_with("~")
+        {
             return true;
         }
     }
@@ -69,8 +71,7 @@ fn is_always_included(rel: &str) -> bool {
 pub fn collect_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
     let pj_path = dir.join("package.json");
     let pj: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&pj_path)
-            .map_err(|e| format!("read package.json: {}", e))?,
+        &std::fs::read_to_string(&pj_path).map_err(|e| format!("read package.json: {}", e))?,
     )
     .map_err(|e| format!("parse package.json: {}", e))?;
 
@@ -108,7 +109,11 @@ pub fn collect_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
             }
             let path = entry.path();
             if path.is_dir() {
-                if use_files && !files_field.iter().any(|f| child_rel == *f || f.starts_with(&format!("{}/", child_rel))) {
+                if use_files
+                    && !files_field
+                        .iter()
+                        .any(|f| child_rel == *f || f.starts_with(&format!("{}/", child_rel)))
+                {
                     // directory not listed in files — still walk its top level
                     // because a nested path may be listed exactly
                     walk(&path, &child_rel, out, use_files, files_field)?;
@@ -160,7 +165,9 @@ pub fn pack_bytes(dir: &Path) -> Result<(Vec<u8>, String, usize), String> {
     let mut tar = tar::Builder::new(Vec::new());
     for rel in &files {
         let abs = dir.join(rel);
-        let meta = abs.metadata().map_err(|e| format!("{}: {}", rel.display(), e))?;
+        let meta = abs
+            .metadata()
+            .map_err(|e| format!("{}: {}", rel.display(), e))?;
         if meta.is_dir() {
             let mut h = tar::Header::new_gnu();
             h.set_size(0);
@@ -168,8 +175,12 @@ pub fn pack_bytes(dir: &Path) -> Result<(Vec<u8>, String, usize), String> {
             h.set_entry_type(tar::EntryType::Directory);
             h.set_mtime(0);
             h.set_cksum();
-            tar.append_data(&mut h, &format!("package/{}", rel.display()), std::io::empty())
-                .map_err(|e| e.to_string())?;
+            tar.append_data(
+                &mut h,
+                &format!("package/{}", rel.display()),
+                std::io::empty(),
+            )
+            .map_err(|e| e.to_string())?;
         } else {
             let data = std::fs::read(&abs).map_err(|e| format!("{}: {}", rel.display(), e))?;
             let mut h = tar::Header::new_gnu();
@@ -177,8 +188,12 @@ pub fn pack_bytes(dir: &Path) -> Result<(Vec<u8>, String, usize), String> {
             h.set_mode(0o644);
             h.set_mtime(0);
             h.set_cksum();
-            tar.append_data(&mut h, &format!("package/{}", rel.display()), data.as_slice())
-                .map_err(|e| e.to_string())?;
+            tar.append_data(
+                &mut h,
+                &format!("package/{}", rel.display()),
+                data.as_slice(),
+            )
+            .map_err(|e| e.to_string())?;
         }
     }
     let tar_bytes = tar.into_inner().map_err(|e| e.to_string())?;
@@ -212,7 +227,10 @@ pub fn pack_bytes(dir: &Path) -> Result<(Vec<u8>, String, usize), String> {
     let mut h = sha2::Sha256::new();
     h.update(&gz);
     let digest = h.finalize();
-    let sha = digest.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+    let sha = digest
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>();
     let filename = format!("{}-{}.tgz", name, version);
     Ok((gz, format!("{}:{}", filename, sha), files.len()))
 }

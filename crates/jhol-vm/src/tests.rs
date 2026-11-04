@@ -233,6 +233,292 @@ fn objects_and_functions_carry_a_property_bag() {
 
 // -------------------------- JavaScript ----------------------------
 
+// Hidden-issue sweep: cases where the engine looked right but differed from JS.
+// Strictness is per function: sloppy functions coerce a missing receiver to the
+// global object, class methods and "use strict" bodies keep `undefined`.
+#[test]
+fn parameter_defaults_fill_only_missing_arguments() {
+    in_thread(|| {
+        // The comparison loaded a constant *index* instead of a register, so a
+        // default fired for a supplied argument and was skipped for a missing
+        // one. Arrows were the visible case; plain functions were wrong too.
+        assert_eq!(
+            eval_str("(function(){ return JSON.stringify(((a,b=2)=>[a,b])(1)) })()"),
+            "[1,2]"
+        );
+        assert_eq!(
+            eval_str("(function(){ return JSON.stringify(((a=1,b=2)=>[a,b])(9)) })()"),
+            "[9,2]"
+        );
+        assert_eq!(eval_str("(function(a=1,b=2){ return a+b })()"), "3");
+        assert_eq!(eval_str("(function(a,b=2){ return a+b })(1)"), "3");
+    });
+}
+
+#[test]
+fn numeric_formatting_matches_js() {
+    in_thread(|| {
+        // toFixed rounds the exact decimal expansion: 2.55 is 2.54999… in binary.
+        assert_eq!(
+            eval_str("(2.55).toFixed(1) + ',' + (2.5).toFixed(0) + ',' + (1.005).toFixed(2)"),
+            "2.5,3,1.00"
+        );
+        // fractional radix conversion
+        assert_eq!(
+            eval_str("(0.5).toString(2) + ',' + (0.25).toString(2) + ',' + (255).toString(16)"),
+            "0.1,0.01,ff"
+        );
+    });
+}
+
+#[test]
+fn this_binding_follows_function_strictness() {
+    in_thread(|| {
+        assert_eq!(
+            eval_str("(function(){ return this === globalThis })()"),
+            "true"
+        );
+        assert_eq!(
+            eval_str("(function(){ const o={v:2,m(){return this.v}}; return o.m.call(null) })()"),
+            "undefined"
+        );
+        assert_eq!(
+            eval_str("(function(){ 'use strict'; return this === undefined })()"),
+            "true"
+        );
+        // a class method is always strict, even when extracted
+        assert_eq!(
+            eval_str("(function(){ class A{m(){return this===undefined}} const f = new A().m; return f() })()"),
+            "true"
+        );
+    });
+}
+
+#[test]
+fn spread_and_rest_read_values_not_accessor_slots() {
+    in_thread(|| {
+        // a getter must be invoked and become a data property
+        assert_eq!(
+            eval_str("(function(){ const o={get a(){return 5}}; const s={...o}; return s.a + '|' + Object.keys(s).join() })()"),
+            "5|a"
+        );
+        // rest excludes what the pattern bound
+        assert_eq!(
+            eval_str("(function(){ const o={a:1,b:2,c:3}; const {a,c,...r}=o; return Object.keys(r).join() })()"),
+            "b"
+        );
+        assert_eq!(
+            eval_str(
+                "(function(){ const o={a:1}; const {a,...r}=o; return Object.keys(r).length })()"
+            ),
+            "0"
+        );
+    });
+}
+
+#[test]
+fn json_stringify_calls_to_json() {
+    in_thread(|| {
+        assert_eq!(
+            eval_str("JSON.stringify({d:{toJSON(){return 'T'}}})"),
+            "{\"d\":\"T\"}"
+        );
+    });
+}
+
+#[test]
+fn sparse_arrays_keep_holes_and_skip_them() {
+    in_thread(|| {
+        // map preserves the hole (join renders it empty), callbacks skip it,
+        // reduce skips it, and arithmetic on a hole must not crash the VM (it
+        // used to overflow the stack through `to_primitive`).
+        assert_eq!(eval_str("[1,,3].map(x => x*2).join('-')"), "2--6");
+        assert_eq!(eval_str("[1,,3].filter(x => true).length"), "2");
+        assert_eq!(eval_str("[1,,3].reduce((s,x) => s+x, 0)"), "4");
+        assert_eq!(
+            eval_str("(function(){let n=0; [1,,3].forEach(()=>n++); return n})()"),
+            "2"
+        );
+    });
+}
+
+#[test]
+fn delete_on_an_array_index_leaves_a_hole() {
+    in_thread(|| {
+        assert_eq!(
+            eval_str("(function(){const a=[1,2,3]; delete a[1]; return a.length + '|' + a.join('-') + '|' + Object.keys(a).join()})()"),
+            "3|1--3|0,2"
+        );
+    });
+}
+
+#[test]
+fn own_keys_order_puts_indices_first() {
+    in_thread(|| {
+        assert_eq!(
+            eval_str("Object.keys({b:1,'2':2,a:3,'1':4}).join()"),
+            "1,2,b,a"
+        );
+        assert_eq!(
+            eval_str("Object.keys({o:1,'10':2,'2':3,y:4}).join()"),
+            "2,10,o,y"
+        );
+        // "01" is not an index
+        assert_eq!(eval_str("Object.keys({'01':1,'1':2}).join()"), "1,01");
+        assert_eq!(eval_str("JSON.stringify({b:1,'2':2})"), "{\"2\":2,\"b\":1}");
+    });
+}
+
+#[test]
+fn string_replace_expands_dollar_patterns() {
+    in_thread(|| {
+        assert_eq!(eval_str("'a$&b'.replace('a','$&$&')"), "aa$&b");
+        // $` is everything before the match, $' everything after.
+        assert_eq!(eval_str("'abc'.replace('b',\"$`|$'\")"), "aa|cc");
+    });
+}
+
+#[test]
+fn math_round_handles_the_half_open_interval() {
+    in_thread(|| {
+        // the double just below .5 must round to 0, not 1
+        assert_eq!(
+            eval_str(
+                "Math.round(0.49999999999999994) + ',' + Math.round(0.5) + ',' + Math.round(-2.5)"
+            ),
+            "0,1,-2"
+        );
+    });
+}
+
+#[test]
+fn number_statics_are_the_same_function_objects() {
+    in_thread(|| {
+        assert_eq!(
+            eval_str("Number.parseInt===parseInt && Number.parseFloat===parseFloat"),
+            "true"
+        );
+    });
+}
+
+#[test]
+fn arguments_object_reflects_the_call() {
+    in_thread(|| {
+        assert_eq!(
+            eval_str("(function(){ return arguments.length })(1,2,3)"),
+            "3"
+        );
+        assert_eq!(
+            eval_str("(function(a){ return arguments[1] })(\"x\",\"y\")"),
+            "y"
+        );
+        assert_eq!(eval_str("(function(){ return arguments.length })()"), "0");
+    });
+}
+
+// Sweep of JS-conformance fixes found by differential testing against node.
+#[test]
+fn math_round_matches_js_ties() {
+    in_thread(|| {
+        // .5 rounds toward +Infinity, and -0 keeps its sign.
+        assert_eq!(
+            eval_str(
+                "Math.round(-2.5) + ',' + Math.round(2.5) + ',' + Object.is(Math.round(-0.5), -0)"
+            ),
+            "-2,3,true"
+        );
+    });
+}
+
+#[test]
+fn to_precision_selects_significant_digits() {
+    in_thread(|| {
+        assert_eq!(
+            eval_str("(1.5).toPrecision(3) + ',' + (1234).toPrecision(2)"),
+            "1.50,1.2e+3"
+        );
+    });
+}
+
+#[test]
+fn own_property_names_include_accessors() {
+    in_thread(|| {
+        assert_eq!(
+            eval_str("Object.getOwnPropertyNames({get x(){return 1}}).join()"),
+            "x"
+        );
+    });
+}
+
+#[test]
+fn array_entries_yield_index_value_pairs() {
+    in_thread(|| {
+        assert_eq!(eval_str("[...['a','b'].entries()].join('|')"), "0,a|1,b");
+        assert_eq!(eval_str("[...['a','b'].keys()].join()"), "0,1");
+    });
+}
+
+#[test]
+fn runtime_faults_are_error_instances() {
+    in_thread(|| {
+        assert_eq!(
+            eval_str("(function(){try{null.x}catch(e){return e instanceof TypeError && e instanceof Error && e.name}})()"),
+            "TypeError"
+        );
+    });
+}
+
+// `finally` used to be dropped in three cases: when the try/finally was the last
+// statement of a program, when the try threw without a catch, and when it was
+// left through `return`. These pin all three, plus the override rule.
+#[test]
+fn finally_runs_on_the_normal_path_as_last_statement() {
+    in_thread(|| {
+        assert_eq!(eval_str("var x=0; try{ x=1 } finally { x=2 } x"), "2");
+    });
+}
+
+#[test]
+fn finally_runs_before_a_rethrow() {
+    in_thread(|| {
+        assert_eq!(
+            eval_str(
+                "var x=0; try { try { throw new Error('e') } finally { x=7 } } catch (e) {} x"
+            ),
+            "7"
+        );
+        // and the exception still propagates when there is no catch
+        assert!(eval("try { throw 1 } finally { }").is_err());
+    });
+}
+
+#[test]
+fn finally_runs_when_try_returns() {
+    in_thread(|| {
+        assert_eq!(
+            eval_str("(function(){ var x=0; (function(){ try { return 1 } finally { x=5 } })(); return x })()"),
+            "5"
+        );
+        // a `return` inside `finally` overrides the try's return value
+        assert_eq!(
+            eval_str("(function(){ try { return 1 } finally { return 2 } })()"),
+            "2"
+        );
+    });
+}
+
+#[test]
+fn finally_runs_for_catch_return_path() {
+    in_thread(|| {
+        assert_eq!(
+            eval_str(
+                "(function(){ var x=0; (function(){ try { throw new Error('e') } catch(e) { return 3 } finally { x=9 } })(); return x })()"
+            ),
+            "9"
+        );
+    });
+}
+
 #[test]
 fn evaluates_arithmetic_and_strings() {
     in_thread(|| {

@@ -1802,21 +1802,29 @@ fn build_completions_cli() -> Command {
         .subcommand(
             Command::new("approve-scripts")
                 .about("Grant content-addressed consent for a package's install scripts")
-                .arg(Arg::new("packages")
-                    .num_args(0..)
-                    .value_name("PACKAGE")
-                    .help("Package names; omit with --all for every package with scripts"))
-                .arg(Arg::new("all").long("all").num_args(0)
-                    .help("Approve every package that currently ships install scripts")),
+                .arg(
+                    Arg::new("packages")
+                        .num_args(0..)
+                        .value_name("PACKAGE")
+                        .help("Package names; omit with --all for every package with scripts"),
+                )
+                .arg(
+                    Arg::new("all")
+                        .long("all")
+                        .num_args(0)
+                        .help("Approve every package that currently ships install scripts"),
+                ),
         )
         .subcommand(
             Command::new("revoke-scripts")
                 .about("Revoke script consent for packages")
-                .arg(Arg::new("packages")
-                    .num_args(1..)
-                    .required(true)
-                    .value_name("PACKAGE")
-                    .help("Package names to revoke (as name or name@version)")),
+                .arg(
+                    Arg::new("packages")
+                        .num_args(1..)
+                        .required(true)
+                        .value_name("PACKAGE")
+                        .help("Package names to revoke (as name or name@version)"),
+                ),
         )
         .subcommand(Command::new("prefetch").about("Download lockfile dependencies into cache"))
         .subcommand(Command::new("cache").about("Manage local package cache"))
@@ -3317,6 +3325,43 @@ fn run() -> Result<(), String> {
                     )
             )
             .subcommand(
+                Command::new("login")
+                    .about("Store a registry auth token in .npmrc (0600)")
+                    .arg(
+                        Arg::new("registry")
+                            .long("registry")
+                            .help("Registry URL (default: effective registry)"),
+                    )
+                    .arg(
+                        Arg::new("token")
+                            .long("token")
+                            .required(true)
+                            .help("Auth token to store"),
+                    )
+                    .arg(
+                        Arg::new("global")
+                            .long("global")
+                            .num_args(0)
+                            .help("Write ~/.npmrc instead of the project .npmrc"),
+                    ),
+            )
+            .subcommand(
+                Command::new("publish")
+                    .about("Publish the package in this directory to the registry")
+                    .arg(Arg::new("dir").default_value(".").help("Package directory"))
+                    .arg(
+                        Arg::new("dry-run")
+                            .long("dry-run")
+                            .num_args(0)
+                            .help("Build the full request without sending it"),
+                    )
+                    .arg(
+                        Arg::new("registry")
+                            .long("registry")
+                            .help("Override the registry URL"),
+                    ),
+            )
+            .subcommand(
                 Command::new("view")
                     .about("Inspect a package's registry metadata (versions, deps, integrity)")
                     .arg(Arg::new("package").required(true).help("name or name@version")),
@@ -3817,12 +3862,16 @@ fn run() -> Result<(), String> {
                         if dry {
                             println!(
                                 "gc (dry run): {} tarball(s) reachable, {} file(s) / {} freeable",
-                                kept, files, human_bytes(freed)
+                                kept,
+                                files,
+                                human_bytes(freed)
                             );
                         } else {
                             println!(
                                 "gc: {} tarball(s) kept, freed {} file(s) / {}",
-                                kept, files, human_bytes(freed)
+                                kept,
+                                files,
+                                human_bytes(freed)
                             );
                         }
                     }
@@ -5319,8 +5368,67 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    if let Some(("login", sub_m)) = matches.subcommand() {
+        let registry = sub_m
+            .get_one::<String>("registry")
+            .cloned()
+            .unwrap_or_else(|| {
+                jhol_core::config::effective_registry_url(std::path::Path::new("."))
+            });
+        let token = sub_m
+            .get_one::<String>("token")
+            .cloned()
+            .unwrap_or_default();
+        let global = sub_m.get_flag("global");
+        match jhol_core::publish::login(std::path::Path::new("."), &registry, &token, global) {
+            Ok(path) => {
+                println!("Stored token for {} in {}", registry, path.display());
+            }
+            Err(e) => {
+                eprintln!("login: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if let Some(("publish", sub_m)) = matches.subcommand() {
+        let dir = PathBuf::from(
+            sub_m
+                .get_one::<String>("dir")
+                .cloned()
+                .unwrap_or(".".into()),
+        );
+        let dry = sub_m.get_flag("dry-run");
+        let registry = sub_m
+            .get_one::<String>("registry")
+            .cloned()
+            .unwrap_or_else(|| jhol_core::config::effective_registry_url(&dir));
+        match jhol_core::publish::publish(&dir, &registry, None, dry) {
+            Ok(o) => {
+                if o.dry_run {
+                    println!(
+                        "dry run: would publish {}@{} to {} ({} bytes, sha256 {})",
+                        o.name, o.version, o.registry, o.tarball_bytes, o.sha256
+                    );
+                } else {
+                    println!(
+                        "published {}@{} -> {} ({} bytes, sha256 {})",
+                        o.name, o.version, o.registry, o.tarball_bytes, o.sha256
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("publish: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
     if let Some(("view", sub_m)) = matches.subcommand() {
-        let pkg = sub_m.get_one::<String>("package").cloned().unwrap_or_default();
+        let pkg = sub_m
+            .get_one::<String>("package")
+            .cloned()
+            .unwrap_or_default();
         match jhol_core::registry_query::view(&pkg) {
             Ok(text) => print!("{}", text),
             Err(e) => {
@@ -5343,7 +5451,12 @@ fn run() -> Result<(), String> {
     }
 
     if let Some(("pack", sub_m)) = matches.subcommand() {
-        let dir = PathBuf::from(sub_m.get_one::<String>("dir").cloned().unwrap_or(".".into()));
+        let dir = PathBuf::from(
+            sub_m
+                .get_one::<String>("dir")
+                .cloned()
+                .unwrap_or(".".into()),
+        );
         match jhol_core::pack::pack_bytes(&dir) {
             Ok((bytes, label, files)) => {
                 let filename = label.split(':').next().unwrap_or("package.tgz").to_string();
@@ -6568,9 +6681,28 @@ fn run() -> Result<(), String> {
             } else {
                 for r in &roots {
                     let pp = std::path::Path::new(r);
+                    // An explicitly named path must be real, and explicitly named
+                    // files must have an engine. Silently reporting
+                    // "0 file(s), 0 changed" with exit 0 for a typo or an
+                    // unsupported extension makes `jhol fmt --check` useless in
+                    // CI: it passes while formatting nothing.
+                    if !pp.exists() {
+                        return Err(format!("fmt: no such file or directory: {r}"));
+                    }
                     if pp.is_dir() {
                         collect_fmt_files(pp, &mut files);
                     } else {
+                        let has_engine = jhol_bundle::fmt::is_supported(pp)
+                            || pp
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .and_then(jhol_bundle::fmt::external_tool)
+                                .is_some();
+                        if !has_engine {
+                            return Err(format!(
+                                "fmt: no formatter for {r} (supported: js, mjs, cjs, jsx, ts, tsx, mts, cts, json, css, scss, less, rs, go, py)"
+                            ));
+                        }
                         files.push(pp.to_path_buf());
                     }
                 }
@@ -7761,59 +7893,54 @@ fn main() {
 mod daemon_socket_tests {
     use super::{prepare_daemon_socket, DaemonSocketCleanup};
     use std::os::unix::net::UnixListener;
-    use std::path::PathBuf;
 
-    fn isolated_dir() -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system clock after epoch")
-            .as_nanos();
-        let dir = PathBuf::from("/tmp").join(format!(
-            "jhol-daemon-socket-test-{}-{nonce}",
-            std::process::id()
-        ));
-        std::fs::create_dir(&dir).expect("create isolated socket directory");
-        dir
+    // Hermetic per-test directory owned by `tempfile`, removed on drop. The
+    // previous hand-rolled `create_dir` + `remove_dir_all` pair panicked inside
+    // `create_dir` when the shared `/tmp` was under disk pressure, which is the
+    // failure this replaces; a failing assertion also no longer leaks a
+    // directory. Keep this hermetic rather than special-casing an error.
+    fn isolated_dir() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("jhol-daemon-socket-test-")
+            .tempdir()
+            .expect("create isolated socket directory")
     }
 
     #[test]
     fn active_daemon_socket_is_preserved() {
         let dir = isolated_dir();
-        let socket = dir.join("daemon.sock");
+        let socket = dir.path().join("daemon.sock");
         let listener = UnixListener::bind(&socket).expect("bind active test socket");
         assert!(prepare_daemon_socket(&socket).is_err());
         assert!(std::fs::symlink_metadata(&socket).is_ok());
         drop(listener);
-        std::fs::remove_dir_all(dir).expect("clean isolated socket directory");
     }
 
     #[test]
     fn stale_daemon_socket_is_removed() {
         let dir = isolated_dir();
-        let socket = dir.join("daemon.sock");
+        let socket = dir.path().join("daemon.sock");
         drop(UnixListener::bind(&socket).expect("bind stale test socket"));
         prepare_daemon_socket(&socket).expect("remove stale socket");
         assert!(std::fs::symlink_metadata(&socket).is_err());
-        std::fs::remove_dir_all(dir).expect("clean isolated socket directory");
     }
 
     #[test]
     fn non_socket_daemon_path_is_preserved() {
         let dir = isolated_dir();
-        let socket = dir.join("daemon.sock");
+        let socket = dir.path().join("daemon.sock");
         std::fs::write(&socket, b"keep me").expect("create non-socket path");
         assert!(prepare_daemon_socket(&socket).is_err());
         assert_eq!(
             std::fs::read(&socket).expect("read preserved path"),
             b"keep me"
         );
-        std::fs::remove_dir_all(dir).expect("clean isolated socket directory");
     }
 
     #[test]
     fn daemon_cleanup_removes_its_bound_socket() {
         let dir = isolated_dir();
-        let socket = dir.join("daemon.sock");
+        let socket = dir.path().join("daemon.sock");
         let listener = UnixListener::bind(&socket).expect("bind owned socket");
         let cleanup = DaemonSocketCleanup::capture(&socket).expect("capture socket identity");
         drop(listener);
@@ -7821,13 +7948,12 @@ mod daemon_socket_tests {
         cleanup.remove_if_owned().expect("remove owned socket");
         assert!(std::fs::symlink_metadata(&socket).is_err());
         drop(cleanup);
-        std::fs::remove_dir_all(dir).expect("clean isolated socket directory");
     }
 
     #[test]
     fn daemon_cleanup_preserves_replacement_socket() {
         let dir = isolated_dir();
-        let socket = dir.join("daemon.sock");
+        let socket = dir.path().join("daemon.sock");
         let listener = UnixListener::bind(&socket).expect("bind original socket");
         let cleanup = DaemonSocketCleanup::capture(&socket).expect("capture socket identity");
         std::fs::remove_file(&socket).expect("remove original socket path");
@@ -7838,6 +7964,5 @@ mod daemon_socket_tests {
         assert!(std::fs::symlink_metadata(&socket).is_ok());
         drop(cleanup);
         drop(replacement);
-        std::fs::remove_dir_all(dir).expect("clean isolated socket directory");
     }
 }

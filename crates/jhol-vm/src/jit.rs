@@ -2836,7 +2836,9 @@ fn emit_smi_recursion(plan: &NPlan, nparams: u32, param_base: u32) -> Option<Vec
                 holds.remove(&dst);
                 defined.insert(dst);
             }
-            NReg::Branch { on_true, src, t, .. } => {
+            NReg::Branch {
+                on_true, src, t, ..
+            } => {
                 if !defined.contains(&src) {
                     return None;
                 }
@@ -2848,10 +2850,7 @@ fn emit_smi_recursion(plan: &NPlan, nparams: u32, param_base: u32) -> Option<Vec
             }
             NReg::Jump { t } => a.b(labels[t]),
             NReg::Invoke {
-                dst,
-                arg0,
-                argc,
-                ..
+                dst, arg0, argc, ..
             } => {
                 for i in 0..argc {
                     if !defined.contains(&(arg0 + i)) {
@@ -3122,7 +3121,18 @@ pub unsafe extern "C" fn jhol_native_invoke(
         return 1;
     }
     let this = if proto.is_arrow { f.this_val.0 } else { this };
-    unsafe { invoke_native_entry(entry, f.upvalues.as_ptr(), args, argc, depth, out, this, callee) }
+    unsafe {
+        invoke_native_entry(
+            entry,
+            f.upvalues.as_ptr(),
+            args,
+            argc,
+            depth,
+            out,
+            this,
+            callee,
+        )
+    }
 }
 
 #[inline]
@@ -3137,7 +3147,15 @@ unsafe fn invoke_native_entry(
     callee: u64,
 ) -> u32 {
     let fun: NativeEntry = std::mem::transmute(entry);
-    fun(args, argc, depth.wrapping_add(1), out, upvalues, this, callee)
+    fun(
+        args,
+        argc,
+        depth.wrapping_add(1),
+        out,
+        upvalues,
+        this,
+        callee,
+    )
 }
 
 // Boxed-register regions cover branches, cached own properties and pure native
@@ -3347,8 +3365,7 @@ extern "C" fn region_prepare_call(bits: u64, target: *mut RegionCallTarget) -> u
     let f = unsafe { value.as_function() };
     if let crate::objects::FnKind::Native(nf) = f.kind {
         let flags = f.hdr.flags;
-        if flags
-            & (crate::objects::FLAG_NATIVE_LEAF | crate::objects::FLAG_NATIVE_PRIMITIVE_LEAF)
+        if flags & (crate::objects::FLAG_NATIVE_LEAF | crate::objects::FLAG_NATIVE_PRIMITIVE_LEAF)
             == 0
         {
             return 0;
@@ -3912,14 +3929,13 @@ pub unsafe fn try_compile_region(
                 continue;
             }
             let lit = ins[ip];
-            let keys: Vec<crate::objects::PropKey> =
-                match unsafe { &*pool.add(lit.b as usize) } {
-                    crate::bytecode::ConstVal::Keys(k) if k.len() <= 8 => k.to_vec(),
-                    _ => {
-                        ip += 1;
-                        continue;
-                    }
-                };
+            let keys: Vec<crate::objects::PropKey> = match unsafe { &*pool.add(lit.b as usize) } {
+                crate::bytecode::ConstVal::Keys(k) if k.len() <= 8 => k.to_vec(),
+                _ => {
+                    ip += 1;
+                    continue;
+                }
+            };
             let root = lit.a;
             let mut aliases = vec![root];
             let mut fields: Vec<(crate::objects::PropKey, u32, usize)> = keys
@@ -3960,7 +3976,13 @@ pub unsafe fn try_compile_region(
                     let found = fields.iter().position(|(k, _, _)| *k == ic.key);
                     if ic.state == 0 || found.is_none() || aliases.contains(&y.a) {
                         ok = false;
-                        why = if ic.state == 0 { "get-state" } else if found.is_none() { "get-key" } else { "get-root" };
+                        why = if ic.state == 0 {
+                            "get-state"
+                        } else if found.is_none() {
+                            "get-key"
+                        } else {
+                            "get-root"
+                        };
                         break;
                     }
                     aliases.retain(|s| *s != y.a);
@@ -4403,7 +4425,11 @@ pub unsafe fn try_compile_region(
                 a.word(0x8a000000 | (3 << 16));
                 a.mov_const(3, arena_base as u64);
                 a.add_reg(0, 0, 3);
-                a.ldr32(2, 0, std::mem::offset_of!(crate::objects::ObjHeader, tag) as u32);
+                a.ldr32(
+                    2,
+                    0,
+                    std::mem::offset_of!(crate::objects::ObjHeader, tag) as u32,
+                );
                 a.cmp_imm(2, crate::objects::TAG_ARRAY);
                 a.b_cond(1, slow);
                 a.ldr32(

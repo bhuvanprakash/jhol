@@ -17,7 +17,16 @@ pub fn describe(e: &VmError) -> Result<i32, String> {
         }
     }
     let message = match e {
-        VmError::Exception(t) => format!("uncaught exception ({:?})", t.value),
+        VmError::Exception(t) => {
+            // Exceptions are thrown as strings by the engine's own helpers
+            // (`type_error(...)`); printing the Debug of the Value showed
+            // `Str("TypeError: ...")` instead of the message.
+            if t.value.is_string() {
+                unsafe { t.value.as_string().as_str() }.to_string()
+            } else {
+                format!("uncaught exception ({:?})", t.value)
+            }
+        }
         VmError::Syntax(m) => format!("SyntaxError: {}", m),
         VmError::Internal(m) => m.clone(),
     };

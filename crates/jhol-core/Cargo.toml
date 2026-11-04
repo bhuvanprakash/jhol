@@ -7,6 +7,7 @@ license-file = "../../LICENSE"
 repository = "https://github.com/bhuvanprakash/jhol"
 
 [features]
+lifedebug = []
 # NOTE: `http-reqwest` is intentionally NOT default. It pulls reqwest + the
 # HTTP/2 stack for `http2_download`, which is resume-only (slower than ureq
 # on packuments, parity on tarballs). Opt in with `--features http-reqwest`.

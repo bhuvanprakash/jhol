@@ -14,10 +14,10 @@
 //! {version, script text, tarball bytes} changes — the approval is bound to
 //! the artifact, not the name.
 
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
-use sha2::{Digest, Sha256};
 
 /// Which lifecycle scripts to run, in order.
 const INSTALL_SCRIPTS: &[&str] = &["preinstall", "install", "postinstall"];
@@ -46,12 +46,7 @@ pub enum ScriptOutcome {
 /// `integrity` is the SRI from the lockfile (empty string when unknown);
 /// including it means a republished tarball with different bytes invalidates
 /// a previously granted approval even if the scripts text is identical.
-pub fn script_receipt(
-    name: &str,
-    version: &str,
-    scripts_json: &str,
-    integrity: &str,
-) -> String {
+pub fn script_receipt(name: &str, version: &str, scripts_json: &str, integrity: &str) -> String {
     let mut h = Sha256::new();
     h.update(name.as_bytes());
     h.update(b"\0");
@@ -292,7 +287,10 @@ fn read_pkg_scripts(pkg_dir: &Path) -> Option<(String, serde_json::Value)> {
         .and_then(|v| v.as_str())
         .unwrap_or("0.0.0")
         .to_string();
-    let scripts = pj.get("scripts").cloned().unwrap_or(serde_json::Value::Null);
+    let scripts = pj
+        .get("scripts")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     Some((version, scripts))
 }
 
@@ -392,12 +390,7 @@ fn evaluate_package(
 
     // Receipt path: consent bound to version + script text + tarball bytes.
     let integrity = integrity_of(name, &version).unwrap_or_default();
-    let expected = script_receipt(
-        name,
-        &version,
-        &canonical_scripts(&scripts),
-        &integrity,
-    );
+    let expected = script_receipt(name, &version, &canonical_scripts(&scripts), &integrity);
     match policy.receipts.get(&format!("{}@{}", name, version)) {
         Some(granted) if *granted == expected => {
             // The receipt IS the consent: gate via a single-name set (an
@@ -443,11 +436,7 @@ fn lockfile_integrity(project: &Path) -> HashMap<String, String> {
 /// Grant content-addressed script consent. `asked` filters by package name or
 /// `name@version`; `all` approves every package that currently ships install
 /// scripts. Receipts are written to `.jhol/script-receipts.json`.
-pub fn approve_scripts(
-    project: &Path,
-    asked: &[String],
-    all: bool,
-) -> Result<Vec<String>, String> {
+pub fn approve_scripts(project: &Path, asked: &[String], all: bool) -> Result<Vec<String>, String> {
     if !all && asked.is_empty() {
         return Err(
             "specify packages to approve, or pass --all to approve every package with install scripts"
@@ -514,7 +503,15 @@ pub fn approve_scripts(
             granted.push(key);
         }
     }
-    walk(&node_modules, "", &integrity, asked, all, &mut receipts, &mut granted);
+    walk(
+        &node_modules,
+        "",
+        &integrity,
+        asked,
+        all,
+        &mut receipts,
+        &mut granted,
+    );
     granted.sort();
     granted.dedup();
     save_receipts(project, &receipts)?;

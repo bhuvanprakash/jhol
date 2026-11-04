@@ -31,8 +31,10 @@ pub mod errors;
 pub mod formatter;
 pub mod jit;
 pub mod lexer;
+pub mod modules;
 pub mod objects;
 pub mod parser;
+pub mod regex;
 pub mod value;
 pub mod vm;
 

@@ -141,7 +141,11 @@ pub struct Vm {
     set_clear_used: u32,
     pub(crate) handlers: Vec<Handler>,
     pub globals: *mut JObject,
-    protos: Vec<Arc<FnProto>>,
+    /// Directories of the modules currently executing (entry script at the
+    /// bottom, nested requires on top). `require` resolves relative specs
+    /// against the top entry — the same rule node uses.
+    pub module_dirs: Vec<String>,
+    pub(crate) protos: Vec<Arc<FnProto>>,
     /// Roots that the GC must see but that live outside the register file.
     roots: Vec<Value>,
     last_result: Value,
@@ -266,7 +270,6 @@ impl Vm {
             v
         }
     }
-
 
     #[inline]
     pub fn arena_ref(&self) -> &'static mut Arena {
@@ -471,7 +474,12 @@ impl Vm {
         0
     }
 
-    pub(crate) fn jit_set_prop(&mut self, obj: Value, val: Value, ic: *mut crate::bytecode::Ic) -> u32 {
+    pub(crate) fn jit_set_prop(
+        &mut self,
+        obj: Value,
+        val: Value,
+        ic: *mut crate::bytecode::Ic,
+    ) -> u32 {
         if ic.is_null() {
             return 1;
         }
@@ -1537,7 +1545,13 @@ impl Vm {
 
     pub fn delete_prop(&mut self, obj: Value, key: PropKey) -> Value {
         if obj.is_array() {
-            if let PropKey::Idx(_i) = key {
+            if let PropKey::Idx(i) = key {
+                // JS `delete arr[i]` leaves a hole and keeps `length`, so
+                // `join` renders it empty and `Object.keys` omits the index.
+                let a = unsafe { obj.as_array_mut() };
+                if (i as usize) < a.data.len() {
+                    a.data[i as usize] = Value::EMPTY;
+                }
                 return Value::TRUE;
             }
         }
@@ -1634,6 +1648,11 @@ impl Vm {
             _ if v.is_bool() => Ok(if v.as_bool() { 1.0 } else { 0.0 }),
             _ if v.is_null() => Ok(0.0),
             _ if v.is_undefined() => Ok(f64::NAN),
+            // A hole in an array is `Value::EMPTY`. It is pointer-shaped but is
+            // not an object, so it used to fall into the object branch below,
+            // where `obj_tag()` returned garbage and `to_primitive` recursed
+            // until the stack overflowed (crash on `[1,,3].map(x => x*2)`).
+            _ if v.is_empty() => Ok(f64::NAN),
             _ if v.is_string() => {
                 let s = unsafe { v.as_string().as_str().to_string() };
                 let t = s.trim();
@@ -1664,6 +1683,11 @@ impl Vm {
     pub fn to_primitive(&mut self, v: Value, number_hint: bool) -> VmResult<Value> {
         if !v.is_ptr() || v.is_string() {
             return Ok(v);
+        }
+        // `EMPTY` is pointer-tagged but is not an object; unwrapping it as one
+        // reads a shape that does not exist. It means "no value" here.
+        if v.is_empty() {
+            return Ok(Value::UNDEFINED);
         }
         let scope = self.arena().root_scope(&[v]);
         let result = self.to_primitive_inner(v, number_hint);
@@ -1730,14 +1754,29 @@ impl Vm {
         ret: Option<(usize, u32)>,
     ) -> VmResult<()> {
         if !callee.is_function() {
+            // node splits these: an undeclared identifier call is a
+            // ReferenceError, a missing method is a TypeError. The VM has only
+            // the value here, and `undefined` is far more often a missing
+            // property (`o.m()`) than an undeclared global, so the TypeError
+            // branch is the one that does not mislead. undeclared-global calls
+            // are therefore reported as TypeError — see the VM gaps table.
             let n = self.to_string(callee).unwrap_or_default();
             return Err(type_error(&format!("{} is not a function", n)));
         }
         let f = unsafe { callee.as_function() };
-        let this = match &f.kind {
+        let mut this = match &f.kind {
             FnKind::Bytecode(proto) if proto.is_arrow => f.this_val,
             _ => this,
         };
+        // Sloppy-mode calls coerce a missing receiver to the global object;
+        // strict functions keep `undefined`. Without this, `f()` inside a method
+        // threw "cannot read properties of undefined" where node sees
+        // `globalThis`, and `o.m.call(null)` threw instead of reading globals.
+        if let FnKind::Bytecode(proto) = &f.kind {
+            if !proto.is_strict && (this.is_undefined() || this.is_null()) {
+                this = Value::from_ptr(self.globals);
+            }
+        }
         if f.hdr.has(FLAG_BOUND) {
             let target = f.this_val;
             let bound_this = f.bound_this;
@@ -2115,7 +2154,11 @@ impl Vm {
                     proto.nparams,
                     proto.nupvals,
                     f.upvalues.len(),
-                    proto.code.iter().map(|i| (i.op, i.a, i.b, i.c)).collect::<Vec<_>>()
+                    proto
+                        .code
+                        .iter()
+                        .map(|i| (i.op, i.a, i.b, i.c))
+                        .collect::<Vec<_>>()
                 );
             }
         }
@@ -2134,7 +2177,9 @@ impl Vm {
                 let n = Self::proto_num(proto, m.c)?;
                 let z = Self::proto_num(proto, load.b)?;
                 let r = self.arith(ArithOp::Mod, x, Value::from_f64(n)).ok()?;
-                return Some(Value::from_bool(self.strict_eq(r, Value::from_f64(z)).ok()?));
+                return Some(Value::from_bool(
+                    self.strict_eq(r, Value::from_f64(z)).ok()?,
+                ));
             }
             let n = Self::proto_num(proto, proto.code.first()?.c)?;
             let y = Value::from_f64(n);
@@ -2277,11 +2322,22 @@ impl Vm {
         // GC scan of the window sees valid references either way. This removes
         // one zero-fill of `nslots` words per call — the single largest cost in
         // call-dominated code.
+        let is_arrow = proto.is_arrow;
+        // The frame window must cover the parameter slots too: non-arrow
+        // functions keep params at `2..2+nparams` (arrows at `0..nparams`).
+        // A proto whose body uses no locals could otherwise report an nslots
+        // smaller than the param region, and the copy below would write past
+        // the resize (observed with CommonJS module wrappers: five params, a
+        // body with no top-level locals, `nslots` clamped to 2).
+        let nslots = nslots.max(if is_arrow {
+            proto.nparams
+        } else {
+            proto.nparams.saturating_add(2)
+        });
         let need = reg_base + nslots;
         if self.stack.len() < need {
             self.stack.resize(need, Value::UNDEFINED);
         }
-        let is_arrow = proto.is_arrow;
         if !is_arrow {
             let this_v = if this.is_undefined() {
                 Value::UNDEFINED
@@ -2298,6 +2354,35 @@ impl Vm {
         let param_base = if is_arrow { 0 } else { 2 };
         for i in 0..copy {
             self.stack[reg_base + param_base + i] = self.stack[arg_base + i];
+        }
+        if std::env::var_os("JHOL_LIFE_DEBUG").is_some() {
+            let nm = if let FnKind::Bytecode(pr) = &unsafe { func.as_function() }.kind {
+                pr.name.clone()
+            } else {
+                "?".into()
+            };
+            eprintln!(
+                "enter {nm}: reg_base={reg_base} arg_base={arg_base} argc={argc} nparams={nparams} nslots={nslots} p0_obj={p0:?} p1_obj={p1:?} copied={copied}",
+                nm = nm,
+                reg_base = reg_base,
+                arg_base = arg_base,
+                argc = argc,
+                nparams = nparams,
+                nslots = nslots,
+                p0 = self.stack.get(arg_base).map(|v| v.is_object()),
+                p1 = self.stack.get(arg_base + 1).map(|v| v.is_object()),
+                copied = (0..copy)
+                    .map(|i| {
+                        self.stack
+                            .get(reg_base + param_base + i)
+                            .map(|v| v.is_object())
+                            .unwrap_or(false)
+                    })
+                    .collect::<Vec<bool>>()
+                    .iter()
+                    .map(|b| if *b { "O" } else { "." })
+                    .collect::<String>(),
+            );
         }
         let super_ctor = Value::UNDEFINED;
         self.frames.push(Frame {
@@ -4191,6 +4276,33 @@ impl Vm {
         }
     }
 
+    /// Runtime faults are raised as `"TypeError: message"` strings. JavaScript
+    /// expects an object with `name` and `message`, so a caught value is
+    /// upgraded once, at the catch, and left alone if it is not one of ours.
+    fn error_object_from_thrown(&mut self, v: Value) -> Value {
+        if !v.is_string() {
+            return v;
+        }
+        let s = match self.to_string(v) {
+            Ok(s) => s,
+            Err(_) => return v,
+        };
+        for name in [
+            "TypeError",
+            "RangeError",
+            "SyntaxError",
+            "ReferenceError",
+            "EvalError",
+            "URIError",
+        ] {
+            let prefix = format!("{name}: ");
+            if let Some(msg) = s.strip_prefix(&prefix) {
+                return crate::builtins::make_error_value(self, name, msg);
+            }
+        }
+        v
+    }
+
     fn handle_exception(&mut self, e: VmError) -> bool {
         // Drop handlers that no longer have a live frame.
         while let Some(h) = self.handlers.last() {
@@ -4201,9 +4313,11 @@ impl Vm {
             let (fi, catch_ip, slot) = (h.frame_idx, h.catch_ip, h.slot);
             self.handlers.pop();
             let thrown = match e {
-                VmError::Exception(t) => t.value,
-                VmError::Syntax(m) => self.new_string(&format!("SyntaxError: {}", m)),
-                VmError::Internal(m) => self.new_string(&format!("InternalError: {}", m)),
+                VmError::Exception(t) => self.error_object_from_thrown(t.value),
+                VmError::Syntax(m) => crate::builtins::make_error_value(self, "SyntaxError", &m),
+                VmError::Internal(m) => {
+                    crate::builtins::make_error_value(self, "InternalError", &m)
+                }
             };
             self.frames.truncate(fi + 1);
             // Unwind to the handler frame's own register window, not to its
@@ -4275,6 +4389,7 @@ impl Vm {
             },
             handlers: Vec::new(),
             globals: std::ptr::null_mut(),
+            module_dirs: Vec::new(),
             protos: Vec::new(),
             roots: Vec::new(),
             last_result: Value::UNDEFINED,
@@ -4666,8 +4781,23 @@ impl Engine {
         let src = std::fs::read_to_string(path)
             .map_err(|e| VmError::Internal(format!("cannot read {}: {}", path.display(), e)))?;
         let name = path.display().to_string();
-        self.eval_source(&src, &name)?;
+        // The entry script is a module too: relative `require` calls resolve
+        // against its directory for the whole run (including timers fired
+        // later — the entry stays on the stack until the event loop drains).
+        let dir = path
+            .parent()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| ".".into());
+        self.vm.module_dirs.push(dir);
+        let out = self.eval_source(&src, &name);
+        if out.is_err() {
+            self.vm.module_dirs.pop();
+            let e = out.unwrap_err();
+            self.run_event_loop()?;
+            return Err(e);
+        }
         self.run_event_loop()?;
+        self.vm.module_dirs.pop();
         Ok(self.vm.exit_code)
     }
 
