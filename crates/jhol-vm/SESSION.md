@@ -1655,3 +1655,27 @@ regenerated); the tar crate's Builder refuses hostile paths at BUILD time
 (adversarial fixtures must be raw wire bytes); closures cannot recurse
 (use a fn); clap builders — the live one is inside main(), the other is
 for completions only.
+
+
+---
+
+## Journal — 2026-11-05: the var-in-loop closure defect, fixed
+
+The one the 2026-11-03 notes called "recorded rather than patched" is closed.
+Two halves to the root cause: `loop_cell_slots` excluded `var` inits (the
+pre-pass returned empty, so no shadow/rebind), while the body compile still
+cellified the captured var — the fused test then compared a cell pointer as a
+number and the loop exited after one iteration. The fix splits the boxed-loop
+design by declaration kind: `var` boxes once before the head (CreateCell
+after the init write, everything through the cell, one shared binding — node's
+var), `let`/`const` keeps shadow + RebindCell per iteration (fresh binding per
+closure — node's let). Five node-diffed shapes pass, including the
+shared-write-through-closure case.
+
+The earlier panics ("box before the loop head") were an ordering problem:
+CreateCell must come after the init's plain write, not before. The comment
+in for_stmt now documents the whole design.
+
+Verified: closure.js + closure2.js (5 shapes) identical to node; VM 116/116;
+corpus 44/44; workspace 1045/0; both gates PASS; benches 10/11
+(json_roundtrip at parity-with-bun's-variance).

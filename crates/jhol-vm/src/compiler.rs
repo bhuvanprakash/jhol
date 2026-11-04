@@ -992,25 +992,41 @@ impl Compiler {
                 // Now the loop variable exists: mark it captured so the *test*
                 // also goes through the cell.
                 let rebound = self.captured_loop_slots(init.as_deref(), body);
-                // NOTE: a `var` loop variable captured by a closure in the body is
-                // still boxed lazily *inside* the body, so the box is rebuilt every
-                // iteration and the body runs once. Moving the box before the loop
-                // head was attempted twice and panics inside value access
-                // (`assert!(self.is_ptr() && !base.is_null())`) — the cell must be
-                // created before any plain-slot access to that binding is emitted,
-                // which means a cellification pre-pass over the whole body, not a
-                // patch at the loop site. See PRODUCTION_READY_2026-11-03.md.
-                // Each loop variable gets a shadow register holding its plain
-                // value. The update expression writes that register, so the
-                // per-iteration cell it boxes stays untouched.
-                let shadow: Vec<(String, u32, u32)> = rebound
-                    .iter()
-                    .map(|(name, slot)| {
-                        let u = self.add_local("\u{0}loopval");
-                        self.emit(Op::Move, u, *slot, 0);
-                        (name.clone(), *slot, u)
-                    })
-                    .collect();
+                // Two boxed-loop designs, by declaration kind:
+                //
+                // * `var` (node semantics): ONE binding shared by every
+                //   iteration and every closure. Box it ONCE here — CreateCell
+                //   reads the plain slot the init just wrote and replaces it
+                //   with a cell holding that value — then the captured binding
+                //   routes every test/body/update access through the cell, and
+                //   all closures capture the same cell. No shadow, no rebind:
+                //   a per-iteration cell would be `let` semantics.
+                // * `let`/`const` (block semantics): a fresh binding per
+                //   iteration. Shadow register + `RebindCell` at the head gives
+                //   each closure its own cell, which is the node behaviour.
+                //
+                // The boxed value is created AFTER the init has written the
+                // plain slot (the earlier "cell before any plain-slot access"
+                // panics came from boxing an unwritten slot).
+                let var_init = matches!(
+                    init.as_deref(),
+                    Some(crate::ast::Stmt::Var(crate::ast::VarKind::Var, _))
+                );
+                let shadow: Vec<(String, u32, u32)> = if var_init {
+                    for (_, slot) in rebound.iter() {
+                        self.emit(Op::CreateCell, *slot, 0, 0);
+                    }
+                    Vec::new()
+                } else {
+                    rebound
+                        .iter()
+                        .map(|(name, slot)| {
+                            let u = self.add_local("\u{0}loopval");
+                            self.emit(Op::Move, u, *slot, 0);
+                            (name.clone(), *slot, u)
+                        })
+                        .collect()
+                };
                 let lbl = self.pending_label.take();
                 self.push_label(lbl);
                 // The rebind is the loop head: jumping back to `top` gives every
@@ -1202,12 +1218,19 @@ impl Compiler {
     fn loop_cell_slots(&mut self, init: Option<&Stmt>) -> Vec<(String, u32)> {
         let mut out = Vec::new();
         if let Some(Stmt::Var(kind, decls)) = init {
-            if *kind == VarKind::Let || *kind == VarKind::Const {
-                for (target, _) in decls {
-                    if let Target::Simple(n) = target {
-                        if let Some(b) = self.find_binding(n) {
-                            out.push((n.clone(), b.slot));
-                        }
+            // `var` loops are the node-semantics case this whole mechanism
+            // exists for: a closure capturing a `var` shares ONE binding, and
+            // the binding must be boxed before the loop head so the fused
+            // test never compares a cell pointer as a number. Excluding `var`
+            // here meant the pre-pass returned empty for `var` loops, the
+            // shadow/rebind machinery never engaged, and the body's own
+            // cellification then desynchronised from the raw slot (the loop
+            // exited after one iteration, or closures saw garbage).
+            let _ = kind;
+            for (target, _) in decls {
+                if let Target::Simple(n) = target {
+                    if let Some(b) = self.find_binding(n) {
+                        out.push((n.clone(), b.slot));
                     }
                 }
             }

@@ -416,6 +416,37 @@ Gates after this sweep: VM tests 114 → **116**, workspace **1045 / 0 / 16**,
 `cargo fmt --all --check` 0 diffs.
 
 
+## Fixed — `var` closures in `for` loops: body ran once, then per-iteration cells (node: one shared binding)
+
+The diagnosed-but-unpatched defect from the 2026-11-03 record is fixed, with
+the architecture the earlier notes called for:
+
+- **Root cause (two halves).** The loop pre-pass `loop_cell_slots` only
+  handled `let`/`const` inits — a `var` init returned empty, so the
+  shadow/rebind machinery never engaged for `var` loops. The body compile
+  *did* cell the captured variable anyway (the arrow's compile marks it),
+  producing a slot/cell desynchronisation: the fused test compared the raw
+  slot (now a cell pointer) as a number, and the loop exited after one
+  iteration.
+- **Fix, by declaration kind.** `var`: box ONCE before the loop head
+  (`CreateCell` reads the plain slot the init just wrote), then every
+  test/body/update access routes through the cell — one binding shared by
+  all iterations and all closures, exactly node's `var` semantics. No
+  shadow, no rebind. `let`/`const`: the existing shadow register +
+  `RebindCell` per iteration stays (fresh binding per closure — also node).
+- The earlier "box before the loop panics" notes were about boxing an
+  *unwritten* slot; boxing after the init has written the plain slot is the
+  ordering that works.
+
+Verified against node on five shapes: inline arrow, `const`-then-push,
+function declaration, skip-step update (`i++` inside the body), and
+shared-write-through-closure (`objs[0].set(99)` visible from `objs[2].get()`)
+— all identical. `for-of let` unchanged.
+
+This was the last item in the "looks right but is wrong" class that made
+older libraries (any `for (var i …) { setTimeout/callback using i }`) fail
+silently.
+
 ## P3 delivery — 2026-11-02 session (require, publish/login, error overhaul)
 
 Dated record of the P2/P3 feature work (verified before the production-gate
