@@ -233,6 +233,10 @@ unsafe extern "C" fn env_get_cb(
     js_string(ctx, &crate::engine::env_get_impl(&key).unwrap_or_default())
 }
 
+// Exactly one http_listen_cb exists for any feature combination: this
+// ungated copy is shadowed by the `http-server`-gated definition below when
+// that feature is on (the duplicate symbol broke `--all-features` builds).
+#[cfg(not(feature = "http-server"))]
 unsafe extern "C" fn http_listen_cb(
     ctx: JSContextRef,
     _function: JSObjectRef,
