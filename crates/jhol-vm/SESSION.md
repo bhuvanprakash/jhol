@@ -1679,3 +1679,26 @@ in for_stmt now documents the whole design.
 Verified: closure.js + closure2.js (5 shapes) identical to node; VM 116/116;
 corpus 44/44; workspace 1045/0; both gates PASS; benches 10/11
 (json_roundtrip at parity-with-bun's-variance).
+
+
+---
+
+## Journal — 2026-11-05: six empty test suites filled, --all-features fixed
+
+The six test directories (hostile-fixtures, regression, graph-invariants,
+polyglot-e2e, snapshot-replay, feature-matrix) were README-only shells —
+CI would have passed them vacuously. Each now has a run.sh with real
+assertions (20 total). The hostile-fixtures suite is the E2E complement
+to the in-crate adversarial_install.rs: a local Python registry serves
+raw hostile tarballs, and the real binary must refuse them.
+
+**--all-features build break fixed**: duplicate http_listen_cb in
+jsc_engine.rs (one ungated, one gated on http-server). The ungated copy
+is now cfg(not(http-server)). cargo check --workspace --all-features:
+exit 0 for the first time.
+
+**Shell landmine**: `for link in dir/*` with an empty dir expands to the
+literal glob string, which fails the existence check. Fix: `set --` +
+`[ -e "$1" ]` guard, or use `find -type l`.
+
+Gates: engine PASS, installer PASS, workspace 1045/0.

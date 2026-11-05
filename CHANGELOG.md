@@ -447,6 +447,33 @@ This was the last item in the "looks right but is wrong" class that made
 older libraries (any `for (var i …) { setTimeout/callback using i }`) fail
 silently.
 
+## Added — six test suites un-vacuumed: the empty fixture directories now run
+
+`tests/{hostile-fixtures,regression,graph-invariants,polyglot-e2e,
+snapshot-replay,feature-matrix}` existed as README-only shells — CI would
+have passed them vacuously. Each now has a `run.sh` with real assertions:
+
+- **hostile-fixtures** (5 tests): a local registry serves raw crafted
+  tarballs (traversal, absolute paths, backslash, symlink escape, plus a
+  clean control). The real `jhol install` binary must refuse every attack
+  and succeed on the control. Complements the in-crate
+  `adversarial_install.rs` unit tests with a full-pipeline E2E.
+- **regression** (3 tests): install determinism (two installs →
+  byte-identical trees), lockfile integrity completeness (every package
+  carries an SRI), no-deps install succeeds.
+- **graph-invariants** (4 tests): every declared dep present in
+  node_modules, no orphan top-level dirs, no broken `.bin` links, depth-2
+  dependency chain materialised.
+- **polyglot-e2e** (2 tests): a project with JS + Python + Rust manifests
+  passes `jhol plan` and `jhol sync`.
+- **snapshot-replay** (1 test): wipe node_modules, restore from
+  lockfile + `.jhol` snapshot, `install --offline` succeeds.
+- **feature-matrix** (5 tests): each named feature combination (`runtime`,
+  `runtime jholvm`, `bundle bundle-swc`, …) compiles with `cargo check`.
+
+Total: 20 new E2E assertions, all passing. `--all-features` now compiles
+(fixed a duplicate `http_listen_cb` symbol in the JSC backend).
+
 ## P3 delivery — 2026-11-02 session (require, publish/login, error overhaul)
 
 Dated record of the P2/P3 feature work (verified before the production-gate
