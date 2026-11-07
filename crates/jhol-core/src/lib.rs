@@ -130,7 +130,8 @@ pub use lockfile_write::{
 pub use progress::{snapshot as progress_snapshot, ProgressSnapshot};
 pub use run::run_script;
 pub use utils::{
-    cache_clean, cache_export, cache_import, cache_prune, cache_size_bytes, get_cache_dir,
+    cache_clean,
+    cache_clean_report, cache_export, cache_import, cache_prune, cache_size_bytes, get_cache_dir,
     init_cache, list_cached_packages, lockfile_content_hash, read_fallback_telemetry,
     validate_package_name,
 };

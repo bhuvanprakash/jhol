@@ -1184,3 +1184,35 @@ one process; the guard therefore tracks locks held by this process and treats a
 re-entry as a no-op.
 
 `jhol-core` 636 tests (4 new), `jhol-treecheck` 10, installer gate PASS.
+
+
+## `jhol cache clean`: reports what it could not remove, and why
+
+The command returned a count and swallowed every failure with `is_ok()`, so a
+cache written by an older `sudo` run produced `Removed 0 cached package(s)` and
+nothing else — indistinguishable from an already-clean cache. Worse, it could
+not run at all in that state: cache initialisation runs before the subcommand
+and aborted with `Failed to initialize cache: Permission denied`, which is
+precisely when you need the command.
+
+Now:
+
+```
+jhol: 2 entries could not be removed:
+  /tmp/cache/a.tgz  (Permission denied (os error 13))
+  /tmp/cache/b.tgz  (Permission denied (os error 13))
+
+those entries belong to another user (an older `sudo` run?).
+  Fix ownership:  sudo chown -R $(id -u):$(id -g) /tmp/cache
+  Then re-run:    jhol cache clean
+```
+
+- `cache clean` no longer requires a usable cache (every other `cache`
+  subcommand still does, because it reads or writes one).
+- Bytes freed are reported alongside the count.
+- The permission case names the directory and the exact command that fixes it,
+  instead of leaving the user to infer it from `Removed 0`.
+- **Partial failure exits 1.** A script that runs `jhol cache clean` and checks
+  the status must not be told the cache is empty while entries survived.
+
+`jhol-core` 636 tests, installer gate PASS.

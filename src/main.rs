@@ -4125,7 +4125,18 @@ fn run() -> Result<(), String> {
 
     // cache list | size | prune | export | import | clean
     if let Some(("cache", sub)) = matches.subcommand() {
-        jhol_core::init_cache().map_err(|e| format!("Failed to initialize cache: {}", e))?;
+        // `cache clean` must work in exactly the state that breaks cache
+        // initialisation: a read-only or foreign-owned cache directory is when
+        // you need it most. Every other subcommand still requires a usable
+        // cache, because it reads or writes one.
+        if let Err(e) = jhol_core::init_cache() {
+            if !matches!(sub.subcommand(), Some(("clean", _))) {
+                return Err(format!("Failed to initialize cache: {}", e));
+            }
+            if std::env::var("JHOL_VERBOSE").is_ok() {
+                eprintln!("[jhol] cache init failed ({e}); continuing with clean");
+            }
+        }
         match sub.subcommand() {
             Some(("list", _)) => {
                 let list = jhol_core::list_cached_packages()
@@ -4206,9 +4217,41 @@ fn run() -> Result<(), String> {
                 success(&format!("Imported {} package(s) from {}.", n, dir));
             }
             Some(("clean", _)) => {
-                let n = jhol_core::cache_clean()
+                let report = jhol_core::cache_clean_report()
                     .map_err(|e| format!("Failed to clean cache: {}", e))?;
-                success(&format!("Removed {} cached package(s).", n));
+                if report.freed_bytes > 0 && report.removed > 0 {
+                    success(&format!(
+                        "Removed {} cached package(s), freed {}.",
+                        report.removed,
+                        human_bytes(report.freed_bytes)
+                    ));
+                } else {
+                    success(&format!("Removed {} cached package(s).", report.removed));
+                }
+                if !report.failed.is_empty() {
+                    eprintln!(
+                        "jhol: {} entr{} could not be removed:",
+                        report.failed.len(),
+                        if report.failed.len() == 1 { "y" } else { "ies" }
+                    );
+                    for (path, reason) in report.failed.iter().take(5) {
+                        eprintln!("  {}  ({})", path.display(), reason);
+                    }
+                    if report.failed.len() > 5 {
+                        eprintln!("  … and {} more", report.failed.len() - 5);
+                    }
+                    if let Some(hint) = report.hint() {
+                        eprintln!("\n{}", hint);
+                    }
+                    // Partial failure is failure: a script that runs
+                    // `jhol cache clean` and checks the status must not be told
+                    // the cache is empty when entries survived.
+                    return Err(format!(
+                        "{} cached entr{} could not be removed",
+                        report.failed.len(),
+                        if report.failed.len() == 1 { "y" } else { "ies" }
+                    ));
+                }
             }
             Some(("telemetry", _)) => {
                 let v = jhol_core::read_fallback_telemetry();

@@ -1404,6 +1404,100 @@ pub fn list_cached_packages() -> Result<Vec<String>> {
 }
 
 /// Remove all cached tarballs (store + legacy). Keeps logs.
+/// What a `cache clean` actually achieved.
+///
+/// The old version returned a count and swallowed every failure with `is_ok()`,
+/// so a cache directory owned by another user (an old `sudo jhol install`)
+/// produced "Removed 0 cached package(s)" with no explanation of why nothing
+/// could be removed. Reporting the failures and their reasons is the difference
+/// between a tool that looks broken and one that tells you what to run.
+#[derive(Debug, Default)]
+pub struct CacheCleanReport {
+    pub removed: usize,
+    pub freed_bytes: u64,
+    /// Entries that could not be removed, with the reason given by the OS.
+    pub failed: Vec<(std::path::PathBuf, String)>,
+}
+
+impl CacheCleanReport {
+    /// The common cause: cache entries written by a previous root-run install.
+    pub fn all_permission_denied(&self) -> bool {
+        !self.failed.is_empty()
+            && self
+                .failed
+                .iter()
+                .all(|(_, reason)| reason.to_lowercase().contains("permission"))
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        if self.failed.is_empty() {
+            return None;
+        }
+        if self.all_permission_denied() {
+            let parent = self
+                .failed
+                .first()
+                .map(|(p, _)| p.parent().map(|d| d.to_path_buf()).unwrap_or_else(|| p.clone()));
+            Some(match parent {
+                Some(dir) => format!("those entries belong to another user (an older `sudo` run?).\n  Fix ownership:  sudo chown -R $(id -u):$(id -g) {}\n  Then re-run:    jhol cache clean", dir.display()),
+                None => "fix ownership of the cache directory, then re-run `jhol cache clean`".to_string(),
+            })
+        } else {
+            Some("re-run with `JHOL_VERBOSE=1` to see each failing path".to_string())
+        }
+    }
+}
+
+/// Remove every cached tarball, reporting what could not be removed and why.
+pub fn cache_clean_report() -> Result<CacheCleanReport> {
+    let mut report = CacheCleanReport::default();
+    let mut sweep = |dir: &std::path::Path, tgz_only: bool| {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let path = e.path();
+            let is_tarball = path
+                .extension()
+                .map(|x| x == "tgz")
+                .unwrap_or(false);
+            if tgz_only && !is_tarball {
+                continue;
+            }
+            if !tgz_only && !is_tarball && !path.is_dir() {
+                continue;
+            }
+            let size = if is_tarball {
+                fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+            } else {
+                0
+            };
+            match if path.is_dir() {
+                fs::remove_dir_all(&path)
+            } else {
+                fs::remove_file(&path)
+            } {
+                Ok(()) => {
+                    report.removed += 1;
+                    report.freed_bytes += size;
+                }
+                Err(e) => report.failed.push((path, e.to_string())),
+            }
+        }
+    };
+
+    let cache_dir = cache_dir_path();
+    if cache_dir.exists() {
+        sweep(&cache_dir, true);
+    }
+    let store = store_dir();
+    if store.exists() {
+        sweep(&store, false);
+    }
+    let _ = fs::remove_file(store_index_path());
+    Ok(report)
+}
+
 pub fn cache_clean() -> Result<usize> {
     let cache_dir = cache_dir_path();
     if !cache_dir.exists() {

@@ -7077,3 +7077,18 @@ tree stays consistent; warm runs take no lock because they write nothing.
 Lesson, again, in a new dress: a "lock" implemented as a file with content is
 two mechanisms — a file and a protocol — and the protocol had a hole. Prefer the
 mechanism the OS already gets right.
+
+## Journal — 2026-11-07 (cont.): cache clean tells the truth
+
+`jhol cache clean` returned a count and swallowed failures (`is_ok()`), so a
+root-owned cache printed "Removed 0 cached package(s)" — indistinguishable from
+"already empty" — and in fact could not run at all, because cache init aborted
+with EACCES before the subcommand.
+
+Now it reports each failure with the OS reason, names the ownership fix, reports
+bytes freed, does not require an initialisable cache, and exits 1 on partial
+failure.
+
+Small thing, real lesson: swallowing errors with `is_ok()` turns a diagnosable
+condition into a wrong answer. The count said "0" — a number, not an
+explanation.
