@@ -3271,6 +3271,18 @@ fn validate_layout(
         };
         if let Some(declared) = ver_info.get("dependencies").and_then(|v| v.as_object()) {
             for (child, spec) in declared {
+                // `"alias": "npm:real@range"`: the alias is a *name*, not a
+                // package. Its path is linked from the real package after the
+                // install, so legality is checked against the real name and
+                // range — requiring the alias to exist as its own node made
+                // every package using `npm:` aliases (pretty-format, and
+                // therefore jest/expect/vite/next/prisma) uninstallable.
+                let raw_spec = spec.as_str().unwrap_or("*");
+                let (child, spec) = match crate::spec_grammar::classify(raw_spec) {
+                    crate::spec_grammar::Spec::Alias { real, range } => (real, range),
+                    _ => (child.clone(), raw_spec.to_string()),
+                };
+                let child = &child;
                 let Some(child_pkg) =
                     crate::layout::visible_dependency(node, child, |path| layout.get(path))
                 else {
@@ -3279,7 +3291,7 @@ fn validate_layout(
                         name, pkg.version, child
                     ));
                 };
-                let spec = spec.as_str().unwrap_or("*");
+                let spec = spec.as_str();
                 if !crate::registry::version_satisfies(spec, &child_pkg.version) {
                     return Err(format!(
                         "JAGR-∞ legality: {}@{} requires {} {}, got {}",
@@ -3609,12 +3621,22 @@ fn reconcile_versions(
         {
             let edges: Vec<(String, String)> = declared
                 .iter()
-                .map(|(child, _spec)| {
+                .map(|(child, spec)| {
+                    // `"alias": "npm:real@range"` — the resolved node is the
+                    // REAL package; recording the alias name here left the
+                    // layout with an empty version and failed legality. The
+                    // alias path itself is linked after the install.
+                    let child = match crate::spec_grammar::classify(
+                        spec.as_str().unwrap_or("*"),
+                    ) {
+                        crate::spec_grammar::Spec::Alias { real, .. } => real,
+                        _ => child.clone(),
+                    };
                     let v = resolved
-                        .get(child)
+                        .get(&child)
                         .map(|c| c.version.clone())
                         .unwrap_or_default();
-                    (child.clone(), v)
+                    (child, v)
                 })
                 .collect();
             if let Some(pkg) = resolved.get_mut(&name) {
@@ -5145,7 +5167,24 @@ fn selection_to_resolved(
 
                 if let Some(deps) = ver_info.get("dependencies").and_then(|v| v.as_object()) {
                     for (dep_name, spec) in deps {
-                        let spec = spec.as_str().unwrap_or("*");
+                        // `"alias": "npm:real@range"` — resolve the REAL
+                        // package under its own name; the alias path is linked
+                        // after the install. Resolving the alias name looked it
+                        // up in the packument map, never found it, and left the
+                        // dependency missing from the layout (which then failed
+                        // legality) — that is what made every package aliasing
+                        // react-is uninstallable.
+                        let raw = spec.as_str().unwrap_or("*");
+                        let (dep_name_owned, spec_owned) =
+                            match crate::spec_grammar::classify(raw) {
+                                crate::spec_grammar::Spec::Alias { real, range } => {
+                                    crate::install::record_alias_public(dep_name, &real);
+                                    (real, range)
+                                }
+                                _ => (dep_name.clone(), raw.to_string()),
+                            };
+                        let dep_name = &dep_name_owned;
+                        let spec = spec_owned.as_str();
                         // Highest fetched version satisfying the declared range.
                         if let Some(target_packument) = packuments.get(dep_name) {
                             if let Some(v) = highest_satisfying(target_packument, spec) {

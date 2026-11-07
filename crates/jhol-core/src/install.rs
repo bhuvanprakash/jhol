@@ -1187,6 +1187,69 @@ impl ColdResolveStrategy for ManifestThenPackumentStrategy {
 /// `npm:` alias does (`npm:real@range`), and the naive `rfind('@')` produced the
 /// bogus name `my-lodash@npm:lodash`, which then leaked into resolution as a
 /// package to fetch (HTTP 404) and broke the alias install.
+/// Transitive `npm:` aliases discovered while expanding the graph:
+/// `alias_name -> real_name`. Filled by the expansion, consumed after the
+/// install to materialise the alias path.
+///
+/// `pretty-format` (and therefore jest, expect, vite, next, prisma …)
+/// declares `"@jest/react-is-19": "npm:react-is@^19.2.5"`. Those names do not
+/// exist on the registry — fetching the alias 404s — so the expansion must
+/// resolve the *target* and remember the alias to link afterwards.
+fn alias_registry() -> &'static std::sync::Mutex<std::collections::HashMap<String, String>> {
+    static ALIASES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
+        std::sync::OnceLock::new();
+    ALIASES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Public hook for the nested resolver in `jagr_infinite` to record an alias
+/// discovered while building the layout.
+pub fn record_alias_public(alias: &str, real: &str) {
+    record_alias(alias, real)
+}
+
+fn record_alias(alias: &str, real: &str) {
+    if alias == real {
+        return;
+    }
+    if let Ok(mut m) = alias_registry().lock() {
+        m.insert(alias.to_string(), real.to_string());
+    }
+}
+
+/// The aliases recorded by the most recent expansion.
+pub fn recorded_aliases() -> std::collections::HashMap<String, String> {
+    alias_registry().lock().map(|m| m.clone()).unwrap_or_default()
+}
+
+/// Create `node_modules/<alias>` as a link to `node_modules/<real>` for every
+/// recorded alias. Idempotent; missing targets are skipped.
+pub fn materialize_aliases(project: &Path) -> usize {
+    let aliases = recorded_aliases();
+    let nm = project.join("node_modules");
+    let mut made = 0usize;
+    for (alias, real) in aliases {
+        let target = nm.join(&real);
+        let link = nm.join(&alias);
+        if !target.exists() || link.exists() {
+            continue;
+        }
+        if let Some(parent) = link.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        #[cfg(unix)]
+        {
+            if std::os::unix::fs::symlink(&target, &link).is_ok() {
+                made += 1;
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (&target, &link);
+        }
+    }
+    made
+}
+
 fn base_name(package: &str) -> &str {
     let start = if package.starts_with('@') {
         // `@scope/...` — the scope's own `@` is not a separator.
@@ -2258,6 +2321,16 @@ fn expand_with_transitive_dependencies(
                     let required_deps =
                         registry::get_version_required_dependencies(metadata, &version);
                     for (dep_name, dep_spec) in required_deps {
+                        // `"alias": "npm:real@range"` — resolve the real
+                        // package; the alias path is linked after the install.
+                        let (dep_name, dep_spec) =
+                            match crate::spec_grammar::classify(&dep_spec) {
+                                crate::spec_grammar::Spec::Alias { real, range } => {
+                                    record_alias(&dep_name, &real);
+                                    (real, range)
+                                }
+                                _ => (dep_name, dep_spec),
+                            };
                         let dn: Arc<str> = dep_name.into();
                         let dn_str = dn.to_string();
                         let dep_constraints = constraints.entry(dn_str.clone()).or_default();
@@ -2659,7 +2732,21 @@ fn expand_with_transitive_dependencies(
         .into_iter()
         .map(|(name, version)| format!("{}@{}", name, version))
         .collect();
+    // `npm:` aliases: the real package was resolved under its own name above;
+    // make sure it is in the returned spec list even when nothing else pulls
+    // it in (a package may alias a dep that no other dependency needs). The
+    // alias path is linked after the install.
+    for (alias, real) in recorded_aliases() {
+        let _ = alias;
+        if specs.iter().any(|s| base_name(s) == real) {
+            continue;
+        }
+        // Reuse the version the alias range selected when we have it,
+        // otherwise let the resolver pick.
+        specs.push(format!("{}@*", real));
+    }
     specs.sort();
+    specs.dedup();
     // A conflicting flat tree must never be cached: a later hit would skip this
     // check and could install the same incompatible package selections again.
     // The caller handles the conflict through the node-keyed layout instead.
@@ -6387,6 +6474,12 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         eprintln!("[integrity] wrapper: ok={}", result.is_ok());
     }
     if result.is_ok() {
+        // npm: aliases resolved during expansion get their alias path linked
+        // to the real package (node_modules/@jest/react-is-19 -> react-is).
+        let aliased = materialize_aliases(Path::new("."));
+        if aliased > 0 && !options.quiet {
+            crate::utils::log(&format!("Linked {} npm: alias(es)", aliased));
+        }
         // engines: warn by default, fail under --engine-strict. Runs before
         // patches so a mismatch is reported for the published package.
         {

@@ -608,3 +608,55 @@ update), not something an install tool should do silently.
 
 Gates: workspace tests green (620 jhol-core incl. 20 new, 116 VM), installer
 gate PASS, engine gate PASS, all five E2E suites pass.
+
+
+## Audit 2026-11-07 — real-package install sweep, and two bugs it found
+
+Method: 34 popular packages installed in isolated directories with unique
+manifests, `--native-only --no-save`, no daemon. This is the only number in
+the project measured against what users actually install.
+
+**Before: 23/34 succeeded. After: 32/34.**
+
+### Fixed — transitive `npm:` aliases (the cause of 11 failures)
+
+`pretty-format` (and therefore jest, expect, vite, next, prisma, zod-like
+graphs) declares:
+
+```json
+"@jest/react-is-18": "npm:react-is@^18.3.1",
+"@jest/react-is-19": "npm:react-is@^19.2.5"
+```
+
+Those names do not exist on the registry: the alias is a name, the target is
+`react-is`. Root-level alias handling existed, but **transitive** aliases were
+fed to the resolver as if they were packages, so every graph containing one
+died on `Failed to fetch metadata for @jest/react-is-19: HTTP 404`.
+
+Fixed in four places, each needed by a different stage:
+1. expansion enqueues the alias *target* (`real@range`) and records
+   `alias -> real`;
+2. the flat spec list keeps the target even when nothing else pulls it in;
+3. the nested resolver resolves the target while building `dependencies`;
+4. the legality check and the layout-edge builder compare the target, not the
+   alias name.
+
+After install, `materialize_aliases` links `node_modules/<alias>` to
+`node_modules/<real>` so `require()` reaches it.
+
+### Found, not yet fixed (recorded with repros)
+
+**1. Fresh-project bundle replay ignores the requested package.**
+Two directories with an identical `package.json` and different `jhol install
+<pkg>` arguments replay the *first* project's bundle: `install zod` in a fresh
+directory whose manifest reads `{"name":"t","version":"1.0.0"}` produced
+express's 68-package tree. The replay key must include the requested spec
+list, not only the manifest fingerprint. Repro: any two dirs with the same
+manifest, different packages.
+
+**2. `jest` and `prisma` still fail** with `verify_deps: empty resolution`
+from the nested resolver — the flat pass detects a conflict, and the nested
+pass returns an empty tree instead of resolving it.
+
+Both are correctness bugs, not missing features, and both are recorded here
+rather than papered over.
