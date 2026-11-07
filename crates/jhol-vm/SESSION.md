@@ -1950,3 +1950,24 @@ top pick and the measurement says they would save search time, not build time â€
 search never even runs on real trees, because propagation hits a genuine
 multi-major conflict that a flat solve cannot represent. That blocker is now the
 headline item in docs/JAGR-INFINITE-IDEAS.md.
+
+## Journal â€” 2026-11-07 (cont.): the index, and the determinism bug it found
+
+Idea 1 measured: replace gzipped-JSON packuments with a purpose-built binary
+index. 344 packuments: load 302.7 ms -> 4.5 ms (67x), end to end 372 -> 70 ms
+(5.3x). Chart build unchanged at ~65 ms because it was already mask-bound, which
+is exactly what the earlier measurement predicted.
+
+Building it exposed a determinism bug I had claimed did not exist: `extract_deps`
+returns a HashSet-derived Vec, so a package's edge ORDER depended on hashing. The
+solver is pure; the chart handed to it was not. The equality test (chart from
+index == chart from JSON) failed on edge order and forced the fix (sort edges in
+the builder).
+
+Order of operations that made this work: measure (found masks were 98% of chart
+build) -> optimise the measured thing (12.4x) -> measure again (load now 85-90%)
+-> build the thing that fixes the new measurement (67x on load). Each step chosen
+by the previous number, not by novelty.
+
+Still not wired into the live cache path: the reader/writer are tested, the
+integration point is the packument cache, and that is the next step.

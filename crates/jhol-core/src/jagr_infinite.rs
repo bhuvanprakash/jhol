@@ -886,7 +886,13 @@ pub mod atlas {
                 computed
             };
 
-            let deps = package_deps
+            // Deterministic edge order. `extract_deps` builds its result from a
+            // HashSet, so the order of a package's edges depended on hashing —
+            // the solver is pure, but the chart it was given was not. Sorting by
+            // (target, spec, optional) makes the chart a function of its inputs,
+            // which is what "same manifest, same tree" requires. It also makes a
+            // chart built from the binary index comparable to one built from JSON.
+            let mut deps: Vec<crate::jagr_infinite::chart::DependencyEdge> = package_deps
                 .get(pkg_id)
                 .map(|v| {
                     v.iter()
@@ -901,7 +907,7 @@ pub mod atlas {
                 })
                 .unwrap_or_default();
 
-            let peers = package_peers
+            let mut peers: Vec<crate::jagr_infinite::chart::PeerEdge> = package_peers
                 .get(pkg_id)
                 .map(|v| {
                     v.iter()
@@ -915,6 +921,16 @@ pub mod atlas {
                 })
                 .unwrap_or_default();
 
+            deps.sort_by(|a, b| {
+                (a.target_pkg, a.spec.as_str(), a.optional).cmp(&(
+                    b.target_pkg,
+                    b.spec.as_str(),
+                    b.optional,
+                ))
+            });
+            peers.sort_by(|a, b| {
+                (a.target_pkg, a.spec.as_str()).cmp(&(b.target_pkg, b.spec.as_str()))
+            });
             packages.insert(
                 *pkg_id,
                 ChartPackage {

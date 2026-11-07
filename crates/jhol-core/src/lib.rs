@@ -78,6 +78,7 @@ pub mod grm;
 pub mod incremental_hashing;
 pub mod incremental_resolution;
 pub mod jagr;
+pub mod jagr_index;
 pub mod jagr_infinite;
 pub mod lattice_cache;
 pub mod lock_free_grm;

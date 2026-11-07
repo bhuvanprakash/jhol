@@ -74,6 +74,43 @@ fn main() {
         load_us as f64 / 1000.0
     );
 
+    // Binary index (idea 1): the resolver's facts without gunzip/JSON.
+    {
+        let t_build = Instant::now();
+        let index = jhol_core::jagr_index::ResolverIndex::build(&packuments);
+        let build_us = t_build.elapsed().as_micros();
+        let t_enc = Instant::now();
+        let bytes = index.encode();
+        let enc_us = t_enc.elapsed().as_micros();
+        let t_dec = Instant::now();
+        let decoded = jhol_core::jagr_index::ResolverIndex::decode(&bytes)
+            .expect("index round-trips");
+        let dec_us = t_dec.elapsed().as_micros();
+        let t_chart = Instant::now();
+        let (name_to_id, versions, version_strings, dp, pr) = decoded.chart_inputs();
+        let constraints: HashMap<u32, jhol_core::jagr_infinite::chart::VersionInterval> =
+            name_to_id
+                .values()
+                .map(|id| (*id, jhol_core::jagr_infinite::chart::VersionInterval::full()))
+                .collect();
+        let chart = jhol_core::jagr_infinite::atlas::build_chart_from_constraints(
+            &constraints,
+            &versions,
+            &version_strings,
+            &dp,
+            &pr,
+        );
+        let chart_us = t_chart.elapsed().as_micros();
+        println!(
+            "[bench] index: build+encode {:.1} ms ({} bytes) | decode {:.2} ms | chart from index {:.1} ms | packages={}",
+            (build_us + enc_us) as f64 / 1000.0,
+            bytes.len(),
+            dec_us as f64 / 1000.0,
+            chart_us as f64 / 1000.0,
+            chart.packages.len()
+        );
+    }
+
     let (selection, s, err) = jhol_core::jagr_infinite::select_versions_stats(&packuments, &deps);
     println!(
         "[bench] packages={} edges={} distinct_specs={} | chart={:.1} ms propagate={:.1} ms search={:.1} ms | selected={} total={:.1} ms",

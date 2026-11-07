@@ -11,7 +11,7 @@ Corpus: 275 packuments, 6,715 edges, 3,774 distinct `(target, spec)` pairs.
 
 | # | idea | verdict | measured |
 |---|---|---|---|
-| 1 | Binary version-space index (drop gunzip + JSON) | **next target** | load is now the whole cost: 80–158 ms |
+| 1 | Binary version-space index (drop gunzip + JSON) | **built + measured: 67x on load, 5.3x end-to-end** | see below |
 | 2 | Capability-equivalence classes | **not yet justified** | chart build is mask-bound, not version-bound (see below) |
 | 3 | Time/policy as extra bitmap axes | **promising, unbuilt** | one extra `intersect` per axis |
 | 4 | Exactly-computed LCV ordering | **blocked** | search never runs on real trees (see blocker) |
@@ -49,6 +49,44 @@ answer against the one-off predicate.
 Also landed: published version strings are parsed **once per package** instead of
 once per `(spec, version)` pair.
 
+### Binary resolver index — **67× faster load, 5.3× end-to-end**
+
+`crates/jhol-core/src/jagr_index.rs`. The registry cache stores gzipped HTTP
+bodies because that is what HTTP gives us; it is not a format for repeated
+resolution. The index holds only what the resolver reads — sorted version
+strings, and each dependency/peer declaration with **the releases that declare
+it** — as a flat length-prefixed little-endian blob
+(`magic "JHOLJAG1"`, per package: name, versions, deps, peers).
+
+Measured on 344 packuments / 34,899 edges / 2.27 MB of index:
+
+| phase | JSON path | index path |
+|---|---:|---:|
+| load (gunzip + JSON parse + prune) | 302.7 ms | **4.5 ms** |
+| chart build | 69.6 ms | 65.4 ms |
+| **end to end** | **372 ms** | **70 ms** |
+
+- The index write costs 157.7 ms **once** per packument (at cache-write time),
+  amortised across every later resolve; the bench measures build+encode
+  separately so it is not hidden inside the read number.
+- Chart build is unchanged because it was already mask-bound; the win is the load.
+- Determinism: packages encoded in sorted name order, edges in sorted
+  `(target, spec, optional)` order, so the same inputs produce the same bytes — a
+  cache key must be a function of its inputs.
+- Robustness: every read is bounds-checked; truncated, foreign-magic and
+  trailing-byte blobs return `None` so the caller falls back to the packument
+  instead of panicking.
+
+**A defect this work exposed:** `extract_deps` returns a `HashSet`-derived `Vec`,
+so a package's edge order depended on hashing — the solver is pure, but the chart
+handed to it was not. Edges are now sorted in the builder, which makes "same
+manifest, same tree" true for the chart as well as the solve. The equality test
+(index-chart == JSON-chart, edge for edge) is what caught it.
+
+Remaining step: wire the index into the registry cache (write `.idx` beside each
+packument, read it when present and valid, fall back otherwise). The writer and
+reader exist and are tested; the integration point is the packument cache.
+
 ## Why idea 2 (capability classes) is deferred
 
 Classes were expected to be the big constant-factor win, on the theory that
@@ -75,12 +113,10 @@ With correct intersections the conflict surfaces. So:
 
 ## Next, in order
 
-1. **Binary index (idea 1).** Load is now 80–158 ms against a 15 ms chart build,
-   i.e. 85–90% of resolver time. A per-package index of
-   `(versions, dep edges with declaring-version sets, peer edges)` written as a
-   hand-rolled binary blob removes gunzip, JSON parse and `prune_packument_in_place`.
-   Acceptance: `resolve_bench` load < 20 ms, selections byte-identical, cache
-   invalidated by packument ETag/hash.
+1. **Wire the index into the registry cache** — write `.idx` beside each cached
+   packument, read it when valid (keyed by packument hash), fall back otherwise.
+   Reader/writer/equality tests exist; acceptance is `resolve_bench` load < 20 ms
+   on the real cache and byte-identical selections with `JAGR_NO_INDEX=1`.
 2. **Nested layout per dependent** — unblocks the correct-intersection fix and
    everything downstream.
 3. **Certificate lockfile** (`jhol prove`, offline, O(packages) popcounts) and

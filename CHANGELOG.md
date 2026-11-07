@@ -1345,3 +1345,33 @@ not build time), and everything search-dependent — real trees hit a genuine
 multi-major conflict in propagation, which a flat solve cannot represent.
 
 `jhol-core` 649 tests, installer gate PASS.
+
+
+## JAGR-∞: binary resolver index — 67x faster load, 5.3x end to end
+
+The registry cache stores gzipped HTTP bodies, which is what HTTP gives us and a
+bad format for repeated resolution. `crates/jhol-core/src/jagr_index.rs` extracts
+only what the resolver reads — sorted version strings and each dependency/peer
+declaration with the releases that declare it — into a flat length-prefixed
+little-endian blob (`JHOLJAG1`).
+
+Measured on 344 packuments / 34,899 edges (2.27 MB index):
+
+| phase | JSON | index |
+|---|---:|---:|
+| load (gunzip + JSON + prune) | 302.7 ms | **4.5 ms** |
+| chart build | 69.6 ms | 65.4 ms |
+| end to end | 372 ms | **70 ms** |
+
+The write costs 157.7 ms once per packument and is measured separately so it is
+not hidden inside the read. Encoding is deterministic (sorted packages, sorted
+edges), reads are bounds-checked, and truncated/foreign/trailing-byte blobs are
+rejected so the caller falls back instead of panicking.
+
+A defect this exposed: `extract_deps` builds its result from a `HashSet`, so a
+package's edge order depended on hashing — the solver was pure but the chart was
+not. Edges are now sorted in the builder. The equality test (chart from index ==
+chart from JSON, edge for edge, mask for mask) is what found it.
+
+`jhol-core` 646 tests, installer gate PASS. Next: wire the index into the
+registry cache (write/read beside each packument, keyed by its hash).
