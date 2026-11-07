@@ -1882,3 +1882,20 @@ failure.
 Small thing, real lesson: swallowing errors with `is_ok()` turns a diagnosable
 condition into a wrong answer. The count said "0" — a number, not an
 explanation.
+
+## Journal — 2026-11-07 (cont.): `jhol ci` panicked, and every writer reports
+
+`jhol ci` crashed 100% of the time: the subcommand never declared
+`--engine-strict`, the handler read it with `get_flag`, and clap asserts on
+undeclared ids. Third appearance of the two-clap-builder hazard. Fixed the class
+rather than the instance: a `flag(&m, name)` helper that treats an undeclared
+flag as off; 117 call sites rewritten; a scripted audit compares each arm's read
+ids against its declared args (only the shared `backend` shows, a false positive).
+
+Also: reconcile ran only for plain `install`, so `install --frozen-lockfile` and
+`ci` repaired a tampered tree while printing "Up to date". Moved reconciliation
+to every tree-writing command and set the repair flag on any arrival mismatch.
+
+Lesson: when the same code reads options from two builders, the flags are part of
+the contract — and reading a missing one is not "false", it is undefined
+behaviour. Make absence explicit.

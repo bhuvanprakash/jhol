@@ -1216,3 +1216,44 @@ those entries belong to another user (an older `sudo` run?).
   the status must not be told the cache is empty while entries survived.
 
 `jhol-core` 636 tests, installer gate PASS.
+
+
+## `jhol ci` panicked; every tree-writing command now reports repairs
+
+`jhol ci` crashed on every invocation:
+
+```
+thread 'main' panicked at clap_builder/.../arg_matches.rs:185:
+arg `engine-strict`'s `ArgAction` should be one of `SetTrue`, `SetFalse`
+```
+
+The `ci` subcommand never declared `engine-strict`, but its handler read it. This
+is the two-clap-builder hazard again — the flag exists on `install` and the code
+treats both handlers alike. Every `get_flag` call now goes through a helper that
+treats an undeclared flag as *off* (which is what an absent flag means), so a
+drift like this can no longer turn into a panic:
+
+```rust
+fn flag(m: &ArgMatches, name: &str) -> bool {
+    m.try_get_one::<bool>(name).ok().flatten().copied().unwrap_or(false)
+}
+```
+
+117 call sites rewritten. A scripted audit of every subcommand arm against its
+`Arg::new` declarations now finds no real drift (the three remaining hits are the
+shared `backend` argument, a false positive).
+
+### Reporting, everywhere
+
+The reconcile-from-the-entry gate only covered plain `install`, so
+`install --frozen-lockfile` and `ci` repaired a tampered tree and still printed
+`Up to date`. Reconciliation now runs for every command that writes the tree, and
+the repair flag is set whenever the tree disagreed on arrival — so:
+
+| command, tampered tree | before | after |
+|---|---|---|
+| `install --frozen-lockfile` | Up to date, 9.9.9 kept | `Repaired`, restored to 4.22.3 |
+| `ci` | **panic** | repairs, reports script approvals |
+| `install --offline` (extraneous dir) | Up to date, kept | `Repaired`, pruned |
+
+`jhol-core` 636 tests, `jhol-treecheck` 10, installer gate PASS.

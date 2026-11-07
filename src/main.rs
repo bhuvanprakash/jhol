@@ -319,6 +319,24 @@ fn install_command_lock() -> Option<jhol_core::project_lock::ProjectLock> {
     if !writes_tree {
         return None;
     }
+    // Reconcile before the lock even: an unauthorised directory needs no
+    // resolution to remove, and doing it here means every tree-writing command
+    // starts from a tree that at least matches the lockfile's *set*. It also
+    // records the repair so whichever summary prints later says "Repaired"
+    // instead of "Up to date" (the entry short-circuit above only covers plain
+    // installs, so `install --frozen-lockfile` and `ci` used to repair silently).
+    {
+        use jhol_core::tree_state::{reconcile_tree, verify_tree};
+        let before = verify_tree(Path::new("."));
+        let _ = reconcile_tree(Path::new("."));
+        // The tree disagreed with the lockfile when we arrived, so whatever the
+        // command ends up doing, its summary must not say "Up to date".
+        if !before.is_match()
+            && !matches!(before, jhol_core::tree_state::TreeState::Unverified { .. })
+        {
+            TREE_REPAIRED.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
     match jhol_core::project_lock::ProjectLock::acquire(Path::new(".")) {
         Ok(lock) => Some(lock),
         Err(e) => {
@@ -386,6 +404,19 @@ fn plain_install_fully_settled() -> bool {
     let quiet = args.iter().any(|a| a == "-q" || a == "--quiet")
         || std::env::var("JHOL_QUIET").is_ok();
     tree_is_current_and_reported(quiet)
+}
+
+/// Read a boolean flag without panicking when the argument is not declared
+/// for this subcommand.
+///
+/// `ArgMatches::get_flag` asserts that the id exists *and* is a `SetTrue` flag;
+/// when the two clap builders drifted, `jhol ci` crashed with an internal clap
+/// assertion (`arg 'engine-strict''s ArgAction should be one of SetTrue,
+/// SetFalse`) instead of doing anything. A missing flag means "not requested",
+/// which is what an absent flag means everywhere else, so this is also the more
+/// honest default: `ci` never accepted `--engine-strict`, so it is off.
+fn flag(m: &clap::ArgMatches, name: &str) -> bool {
+    m.try_get_one::<bool>(name).ok().flatten().copied().unwrap_or(false)
 }
 
 /// Print the final install summary line using accurate per-install metrics.
@@ -4094,10 +4125,10 @@ fn run() -> Result<(), String> {
     }
 
     if let Some(("daemon", sub_m)) = matches.subcommand() {
-        if sub_m.get_flag("serve") && sub_m.get_flag("stop") {
+        if flag(&sub_m, "serve") && flag(&sub_m, "stop") {
             return Err("choose either `jhol daemon --serve` or `jhol daemon --stop`".to_string());
         }
-        if sub_m.get_flag("stop") {
+        if flag(&sub_m, "stop") {
             #[cfg(unix)]
             {
                 daemon_stop()?;
@@ -4109,7 +4140,7 @@ fn run() -> Result<(), String> {
                 return Err("daemon mode is only supported on Unix".to_string());
             }
         }
-        if sub_m.get_flag("serve") {
+        if flag(&sub_m, "serve") {
             #[cfg(unix)]
             {
                 daemon_serve()?;
@@ -4169,7 +4200,7 @@ fn run() -> Result<(), String> {
                 success(&format!("Pruned {} tarball(s).", n));
             }
             Some(("gc", gc_m)) => {
-                let dry = gc_m.get_flag("dry-run");
+                let dry = flag(&gc_m, "dry-run");
                 let mut lockfiles: Vec<std::path::PathBuf> = gc_m
                     .get_many::<String>("from")
                     .map(|v| v.map(std::path::PathBuf::from).collect())
@@ -4352,8 +4383,8 @@ fn run() -> Result<(), String> {
             .unwrap()
             .as_str()
             .to_string();
-        let is_file = sub_m.get_flag("file");
-        let watch = sub_m.get_flag("watch");
+        let is_file = flag(&sub_m, "file");
+        let watch = flag(&sub_m, "watch");
         let engine = sub_m
             .get_one::<String>("engine")
             .map(|s| s.as_str())
@@ -4420,7 +4451,7 @@ fn run() -> Result<(), String> {
 
         // Existing behavior: run a package.json script
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let roots: Vec<std::path::PathBuf> = if sub_m.get_flag("all-workspaces") {
+        let roots: Vec<std::path::PathBuf> = if flag(&sub_m, "all-workspaces") {
             let r = jhol_core::list_workspace_roots(&cwd).unwrap_or_default();
             if r.is_empty() {
                 vec![cwd]
@@ -4453,7 +4484,7 @@ fn run() -> Result<(), String> {
         // expression and print its value. The user's code is passed as a
         // string through `eval()` so its syntax is unchanged; TypeScript and
         // JSX are transpiled first because `eval()` sees raw source.
-        let code = if sub_m.get_flag("print") {
+        let code = if flag(&sub_m, "print") {
             let transpiled = if file_type == "js" {
                 code.clone()
             } else {
@@ -4496,7 +4527,7 @@ fn run() -> Result<(), String> {
             .unwrap_or_else(|| {
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
             });
-        let as_json = sub_m.get_flag("json");
+        let as_json = flag(&sub_m, "json");
         let reg = jhol_adapters::AdapterRegistry::default_local();
         let decls = reg
             .discover_all(&root)
@@ -4567,8 +4598,8 @@ fn run() -> Result<(), String> {
             return cmd_state_diff(
                 &root,
                 before_arg,
-                sub_m.get_flag("json"),
-                sub_m.get_flag("exit-code"),
+                flag(&sub_m, "json"),
+                flag(&sub_m, "exit-code"),
             );
         }
         let before_path =
@@ -4577,7 +4608,7 @@ fn run() -> Result<(), String> {
             .ok_or("diff: two-receipt mode needs both files (or pass only a snapshot id)")?;
         let before_path = &before_path;
         let after_path = &after_path;
-        let as_json = sub_m.get_flag("json");
+        let as_json = flag(&sub_m, "json");
         let before_s =
             std::fs::read_to_string(before_path).map_err(|e| format!("read {before_path}: {e}"))?;
         let after_s =
@@ -4616,10 +4647,10 @@ fn run() -> Result<(), String> {
         let root = requested_root
             .canonicalize()
             .map_err(|e| format!("project root {}: {e}", requested_root.display()))?;
-        let apply = sub_m.get_flag("apply");
-        let as_json = sub_m.get_flag("json");
-        let offline = sub_m.get_flag("offline");
-        let allow_build_scripts = sub_m.get_flag("allow-build-scripts");
+        let apply = flag(&sub_m, "apply");
+        let as_json = flag(&sub_m, "json");
+        let offline = flag(&sub_m, "offline");
+        let allow_build_scripts = flag(&sub_m, "allow-build-scripts");
         let reg = jhol_adapters::AdapterRegistry::default_local();
         let adapter_refs: Vec<jhol_graph::AdapterRef> = reg
             .iter()
@@ -4821,7 +4852,7 @@ fn run() -> Result<(), String> {
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
             });
         let action = sub_m.get_one::<String>("action").unwrap().as_str();
-        let as_json = sub_m.get_flag("json");
+        let as_json = flag(&sub_m, "json");
         match action {
             "list" => {
                 let list = jhol_receipt::Snapshot::list(&root)
@@ -4923,10 +4954,10 @@ fn run() -> Result<(), String> {
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
             });
         let id = sub_m.get_one::<String>("id").unwrap();
-        let as_json = sub_m.get_flag("json");
-        let do_plan = sub_m.get_flag("plan");
-        let do_apply = sub_m.get_flag("apply");
-        let want_db = sub_m.get_flag("databases");
+        let as_json = flag(&sub_m, "json");
+        let do_plan = flag(&sub_m, "plan");
+        let do_apply = flag(&sub_m, "apply");
+        let want_db = flag(&sub_m, "databases");
         if !do_plan && !do_apply {
             return Err("restore needs --plan or --apply".into());
         }
@@ -4986,7 +5017,7 @@ fn run() -> Result<(), String> {
                 .get_one::<String>("migrations")
                 .map(|s| s.as_str())
                 .unwrap_or("migrations");
-            let as_json = plan_m.get_flag("json");
+            let as_json = flag(&plan_m, "json");
             let plan = jhol_db::plan_migrations(&root, mig).map_err(|e| format!("db plan: {e}"))?;
             if as_json {
                 println!(
@@ -5016,7 +5047,7 @@ fn run() -> Result<(), String> {
                 .get_one::<String>("timeout-ms")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(500);
-            let as_json = probe_m.get_flag("json");
+            let as_json = flag(&probe_m, "json");
             let result = jhol_db::probe_from_env(timeout_ms);
             if as_json {
                 println!(
@@ -5044,9 +5075,9 @@ fn run() -> Result<(), String> {
             .unwrap_or_else(|| {
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
             });
-        let as_json = sub_m.get_flag("json");
-        let do_probe = sub_m.get_flag("probe");
-        let do_spawn = sub_m.get_flag("spawn");
+        let as_json = flag(&sub_m, "json");
+        let do_probe = flag(&sub_m, "probe");
+        let do_spawn = flag(&sub_m, "spawn");
         let hold_secs: u64 = sub_m
             .get_one::<String>("hold-secs")
             .and_then(|s| s.parse().ok())
@@ -5177,7 +5208,7 @@ fn run() -> Result<(), String> {
             .map(|s| s.as_str())
             .unwrap_or("models/demo.jhol-model.json");
         let man_path = root.join(man);
-        let as_json = act_m.get_flag("json");
+        let as_json = flag(&act_m, "json");
         if action == "pin" {
             let name = act_m.get_one::<String>("name").expect("required by clap");
             let source = act_m.get_one::<String>("source").expect("required by clap");
@@ -5305,7 +5336,7 @@ fn run() -> Result<(), String> {
         let artifact = jhol_ai::ModelArtifact::read_manifest(&man_path)
             .map_err(|e| format!("ai {action}: {e}"))?;
         let receipt: Option<jhol_ai::DownloadReceipt> = if action == "verify"
-            || !act_m.get_flag("allow-network")
+            || !flag(&act_m, "allow-network")
         {
             jhol_ai::prepare_offline(&root, &man_path).map_err(|e| format!("ai {action}: {e}"))?;
             None
@@ -5414,7 +5445,7 @@ fn run() -> Result<(), String> {
 
     if let Some(("uninstall", sub_m)) = matches.subcommand() {
         let package = sub_m.get_one::<String>("package").unwrap();
-        let save = !sub_m.get_flag("no-save");
+        let save = !flag(&sub_m, "no-save");
         jhol_core::uninstall(package, save).map_err(|e| e.to_string())?;
         success(&format!("Removed {}", package));
         return Ok(());
@@ -5425,7 +5456,7 @@ fn run() -> Result<(), String> {
         // test `test_update_requires_save_for_specific_packages` pins that contract,
         // and rewriting package.json implicitly on an explicit package list would be
         // surprising.
-        let save = sub_m.get_flag("save");
+        let save = flag(&sub_m, "save");
         let packages: Vec<String> = sub_m
             .get_many::<String>("package")
             .map(|it| it.map(|s| s.clone()).collect())
@@ -5445,7 +5476,7 @@ fn run() -> Result<(), String> {
 
     if let Some(("why", sub_m)) = matches.subcommand() {
         let package = sub_m.get_one::<String>("package").unwrap();
-        let use_jagr = sub_m.get_flag("jagr");
+        let use_jagr = flag(&sub_m, "jagr");
         if use_jagr {
             let manifest = std::path::PathBuf::from(
                 sub_m
@@ -5466,9 +5497,9 @@ fn run() -> Result<(), String> {
     }
 
     if let Some(("outdated", sub_m)) = matches.subcommand() {
-        let quiet = sub_m.get_flag("quiet");
-        let all_workspaces = sub_m.get_flag("all-workspaces");
-        let with_jagr = sub_m.get_flag("jagr");
+        let quiet = flag(&sub_m, "quiet");
+        let all_workspaces = flag(&sub_m, "all-workspaces");
+        let with_jagr = flag(&sub_m, "jagr");
         if quiet {
             env::set_var("JHOL_QUIET", "1");
         }
@@ -5552,8 +5583,8 @@ fn run() -> Result<(), String> {
     }
 
     if let Some(("init", sub_m)) = matches.subcommand() {
-        let _accept_defaults = sub_m.get_flag("yes");
-        let private = sub_m.get_flag("private");
+        let _accept_defaults = flag(&sub_m, "yes");
+        let private = flag(&sub_m, "private");
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let package_json_path = cwd.join("package.json");
         if package_json_path.exists() {
@@ -5594,7 +5625,7 @@ fn run() -> Result<(), String> {
             .get_many::<String>("package")
             .map(|v| v.map(|s| s.as_str()).collect())
             .unwrap_or_default();
-        let quiet = sub_m.get_flag("quiet");
+        let quiet = flag(&sub_m, "quiet");
         if packages.is_empty() {
             return Err("At least one package must be specified".to_string());
         }
@@ -5711,7 +5742,7 @@ fn run() -> Result<(), String> {
             .get_many::<String>("package")
             .map(|v| v.map(|s| s.as_str()).collect())
             .unwrap_or_default();
-        let save = !sub_m.get_flag("no-save");
+        let save = !flag(&sub_m, "no-save");
         if packages.is_empty() {
             return Err("At least one package must be specified".to_string());
         }
@@ -5757,7 +5788,7 @@ fn run() -> Result<(), String> {
 
     if let Some(("dedupe", sub_m)) = matches.subcommand() {
         let dups = jhol_core::pm_field::find_duplicates(std::path::Path::new("."));
-        if sub_m.get_flag("json") {
+        if flag(&sub_m, "json") {
             let body: Vec<serde_json::Value> = dups
                 .iter()
                 .map(|d| {
@@ -5790,7 +5821,7 @@ fn run() -> Result<(), String> {
     if let Some(("patch", sub_m)) = matches.subcommand() {
         let project = std::path::Path::new(".");
         let pkg = sub_m.get_one::<String>("package").cloned();
-        if sub_m.get_flag("list") || (pkg.is_none() && !sub_m.get_flag("commit")) {
+        if flag(&sub_m, "list") || (pkg.is_none() && !flag(&sub_m, "commit")) {
             let patches = jhol_core::patch::list(project);
             if patches.is_empty() {
                 println!("No patches recorded.");
@@ -5808,7 +5839,7 @@ fn run() -> Result<(), String> {
                 }
             }
         } else if let Some(pkg) = pkg {
-            let result = if sub_m.get_flag("rollback") {
+            let result = if flag(&sub_m, "rollback") {
                 jhol_core::patch::rollback(project, &pkg)
                     .map(|removed| {
                         if removed {
@@ -5818,7 +5849,7 @@ fn run() -> Result<(), String> {
                         }
                     })
                     .map_err(|e| e)
-            } else if sub_m.get_flag("commit") {
+            } else if flag(&sub_m, "commit") {
                 jhol_core::patch::commit(project, &pkg)
                     .map(|rec| {
                         println!(
@@ -5857,7 +5888,7 @@ fn run() -> Result<(), String> {
             .get_one::<String>("token")
             .cloned()
             .unwrap_or_default();
-        let global = sub_m.get_flag("global");
+        let global = flag(&sub_m, "global");
         match jhol_core::publish::login(std::path::Path::new("."), &registry, &token, global) {
             Ok(path) => {
                 println!("Stored token for {} in {}", registry, path.display());
@@ -5876,7 +5907,7 @@ fn run() -> Result<(), String> {
                 .cloned()
                 .unwrap_or(".".into()),
         );
-        let dry = sub_m.get_flag("dry-run");
+        let dry = flag(&sub_m, "dry-run");
         let registry = sub_m
             .get_one::<String>("registry")
             .cloned()
@@ -5959,7 +5990,7 @@ fn run() -> Result<(), String> {
 
     if let Some(("cache", sub_m)) = matches.subcommand() {
         if let Some(("gc", gc_m)) = sub_m.subcommand() {
-            let dry = gc_m.get_flag("dry-run");
+            let dry = flag(&gc_m, "dry-run");
             let mut lockfiles: Vec<PathBuf> = gc_m
                 .get_many::<String>("from")
                 .map(|v| v.map(PathBuf::from).collect())
@@ -5995,7 +6026,7 @@ fn run() -> Result<(), String> {
     }
 
     if let Some(("approve-scripts", sub_m)) = matches.subcommand() {
-        let want_all = sub_m.get_flag("all");
+        let want_all = flag(&sub_m, "all");
         let asked: Vec<String> = sub_m
             .get_many::<String>("packages")
             .map(|v| v.cloned().collect())
@@ -6139,10 +6170,10 @@ fn run() -> Result<(), String> {
             env::set_var("JHOL_CACHE_DIR", d);
         }
         let quiet = false;
-        let offline = sub_m.get_flag("offline")
+        let offline = flag(&sub_m, "offline")
             || env::var("JHOL_OFFLINE").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
-        let all_workspaces = sub_m.get_flag("all-workspaces");
-        let jagr_check = sub_m.get_flag("jagr-check");
+        let all_workspaces = flag(&sub_m, "all-workspaces");
+        let jagr_check = flag(&sub_m, "jagr-check");
         let backend = match sub_m.get_one::<String>("backend") {
             Some(s) if s == "bun" => Some(jhol_core::Backend::Bun),
             Some(s) if s == "npm" => Some(jhol_core::Backend::Npm),
@@ -6150,7 +6181,7 @@ fn run() -> Result<(), String> {
         };
         // CI always installs natively; no external backend probe is needed.
         let backend = backend.unwrap_or(jhol_core::Backend::Npm);
-        let json_out = sub_m.get_flag("json");
+        let json_out = flag(&sub_m, "json");
         let roots: Vec<std::path::PathBuf> = if all_workspaces {
             let r = jhol_core::list_workspace_roots(&cwd).unwrap_or_default();
             if r.is_empty() {
@@ -6180,12 +6211,12 @@ fn run() -> Result<(), String> {
                 lockfile_only: false,
                 offline,
                 strict_lockfile: true,
-                strict_peer_deps: sub_m.get_flag("strict-peer-deps"),
+                strict_peer_deps: flag(&sub_m, "strict-peer-deps"),
                 from_lockfile: true,
                 native_only: true,
                 // Parity with `install`: scripts stay off by default, and naming
                 // packages in --script-allowlist is itself the opt-in.
-                no_scripts: !sub_m.get_flag("scripts") && {
+                no_scripts: !flag(&sub_m, "scripts") && {
                     let allow: Vec<String> = sub_m
                         .get_many::<String>("script-allowlist")
                         .into_iter()
@@ -6220,7 +6251,7 @@ fn run() -> Result<(), String> {
                 overrides: None,
                 telemetry: jhol_core::telemetry_enabled(&config),
                 omit: omitted_classes,
-                engine_strict: sub_m.get_flag("engine-strict"),
+                engine_strict: flag(&sub_m, "engine-strict"),
             };
             // `npm ci` semantics: a clean install. Without this, `ci` reused
             // whatever was already in `node_modules`, and every entry found there
@@ -6340,26 +6371,26 @@ fn run() -> Result<(), String> {
                 },
                 None => jhol_core::omit::Omit::NONE,
             };
-            let include_dev = sub_m.get_flag("include-dev");
+            let include_dev = flag(&sub_m, "include-dev");
             if std::env::var_os("JHOL_OMIT_DEBUG").is_some() {
-                eprintln!("[omit] cli_omit={:?} prod={} include_dev={}", cli_omit, sub_m.get_flag("prod"), include_dev);
+                eprintln!("[omit] cli_omit={:?} prod={} include_dev={}", cli_omit, flag(&sub_m, "prod"), include_dev);
             }
 
-            let omitted_classes: jhol_core::omit::Omit = if sub_m.get_flag("prod") {
+            let omitted_classes: jhol_core::omit::Omit = if flag(&sub_m, "prod") {
                 jhol_core::omit::Omit { dev: true, ..cli_omit }.with_env(include_dev)
             } else {
                 cli_omit.with_env(include_dev)
             };
-            if sub_m.get_flag("global") {
+            if flag(&sub_m, "global") {
                 let pkg_refs: Vec<&str> = sub_m
                     .get_many::<String>("package")
                     .map(|v| v.map(|s| s.as_str()).collect())
                     .unwrap_or_default();
                 let gopts = jhol_core::InstallOptions {
-                    quiet: sub_m.get_flag("quiet"),
-                    offline: sub_m.get_flag("offline"),
+                    quiet: flag(&sub_m, "quiet"),
+                    offline: flag(&sub_m, "offline"),
                     native_only: true,
-                    no_scripts: !sub_m.get_flag("scripts"),
+                    no_scripts: !flag(&sub_m, "scripts"),
                     omit: omitted_classes,
                     engine_strict: false,
                     ..Default::default()
@@ -6383,20 +6414,20 @@ fn run() -> Result<(), String> {
                 }
                 return Ok(());
             }
-            let no_cache = sub_m.get_flag("no-cache");
-            let quiet = sub_m.get_flag("quiet");
-            let lockfile_only = sub_m.get_flag("lockfile-only");
-            let offline = sub_m.get_flag("offline")
+            let no_cache = flag(&sub_m, "no-cache");
+            let quiet = flag(&sub_m, "quiet");
+            let lockfile_only = flag(&sub_m, "lockfile-only");
+            let offline = flag(&sub_m, "offline")
                 || env::var("JHOL_OFFLINE")
                     .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
-            let strict_lockfile = sub_m.get_flag("frozen") || config.frozen.unwrap_or(false);
-            let strict_peer_deps = sub_m.get_flag("strict-peer-deps")
+            let strict_lockfile = flag(&sub_m, "frozen") || config.frozen.unwrap_or(false);
+            let strict_peer_deps = flag(&sub_m, "strict-peer-deps")
                 || env::var("JHOL_STRICT_PEER_DEPS")
                     .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
 
             // Feature 1: native_only / fallback_backend from config (CLI takes precedence)
-            let cli_fallback = sub_m.get_flag("fallback-backend");
-            let cli_native_only = sub_m.get_flag("native-only");
+            let cli_fallback = flag(&sub_m, "fallback-backend");
+            let cli_native_only = flag(&sub_m, "native-only");
             let native_only = if cli_native_only {
                 true
             } else if cli_fallback {
@@ -6406,11 +6437,11 @@ fn run() -> Result<(), String> {
                 config.fallback_backend.map(|fb| !fb).unwrap_or(true)
             };
 
-            let all_workspaces = sub_m.get_flag("all-workspaces");
+            let all_workspaces = flag(&sub_m, "all-workspaces");
 
             // Feature 1: no_scripts — CLI flags take precedence, then config
-            let cli_scripts_flag = sub_m.get_flag("scripts");
-            let cli_no_scripts_flag = sub_m.get_flag("no-scripts");
+            let cli_scripts_flag = flag(&sub_m, "scripts");
+            let cli_no_scripts_flag = flag(&sub_m, "no-scripts");
             // `--script-allowlist pkg[,pkg]` (repeatable). Naming packages to allow
             // is itself an opt-in, so it turns scripts on for those packages rather
             // than being silently ignored while `no_scripts` stays true.
@@ -6435,7 +6466,7 @@ fn run() -> Result<(), String> {
             // slot for dependency-class omission. Sending a --omit install to
             // the daemon would silently install the omitted classes, so an
             // omitting install always runs in-process.
-            let mut use_daemon = sub_m.get_flag("daemon") && omitted_classes.is_empty();
+            let mut use_daemon = flag(&sub_m, "daemon") && omitted_classes.is_empty();
             let mut daemon_auto_attach = false;
             if !use_daemon
                 && omitted_classes.is_empty()
@@ -6500,7 +6531,7 @@ fn run() -> Result<(), String> {
             } else {
                 jhol_core::resolve_backend(backend)
             };
-            let json_out = sub_m.get_flag("json");
+            let json_out = flag(&sub_m, "json");
             if quiet || json_out {
                 env::set_var("JHOL_QUIET", "1");
             }
@@ -6508,14 +6539,14 @@ fn run() -> Result<(), String> {
                 .get_many::<String>("package")
                 .map(|it| it.map(|s| s.clone()).collect())
                 .unwrap_or_default();
-            let save = !sub_m.get_flag("no-save");
+            let save = !flag(&sub_m, "no-save");
             if save && !packages.is_empty() {
                 let pkg_refs: Vec<&str> = packages.iter().map(|s| s.as_str()).collect();
-                let target = if sub_m.get_flag("save-dev") {
+                let target = if flag(&sub_m, "save-dev") {
                     SaveTarget::Dev
-                } else if sub_m.get_flag("save-peer") {
+                } else if flag(&sub_m, "save-peer") {
                     SaveTarget::Peer
-                } else if sub_m.get_flag("save-optional") {
+                } else if flag(&sub_m, "save-optional") {
                     SaveTarget::Optional
                 } else {
                     SaveTarget::Dependencies
@@ -6523,7 +6554,7 @@ fn run() -> Result<(), String> {
                 let _ = persist_added_deps_opts(
                     &pkg_refs,
                     target,
-                    sub_m.get_flag("save-exact"),
+                    flag(&sub_m, "save-exact"),
                 );
             }
 
@@ -6610,7 +6641,7 @@ fn run() -> Result<(), String> {
                     check_package_manager_pin(std::path::Path::new(&root), false, quiet)?;
                     report_engine_mismatches(
                         std::path::Path::new(&root),
-                        sub_m.get_flag("engine-strict"),
+                        flag(&sub_m, "engine-strict"),
                         quiet,
                     )?;
                     return Ok(());
@@ -6740,7 +6771,7 @@ fn run() -> Result<(), String> {
                 )?;
                 report_engine_mismatches(
                     std::path::Path::new(&root),
-                    sub_m.get_flag("engine-strict"),
+                    flag(&sub_m, "engine-strict"),
                     quiet,
                 )?;
                 let elapsed = install_start.elapsed();
@@ -6966,12 +6997,12 @@ fn run() -> Result<(), String> {
             }
         }
         Some(("doctor", sub_m)) => {
-            let quiet = sub_m.get_flag("quiet");
-            let do_fix = sub_m.get_flag("fix");
-            let explain = sub_m.get_flag("explain");
-            let use_jagr = sub_m.get_flag("jagr");
-            let all_workspaces = sub_m.get_flag("all-workspaces");
-            let json_out = sub_m.get_flag("json");
+            let quiet = flag(&sub_m, "quiet");
+            let do_fix = flag(&sub_m, "fix");
+            let explain = flag(&sub_m, "explain");
+            let use_jagr = flag(&sub_m, "jagr");
+            let all_workspaces = flag(&sub_m, "all-workspaces");
+            let json_out = flag(&sub_m, "json");
             let backend = match sub_m.get_one::<String>("backend") {
                 Some(s) if s == "bun" => Some(jhol_core::Backend::Bun),
                 Some(s) if s == "npm" => Some(jhol_core::Backend::Npm),
@@ -7132,11 +7163,11 @@ fn run() -> Result<(), String> {
             }
         }
         Some(("audit", sub_m)) => {
-            let quiet = sub_m.get_flag("quiet");
-            let do_fix = sub_m.get_flag("fix");
-            let gate = sub_m.get_flag("gate") || config.audit_gate == Some(true);
-            let all_workspaces = sub_m.get_flag("all-workspaces");
-            let json_out = sub_m.get_flag("json");
+            let quiet = flag(&sub_m, "quiet");
+            let do_fix = flag(&sub_m, "fix");
+            let gate = flag(&sub_m, "gate") || config.audit_gate == Some(true);
+            let all_workspaces = flag(&sub_m, "all-workspaces");
+            let json_out = flag(&sub_m, "json");
             let backend = match sub_m.get_one::<String>("backend") {
                 Some(s) if s == "bun" => Some(jhol_core::Backend::Bun),
                 Some(s) if s == "npm" => Some(jhol_core::Backend::Npm),
@@ -7240,8 +7271,8 @@ fn run() -> Result<(), String> {
         #[cfg(feature = "bundle")]
         Some(("fmt", sub_m)) => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let check = sub_m.get_flag("check") || sub_m.get_flag("list-different");
-            let no_cache = sub_m.get_flag("no-cache");
+            let check = flag(&sub_m, "check") || flag(&sub_m, "list-different");
+            let no_cache = flag(&sub_m, "no-cache");
 
             // Config precedence: CLI flags > .jholrc [fmt] > .prettierrc > spec defaults.
             let mut config = jhol_bundle::fmt::load_config(&cwd);
@@ -7255,13 +7286,13 @@ fn run() -> Result<(), String> {
                     config.tab_width = n;
                 }
             }
-            if sub_m.get_flag("use-tabs") {
+            if flag(&sub_m, "use-tabs") {
                 config.use_tabs = true;
             }
-            if sub_m.get_flag("no-semi") {
+            if flag(&sub_m, "no-semi") {
                 config.semi = false;
             }
-            if sub_m.get_flag("single-quote") {
+            if flag(&sub_m, "single-quote") {
                 config.single_quote = true;
             }
             if let Some(tc) = sub_m.get_one::<String>("trailing-comma") {
@@ -7269,7 +7300,7 @@ fn run() -> Result<(), String> {
             }
 
             // --init: write spec defaults to .prettierrc.json when absent.
-            if sub_m.get_flag("init") {
+            if flag(&sub_m, "init") {
                 let path = cwd.join(".prettierrc.json");
                 if path.exists() {
                     info(".prettierrc.json already exists — leaving it alone");
@@ -7510,10 +7541,10 @@ fn run() -> Result<(), String> {
                     .get_one::<String>("target")
                     .map(|s| s.as_str())
                     .unwrap_or("browser");
-                let minify = sub_m.get_flag("minify");
-                let watch = sub_m.get_flag("watch");
-                let tree_shake = sub_m.get_flag("tree-shake");
-                let code_splitting = sub_m.get_flag("code-splitting");
+                let minify = flag(&sub_m, "minify");
+                let watch = flag(&sub_m, "watch");
+                let tree_shake = flag(&sub_m, "tree-shake");
+                let code_splitting = flag(&sub_m, "code-splitting");
 
                 let mut config = jhol_bundle::config::BundleConfig::default();
                 config.entries = entries;
@@ -7549,7 +7580,7 @@ fn run() -> Result<(), String> {
             }
         }
         Some(("prefetch", sub_m)) => {
-            let quiet = sub_m.get_flag("quiet");
+            let quiet = flag(&sub_m, "quiet");
             jhol_core::prefetch_from_lockfile(quiet).map_err(|e| e.to_string())?;
             if !quiet {
                 success("Prefetch done. Run `jhol install --offline` to install from cache.");
@@ -7686,7 +7717,7 @@ fn run() -> Result<(), String> {
                     .cloned()
                     .unwrap_or_else(|| "package.json".to_string()),
             );
-            let json_out = sub_m.get_flag("json");
+            let json_out = flag(&sub_m, "json");
 
             // Accept either --target PKG@VERSION or --package PKG --version VER.
             let (pkg, ver): (String, String) =
@@ -7755,12 +7786,12 @@ fn run() -> Result<(), String> {
                     .cloned()
                     .unwrap_or_else(|| "package.json".to_string()),
             );
-            let json_out = sub_m.get_flag("json");
-            let quiet = sub_m.get_flag("quiet");
-            let all_workspaces = sub_m.get_flag("all-workspaces");
+            let json_out = flag(&sub_m, "json");
+            let quiet = flag(&sub_m, "quiet");
+            let all_workspaces = flag(&sub_m, "all-workspaces");
             let graph_format = sub_m.get_one::<String>("graph").cloned();
             let output_path = sub_m.get_one::<String>("output").cloned();
-            let show_config = sub_m.get_flag("show-config");
+            let show_config = flag(&sub_m, "show-config");
 
             if show_config {
                 let cfg = jhol_core::load_jagr_config(&cwd);
@@ -7777,13 +7808,13 @@ fn run() -> Result<(), String> {
                 return Ok(());
             }
 
-            let lockfile_only = sub_m.get_flag("lockfile-only");
+            let lockfile_only = flag(&sub_m, "lockfile-only");
 
             // Read CLI-flag overrides for the per-project JAGR config.
             // These override the .jholrc values when set on the command line.
-            let cli_skip_layer3 = sub_m.get_flag("skip-layer3");
-            let cli_skip_layer2 = sub_m.get_flag("skip-layer2");
-            let cli_run_all_layers = sub_m.get_flag("run-all-layers");
+            let cli_skip_layer3 = flag(&sub_m, "skip-layer3");
+            let cli_skip_layer2 = flag(&sub_m, "skip-layer2");
+            let cli_run_all_layers = flag(&sub_m, "run-all-layers");
 
             // Collect the list of (cwd_relative_root, manifest_path) pairs to analyze.
             // Preserve the manifest's directory component when the user pointed
@@ -8154,7 +8185,7 @@ fn run() -> Result<(), String> {
             }
 
             // --explain-each: print per-package layer decisions
-            if sub_m.get_flag("explain-each") {
+            if flag(&sub_m, "explain-each") {
                 let explanations = report.selection_with_explanations();
                 if use_color() {
                     println!(
@@ -8174,7 +8205,7 @@ fn run() -> Result<(), String> {
             }
 
             // --compare-resolvers: run JAGR + pubgrub + sat and compare.
-            if sub_m.get_flag("compare-resolvers") {
+            if flag(&sub_m, "compare-resolvers") {
                 let rows =
                     jhol_core::jagr_compare_resolvers(&manifest_path).map_err(|e| e.to_string())?;
                 if use_color() {
@@ -8205,7 +8236,7 @@ fn run() -> Result<(), String> {
 
             // --upgrade-plan: for each declared dep, simulate a candidate
             // version change and report the topological impact.
-            if sub_m.get_flag("upgrade-plan") {
+            if flag(&sub_m, "upgrade-plan") {
                 let plan =
                     jhol_core::jagr_upgrade_plan(&manifest_path).map_err(|e| e.to_string())?;
                 if use_color() {
