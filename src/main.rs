@@ -391,6 +391,62 @@ fn print_install_summary(
     }
 }
 
+/// Report `engines.node` mismatches for the installed tree. Warns by default;
+/// with `strict`, returns an error so the caller can fail the install.
+/// Warn (or fail, under strict) when the project pins a different package
+/// manager. Silent divergence produces a tree nobody else can reproduce.
+fn check_package_manager_pin(project: &std::path::Path, strict: bool, quiet: bool) -> Result<(), String> {
+    let verdict = jhol_core::pm_field::check(project);
+    if verdict.is_ok() {
+        return Ok(());
+    }
+    let msg = verdict.message().unwrap_or_default();
+    if strict || jhol_core::pm_field::strict() {
+        return Err(format!("{} (refusing: --pm-strict)", msg));
+    }
+    if !quiet {
+        eprintln!("warning: {}", msg);
+    }
+    Ok(())
+}
+
+fn report_engine_mismatches(project: &std::path::Path, strict: bool, quiet: bool) -> Result<(), String> {
+    let mismatches = jhol_core::engines::scan_installed(project);
+    if std::env::var_os("JHOL_OMIT_DEBUG").is_some() {
+        eprintln!("[engines] scan {:?} -> {} mismatch(es)", project, mismatches.len());
+    }
+    if mismatches.is_empty() {
+        return Ok(());
+    }
+    let shown: Vec<String> = mismatches
+        .iter()
+        .take(5)
+        .map(|(n, req, act)| format!("{} needs {} (have {})", n, req, act))
+        .collect();
+    let more = if mismatches.len() > 5 {
+        format!("; ... and {} more", mismatches.len() - 5)
+    } else {
+        String::new()
+    };
+    if strict {
+        return Err(format!(
+            "{} package(s) declare engines.node above this runtime: {}{}",
+            mismatches.len(),
+            shown.join("; "),
+            more
+        ));
+    }
+    if !quiet {
+        eprintln!(
+            "warning: {} package(s) declare engines.node above this runtime: {}{}",
+            mismatches.len(),
+            shown.join("; "),
+            more
+        );
+    }
+    Ok(())
+}
+
 fn human_bytes(n: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut v = n as f64;
@@ -1397,6 +1453,10 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
     let lockfile_only = req.lockfile_only();
     let native_only = req.native_only();
     let no_scripts = req.no_scripts();
+    // The daemon request does not carry --omit (it is a per-invocation
+    // intent, and the daemon is an optimization lane). Honour the process
+    // environment so a production daemon still omits dev dependencies.
+    let omitted = jhol_core::omit::Omit::NONE.with_env(false);
 
     // Serialize the cwd-dependent section (see DAEMON_CWD_LOCK). Poisoning is
     // ignored: a panic in one install must not permanently break the daemon.
@@ -1435,6 +1495,8 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
             resolver: std::env::var("JHOL_RESOLVER").unwrap_or_default(),
             overrides: None,
             telemetry: false,
+            omit: omitted,
+            engine_strict: false,
         };
         jhol_core::set_daemon_mode(true);
         jhol_core::set_transitive_depth(2);
@@ -2140,6 +2202,16 @@ fn try_fast_install() -> Option<Result<(usize, usize), String>> {
     // Every lane here completed an install: run the lifecycle phase so script
     // consent is enforced (and skipped scripts surfaced) on the fast path too.
     if result.as_ref().map(|r| r.is_ok()).unwrap_or(false) {
+        let _ = check_package_manager_pin(std::path::Path::new("."), false, true);
+        let _ = jhol_core::patch::apply_all(std::path::Path::new("."));
+        // The fast lane is the one that runs for a plain `jhol install`, so
+        // the engines report has to live here too, not only at the clap paths.
+        report_engine_mismatches(
+            std::path::Path::new("."),
+            std::env::args().any(|a| a == "--engine-strict"),
+            std::env::args().any(|a| a == "-q" || a == "--quiet"),
+        )
+        .ok();
         if let Err(e) = jhol_core::install::run_post_install_lifecycle_default() {
             return Some(Err(e));
         }
@@ -2288,6 +2360,33 @@ fn run() -> Result<(), String> {
                         .help("Do not save installed packages to package.json"),
                 )
                 .arg(
+                    Arg::new("save-dev")
+                        .short('D')
+                        .long("save-dev")
+                        .action(ArgAction::SetTrue)
+                        .help("Save added packages to devDependencies"),
+                )
+                .arg(
+                    Arg::new("save-peer")
+                        .long("save-peer")
+                        .action(ArgAction::SetTrue)
+                        .help("Save added packages to peerDependencies"),
+                )
+                .arg(
+                    Arg::new("save-optional")
+                        .short('O')
+                        .long("save-optional")
+                        .action(ArgAction::SetTrue)
+                        .help("Save added packages to optionalDependencies"),
+                )
+                .arg(
+                    Arg::new("save-exact")
+                        .short('E')
+                        .long("save-exact")
+                        .action(ArgAction::SetTrue)
+                        .help("Save the exact installed version instead of a range"),
+                )
+                .arg(
                     Arg::new("no-cache")
                         .long("no-cache")
                         .action(ArgAction::SetTrue)
@@ -2327,6 +2426,14 @@ fn run() -> Result<(), String> {
                         .help("Run in all workspace packages (from package.json workspaces)"),
                 )
                 .arg(
+                    Arg::new("filter")
+                        .long("filter")
+                        .short('F')
+                        .value_name("PATTERN")
+                        .action(ArgAction::Append)
+                        .help("Restrict a workspace run to packages matching NAME or @scope/* (repeatable)"),
+                )
+                .arg(
                     Arg::new("json")
                         .long("json")
                         .action(ArgAction::SetTrue)
@@ -2337,6 +2444,38 @@ fn run() -> Result<(), String> {
                         .long("native-only")
                         .action(ArgAction::SetTrue)
                         .help("Never use Bun/npm; fail if native install fails (default)"),
+                )
+                .arg(
+                    Arg::new("omit")
+                        .long("omit")
+                        .value_name("CLASS[,...]")
+                        .help("Leave out dependency classes: dev, optional, peer"),
+                )
+                .arg(
+                    Arg::new("prod")
+                        .long("prod")
+                        .alias("production")
+                        .action(ArgAction::SetTrue)
+                        .help("Shorthand for --omit=dev (runtime dependencies only)"),
+                )
+                .arg(
+                    Arg::new("include-dev")
+                        .long("include-dev")
+                        .action(ArgAction::SetTrue)
+                        .help("Install devDependencies even when NODE_ENV=production"),
+                )
+                .arg(
+                    Arg::new("engine-strict")
+                        .long("engine-strict")
+                        .action(ArgAction::SetTrue)
+                        .help("Fail when a package's engines.node excludes this runtime"),
+                )
+                .arg(
+                    Arg::new("global")
+                        .short('g')
+                        .long("global")
+                        .action(ArgAction::SetTrue)
+                        .help("Install machine-wide into the jhol global prefix, shimming bin entries"),
                 )
                 .arg(
                     Arg::new("fallback-backend")
@@ -2426,6 +2565,14 @@ fn run() -> Result<(), String> {
                         .long("all-workspaces")
                         .action(ArgAction::SetTrue)
                         .help("Run in all workspace packages"),
+                )
+                .arg(
+                    Arg::new("filter")
+                        .long("filter")
+                        .short('F')
+                        .value_name("PATTERN")
+                        .action(ArgAction::Append)
+                        .help("Restrict a workspace run to packages matching NAME or @scope/* (repeatable)"),
                 )
                 .arg(
                     Arg::new("json")
@@ -3325,6 +3472,17 @@ fn run() -> Result<(), String> {
                     )
             )
             .subcommand(
+                Command::new("global")
+                    .about("Manage globally installed packages")
+                    .subcommand(Command::new("list").about("List globally installed packages"))
+                    .subcommand(Command::new("path").about("Print the global prefix"))
+                    .subcommand(
+                        Command::new("remove")
+                            .about("Remove a globally installed package")
+                            .arg(Arg::new("package").required(true)),
+                    ),
+            )
+            .subcommand(
                 Command::new("login")
                     .about("Store a registry auth token in .npmrc (0600)")
                     .arg(
@@ -3360,6 +3518,28 @@ fn run() -> Result<(), String> {
                             .long("registry")
                             .help("Override the registry URL"),
                     ),
+            )
+            .subcommand(
+                Command::new("dedupe")
+                    .about("Report packages installed at more than one version")
+                    .arg(Arg::new("json").long("json").num_args(0)
+                        .help("Machine-readable output")),
+            )
+            .subcommand(
+                Command::new("patch")
+                    .about("Persist local edits to a dependency (extract, edit, commit)")
+                    .arg(
+                        Arg::new("package")
+                            .num_args(0..=1)
+                            .value_name("PACKAGE")
+                            .help("Package to patch; omit with --list"),
+                    )
+                    .arg(Arg::new("commit").long("commit").num_args(0)
+                        .help("Store the edits made in the extracted copy"))
+                    .arg(Arg::new("list").long("list").num_args(0)
+                        .help("Show recorded patches"))
+                    .arg(Arg::new("rollback").long("rollback").num_args(0)
+                        .help("Forget a package's patch")),
             )
             .subcommand(
                 Command::new("view")
@@ -5342,6 +5522,8 @@ fn run() -> Result<(), String> {
             resolver: std::env::var("JHOL_RESOLVER").unwrap_or_default(),
             overrides: None,
             telemetry: jhol_core::telemetry_enabled(&config),
+            omit: jhol_core::omit::Omit::NONE,
+            engine_strict: false,
         };
         let refs: Vec<&str> = packages;
         jhol_core::install_package(&refs, &opts).map_err(|e| e.to_string())?;
@@ -5366,6 +5548,130 @@ fn run() -> Result<(), String> {
         }
         success("Package(s) removed.");
         return Ok(());
+    }
+
+    if let Some(("global", sub_m)) = matches.subcommand() {
+        match sub_m.subcommand() {
+            Some(("list", _)) | None => {
+                let installed = jhol_core::global_install::installed();
+                if installed.is_empty() {
+                    println!("No globally installed packages.");
+                } else {
+                    println!("{} global package(s) in {}:", installed.len(),
+                        jhol_core::global_install::prefix().display());
+                    for (name, range) in installed {
+                        println!("  {}@{}", name, range);
+                    }
+                }
+            }
+            Some(("path", _)) => println!("{}", jhol_core::global_install::prefix().display()),
+            Some(("remove", m)) => {
+                let name = m.get_one::<String>("package").cloned().unwrap_or_default();
+                match jhol_core::global_install::uninstall_global(&name) {
+                    Ok(true) => println!("Removed {} from the global prefix.", name),
+                    Ok(false) => println!("{} is not globally installed.", name),
+                    Err(e) => {
+                        eprintln!("global remove: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            Some((other, _)) => {
+                eprintln!("global: unknown action '{}' (use list, path, or remove)", other);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if let Some(("dedupe", sub_m)) = matches.subcommand() {
+        let dups = jhol_core::pm_field::find_duplicates(std::path::Path::new("."));
+        if sub_m.get_flag("json") {
+            let body: Vec<serde_json::Value> = dups
+                .iter()
+                .map(|d| {
+                    serde_json::json!({
+                        "name": d.name,
+                        "versions": d.versions.iter().map(|(v, n)| serde_json::json!({"version": v, "copies": n})).collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
+        } else if dups.is_empty() {
+            println!("No duplicate versions in node_modules.");
+        } else {
+            println!("{} package(s) installed at more than one version:", dups.len());
+            for d in &dups {
+                let vs: Vec<String> = d
+                    .versions
+                    .iter()
+                    .map(|(v, n)| if *n > 1 { format!("{} ({}x)", v, n) } else { v.clone() })
+                    .collect();
+                println!("  {} — {}", d.name, vs.join(", "));
+            }
+            println!(
+                "\nDuplicates are structural: a range conflict between dependents needs \
+                 an override (`overrides` in package.json) or a dependency update."
+            );
+        }
+    }
+
+    if let Some(("patch", sub_m)) = matches.subcommand() {
+        let project = std::path::Path::new(".");
+        let pkg = sub_m.get_one::<String>("package").cloned();
+        if sub_m.get_flag("list") || (pkg.is_none() && !sub_m.get_flag("commit")) {
+            let patches = jhol_core::patch::list(project);
+            if patches.is_empty() {
+                println!("No patches recorded.");
+            } else {
+                println!("{} patch(es):", patches.len());
+                for p in patches {
+                    println!(
+                        "  {}@{} — {} file(s), {} bytes  ({})",
+                        p.package,
+                        p.version,
+                        p.files,
+                        p.bytes,
+                        p.path.display()
+                    );
+                }
+            }
+        } else if let Some(pkg) = pkg {
+            let result = if sub_m.get_flag("rollback") {
+                jhol_core::patch::rollback(project, &pkg)
+                    .map(|removed| {
+                        if removed {
+                            println!("Removed the patch for {}.", pkg);
+                        } else {
+                            println!("No patch recorded for {}.", pkg);
+                        }
+                    })
+                    .map_err(|e| e)
+            } else if sub_m.get_flag("commit") {
+                jhol_core::patch::commit(project, &pkg)
+                    .map(|rec| {
+                        println!(
+                            "Patched {}@{} — {} file(s) stored in {}",
+                            rec.package,
+                            rec.version,
+                            rec.files,
+                            rec.path.display()
+                        );
+                        println!("Commit the patches/ directory so the fix ships with the repo.");
+                    })
+                    .map_err(|e| e)
+            } else {
+                jhol_core::patch::extract_for_edit(project, &pkg)
+                    .map(|dir| {
+                        println!("Edit the files in:\n  {}", dir.display());
+                        println!("Then run:  jhol patch {} --commit", pkg);
+                    })
+                    .map_err(|e| e)
+            };
+            if let Err(e) = result {
+                eprintln!("patch: {}", e);
+                std::process::exit(1);
+            }
+        }
     }
 
     if let Some(("login", sub_m)) = matches.subcommand() {
@@ -5687,8 +5993,13 @@ fn run() -> Result<(), String> {
         for root in &roots {
             std::env::set_current_dir(root)
                 .map_err(|e| format!("chdir {}: {}", root.display(), e))?;
+            // ci honours --omit and NODE_ENV=production too: a deploy that runs
+            // `jhol ci` must be able to leave devDependencies out. Resolve the
+            // classes BEFORE the spec list, since the list depends on them.
+            let omitted_classes = jhol_core::omit::Omit::NONE.with_env(false);
             let specs =
-                jhol_core::resolve_install_from_package_json(true).map_err(|e| e.to_string())?;
+                jhol_core::resolve_install_from_package_json_omit(true, omitted_classes)
+                    .map_err(|e| e.to_string())?;
             let refs: Vec<&str> = specs.iter().map(|s| s.as_str()).collect();
             let opts = jhol_core::InstallOptions {
                 no_cache: false,
@@ -5736,6 +6047,8 @@ fn run() -> Result<(), String> {
                 resolver: std::env::var("JHOL_RESOLVER").unwrap_or_default(),
                 overrides: None,
                 telemetry: jhol_core::telemetry_enabled(&config),
+                omit: omitted_classes,
+                engine_strict: sub_m.get_flag("engine-strict"),
             };
             // `npm ci` semantics: a clean install. Without this, `ci` reused
             // whatever was already in `node_modules`, and every entry found there
@@ -5845,6 +6158,59 @@ fn run() -> Result<(), String> {
 
     match matches.subcommand() {
         Some(("install", sub_m)) => {
+            // --omit / --prod / --include-dev, composed with NODE_ENV.
+            // Resolved once here; both the sequential and parallel workspace
+            // paths and the direct-install closure read the same value.
+            let cli_omit: jhol_core::omit::Omit = match sub_m.get_one::<String>("omit") {
+                Some(list) => match jhol_core::omit::Omit::parse(list) {
+                    Ok(o) => o,
+                    Err(e) => return Err(e),
+                },
+                None => jhol_core::omit::Omit::NONE,
+            };
+            let include_dev = sub_m.get_flag("include-dev");
+            if std::env::var_os("JHOL_OMIT_DEBUG").is_some() {
+                eprintln!("[omit] cli_omit={:?} prod={} include_dev={}", cli_omit, sub_m.get_flag("prod"), include_dev);
+            }
+
+            let omitted_classes: jhol_core::omit::Omit = if sub_m.get_flag("prod") {
+                jhol_core::omit::Omit { dev: true, ..cli_omit }.with_env(include_dev)
+            } else {
+                cli_omit.with_env(include_dev)
+            };
+            if sub_m.get_flag("global") {
+                let pkg_refs: Vec<&str> = sub_m
+                    .get_many::<String>("package")
+                    .map(|v| v.map(|s| s.as_str()).collect())
+                    .unwrap_or_default();
+                let gopts = jhol_core::InstallOptions {
+                    quiet: sub_m.get_flag("quiet"),
+                    offline: sub_m.get_flag("offline"),
+                    native_only: true,
+                    no_scripts: !sub_m.get_flag("scripts"),
+                    omit: omitted_classes,
+                    engine_strict: false,
+                    ..Default::default()
+                };
+                match jhol_core::global_install::install_global(&pkg_refs, &gopts) {
+                    Ok(shims) => {
+                        if pkg_refs.is_empty() {
+                            println!("Installed global packages into {}.",
+                                jhol_core::global_install::prefix().display());
+                        }
+                        for shim in shims {
+                            println!("  linked {}", shim);
+                        }
+                        println!("Add to PATH: export PATH=\"{}:$PATH\"",
+                            jhol_core::global_install::bin_dir().display());
+                    }
+                    Err(e) => {
+                        eprintln!("global install: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+                return Ok(());
+            }
             let no_cache = sub_m.get_flag("no-cache");
             let quiet = sub_m.get_flag("quiet");
             let lockfile_only = sub_m.get_flag("lockfile-only");
@@ -5893,9 +6259,16 @@ fn run() -> Result<(), String> {
                 config.no_scripts.unwrap_or(true)
             };
 
-            let mut use_daemon = sub_m.get_flag("daemon");
+            // The daemon request is a packed fixed-size wire struct; it has no
+            // slot for dependency-class omission. Sending a --omit install to
+            // the daemon would silently install the omitted classes, so an
+            // omitting install always runs in-process.
+            let mut use_daemon = sub_m.get_flag("daemon") && omitted_classes.is_empty();
             let mut daemon_auto_attach = false;
-            if !use_daemon && jhol_core::soul_path::auto_daemon_enabled() {
+            if !use_daemon
+                && omitted_classes.is_empty()
+                && jhol_core::soul_path::auto_daemon_enabled()
+            {
                 #[cfg(unix)]
                 {
                     // Safety gate: only connect to existing socket, don't auto-start
@@ -5966,14 +6339,27 @@ fn run() -> Result<(), String> {
             let save = !sub_m.get_flag("no-save");
             if save && !packages.is_empty() {
                 let pkg_refs: Vec<&str> = packages.iter().map(|s| s.as_str()).collect();
-                let _ = persist_added_deps(&pkg_refs);
+                let target = if sub_m.get_flag("save-dev") {
+                    SaveTarget::Dev
+                } else if sub_m.get_flag("save-peer") {
+                    SaveTarget::Peer
+                } else if sub_m.get_flag("save-optional") {
+                    SaveTarget::Optional
+                } else {
+                    SaveTarget::Dependencies
+                };
+                let _ = persist_added_deps_opts(
+                    &pkg_refs,
+                    target,
+                    sub_m.get_flag("save-exact"),
+                );
             }
 
             // Feature 5: workspaces parallel / bail
             let ws_parallel = config.workspaces_parallel.unwrap_or(false);
             let ws_bail = config.workspaces_bail.unwrap_or(true);
 
-            let roots: Vec<std::path::PathBuf> = if all_workspaces {
+            let mut roots: Vec<std::path::PathBuf> = if all_workspaces {
                 let r = jhol_core::list_workspace_roots(&cwd).unwrap_or_default();
                 if r.is_empty() {
                     vec![cwd.clone()]
@@ -5983,6 +6369,44 @@ fn run() -> Result<(), String> {
             } else {
                 vec![cwd.clone()]
             };
+            // `--filter`: keep only workspaces whose package.json name matches
+            // a pattern (`name`, `pkg-*`, `@scope/*`).
+            let filters: Vec<String> = sub_m
+                .get_many::<String>("filter")
+                .map(|v| v.cloned().collect())
+                .unwrap_or_default();
+            if !filters.is_empty() {
+                let matches = |name: &str| -> bool {
+                    filters.iter().any(|pat| match pat.strip_suffix('*') {
+                        Some(prefix) => name.starts_with(prefix),
+                        None => name == pat,
+                    })
+                };
+                let before = roots.len();
+                roots.retain(|root| {
+                    if *root == cwd {
+                        return false;
+                    }
+                    std::fs::read_to_string(root.join("package.json"))
+                        .ok()
+                        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                        .and_then(|v| {
+                            v.get("name").and_then(|n| n.as_str()).map(String::from)
+                        })
+                        .map(|n| matches(&n))
+                        .unwrap_or(false)
+                });
+                if roots.is_empty() {
+                    return Err(format!(
+                        "--filter matched none of the {} workspace root(s); patterns: {}",
+                        before,
+                        filters.join(", ")
+                    ));
+                }
+                if !quiet {
+                    info(&format!("--filter selected {} workspace(s)", roots.len()));
+                }
+            }
 
             // Helper: run install for a single root (used by both sequential and parallel paths)
             let run_install_for_root = |root: &std::path::Path,
@@ -6003,12 +6427,20 @@ fn run() -> Result<(), String> {
                                         use_daemon: bool|
              -> Result<(), String> {
                 let specs: Vec<String> = if packages.is_empty() {
-                    jhol_core::resolve_install_from_package_json(strict_lockfile)
+                    jhol_core::resolve_install_from_package_json_omit(strict_lockfile, omitted_classes)
                         .map_err(|e| e.to_string())?
                 } else {
                     packages.iter().map(|s| s.clone()).collect()
                 };
                 if specs.is_empty() {
+                    // Nothing to install, but the tree on disk may still hold
+                    // packages whose engines.node excludes this runtime.
+                    check_package_manager_pin(std::path::Path::new(&root), false, quiet)?;
+                    report_engine_mismatches(
+                        std::path::Path::new(&root),
+                        sub_m.get_flag("engine-strict"),
+                        quiet,
+                    )?;
                     return Ok(());
                 }
                 let from_lockfile = from_lockfile_override.unwrap_or_else(|| {
@@ -6057,6 +6489,8 @@ fn run() -> Result<(), String> {
                         }
                     },
                     telemetry: jhol_core::telemetry_enabled(&config),
+                    omit: omitted_classes,
+                    engine_strict: false,
                 };
                 // Feature 6: pre-install hook
                 if let Some(ref hook) = config.hook_pre_install {
@@ -6117,6 +6551,26 @@ fn run() -> Result<(), String> {
                     direct_install(root, &specs, &opts, pkg_count, quiet, json_out)
                 };
                 install_result?;
+                // Recorded patches are the user's own fixes for a broken
+                // dependency: re-apply them after every lane, including the
+                // fast ones that materialise a pristine tree.
+                if let Ok((pkgs, _files)) =
+                    jhol_core::patch::apply_all(std::path::Path::new(&root))
+                {
+                    if pkgs > 0 && !quiet {
+                        info(&format!("Applied {} patch(es)", pkgs));
+                    }
+                }
+                check_package_manager_pin(
+                    std::path::Path::new(&root),
+                    false,
+                    quiet,
+                )?;
+                report_engine_mismatches(
+                    std::path::Path::new(&root),
+                    sub_m.get_flag("engine-strict"),
+                    quiet,
+                )?;
                 let elapsed = install_start.elapsed();
                 let count_after = jhol_core::count_installed_packages(root);
                 let (added, _) = install_summary_counts(count_before, count_after);
@@ -6169,7 +6623,7 @@ fn run() -> Result<(), String> {
                         std::env::set_current_dir(&root)
                             .map_err(|e| format!("chdir {}: {}", root.display(), e))?;
                         let specs: Vec<String> = if packages.is_empty() {
-                            jhol_core::resolve_install_from_package_json(strict_lockfile)
+                            jhol_core::resolve_install_from_package_json_omit(strict_lockfile, omitted_classes)
                                 .map_err(|e| e.to_string())?
                         } else {
                             packages.clone()
@@ -6221,6 +6675,8 @@ fn run() -> Result<(), String> {
                                 }
                             },
                             telemetry: telemetry_flag,
+                            omit: omitted_classes,
+                            engine_strict: false,
                         };
                         if let Some(ref hook) = config_hook_pre {
                             if let Err(e) = std::process::Command::new("sh")
@@ -7730,7 +8186,44 @@ fn run() -> Result<(), String> {
 /// node_modules, skip the work, and still print "Package(s) added." while installing
 /// nothing and recording nothing. Bare names are stored as `*` here and refined to
 /// `^<installed>` afterwards, which is what npm does.
+/// Which package.json section `add`/`install --save` writes into.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SaveTarget {
+    Dependencies,
+    Dev,
+    Peer,
+    Optional,
+}
+
+impl SaveTarget {
+    fn section(self) -> &'static str {
+        match self {
+            SaveTarget::Dependencies => "dependencies",
+            SaveTarget::Dev => "devDependencies",
+            SaveTarget::Peer => "peerDependencies",
+            SaveTarget::Optional => "optionalDependencies",
+        }
+    }
+}
+
+
+/// The version of `name` as installed in node_modules, if present.
+fn installed_version(name: &str) -> Option<String> {
+    let pj = std::path::Path::new("node_modules").join(name).join("package.json");
+    let text = fs::read_to_string(pj).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    v.get("version")?.as_str().map(|s| s.to_string())
+}
+
 fn persist_added_deps(packages: &[&str]) -> Result<(), String> {
+    persist_added_deps_opts(packages, SaveTarget::Dependencies, false)
+}
+
+fn persist_added_deps_opts(
+    packages: &[&str],
+    target: SaveTarget,
+    exact: bool,
+) -> Result<(), String> {
     let path = std::path::Path::new("package.json");
     let raw = match fs::read_to_string(path) {
         Ok(s) => s,
@@ -7753,7 +8246,7 @@ fn persist_added_deps(packages: &[&str]) -> Result<(), String> {
         .as_object_mut()
         .ok_or("package.json must be a JSON object")?;
     let deps_value = root
-        .entry("dependencies")
+        .entry(target.section())
         .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
     let deps = deps_value
         .as_object_mut()
@@ -7770,7 +8263,14 @@ fn persist_added_deps(packages: &[&str]) -> Result<(), String> {
         } else {
             ((*spec).to_string(), "*".to_string())
         };
-        deps.insert(name, serde_json::Value::String(version));
+        let value = if exact {
+            // `--save-exact`: pin the resolved version, which is what npm
+            // writes. The requested range is only the request.
+            installed_version(&name).unwrap_or(version)
+        } else {
+            version
+        };
+        deps.insert(name, serde_json::Value::String(value));
     }
     let pretty = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
     fs::write(path, format!("{}\n", pretty))
@@ -7814,7 +8314,19 @@ fn refine_star_specs(packages: &[&str]) {
         let Some(version) = meta.get("version").and_then(|v| v.as_str()) else {
             continue;
         };
-        if let Some(deps) = json.get_mut("dependencies").and_then(|d| d.as_object_mut()) {
+        // Refine whichever section the package was saved into: `-D`,
+        // `--save-peer` and `-O` write their own sections, and refining only
+        // `dependencies` left those at "*".
+        let section = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]
+            .into_iter()
+            .find(|s| {
+                json.get(*s)
+                    .and_then(|d| d.as_object())
+                    .map(|d| d.contains_key(&name))
+                    .unwrap_or(false)
+            })
+            .unwrap_or("dependencies");
+        if let Some(deps) = json.get_mut(section).and_then(|d| d.as_object_mut()) {
             if let Some(existing) = deps.get(&name).and_then(|v| v.as_str()) {
                 if existing == "*" || existing.is_empty() {
                     deps.insert(name, serde_json::Value::String(format!("^{}", version)));

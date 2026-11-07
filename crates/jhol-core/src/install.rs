@@ -3951,6 +3951,13 @@ pub struct InstallOptions {
     pub telemetry: bool,
     /// Optional allowlist for packages allowed to run scripts in backend fallback mode.
     pub script_allowlist: Option<std::collections::HashSet<String>>,
+    /// Dependency classes to leave out (`--omit=dev|optional|peer`).
+    /// The lockfile always records every class; only materialisation is
+    /// filtered, so a later plain install restores the full tree.
+    pub omit: crate::omit::Omit,
+    /// Fail (instead of warn) when an installed package's `engines.node`
+    /// excludes this runtime (`--engine-strict`).
+    pub engine_strict: bool,
 }
 
 /// Lockfile entries carry exact tarball URLs, integrity values, and placement
@@ -3977,6 +3984,8 @@ impl Default for InstallOptions {
             resolver: String::new(),
             overrides: None,
             telemetry: false,
+            omit: crate::omit::Omit::NONE,
+            engine_strict: false,
         }
     }
 }
@@ -5052,6 +5061,55 @@ fn build_resolve_request_from_deps(
         conflicts: vec![],
         focus_packages: None,
     })
+}
+
+/// Spec list for `jhol install` with no arguments, honouring `--omit`.
+/// `resolve_install_from_package_json` keeps the full-manifest behaviour for
+/// callers that need every class (doctor, ci's completeness check).
+pub fn resolve_install_from_package_json_omit(
+    strict_lockfile: bool,
+    omit: crate::omit::Omit,
+) -> Result<Vec<String>, JholError> {
+    if omit.is_empty() {
+        return resolve_install_from_package_json(strict_lockfile);
+    }
+    let pj_path = Path::new("package.json");
+    if !pj_path.exists() {
+        return resolve_install_from_package_json(strict_lockfile);
+    }
+    let deps = lockfile::deps_for_install(pj_path, omit).ok_or_else(|| {
+        crate::error_handling::utils::config_error(
+            "read_manifest_deps",
+            Some("dependencies"),
+            "Could not read package.json dependencies",
+        )
+    })?;
+    if deps.is_empty() {
+        return Ok(Vec::new());
+    }
+    let resolved = lockfile::read_resolved_from_dir(Path::new("."));
+    if strict_lockfile && resolved.is_none() {
+        return Err(crate::error_handling::utils::config_error(
+            "strict_lockfile_check",
+            Some("package-lock.json"),
+            "No lockfile found; run `jhol install` first to create one",
+        ));
+    }
+    let mut specs: Vec<String> = Vec::with_capacity(deps.len());
+    for (name, range) in deps.iter() {
+        // Prefer the locked version when it satisfies the (possibly omitted)
+        // manifest range and is still part of this install's class set.
+        let locked = resolved
+            .as_ref()
+            .and_then(|m| m.get(name))
+            .cloned()
+            .filter(|v| crate::registry::version_satisfies(range, v));
+        match locked {
+            Some(v) => specs.push(format!("{}@{}", name, v)),
+            None => specs.push(format!("{}@{}", name, range)),
+        }
+    }
+    Ok(specs)
 }
 
 pub fn resolve_install_from_package_json(strict_lockfile: bool) -> Result<Vec<String>, JholError> {
@@ -6329,6 +6387,54 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
         eprintln!("[integrity] wrapper: ok={}", result.is_ok());
     }
     if result.is_ok() {
+        // engines: warn by default, fail under --engine-strict. Runs before
+        // patches so a mismatch is reported for the published package.
+        {
+            let mismatches = crate::engines::scan_installed(Path::new("."));
+            if !mismatches.is_empty() {
+                if options.engine_strict {
+                    let list = mismatches
+                        .iter()
+                        .take(5)
+                        .map(|(n, req, act)| format!("{} (needs {}, have {})", n, req, act))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(crate::error_handling::utils::config_error(
+                        "engine_strict",
+                        Some("engines"),
+                        &format!(
+                            "{} package(s) require a newer node: {}",
+                            mismatches.len(),
+                            list
+                        ),
+                    ));
+                }
+                if !options.quiet {
+                    let list = mismatches
+                        .iter()
+                        .take(5)
+                        .map(|(n, req, act)| format!("{} needs {} (have {})", n, req, act))
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    crate::utils::log(&format!(
+                        "warning: {} package(s) declare engines.node above this runtime: {}{}",
+                        mismatches.len(),
+                        list,
+                        if mismatches.len() > 5 { "; ..." } else { "" }
+                    ));
+                }
+            }
+        }
+        // Re-apply recorded patches: extraction materialised pristine files,
+        // and a patch is the user's own fix for a broken dependency.
+        if let Ok((pkgs, files)) = crate::patch::apply_all(Path::new(".")) {
+            if pkgs > 0 && !options.quiet {
+                crate::utils::log(&format!(
+                    "Applied {} patch(es) to {} file(s)",
+                    pkgs, files
+                ));
+            }
+        }
         backfill_lockfile_integrity_after_install();
         // The lifecycle phase belongs at the convergence point: every lane
         // (warm bypass, capsule replay, bare-metal, full pipeline) reaches
@@ -6353,12 +6459,58 @@ pub fn backfill_lockfile_integrity_after_install() {
 
 fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<(), JholError> {
     let mut profiler = InstallProfiler::new();
-    let allow_prepared_replay = can_reuse_prepared_layout(packages, options);
+
+    // --omit: build the filtered spec list before any lane can act on it.
+    //
+    // Two rules matter here:
+    //  1. Explicitly requested packages (`jhol install foo`) are never
+    //     omitted — the user asked for them.
+    //  2. A warm-bypass proof, capsule, or L0 bundle describes the FULL tree.
+    //     Reusing one for a reduced tree would silently install the dev
+    //     dependencies the caller asked to leave out, so every fast lane is
+    //     disabled when anything is omitted. Correctness over speed.
+    if std::env::var_os("JHOL_OMIT_DEBUG").is_some() {
+        eprintln!("[omit] install_package_inner omit={:?} packages={:?}", options.omit, packages);
+    }
+    // Scope the omission set for the whole install: the materialisation layer
+    // consults it, and the guard restores the previous value on exit.
+    let _omit_guard = crate::omit::scoped(options.omit);
+    let omit_filtered: Vec<String> = if options.omit.is_empty() {
+        Vec::new()
+    } else {
+        let mut specs: Vec<String> = packages.iter().map(|p| p.to_string()).collect();
+        let pj = Path::new("package.json");
+        if specs.is_empty() && pj.exists() {
+            let deps = lockfile::deps_for_install(pj, options.omit).unwrap_or_default();
+            let resolved = lockfile::read_resolved_from_dir(Path::new("."));
+            for (name, range) in deps.iter() {
+                let locked = resolved
+                    .as_ref()
+                    .and_then(|m| m.get(name))
+                    .cloned()
+                    .filter(|v| crate::registry::version_satisfies(range, v));
+                specs.push(match locked {
+                    Some(v) => format!("{}@{}", name, v),
+                    None => format!("{}@{}", name, range),
+                });
+            }
+        }
+        specs
+    };
+    let omit_strs: Vec<&str> = omit_filtered.iter().map(|s| s.as_str()).collect();
+    let packages: &[&str] = if options.omit.is_empty() {
+        packages
+    } else {
+        &omit_strs
+    };
+
+    let allow_prepared_replay =
+        options.omit.is_empty() && can_reuse_prepared_layout(packages, options);
 
     // Lane 0 is limited to the plain default install and uses the same proof
     // as the front door. Mtime-only status markers do not bind lockfiles,
     // install paths, policy, or platform and therefore cannot authorize reuse.
-    if can_use_instant_lock_proof(packages, options, Path::new(".")) {
+    if options.omit.is_empty() && can_use_instant_lock_proof(packages, options, Path::new(".")) {
         profiler.mark("lane0_warm_bypass");
         return Ok(());
     }

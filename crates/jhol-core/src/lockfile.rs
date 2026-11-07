@@ -247,7 +247,46 @@ fn skip_lockfile_materialization(name: &str, val: &serde_json::Value) -> bool {
         .get("optional")
         .and_then(|o| o.as_bool())
         .unwrap_or(false);
-    optional && !package_supported_on_current_platform(val)
+    if optional && !package_supported_on_current_platform(val) {
+        return true;
+    }
+    // `--omit`: the lockfile records `dev: true` on dev-only entries (npm does
+    // too, and we now write it), so the tree walk is where omission lands.
+    // Two sources are consulted because a lockfile written by an older build
+    // or by npm may carry the marker, our own may not yet, and a project can
+    // have both patterns:
+    //   1. the entry's own `dev` / `optional` flag, and
+    //   2. the manifest itself — a package that is declared under
+    //      devDependencies and NOT under dependencies is a dev dependency by
+    //      definition.
+    let omit = crate::omit::current();
+    if omit.is_empty() {
+        return false;
+    }
+    if omit.dev && val.get("dev").and_then(|d| d.as_bool()).unwrap_or(false) {
+        return true;
+    }
+    if omit.optional && optional {
+        return true;
+    }
+    if omit.dev || omit.optional {
+        if let Some(manifest) = read_manifest_deps(std::path::Path::new("package.json")) {
+            let base = name.rsplit('/').next().unwrap_or(name);
+            let declared_prod = manifest.dependencies.contains_key(name)
+                || manifest.dependencies.contains_key(base);
+            let declared_dev =
+                manifest.dev.contains_key(name) || manifest.dev.contains_key(base);
+            let declared_opt =
+                manifest.optional.contains_key(name) || manifest.optional.contains_key(base);
+            if omit.dev && declared_dev && !declared_prod {
+                return true;
+            }
+            if omit.optional && declared_opt && !declared_prod {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Pure, env-free platform filter (testable): does `val`'s `os`/`cpu`/`libc`
@@ -335,6 +374,83 @@ pub fn read_package_json_deps(path: &Path) -> Option<HashMap<String, String>> {
         *guard = Some((mtime, deps.clone()));
     }
     Some(deps)
+}
+
+/// A manifest's dependency classes, kept separate so an install can omit
+/// some (see `crate::omit`) while `doctor`/`audit`/`why` still see the whole
+/// picture. `read_package_json_deps` remains the merged view.
+#[derive(Debug, Clone, Default)]
+pub struct ManifestDeps {
+    pub dependencies: HashMap<String, String>,
+    pub dev: HashMap<String, String>,
+    pub optional: HashMap<String, String>,
+    pub peer: HashMap<String, String>,
+}
+
+/// Classified read of package.json's dependency sections (no caching: the
+/// merged cached reader covers the hot path, and this one runs once per
+/// install decision).
+pub fn read_manifest_deps(path: &Path) -> Option<ManifestDeps> {
+    let s = std::fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&s).ok()?;
+    let section = |key: &str| -> HashMap<String, String> {
+        v.get(key)
+            .and_then(|d| d.as_object())
+            .map(|o| {
+                o.iter()
+                    .filter_map(|(k, val)| val.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    Some(ManifestDeps {
+        dependencies: section("dependencies"),
+        dev: section("devDependencies"),
+        optional: section("optionalDependencies"),
+        peer: section("peerDependencies"),
+    })
+}
+
+/// The specs an install should materialise for this manifest, applying
+/// `omit`. Semantics match npm: a package listed in both `dependencies` and
+/// `devDependencies` is a *runtime* dependency (the prod section wins), so it
+/// survives `--omit=dev`. `optionalDependencies` overlay `dependencies` in
+/// npm, but omitting optional must not remove a package that is also a hard
+/// dependency.
+pub fn deps_for_install(path: &Path, omit: crate::omit::Omit) -> Option<HashMap<String, String>> {
+    let m = read_manifest_deps(path)?;
+    let mut out = m.dependencies.clone();
+    if !omit.optional {
+        out.extend(m.optional.clone());
+    } else {
+        // Optional entries that are NOT also hard deps are dropped; ones that
+        // are hard deps stay (they are required, not optional).
+        for (k, v) in m.optional.iter() {
+            if out.contains_key(k) {
+                continue;
+            }
+            out.insert(k.clone(), v.clone());
+        }
+        for (k, _) in m.optional.iter() {
+            if m.dependencies.contains_key(k) {
+                continue;
+            }
+            out.remove(k);
+        }
+    }
+    if !omit.dev {
+        for (k, v) in m.dev.iter() {
+            out.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
+    if !omit.peer {
+        for (k, v) in m.peer.iter() {
+            if !out.contains_key(k) {
+                out.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    Some(out)
 }
 
 fn read_package_json_deps_uncached(path: &Path) -> Option<HashMap<String, String>> {
@@ -2056,5 +2172,90 @@ mod optional_dep_tests {
             parse_optional_dependency_names(&serde_json::json!({ "dependencies": {} })).is_empty()
         );
         assert!(parse_optional_dependency_names(&serde_json::json!({})).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod omit_tests {
+    use super::*;
+    use crate::omit::Omit;
+
+    fn write_manifest(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+        let p = dir.join("package.json");
+        std::fs::write(&p, body).unwrap();
+        p
+    }
+
+    fn tmp(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("jhol-omit-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    const MANIFEST: &str = r#"{
+        "name": "t", "version": "1.0.0",
+        "dependencies": { "prod-a": "^1.0.0", "shared": "^2.0.0" },
+        "devDependencies": { "dev-b": "^3.0.0", "shared": "^9.0.0" },
+        "optionalDependencies": { "opt-c": "^4.0.0", "prod-a": "^1.0.0" },
+        "peerDependencies": { "peer-d": "^5.0.0" }
+    }"#;
+
+    #[test]
+    fn full_install_includes_everything() {
+        let d = tmp("full");
+        let pj = write_manifest(&d, MANIFEST);
+        let deps = deps_for_install(&pj, Omit::NONE).unwrap();
+        assert!(deps.contains_key("prod-a"));
+        assert!(deps.contains_key("dev-b"));
+        assert!(deps.contains_key("opt-c"));
+        assert!(deps.contains_key("peer-d"));
+        // prod section wins for a name in both
+        assert_eq!(deps.get("shared").map(|s| s.as_str()), Some("^2.0.0"));
+    }
+
+    #[test]
+    fn omit_dev_drops_only_dev() {
+        let d = tmp("dev");
+        let pj = write_manifest(&d, MANIFEST);
+        let deps = deps_for_install(&pj, Omit::PROD).unwrap();
+        assert!(!deps.contains_key("dev-b"), "devDependencies must be omitted");
+        assert!(deps.contains_key("prod-a"));
+        assert!(deps.contains_key("opt-c"));
+        assert_eq!(deps.get("shared").map(|s| s.as_str()), Some("^2.0.0"));
+    }
+
+    #[test]
+    fn omit_optional_keeps_hard_deps() {
+        let d = tmp("opt");
+        let pj = write_manifest(&d, MANIFEST);
+        let deps = deps_for_install(
+            &pj,
+            Omit {
+                dev: false,
+                optional: true,
+                peer: false,
+            },
+        )
+        .unwrap();
+        assert!(!deps.contains_key("opt-c"), "optional-only dep dropped");
+        assert!(deps.contains_key("prod-a"), "hard dep that is also optional survives");
+    }
+
+    #[test]
+    fn omit_peer_drops_peer() {
+        let d = tmp("peer");
+        let pj = write_manifest(&d, MANIFEST);
+        let deps = deps_for_install(
+            &pj,
+            Omit {
+                dev: false,
+                optional: false,
+                peer: true,
+            },
+        )
+        .unwrap();
+        assert!(!deps.contains_key("peer-d"));
+        assert!(deps.contains_key("prod-a"));
     }
 }

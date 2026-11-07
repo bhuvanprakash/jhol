@@ -14,6 +14,7 @@ pub mod config;
 pub mod content;
 pub mod daemon_cache;
 pub mod doctor;
+pub mod engines;
 pub mod enterprise;
 pub mod error_handling;
 pub mod exec;
@@ -21,6 +22,7 @@ pub mod fast_stream;
 pub mod file_lock;
 pub mod git_lifecycle;
 pub mod global_cache;
+pub mod global_install;
 #[cfg(feature = "http-reqwest")]
 pub mod http2_download;
 pub mod http_client;
@@ -39,8 +41,11 @@ pub mod materialize;
 pub mod mcp;
 pub mod offline_cache;
 pub mod optimized_download;
+pub mod omit;
 pub mod origin;
 pub mod pack;
+pub mod pm_field;
+pub mod patch;
 pub mod package_index;
 pub mod packument;
 pub mod pool;
@@ -110,6 +115,7 @@ pub use exec::{exec_binary, find_binary_in_node_modules};
 pub use install::{
     backfill_lockfile_integrity_after_install, count_installed_packages, fast_direct_warm_install,
     install_lockfile_only, install_package, resolve_install_from_package_json,
+    resolve_install_from_package_json_omit,
     try_fresh_project_bundle_replay, write_install_markers, InstallOptions,
 };
 pub use lockfile::{

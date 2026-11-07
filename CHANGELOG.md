@@ -547,3 +547,64 @@ by construction (an unclassifiable tree is kept; no index means no-op).
 parity with bun (bun's own samples ranged 17-129 ms across identical runs —
 host variance dominates this bench). This is consistent with the
 production-gate session's parity finding above; no current-claim dispute.
+
+## Tier 1 + Tier 2 delivery — 2026-11-07
+
+The production-adoption gap closed. Every item below is verified by a test or
+an end-to-end run against a fixture.
+
+### Tier 1 — blockers for production use
+
+**`--omit=dev` (and `optional`, `peer`)** — the flag every Dockerfile and CI
+deploy needs. `NODE_ENV=production` implies it; `--include-dev` overrides;
+`--prod` is the shorthand. Semantics match npm: a package declared in both
+`dependencies` and `devDependencies` is a runtime dependency and survives;
+`optionalDependencies` that are also hard deps survive `--omit=optional`; the
+lockfile keeps recording **every** class so a later plain install restores
+the full tree. Implemented as a resolver filter plus a materialisation filter
+(the lockfile now also writes npm's `dev: true` / `optional: true` markers),
+and it deliberately disables the warm-bypass/capsule/daemon lanes — a proof or
+capsule for the full tree is not a valid proof for a reduced one, and the
+packed daemon request has no slot for it.
+
+**`jhol install -g <pkg>`** — machine-wide installs into
+`$JHOL_GLOBAL_PREFIX` (default `~/.jhol/global`), with POSIX shims in
+`<prefix>/bin` for every `bin` entry (a `.js` target without a shebang runs
+under `node`), a global manifest recording `^<installed version>`, and
+`jhol global list | path | remove`. Verified: `mkdirp` installed globally and
+ran through its shim.
+
+**`jhol patch`** — persistent local fixes to third-party packages:
+`jhol patch <pkg>` extracts an editable copy, `--commit` stores
+`patches/<pkg>+<version>.patch`, `--list`, `--rollback`. Patches re-apply
+automatically after every install lane (including the fast ones), which is
+what makes the fix survive a wipe.
+
+### Tier 2 — compatibility gaps
+
+**`engines` enforcement** — `engines.node` is read and compared against the
+runtime (22.0.0, or `$NODE_VERSION`); warns by default, fails with
+`--engine-strict`. Full range support: `>=`, `<`, `^`, `~`, `14.x`, `*`,
+conjunctions (`>=12 <19`), alternatives (`>=16 || >=18`); an unparsable range
+never blocks. `npm`/`yarn`/`pnpm`/`bun` engine keys are reported, never
+enforced.
+
+**`--save-dev` / `-D`, `--save-peer`, `--save-optional` / `-O`,
+`--save-exact` / `-E`** — `add`/`install` write into the right package.json
+section and pin the exact installed version under `-E`. Star specs are refined
+to `^<version>` in whichever section they were saved into.
+
+**`--filter <pattern>` / `-F`** — monorepo workspace selection (`@acme/a`,
+`@acme/*`), with a clear error when nothing matches.
+
+**`packageManager` field** — parsed (`name@version`, hash-suffixed too) and
+compared with this build; warns on a foreign tool or a major skew, refuses
+under `JHOL_PM_STRICT=1` / strict mode.
+
+**`jhol dedupe`** — reports packages installed at more than one version with
+copy counts (`--json` for machines). Reporting only by design: collapsing a
+duplicate is a resolution decision (an `overrides` entry or a dependency
+update), not something an install tool should do silently.
+
+Gates: workspace tests green (620 jhol-core incl. 20 new, 116 VM), installer
+gate PASS, engine gate PASS, all five E2E suites pass.

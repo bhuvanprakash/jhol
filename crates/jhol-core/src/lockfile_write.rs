@@ -1987,6 +1987,112 @@ fn normalize_tree_key_to_package_name(raw: &str) -> String {
     raw.trim_start_matches("node_modules/").to_string()
 }
 
+/// npm's `dev` / `optional` markers on lockfile entries.
+///
+/// A package is *dev* when it is not reachable from the project's runtime
+/// dependencies: walk the resolved dependency graph from the runtime roots and
+/// everything left over came in through `devDependencies` (or is orphaned).
+/// Marking as npm does is what lets `--omit=dev` work later: the lockfile is
+/// the only record of what the tree was, and without the flag every later
+/// install re-materialises the dev packages it deliberately left out.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct EntryClass {
+    pub dev: bool,
+    pub optional: bool,
+}
+
+fn classify_entries(
+    tree: &HashMap<String, ResolvedPackage>,
+    manifest: &crate::lockfile::ManifestDeps,
+) -> HashMap<String, EntryClass> {
+    use std::collections::{HashSet, VecDeque};
+
+    // key -> ResolvedPackage, normalised like build_packages_json does
+    let mut entries: HashMap<String, &ResolvedPackage> = HashMap::new();
+    for (raw_key, pkg) in tree {
+        let key = normalize_lockfile_tree_key(raw_key);
+        if key.is_empty() {
+            continue;
+        }
+        entries.entry(key).or_insert(pkg);
+    }
+
+    let lookup = |name: &str| -> Option<String> {
+        let direct = format!("node_modules/{}", name);
+        if entries.contains_key(&direct) {
+            return Some(direct);
+        }
+        if entries.contains_key(name) {
+            return Some(name.to_string());
+        }
+        // nested placement: any key ending in /node_modules/<name>
+        let suffix = format!("/node_modules/{}", name);
+        entries.keys().find(|k| k.ends_with(&suffix)).cloned()
+    };
+
+    let mut visit = |roots: Vec<&String>, out: &mut HashSet<String>| {
+        let mut q: VecDeque<String> = VecDeque::new();
+        for r in roots {
+            if let Some(k) = lookup(r) {
+                q.push_back(k);
+            }
+        }
+        while let Some(key) = q.pop_front() {
+            if !out.insert(key.clone()) {
+                continue;
+            }
+            if let Some(pkg) = entries.get(&key) {
+                let mut names: Vec<&String> = pkg.dependencies.keys().collect();
+                names.sort();
+                for dep in names {
+                    if let Some(k) = lookup(dep) {
+                        if !out.contains(&k) {
+                            q.push_back(k);
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    let prod_roots: Vec<&String> = manifest.dependencies.keys().collect();
+    let mut prod_set: HashSet<String> = HashSet::new();
+    visit(prod_roots, &mut prod_set);
+
+    // Optional roots are prod-ish (npm: optional deps of prod packages are
+    // installable) but marked so `--omit=optional` can drop their subtrees
+    // when they are not reachable from a hard dependency.
+    let opt_roots: Vec<&String> = manifest.optional.keys().collect();
+    let mut opt_set: HashSet<String> = HashSet::new();
+    visit(opt_roots, &mut opt_set);
+
+    let mut out = HashMap::new();
+    for key in entries.keys() {
+        let is_prod = prod_set.contains(key);
+        let is_opt = opt_set.contains(key);
+        if is_prod {
+            out.insert(key.clone(), EntryClass::default());
+        } else if is_opt {
+            out.insert(
+                key.clone(),
+                EntryClass {
+                    dev: false,
+                    optional: true,
+                },
+            );
+        } else {
+            out.insert(
+                key.clone(),
+                EntryClass {
+                    dev: true,
+                    optional: false,
+                },
+            );
+        }
+    }
+    out
+}
+
 fn build_packages_json(
     root_name: &str,
     root_version: &str,
@@ -2051,12 +2157,39 @@ fn build_packages_json(
         }),
     );
 
+    // npm-compatible class markers, so a later `--omit=dev` install knows
+    // which entries came in through devDependencies.
+    let classes = if let Some(manifest) = crate::lockfile::read_manifest_deps(
+        std::path::Path::new("package.json"),
+    ) {
+        let c = classify_entries(tree, &manifest);
+        if std::env::var_os("JHOL_OMIT_DEBUG").is_some() {
+            eprintln!("[omit] classify cwd={:?} deps={:?} dev={:?} -> {:?}",
+                std::env::current_dir().ok(), manifest.dependencies.keys().collect::<Vec<_>>(),
+                manifest.dev.keys().collect::<Vec<_>>(), c);
+        }
+        c
+    } else {
+        if std::env::var_os("JHOL_OMIT_DEBUG").is_some() {
+            eprintln!("[omit] no manifest at cwd={:?}", std::env::current_dir().ok());
+        }
+        HashMap::new()
+    };
+
     for (key, pkg) in &normalized_tree {
         let mut entry = serde_json::Map::new();
         entry.insert(
             "version".to_string(),
             serde_json::Value::String(pkg.version.clone()),
         );
+        if let Some(cls) = classes.get(key) {
+            if cls.dev {
+                entry.insert("dev".to_string(), serde_json::Value::Bool(true));
+            }
+            if cls.optional {
+                entry.insert("optional".to_string(), serde_json::Value::Bool(true));
+            }
+        }
         entry.insert(
             "resolved".to_string(),
             serde_json::Value::String(pkg.resolved.clone()),
