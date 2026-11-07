@@ -51,6 +51,7 @@ pub mod packument;
 pub mod pool;
 pub mod prefetch;
 pub mod progress;
+pub mod project_lock;
 pub mod pubgrub;
 pub mod publish;
 pub mod registry;

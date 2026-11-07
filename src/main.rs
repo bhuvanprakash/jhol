@@ -296,6 +296,38 @@ impl InstallProgress {
 /// exists to stop.
 static TREE_REPAIRED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Take the per-project install lock for commands that write `node_modules`.
+///
+/// Returns a guard held until the process exits. SMART: commands that only read
+/// (`jhol view`, `jhol fmt`, `jhol run`) never take it, so they cannot block on
+/// a concurrent install.
+fn install_command_lock() -> Option<jhol_core::project_lock::ProjectLock> {
+    let sub = std::env::args().nth(1)?;
+    let writes_tree = matches!(
+        sub.as_str(),
+        "install"
+            | "i"
+            | "ci"
+            | "add"
+            | "remove"
+            | "rm"
+            | "uninstall"
+            | "update"
+            | "dedupe"
+            | "prune"
+    );
+    if !writes_tree {
+        return None;
+    }
+    match jhol_core::project_lock::ProjectLock::acquire(Path::new(".")) {
+        Ok(lock) => Some(lock),
+        Err(e) => {
+            eprintln!("jhol: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Ask the tree whether anything needs doing, reconcile whatever needs no
 /// resolution to fix, and report honestly. `true` means the install is already
 /// done.
@@ -8451,6 +8483,12 @@ fn main() {
     if plain_install_fully_settled() {
         return;
     }
+
+    // One install at a time per project, held for the life of the process.
+    // Acquired here rather than inside a lane because the lanes are many and
+    // the CLI dispatches before any of them: two concurrent `jhol install` runs
+    // interleave their writes and leave a tree that matches neither.
+    let _install_lock = install_command_lock();
 
     // An engine name that resolves to nothing used to silently run the script
     // on a different backend, which then surfaced engine-specific errors (a raw

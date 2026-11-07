@@ -7056,3 +7056,24 @@ pruning would have deleted. Fixed + tested.
 
 Result: tamper detected and repaired, extraneous pruned 3/3, honest "Repaired"
 summary, warm install 9-11ms and stable.
+
+## Journal — 2026-11-07 (cont.): project lock, and a race I introduced then removed
+
+Two concurrent `jhol install` runs interleaved and left a tree matching neither.
+Added `project_lock.rs`: one install per working tree, taken at the CLI entry.
+
+First implementation was `create_new` + write-pid. The reproduction caught the
+race at once: between create and write, the second process reads an EMPTY file,
+calls it garbage, treats the lock as stale, removes it and proceeds. Same bug the
+lock was meant to prevent, reintroduced by my own mechanism. Rewrote with
+`flock`: ownership is the open fd, not the file's contents, so there is nothing
+to race; and the kernel releases it on death, which matters because the CLI calls
+`std::process::exit` everywhere and bypasses `Drop` (that is why a lock file was
+left behind after every install in the first version).
+
+Result: cold concurrent runs wait (waited=1), the second reports honestly, the
+tree stays consistent; warm runs take no lock because they write nothing.
+
+Lesson, again, in a new dress: a "lock" implemented as a file with content is
+two mechanisms — a file and a protocol — and the protocol had a hole. Prefer the
+mechanism the OS already gets right.

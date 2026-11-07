@@ -4339,6 +4339,16 @@ fn collect_optional_variants(
 
 /// Only update lockfile (no node_modules). Uses native resolver and lockfile writer.
 pub fn install_lockfile_only(_backend: Backend) -> Result<(), JholError> {
+    let _project_lock = match crate::project_lock::ProjectLock::acquire(Path::new(".")) {
+        Ok(l) => Some(l),
+        Err(e) => {
+            return Err(crate::error_handling::utils::config_error(
+                "another install is in progress",
+                Some("install lock"),
+                &e,
+            ))
+        }
+    };
     let pj = Path::new("package.json");
     if !pj.exists() {
         return Err(crate::error_handling::utils::io_error(
@@ -6567,6 +6577,19 @@ fn materialize_downloaded_package(
 /// end (no lane ever wrote integrity back). One convergence point covers all
 /// lanes now and any lane added later. No-op when integrity already present.
 pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<(), JholError> {
+    // One install per project. Two concurrent runs interleave their writes to
+    // node_modules and package-lock.json, and the tree ends up matching neither
+    // — a state the verifier can then only report, not prevent.
+    let _project_lock = match crate::project_lock::ProjectLock::acquire(Path::new(".")) {
+        Ok(l) => Some(l),
+        Err(e) => {
+            return Err(crate::error_handling::utils::config_error(
+                "another install is in progress",
+                Some("install lock"),
+                &e,
+            ))
+        }
+    };
     let result = install_package_inner(packages, options);
     if std::env::var("JHOL_DEBUG_INTEGRITY").is_ok() {
         eprintln!("[integrity] wrapper: ok={}", result.is_ok());

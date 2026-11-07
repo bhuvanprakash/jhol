@@ -1142,3 +1142,45 @@ The first walker descended into a package's own subdirectories, so
 directories, never package directories; a test pins scoped and nested layouts.
 
 `jhol-core` 632 tests, `jhol-treecheck` 10, installer gate PASS.
+
+
+## Concurrent installs: one per project, enforced by the kernel
+
+Two `jhol install` runs in the same directory used to interleave — both resolved,
+both wrote `node_modules` and `package-lock.json`, and the resulting tree matched
+neither run. The verifier could report that afterwards; it could not prevent it.
+
+`crates/jhol-core/src/project_lock.rs` serialises installs per working tree. It
+is taken at the CLI entry for commands that write the tree (`install`, `i`, `ci`,
+`add`, `remove`, `update`, `dedupe`, `prune`) and held for the life of the
+process; read-only commands never take it.
+
+| | before | after |
+|---|---|---|
+| two cold installs at once | no waiting, tree needed repair | one waits, both succeed, tree consistent |
+| two warm installs | both fine | both fine, no lock taken (nothing to write) |
+| lock after exit | file left behind after every install | released by the kernel on any exit |
+
+### Why `flock` and not a pid file
+
+The first version created the lock with `create_new` then wrote the owner's pid.
+The reproduction caught the race immediately: between the create and the write, a
+second process reads an **empty** file, concludes the content is garbage, calls
+the lock stale, removes it, and proceeds — two installs, no waiting, precisely
+the bug the lock exists to prevent.
+
+`flock` deletes the whole class. Ownership is a property of the open file
+description, not a value inside the file, so there is nothing to read and nothing
+to race; and a process that dies (including through `std::process::exit`, which
+the CLI uses widely and which bypasses `Drop`) has its lock released by the
+kernel. The pid inside is diagnostics only — it tells a waiting user *who* they
+are waiting for and is never consulted to decide whether the lock is held.
+
+### Detail that matters
+
+A nested install (a lifecycle script that runs `jhol install`) would deadlock
+against itself, since `flock` on a second fd of the same file blocks even within
+one process; the guard therefore tracks locks held by this process and treats a
+re-entry as a no-op.
+
+`jhol-core` 636 tests (4 new), `jhol-treecheck` 10, installer gate PASS.
