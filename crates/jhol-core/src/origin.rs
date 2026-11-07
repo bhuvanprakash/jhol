@@ -451,6 +451,7 @@ pub(crate) fn write_packument_cache_with_identity(
     out.push(b'\n');
     out.extend_from_slice(&payload);
     std::fs::write(&body_path, &out).map_err(|e| e.to_string())?;
+
     if harvest_enabled() {
         if let Some(name) = body_path.file_name() {
             mirror_packument_to_roots(&out, name, &durable_roots());

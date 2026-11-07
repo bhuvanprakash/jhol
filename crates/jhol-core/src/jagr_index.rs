@@ -366,6 +366,77 @@ impl<'a> Reader<'a> {
     }
 }
 
+/// On-disk store: one `.idx` beside each cached packument.
+///
+/// Validation is **stat-only** by design — the point of the index is to avoid
+/// reading the packument, so validating by hashing it would defeat the purpose.
+/// The header records the source file's length and mtime; if either moved, the
+/// index is stale and the caller falls back to JSON. That is the same contract
+/// the rest of the cache uses, and it fails safe: a wrong index is ignored, not
+/// trusted.
+const STORE_MAGIC: &[u8; 8] = b"JHOLIDX1";
+
+pub fn index_path_for(packument_path: &std::path::Path) -> std::path::PathBuf {
+    let mut p = packument_path.to_path_buf();
+    let name = format!(
+        "{}.idx",
+        p.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default()
+    );
+    p.set_file_name(name);
+    p
+}
+
+/// Write `pkg` beside `packument_path`, recording the source's size and mtime.
+pub fn write_index_beside(packument_path: &std::path::Path, pkg: &IndexPackage) -> std::io::Result<()> {
+    let meta = std::fs::metadata(packument_path)?;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut out = Vec::with_capacity(1024);
+    out.extend_from_slice(STORE_MAGIC);
+    out.extend_from_slice(&mtime.to_le_bytes());
+    out.extend_from_slice(&meta.len().to_le_bytes());
+    let body = ResolverIndex {
+        packages: BTreeMap::from([(pkg.name.clone(), pkg.clone())]),
+    }
+    .encode();
+    out.extend_from_slice(&body);
+
+    let path = index_path_for(packument_path);
+    // Atomic replace: a half-written index must never be read.
+    let tmp = path.with_extension("idx.tmp");
+    std::fs::write(&tmp, &out)?;
+    std::fs::rename(&tmp, &path)
+}
+
+/// Read the index beside `packument_path` if it is still valid for that file.
+pub fn read_index_beside(packument_path: &std::path::Path) -> Option<IndexPackage> {
+    let path = index_path_for(packument_path);
+    let meta = std::fs::metadata(packument_path).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let bytes = std::fs::read(&path).ok()?;
+    if bytes.len() < 24 || &bytes[..8] != STORE_MAGIC {
+        return None;
+    }
+    let stored_mtime = u64::from_le_bytes(bytes[8..16].try_into().ok()?);
+    let stored_len = u64::from_le_bytes(bytes[16..24].try_into().ok()?);
+    if stored_mtime != mtime || stored_len != meta.len() {
+        return None;
+    }
+    let idx = ResolverIndex::decode(&bytes[24..])?;
+    idx.packages.into_iter().next().map(|(_, pkg)| pkg)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -489,5 +560,205 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+/// What loading a cache directory cost, and how much of it came from indexes.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct IndexLoadStats {
+    pub from_index: usize,
+    pub from_json: usize,
+    pub skipped: usize,
+}
+
+/// Load the resolver's view of a packument cache directory.
+///
+/// This is the read side of the index: for each cached packument, use the `.idx`
+/// beside it when it is valid, and fall back to gunzip + JSON when it is missing,
+/// stale or corrupt. Nothing is guessed — a bad index costs one JSON parse, never
+/// a wrong answer.
+pub fn load_cache_dir(dir: &std::path::Path) -> (ResolverIndex, IndexLoadStats) {
+    let mut packages = BTreeMap::new();
+    let mut stats = IndexLoadStats::default();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return (ResolverIndex { packages }, stats);
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        if path.extension().map(|x| x != "json").unwrap_or(true) {
+            continue;
+        }
+        if let Some(pkg) = read_index_beside(&path) {
+            stats.from_index += 1;
+            packages.insert(pkg.name.clone(), pkg);
+            continue;
+        }
+        match load_json_packument(&path) {
+            Some(pkg) => {
+                stats.from_json += 1;
+                // Self-healing: materialise the index we just derived, so this
+                // work is paid once. Hooking the fetch path proved brittle — the
+                // cache is written by more than one layer — whereas every caller
+                // that wants the resolver's view comes through here by definition.
+                if std::env::var_os("JAGR_NO_INDEX").is_none() {
+                    let _ = write_index_beside(&path, &pkg);
+                }
+                packages.insert(pkg.name.clone(), pkg);
+            }
+            None => stats.skipped += 1,
+        }
+    }
+    (ResolverIndex { packages }, stats)
+}
+
+/// The cache stores `W/"etag"\tgzip\n<gzip bytes>`; decode that and extract.
+fn load_json_packument(path: &std::path::Path) -> Option<IndexPackage> {
+    use std::io::Read;
+    let raw = std::fs::read(path).ok()?;
+    let body: &[u8] = match raw.iter().position(|b| *b == b'\n') {
+        Some(i) if raw[..i].windows(4).any(|w| w == b"gzip") => &raw[i + 1..],
+        _ => &raw[..],
+    };
+    let mut d = flate2::read::GzDecoder::new(body);
+    let mut buf = Vec::new();
+    if d.read_to_end(&mut buf).is_err() {
+        // Not gzipped: try the bytes as-is before giving up.
+        buf = body.to_vec();
+    }
+    let mut v: serde_json::Value = serde_json::from_slice(&buf).ok()?;
+    crate::registry::prune_packument_in_place(&mut v);
+    let name = v.get("name").and_then(|n| n.as_str())?.to_string();
+    Some(package_from_packument(&name, &v))
+}
+
+#[cfg(test)]
+mod store_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn write_packument(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+        let p = dir.join("abc.json");
+        std::fs::write(&p, body).unwrap();
+        p
+    }
+
+    #[test]
+    fn index_round_trips_beside_the_packument() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = write_packument(
+            tmp.path(),
+            r#"{"name":"a","versions":{"1.0.0":{"dependencies":{"b":"^1"}}}}"#,
+        );
+        let pkg = package_from_packument("a", &serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap());
+        write_index_beside(&p, &pkg).unwrap();
+        let back = read_index_beside(&p).expect("valid index");
+        assert_eq!(pkg, back);
+        assert_eq!(back.versions, vec!["1.0.0"]);
+    }
+
+    /// A changed packument must invalidate its index without being parsed.
+    #[test]
+    fn stale_index_is_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = write_packument(tmp.path(), r#"{"name":"a","versions":{"1.0.0":{}}}"#);
+        let pkg = package_from_packument("a", &json!({"versions":{"1.0.0":{}}}));
+        write_index_beside(&p, &pkg).unwrap();
+        assert!(read_index_beside(&p).is_some());
+
+        // Same mtime resolution, different length: still detected.
+        std::fs::write(&p, r#"{"name":"a","versions":{"1.0.0":{},"1.1.0":{}}}"#).unwrap();
+        assert!(
+            read_index_beside(&p).is_none(),
+            "index must not outlive its packument"
+        );
+    }
+
+    #[test]
+    fn truncated_or_missing_index_falls_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = write_packument(tmp.path(), r#"{"name":"a","versions":{"1.0.0":{}}}"#);
+        let pkg = package_from_packument("a", &json!({"versions":{"1.0.0":{}}}));
+        write_index_beside(&p, &pkg).unwrap();
+        let idx = index_path_for(&p);
+        let bytes = std::fs::read(&idx).unwrap();
+        for cut in [0usize, 8, 16, 24, bytes.len() / 2] {
+            std::fs::write(&idx, &bytes[..cut.min(bytes.len())]).unwrap();
+            assert!(read_index_beside(&p).is_none(), "cut {cut}");
+        }
+        std::fs::remove_file(&idx).unwrap();
+        assert!(read_index_beside(&p).is_none());
+    }
+}
+
+#[cfg(test)]
+mod loader_tests {
+    use super::*;
+    use std::io::Write;
+
+    fn gzip_cache_file(dir: &std::path::Path, name: &str, file: &str, body: &str) {
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(body.as_bytes()).unwrap();
+        let payload = gz.finish().unwrap();
+        let mut out = Vec::new();
+        out.extend_from_slice(b"W/\"x\"\tgzip\n");
+        out.extend_from_slice(&payload);
+        std::fs::write(dir.join(file), out).unwrap();
+        let _ = name;
+    }
+
+    /// Missing indexes are rebuilt from JSON on the spot: the accelerator must
+    /// never be a requirement.
+    #[test]
+    fn loader_falls_back_per_entry_and_counts_both() {
+        let tmp = tempfile::tempdir().unwrap();
+        gzip_cache_file(tmp.path(), "a", "a.json", r#"{"name":"a","versions":{"1.0.0":{}}}"#);
+        gzip_cache_file(
+            tmp.path(),
+            "b",
+            "b.json",
+            r#"{"name":"b","versions":{"2.0.0":{"dependencies":{"a":"^1"}}}}"#,
+        );
+        // Index only the first, leaving the second to JSON.
+        let a_path = tmp.path().join("a.json");
+        let a_pkg = package_from_packument("a", &serde_json::json!({"versions":{"1.0.0":{}}}));
+        write_index_beside(&a_path, &a_pkg).unwrap();
+
+        let (idx, stats) = load_cache_dir(tmp.path());
+        assert_eq!(stats.from_index, 1);
+        assert_eq!(stats.from_json, 1);
+        assert_eq!(idx.packages.len(), 2);
+        // Self-healing: the entry that came from JSON now has an index, so the
+        // next read is served entirely from indexes.
+        let (_, again) = load_cache_dir(tmp.path());
+        assert_eq!(again.from_index, 2, "loader must materialise what it parses");
+        assert_eq!(again.from_json, 0);
+        assert_eq!(idx.packages["b"].versions, vec!["2.0.0"]);
+        assert!(idx.packages["b"]
+            .deps
+            .iter()
+            .any(|e| e.target == "a" && e.spec == "^1"));
+    }
+
+    /// A stale index must cost a parse, not a wrong answer.
+    #[test]
+    fn stale_index_falls_back_to_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        gzip_cache_file(tmp.path(), "a", "a.json", r#"{"name":"a","versions":{"1.0.0":{}}}"#);
+        let a_path = tmp.path().join("a.json");
+        write_index_beside(
+            &a_path,
+            &package_from_packument("a", &serde_json::json!({"versions":{"1.0.0":{}}})),
+        )
+        .unwrap();
+        // Packument grows; its index is now stale.
+        gzip_cache_file(
+            tmp.path(),
+            "a",
+            "a.json",
+            r#"{"name":"a","versions":{"1.0.0":{},"1.1.0":{},"2.0.0":{}}}"#,
+        );
+        let (idx, stats) = load_cache_dir(tmp.path());
+        assert_eq!(stats.from_json, 1, "stale index must not be trusted");
+        assert_eq!(idx.packages["a"].versions.len(), 3);
     }
 }

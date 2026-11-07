@@ -11,7 +11,7 @@ Corpus: 275 packuments, 6,715 edges, 3,774 distinct `(target, spec)` pairs.
 
 | # | idea | verdict | measured |
 |---|---|---|---|
-| 1 | Binary version-space index (drop gunzip + JSON) | **built + measured: 67x on load, 5.3x end-to-end** | see below |
+| 1 | Binary version-space index (drop gunzip + JSON) | **landed: 28x on the cache view** | see below |
 | 2 | Capability-equivalence classes | **not yet justified** | chart build is mask-bound, not version-bound (see below) |
 | 3 | Time/policy as extra bitmap axes | **promising, unbuilt** | one extra `intersect` per axis |
 | 4 | Exactly-computed LCV ordering | **blocked** | search never runs on real trees (see blocker) |
@@ -76,6 +76,37 @@ Measured on 344 packuments / 34,899 edges / 2.27 MB of index:
 - Robustness: every read is bounds-checked; truncated, foreign-magic and
   trailing-byte blobs return `None` so the caller falls back to the packument
   instead of panicking.
+
+### The index is now a real cache layer, self-healing
+
+The write side started as a hook in the fetch path — and **never fired**: a real
+install wrote 63 packuments and 0 indexes, because the cache is written by more
+than one layer. Rather than add a second hook, the loader materialises what it
+parses: every caller that wants the resolver's view comes through
+`load_cache_dir`, so the accelerator installs itself the first time anything
+reads the cache.
+
+| reading 344 packuments (2.27 MB of index) | time |
+|---|---:|
+| JSON path (gunzip + parse + prune) | 426.0 ms |
+| cache view, first read (parses + writes indexes) | 57.4 ms |
+| **cache view, indexes present** | **15.2 ms** |
+
+Per-file validation is **stat-only** — length + mtime recorded in the header —
+because validating by hashing the packument would spend what the index exists to
+save. Stale, truncated, foreign-magic or trailing-byte blobs are rejected and the
+entry falls back to JSON, so a bad index costs one parse and never a wrong
+answer. Writes are atomic (temp + rename): a half-written index is never read.
+
+Tests: round-trip equality, staleness detection, truncation at five offsets,
+missing file, mixed cache (one entry from index, one from JSON, then both from
+index), and stale-index-rebuilds-from-JSON.
+
+**Honest status:** the live install path still parses JSON, because other
+consumers need the full packument (lockfile writing, integrity, lifecycle). What
+landed is the cache layer plus the measurement; the switch is to make the
+resolver's packument gather call `load_cache_dir` instead of the per-name JSON
+read.
 
 **A defect this work exposed:** `extract_deps` returns a `HashSet`-derived `Vec`,
 so a package's edge order depended on hashing — the solver is pure, but the chart

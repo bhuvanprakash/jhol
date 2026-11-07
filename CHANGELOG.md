@@ -1375,3 +1375,35 @@ chart from JSON, edge for edge, mask for mask) is what found it.
 
 `jhol-core` 646 tests, installer gate PASS. Next: wire the index into the
 registry cache (write/read beside each packument, keyed by its hash).
+
+
+## JAGR-∞: the binary index becomes a self-healing cache layer
+
+The first attempt at wiring the index hooked the packument fetch path — and it
+**never fired**. A real install wrote 63 packuments and 0 indexes, because the
+cache is written by more than one layer. Rather than add a second hook, the
+loader now materialises the index for anything it had to parse: every consumer of
+the resolver's view goes through `load_cache_dir`, so the accelerator installs
+itself on first read. The dead hook was deleted rather than left as noise.
+
+| reading 344 packuments (2.27 MB index) | time |
+|---|---:|
+| JSON (gunzip + parse + prune) | 426.0 ms |
+| cache view, first read (parses + writes indexes) | 57.4 ms |
+| cache view, indexes present | **15.2 ms** |
+
+Validation is stat-only (length + mtime in the header): hashing the packument
+would spend exactly what the index saves. Stale, truncated, foreign-magic or
+trailing-byte blobs fall back to JSON, so a bad index costs one parse and never a
+wrong answer; writes are atomic (temp + rename).
+
+Nine tests cover round trip, staleness, truncation at five offsets, missing file,
+mixed caches, and rebuild-from-JSON.
+
+Honest status: the live install path still parses JSON because other consumers
+need the full packument. What landed is the cache layer and its measurement; the
+remaining switch is to have the resolver gather packuments through
+`load_cache_dir`.
+
+`jhol-core` 651 tests, `jhol-treecheck` 12, installer gate PASS; express installs
+71 packages, warm runs report `Up to date`, tampering is repaired.

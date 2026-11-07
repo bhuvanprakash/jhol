@@ -74,6 +74,56 @@ fn main() {
         load_us as f64 / 1000.0
     );
 
+    // The read side: the resolver's view of the cache directory, using each
+    // `.idx` beside a packument when it is valid and falling back to
+    // gunzip+JSON when it is not.
+    {
+        let t = Instant::now();
+        let (idx, stats) = jhol_core::jagr_index::load_cache_dir(Path::new(&dir));
+        let load_us = t.elapsed().as_micros();
+        println!(
+            "[bench] cache view: {:.1} ms ({} from index, {} from json, {} skipped, {} packages)",
+            load_us as f64 / 1000.0,
+            stats.from_index,
+            stats.from_json,
+            stats.skipped,
+            idx.packages.len()
+        );
+        // Cold cache: write the indexes so the next run shows the warm number.
+        if stats.from_index == 0 {
+            let mut written = 0usize;
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for e in entries.flatten() {
+                    let p = e.path();
+                    if p.extension().map(|x| x != "json").unwrap_or(true) {
+                        continue;
+                    }
+                    let Ok(raw) = std::fs::read(&p) else { continue };
+                    let body: &[u8] = match raw.iter().position(|b| *b == b'\n') {
+                        Some(i) if raw[..i].windows(4).any(|w| w == b"gzip") => &raw[i + 1..],
+                        _ => &raw[..],
+                    };
+                    let mut d = flate2::read::GzDecoder::new(body);
+                    let mut buf = Vec::new();
+                    if d.read_to_end(&mut buf).is_err() {
+                        continue;
+                    }
+                    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&buf) else {
+                        continue;
+                    };
+                    let Some(name) = v.get("name").and_then(|n| n.as_str()) else {
+                        continue;
+                    };
+                    let pkg = jhol_core::jagr_index::package_from_packument(name, &v);
+                    if jhol_core::jagr_index::write_index_beside(&p, &pkg).is_ok() {
+                        written += 1;
+                    }
+                }
+            }
+            println!("[bench] wrote {} indexes; re-run for the warm number", written);
+        }
+    }
+
     // Binary index (idea 1): the resolver's facts without gunzip/JSON.
     {
         let t_build = Instant::now();

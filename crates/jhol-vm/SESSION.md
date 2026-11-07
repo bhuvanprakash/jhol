@@ -1971,3 +1971,22 @@ by the previous number, not by novelty.
 
 Still not wired into the live cache path: the reader/writer are tested, the
 integration point is the packument cache, and that is the next step.
+
+## Journal — 2026-11-07 (cont.): the index, second attempt — self-healing instead of hooks
+
+I wired the index writer into the packument fetch path and it never ran: a real
+install wrote 63 packuments and 0 indexes, because the cache has more than one
+writer. The lesson is not "find the other writer" — it is that a hook has to be
+placed where the data *actually* flows, and I could have known that by testing
+the write side before claiming it worked.
+
+Fix: make the loader self-healing. `load_cache_dir` writes the index for anything
+it had to parse, so the accelerator installs itself wherever the resolver's view
+is read. Real cache: 426 ms JSON -> 15.2 ms with indexes (28x). Stat-only
+validation (length + mtime) because hashing would spend what the index saves.
+
+Deleted the dead fetch hook rather than leave two mechanisms.
+
+Still not consumed by the live install path, because other consumers need full
+packuments; that switch is the next item, and it is now a one-line change at the
+gather site rather than an architecture question.
