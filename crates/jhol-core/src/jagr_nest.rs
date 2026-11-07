@@ -1,0 +1,613 @@
+//! Nested resolution: more than one version of a package per tree.
+//!
+//! ## Why this exists
+//!
+//! `rvm` resolves with **one domain per package**. That is the right model for a
+//! flat tree and the wrong model for npm's, where `chalk@4` for `jest-cli` and
+//! `chalk@2` for `log-symbols` coexist because `node_modules` is a tree of
+//! directories, not a set of names. Measured consequence: every real root
+//! (`jest`, `yargs`, `@types/node`) failed propagation with a genuine multi-major
+//! conflict. Historically the failure was hidden — bitmaps anchored at different
+//! ordinals were compared position-wise, silently accepting versions that
+//! violated a requirement — so the flat solver "worked" by being wrong.
+//!
+//! This module resolves **instances** instead of packages: a requirement creates
+//! an instance of the target, and only requirements whose ranges cannot share a
+//! version get a second instance. That is npm's nesting, expressed directly.
+//!
+//! ## What it is not
+//!
+//! Not a copy of any published algorithm. It is deliberately the smallest thing
+//! that can represent a multi-major tree, with three properties this project
+//! insists on:
+//!
+//! * **Deterministic** — the worklist and every instance map are ordered by name,
+//!   and version choice is "newest satisfying". The same manifest resolves to the
+//!   same instances on any machine.
+//! * **Explainable** — a conflict names the package, the range, and the chain of
+//!   dependents that demanded it, because the requirement records who asked.
+//! * **Bounded** — instance and step caps, so a pathological graph fails loudly
+//!   instead of growing without limit.
+//!
+//! ## Deliberate limits (documented, not forgotten)
+//!
+//! * Peers are recorded but do not constrain instances: npm installs and warns,
+//!   and making them binding would turn a working tree into a failure. The data
+//!   is kept so `--strict-peer-deps` and `jhol why` can use it.
+//! * Hoisting is a separate step: this produces the instance graph, not the
+//!   directory layout. `flatten_for_tree` gives the deterministic hoisting order.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+use serde_json::Value;
+
+/// One resolved package instance. The same `package` may appear more than once
+/// with different versions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Instance {
+    /// The package actually resolved.
+    pub package: String,
+    /// The name it is installed as. Differs from `package` for `npm:` aliases
+    /// (`"@jest/react-is-18": "npm:react-is@^18"` installs react-is under the
+    /// alias name), so the tree layout must use this.
+    pub installed_as: String,
+    /// The version chosen for this instance.
+    pub version: String,
+    /// Every requirement that this instance satisfies, as `(dependent, spec)`.
+    /// Sorted, so the derivation is stable and printable.
+    pub required_by: Vec<(String, String)>,
+}
+
+/// Why a requirement could not be satisfied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NestFailure {
+    /// The package has no packument in the supplied set. Not a resolution
+    /// failure: the caller fetches it and asks again.
+    MissingPackument,
+    /// The package is known but nothing it publishes satisfies the range.
+    Unsatisfiable,
+    /// A guard fired (instance or step cap).
+    Bounded,
+}
+
+/// A requirement that could not be satisfied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NestConflict {
+    pub failure: NestFailure,
+    pub package: String,
+    pub spec: String,
+    pub required_by: String,
+    /// Versions that exist but do not satisfy, newest first (max 6).
+    pub available: Vec<String>,
+}
+
+impl NestConflict {
+    /// True when retrying after fetching `package` could succeed.
+    pub fn needs_fetch(&self) -> bool {
+        self.failure == NestFailure::MissingPackument
+    }
+}
+
+impl NestConflict {
+    /// One-line explanation naming who asked for what.
+    pub fn describe(&self) -> String {
+        match self.failure {
+            NestFailure::MissingPackument => format!(
+                "{} (required by {}) has no metadata in this set; fetch it and retry",
+                self.package, self.required_by
+            ),
+            NestFailure::Unsatisfiable => format!(
+                "no version of {} satisfies {} (required by {}); published: [{}]",
+                self.package,
+                self.spec,
+                self.required_by,
+                self.available.join(", ")
+            ),
+            NestFailure::Bounded => format!(
+                "resolution on {} (required by {}) exceeded the instance or step budget",
+                self.package, self.required_by
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NestedResolution {
+    /// Instances in deterministic order (by package, then version descending).
+    pub instances: Vec<Instance>,
+    /// `(dependent key, package)` → index into `instances`. The dependent key is
+    /// `""` for a root requirement, or `package@version` for a dependency.
+    pub edges: BTreeMap<(String, String), usize>,
+    /// Peer requirements seen while resolving, for advisory reporting.
+    pub peers: Vec<(String, String, String)>,
+}
+
+impl NestedResolution {
+    /// Number of distinct packages that got more than one version.
+    pub fn duplicated_packages(&self) -> usize {
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for i in &self.instances {
+            *counts.entry(i.package.as_str()).or_default() += 1;
+        }
+        counts.values().filter(|c| **c > 1).count()
+    }
+
+    /// The version each package would occupy at the top of `node_modules` under a
+    /// simple hoisting rule: the instance required by the most dependents wins,
+    /// ties broken by highest version. Everything else stays nested under its
+    /// dependent. Deterministic by construction.
+    pub fn flatten_for_tree(&self) -> HashMap<String, String> {
+        let mut count: HashMap<&str, usize> = HashMap::new();
+        for i in &self.instances {
+            *count.entry(i.package.as_str()).or_default() += 1;
+        }
+        let mut best: HashMap<&str, (&Instance, usize)> = HashMap::new();
+        for i in &self.instances {
+            let demanders = i.required_by.len();
+            match best.get(i.package.as_str()) {
+                Some((cur, cur_demanders)) => {
+                    let better = demanders > *cur_demanders
+                        || (demanders == *cur_demanders
+                            && version_key(&i.version) > version_key(&cur.version));
+                    if better {
+                        best.insert(i.package.as_str(), (i, demanders));
+                    }
+                }
+                None => {
+                    best.insert(i.package.as_str(), (i, demanders));
+                }
+            }
+        }
+        best.into_iter()
+            .map(|(name, (inst, _))| (name.to_string(), inst.version.clone()))
+            .collect()
+    }
+}
+
+/// Expand an `npm:` alias requirement into the package it really names.
+///
+/// `"@jest/react-is-18": "npm:react-is@^18.2.0"` means "install react-is ^18.2.0
+/// under the name @jest/react-is-18". Without this the resolver asks the registry
+/// for `@jest/react-is-18`, which does not exist (HTTP 404), and a real jest tree
+/// stops there.
+fn expand_alias(name: &str, spec: &str) -> (String, String) {
+    let Some(rest) = spec.trim().strip_prefix("npm:") else {
+        return (name.to_string(), spec.to_string());
+    };
+    // Split at the last '@' so scoped reals (`npm:@scope/pkg@^1`) parse.
+    match rest.rsplit_once('@') {
+        Some((real, range)) if !real.is_empty() => {
+            let real = real.to_string();
+            let range = if range.trim().is_empty() {
+                "*".to_string()
+            } else {
+                range.to_string()
+            };
+            (real, range)
+        }
+        _ => (rest.to_string(), "*".to_string()),
+    }
+}
+
+fn version_key(v: &str) -> (u64, u64, u64, String) {
+    match semver::Version::parse(v) {
+        Ok(p) => (
+            p.major,
+            p.minor,
+            p.patch,
+            p.pre.as_str().to_string(),
+        ),
+        Err(_) => (0, 0, 0, v.to_string()),
+    }
+}
+
+/// Resolve a manifest into instances.
+///
+/// `roots` maps package name to the range the manifest asks for. The returned
+/// graph contains at least one instance per reachable package, as many more as
+/// the requirements demand, and a derivation per instance.
+pub fn resolve(
+    packuments: &HashMap<String, Value>,
+    roots: &HashMap<String, String>,
+) -> Result<NestedResolution, NestConflict> {
+    const MAX_INSTANCES: usize = 20_000;
+    const MAX_STEPS: usize = 200_000;
+
+    // Package name -> published versions (descending) plus per-version deps, read
+    // once. `None` means "not in the packument set": the caller decides whether
+    // that is fatal, we report it as a conflict with an empty published list.
+    struct Meta<'a> {
+        versions: Vec<String>,
+        deps: HashMap<&'a str, Vec<(&'a str, &'a str, bool)>>,
+        peers: HashMap<&'a str, Vec<(&'a str, &'a str)>>,
+    }
+    let mut meta: HashMap<&str, Meta> = HashMap::new();
+    for (name, doc) in packuments {
+        let Some(versions) = doc.get("versions").and_then(|v| v.as_object()) else {
+            continue;
+        };
+        let mut sorted: Vec<(semver::Version, String)> = versions
+            .keys()
+            .filter_map(|k| semver::Version::parse(k).ok().map(|v| (v, k.clone())))
+            .collect();
+        sorted.sort_by(|a, b| b.0.cmp(&a.0)); // newest first
+        let mut deps: HashMap<&str, Vec<(&str, &str, bool)>> = HashMap::new();
+        let mut peers: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
+        for (_parsed, ver) in &sorted {
+            // Borrow the key from the packument, not from `sorted`, so the maps
+            // outlive this loop.
+            let Some((vkey, info)) = versions.get_key_value(ver.as_str()) else {
+                continue;
+            };
+            let mut d = Vec::new();
+            for (section, optional) in
+                [("dependencies", false), ("optionalDependencies", true)]
+            {
+                if let Some(map) = info.get(section).and_then(|v| v.as_object()) {
+                    for (t, s) in map {
+                        // Targets that are not in the packument set are checked
+                        // when the edge is expanded, where "optional" is known.
+                        d.push((t.as_str(), s.as_str().unwrap_or("*"), optional));
+                    }
+                }
+            }
+            deps.insert(vkey.as_str(), d);
+            if let Some(map) = info.get("peerDependencies").and_then(|v| v.as_object()) {
+                peers.insert(
+                    vkey.as_str(),
+                    map.iter()
+                        .map(|(t, s)| (t.as_str(), s.as_str().unwrap_or("*")))
+                        .collect(),
+                );
+            }
+        }
+        meta.insert(
+            name.as_str(),
+            Meta {
+                versions: sorted.into_iter().map(|(_, k)| k).collect(),
+                deps,
+                peers,
+            },
+        );
+    }
+
+    // Instances: index -> (package, version, required_by).
+    let mut instances: Vec<Instance> = Vec::new();
+    // package -> indices of its instances
+    let mut by_package: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut edges: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let mut peers_seen: BTreeSet<(String, String, String)> = BTreeSet::new();
+
+    // Worklist of requirements, processed in a deterministic order: sorted roots,
+    // then dependencies in sorted (name, spec) order per instance.
+    let mut queue: std::collections::VecDeque<(String, String, String)> =
+        std::collections::VecDeque::new();
+    for (name, spec) in roots.iter() {
+        queue.push_back((name.clone(), spec.clone(), String::new()));
+    }
+    queue.make_contiguous().sort();
+
+    let mut steps = 0usize;
+    while let Some((target, spec, dependent)) = queue.pop_front() {
+        steps += 1;
+        if steps > MAX_STEPS {
+            return Err(NestConflict {
+                failure: NestFailure::Bounded,
+                package: target,
+                spec,
+                required_by: dependent,
+                available: Vec::new(),
+            });
+        }
+        // `npm:` aliases resolve the real package under an alternate name.
+        let (lookup, lookup_spec) = expand_alias(&target, &spec);
+        if lookup != target {
+            let Some(real_meta) = meta.get(lookup.as_str()) else {
+                return Err(NestConflict {
+                    failure: NestFailure::MissingPackument,
+                    package: lookup,
+                    spec: lookup_spec,
+                    required_by: dependent,
+                    available: Vec::new(),
+                });
+            };
+            let _ = real_meta;
+        }
+        let Some(meta) = meta.get(lookup.as_str()) else {
+            // No metadata for this package: the caller fetches and retries.
+            return Err(NestConflict {
+                failure: NestFailure::MissingPackument,
+                package: target,
+                spec,
+                required_by: dependent,
+                available: Vec::new(),
+            });
+        };
+
+        // Reuse an existing instance whose version satisfies this requirement.
+        let compiled = crate::registry::compile_spec(&lookup_spec);
+        let existing = by_package.get(&lookup).and_then(|ids| {
+            ids.iter().copied().find(|i| {
+                semver::Version::parse(&instances[*i].version)
+                    .map(|v| compiled.matches(&v))
+                    .unwrap_or(false)
+            })
+        });
+        let idx = match existing {
+            Some(idx) => idx,
+            None => {
+                // Newest published version that satisfies the requirement.
+                let chosen = meta.versions.iter().find(|v| {
+                    semver::Version::parse(v)
+                        .map(|p| compiled.matches(&p))
+                        .unwrap_or(false)
+                });
+                let Some(chosen) = chosen.cloned() else {
+                    let mut available: Vec<String> = meta.versions.iter().take(6).cloned().collect();
+                    available.sort_by(|a, b| version_key(b).cmp(&version_key(a)));
+                    return Err(NestConflict {
+                        failure: NestFailure::Unsatisfiable,
+                        package: target,
+                        spec,
+                        required_by: dependent,
+                        available,
+                    });
+                };
+                if instances.len() >= MAX_INSTANCES {
+                    return Err(NestConflict {
+                        failure: NestFailure::Bounded,
+                        package: target,
+                        spec,
+                        required_by: dependent,
+                        available: Vec::new(),
+                    });
+                }
+                let idx = instances.len();
+                instances.push(Instance {
+                    package: lookup.clone(),
+                    installed_as: target.clone(),
+                    version: chosen.clone(),
+                    required_by: Vec::new(),
+                });
+                by_package.entry(lookup.clone()).or_default().push(idx);
+
+                // Enqueue this instance's own dependencies, sorted for
+                // determinism, before moving on.
+                let key = format!("{}@{}", target, chosen);
+                let mut child: Vec<(String, String, bool)> = meta
+                    .deps
+                    .get(chosen.as_str())
+                    .map(|d| {
+                        d.iter()
+                            .map(|(t, s, opt)| (t.to_string(), s.to_string(), *opt))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                child.sort();
+                for (dep_name, dep_spec, optional) in child {
+                    // Check availability under the *real* name: an `npm:` alias
+                    // points at a package that exists, under a name that does
+                    // not. Enqueue the alias name so `installed_as` is preserved.
+                    let (real, _) = expand_alias(&dep_name, &dep_spec);
+                    if !packuments.contains_key(&real) {
+                        if optional {
+                            continue; // optional edge to an unavailable package
+                        }
+                        return Err(NestConflict {
+                            failure: NestFailure::MissingPackument,
+                            package: dep_name,
+                            spec: dep_spec,
+                            required_by: key,
+                            available: Vec::new(),
+                        });
+                    }
+                    queue.push_back((dep_name, dep_spec, key.clone()));
+                }
+                // Peers: recorded, not binding (see module docs).
+                if let Some(ps) = meta.peers.get(chosen.as_str()) {
+                    for (p, s) in ps {
+                        peers_seen.insert((key.clone(), (*p).to_string(), (*s).to_string()));
+                    }
+                }
+                idx
+            }
+        };
+
+        // Record the derivation and the edge from the dependent.
+        let demander = if dependent.is_empty() {
+            "<root>".to_string()
+        } else {
+            dependent.clone()
+        };
+        if !instances[idx]
+            .required_by
+            .iter()
+            .any(|(d, s)| d == &demander && s == &spec)
+        {
+            instances[idx].required_by.push((demander, spec.clone()));
+            instances[idx].required_by.sort();
+        }
+        edges.insert((dependent, target), idx);
+    }
+
+    // Deterministic instance order for callers and for diffs.
+    let mut order: Vec<usize> = (0..instances.len()).collect();
+    order.sort_by(|a, b| {
+        let ia = &instances[*a];
+        let ib = &instances[*b];
+        (ia.package.as_str(), std::cmp::Reverse(version_key(&ia.version)))
+            .cmp(&(ib.package.as_str(), std::cmp::Reverse(version_key(&ib.version))))
+    });
+    // Remap indices through the sorted order.
+    let mut remap = vec![0usize; instances.len()];
+    for (new_idx, old_idx) in order.iter().enumerate() {
+        remap[*old_idx] = new_idx;
+    }
+    let sorted_instances: Vec<Instance> = order.iter().map(|i| instances[*i].clone()).collect();
+    let edges = edges
+        .into_iter()
+        .map(|(k, v)| (k, remap[v]))
+        .collect::<BTreeMap<_, _>>();
+
+    Ok(NestedResolution {
+        instances: sorted_instances,
+        edges,
+        peers: peers_seen.into_iter().collect(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn pk(name: &str, versions: &[(&str, &[(&str, &str)])]) -> Value {
+        let mut v = serde_json::Map::new();
+        for (ver, deps) in versions {
+            let mut d = serde_json::Map::new();
+            for (t, s) in *deps {
+                d.insert((*t).to_string(), json!(s));
+            }
+            v.insert(
+                (*ver).to_string(),
+                json!({ "version": ver, "dependencies": d }),
+            );
+        }
+        json!({ "name": name, "versions": v })
+    }
+
+    /// The whole point: two dependents that need incompatible majors both get a
+    /// version, which a flat resolve cannot do.
+    #[test]
+    fn resolves_two_majors_of_the_same_package() {
+        let packuments = HashMap::from([
+            (
+                "app".to_string(),
+                pk(
+                    "app",
+                    &[("1.0.0", &[("modern", "^1.0.0"), ("legacy", "^1.0.0")])],
+                ),
+            ),
+            (
+                "modern".to_string(),
+                pk("modern", &[("1.0.0", &[("chalk", "^5.0.0")])]),
+            ),
+            (
+                "legacy".to_string(),
+                pk("legacy", &[("1.0.0", &[("chalk", "^2.0.0")])]),
+            ),
+            (
+                "chalk".to_string(),
+                pk("chalk", &[("2.4.2", &[]), ("5.3.0", &[])]),
+            ),
+        ]);
+        let roots = HashMap::from([("app".to_string(), "^1.0.0".to_string())]);
+        let resolved = resolve(&packuments, &roots).expect("multi-major tree resolves");
+
+        let chalks: Vec<&str> = resolved
+            .instances
+            .iter()
+            .filter(|i| i.package == "chalk")
+            .map(|i| i.version.as_str())
+            .collect();
+        assert_eq!(chalks, vec!["5.3.0", "2.4.2"], "newest first, both majors");
+        assert_eq!(resolved.duplicated_packages(), 1);
+
+        // The derivation says who demanded which.
+        let old = resolved
+            .instances
+            .iter()
+            .find(|i| i.package == "chalk" && i.version == "2.4.2")
+            .unwrap();
+        assert_eq!(
+            old.required_by,
+            vec![("legacy@1.0.0".to_string(), "^2.0.0".to_string())]
+        );
+        // Hoisting picks the most-demanded version for the top level.
+        let flat = resolved.flatten_for_tree();
+        assert_eq!(flat.get("chalk").map(|s| s.as_str()), Some("5.3.0"));
+    }
+
+    /// Compatible requirements share one instance: nesting is a cost, not a habit.
+    #[test]
+    fn compatible_requirements_share_an_instance() {
+        let packuments = HashMap::from([
+            (
+                "app".to_string(),
+                pk("app", &[("1.0.0", &[("a", "^1.0.0"), ("b", "^1.0.0")])]),
+            ),
+            (
+                "a".to_string(),
+                pk("a", &[("1.0.0", &[("shared", "^2.0.0")])]),
+            ),
+            (
+                "b".to_string(),
+                pk("b", &[("1.0.0", &[("shared", "^2.1.0")])]),
+            ),
+            (
+                "shared".to_string(),
+                pk("shared", &[("2.0.0", &[]), ("2.1.0", &[])]),
+            ),
+        ]);
+        let roots = HashMap::from([("app".to_string(), "*".to_string())]);
+        let resolved = resolve(&packuments, &roots).unwrap();
+        let shared: Vec<&str> = resolved
+            .instances
+            .iter()
+            .filter(|i| i.package == "shared")
+            .map(|i| i.version.as_str())
+            .collect();
+        assert_eq!(shared, vec!["2.1.0"], "one instance satisfying both");
+        assert_eq!(resolved.duplicated_packages(), 0);
+        assert_eq!(
+            resolved.instances.iter().find(|i| i.package == "shared").unwrap().required_by.len(),
+            2,
+            "both dependents recorded on the shared instance"
+        );
+    }
+
+    /// A genuinely unsatisfiable range fails with the chain, not a shrug.
+    #[test]
+    fn unsatisfiable_range_reports_the_chain() {
+        let packuments = HashMap::from([
+            ("app".to_string(), pk("app", &[("1.0.0", &[("dep", "^9.0.0")])])),
+            ("dep".to_string(), pk("dep", &[("1.0.0", &[])])),
+        ]);
+        let roots = HashMap::from([("app".to_string(), "*".to_string())]);
+        let err = resolve(&packuments, &roots).unwrap_err();
+        assert_eq!(err.package, "dep");
+        assert_eq!(err.spec, "^9.0.0");
+        assert_eq!(err.required_by, "app@1.0.0");
+        assert!(err.describe().contains("published: [1.0.0]"));
+    }
+
+    /// Same manifest, same graph — regardless of map insertion order.
+    #[test]
+    fn determinism_across_insertion_order() {
+        let pkgs: Vec<(String, Value)> = vec![
+            ("app".to_string(), pk("app", &[("1.0.0", &[("x", "^1"), ("y", "^1")])])),
+            ("x".to_string(), pk("x", &[("1.0.0", &[("z", "^1")])])),
+            ("y".to_string(), pk("y", &[("1.0.0", &[("z", "^2")])])),
+            ("z".to_string(), pk("z", &[("1.5.0", &[]), ("2.5.0", &[])])),
+        ];
+        let roots = HashMap::from([("app".to_string(), "*".to_string())]);
+
+        let a: HashMap<String, Value> = pkgs.iter().cloned().collect();
+        let b: HashMap<String, Value> = pkgs.iter().rev().cloned().collect();
+        let ra = resolve(&a, &roots).unwrap();
+        let rb = resolve(&b, &roots).unwrap();
+        assert_eq!(ra.instances, rb.instances);
+    }
+
+    #[test]
+    fn optional_edges_to_missing_packages_are_dropped() {
+        let packuments = HashMap::from([(
+            "app".to_string(),
+            json!({ "name": "app", "versions": { "1.0.0": {
+                "optionalDependencies": { "not-published": "^1" } } } }),
+        )]);
+        let roots = HashMap::from([("app".to_string(), "*".to_string())]);
+        let resolved = resolve(&packuments, &roots).expect("optional gap is not fatal");
+        assert_eq!(resolved.instances.len(), 1);
+    }
+}

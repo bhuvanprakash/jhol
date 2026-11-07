@@ -161,6 +161,71 @@ fn main() {
         );
     }
 
+    // Nested (per-dependent instances): the multi-major path, with the
+    // fetch-and-retry loop a real install performs.
+    {
+        let t = Instant::now();
+        let mut world = packuments.clone();
+        let mut fetches = 0usize;
+        let mut outcome = jhol_core::jagr_nest::resolve(&world, &deps);
+        loop {
+            match outcome {
+                Ok(_) => break,
+                Err(ref e) if e.needs_fetch() && fetches < 600 => {
+                    fetches += 1;
+                    let name = e.package.clone();
+                    match jhol_core::registry::fetch_metadata(&name) {
+                        Ok(mut doc) => {
+                            jhol_core::registry::prune_packument_in_place(&mut doc);
+                            world.insert(name, doc);
+                        }
+                        Err(err) => {
+                            println!("[bench] fetch {name} failed: {err}");
+                            break;
+                        }
+                    }
+                    outcome = jhol_core::jagr_nest::resolve(&world, &deps);
+                }
+                Err(_) => break,
+            }
+        }
+        if fetches > 0 {
+            println!("[bench] nested: fetched {} additional packuments", fetches);
+        }
+        match outcome {
+            Ok(r) => {
+                println!(
+                    "[bench] nested: {} instances across {} packages, {} packages with >1 version, {:.1} ms",
+                    r.instances.len(),
+                    r.flatten_for_tree().len(),
+                    r.duplicated_packages(),
+                    t.elapsed().as_secs_f64() * 1000.0
+                );
+                let mut dups: Vec<String> = Vec::new();
+                for name in r.flatten_for_tree().keys() {
+                    let vs: Vec<&str> = r
+                        .instances
+                        .iter()
+                        .filter(|i| &i.package == name)
+                        .map(|i| i.version.as_str())
+                        .collect();
+                    if vs.len() > 1 {
+                        dups.push(format!("{}: {}", name, vs.join(", ")));
+                    }
+                }
+                dups.sort();
+                for d in dups.iter().take(6) {
+                    println!("[bench]   nested {d}");
+                }
+            }
+            Err(e) if e.needs_fetch() => println!(
+                "[bench] nested: needs fetch of {} (required by {}); retry after fetching",
+                e.package, e.required_by
+            ),
+            Err(e) => println!("[bench] nested conflict: {}", e.describe()),
+        }
+    }
+
     let (selection, s, err) = jhol_core::jagr_infinite::select_versions_stats(&packuments, &deps);
     println!(
         "[bench] packages={} edges={} distinct_specs={} | chart={:.1} ms propagate={:.1} ms search={:.1} ms | selected={} total={:.1} ms",

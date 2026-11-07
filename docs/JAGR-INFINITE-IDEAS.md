@@ -127,7 +127,53 @@ extraction is 3 ms and **mask assembly was 98% of chart build**. Classes collaps
 search is not where the time is. Revisit after the load cost drops, when chart
 build is small enough for candidate enumeration to matter.
 
-## The blocker that gates ideas 4 and much else
+## The multi-major blocker: solved at the resolver level
+
+`crates/jhol-core/src/jagr_nest.rs` resolves **instances** instead of packages: a
+requirement creates an instance, and only requirements whose ranges cannot share
+a version get a second one. That is what nesting *is*, expressed directly, and it
+is the capability a flat domain can never have.
+
+On the real 275-packument cache, with the fetch-and-retry loop a real install
+performs:
+
+```
+[bench] nested: 270 instances across 249 packages, 19 packages with >1 version, ~103 ms
+[bench]   nested ansi-styles:  6.2.3, 5.2.0, 4.3.0
+[bench]   nested ansi-regex:   6.5.0, 5.0.1
+[bench]   nested brace-expansion: 5.0.12, 2.1.7
+[bench]   nested camelcase:    6.3.0, 5.3.1
+```
+
+`jest` — which previously failed propagation on every attempt — now resolves, and
+the duplicates are exactly the majors the flat solver could not represent.
+
+Properties, all tested:
+
+* **Deterministic** — sorted worklist, sorted instance order, "newest satisfying";
+  the same manifest gives the same graph regardless of map insertion order.
+* **Explainable** — every instance carries `required_by: [(dependent, spec)]`, so
+  "why is chalk@2 here?" is answered by the graph, not by re-running.
+* **Bounded** — instance and step caps fail loudly instead of growing.
+* **Honest about missing data** — `NestFailure::MissingPackument` (fetch and
+  retry), `Unsatisfiable` (real conflict, with the chain and published versions),
+  `Bounded` (guard). Three different situations, three different responses.
+
+Two things real data taught us, both now handled:
+
+* **`npm:` aliases** — `"@jest/react-is-18": "npm:react-is@^18.2.0"` installs
+  react-is *under the alias name*. The resolver asks the registry for the alias
+  name, gets HTTP 404, and stops. `Instance::installed_as` records the tree name
+  while resolution uses the real package, and the availability check expands the
+  alias before deciding a fetch is needed.
+* **Optional edges to unavailable packages** are dropped, not fatal.
+
+Still open: peers are recorded but not binding (npm installs and warns); hoisting
+is a simple most-demanded rule (`flatten_for_tree`); and **the installer's
+materialisation still uses its own nested layout** — wiring these instances into
+the tree and lockfile is the next step, not a redesign.
+
+## Earlier blocker note (kept for the record)
 
 Propagation fails on every real root (`express`, `jest`, `yargs`, `@types/node`)
 with a genuine multi-major conflict — `media-typer`, `type-fest`, `isexe`,

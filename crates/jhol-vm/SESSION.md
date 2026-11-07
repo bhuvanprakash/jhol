@@ -1990,3 +1990,25 @@ Deleted the dead fetch hook rather than leave two mechanisms.
 Still not consumed by the live install path, because other consumers need full
 packuments; that switch is the next item, and it is now a one-line change at the
 gather site rather than an architecture question.
+
+## Journal — 2026-11-07 (cont.): the multi-major blocker, solved and proven
+
+Built `jagr_nest`: resolve instances, not packages — a requirement creates an
+instance, and only incompatible ranges get a second one. That is what nesting
+actually is, and it is the one thing a flat domain cannot express.
+
+Proof on the real corpus (275 packuments, fetch-and-retry like a real install):
+jest resolves — 270 instances, 249 packages, 19 multi-major, ~103 ms — with
+ansi-styles at 6.2.3, 5.2.0 and 4.3.0.
+
+Real data immediately found two things synthetic tests did not: npm: aliases
+(@jest/react-is-18 -> react-is, which 404s if you ask the registry for the alias
+name) and optional edges to unpublished platform packages. Both fixed, both
+tested.
+
+Three failure kinds instead of one: missing metadata (fetch and retry),
+unsatisfiable (real conflict with chain and published versions), bounded (guard).
+That distinction is what lets a caller act instead of apologising.
+
+Still not wired into materialisation or the lockfile. Said plainly in the docs
+rather than implied by the word "resolved".

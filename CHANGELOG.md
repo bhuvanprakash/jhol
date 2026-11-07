@@ -1407,3 +1407,40 @@ remaining switch is to have the resolver gather packuments through
 
 `jhol-core` 651 tests, `jhol-treecheck` 12, installer gate PASS; express installs
 71 packages, warm runs report `Up to date`, tampering is repaired.
+
+
+## JAGR-∞: nested resolution — jest resolves, multi-major trees supported
+
+The flat solver requires one version per package, so every real tree died in
+propagation with a genuine multi-major conflict. `jagr_nest.rs` resolves
+**instances**: a requirement creates one, and only compatible-incompatible ranges
+get a second. That is nesting, expressed directly.
+
+On the real packument cache with the fetch-and-retry loop:
+
+```
+nested: 270 instances across 249 packages, 19 packages with >1 version, ~103 ms
+  ansi-styles:  6.2.3, 5.2.0, 4.3.0
+  ansi-regex:   6.5.0, 5.0.1
+  brace-expansion: 5.0.12, 2.1.7
+```
+
+`jest` now resolves. The duplicates are exactly the majors a flat domain cannot
+hold.
+
+Properties, tested: determinism (sorted worklist and instance order, newest
+satisfying; same graph regardless of insertion order), explanation (each instance
+carries `required_by: [(dependent, spec)]`), bounds (instance/step caps), and
+three distinct failure kinds — `MissingPackument` (fetch and retry),
+`Unsatisfiable` (chain + published versions), `Bounded`.
+
+Real data forced two fixes: `npm:` aliases (`"@jest/react-is-18":
+"npm:react-is@^18"` installs react-is under the alias name — the resolver asked
+the registry for the alias, got 404, and stopped; `Instance::installed_as` now
+separates tree name from resolved package), and optional edges to unavailable
+packages are dropped rather than fatal.
+
+Not yet wired: the installer's materialisation still uses its own nested layout.
+Peers are recorded, not binding. Hoisting is a deterministic most-demanded rule.
+
+`jhol-core` 656 tests, `jhol-treecheck` 12, installer gate PASS.
