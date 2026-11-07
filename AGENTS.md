@@ -6944,3 +6944,17 @@ Watch-outs recorded:
   instead of emitting hundreds of rm errors. Not fixed yet.
 
 Result: 34/34 real packages install (was 23/34). Gates PASS.
+
+## Journal — 2026-11-07 (cont.): engine tests, cold wins, warm gap
+
+Added the 7 tests the propagation rewrite was missing (they live in
+`rvm::exec::tests::engine` and use `atlas::build_chart_from_constraints` to
+build small charts by hand). Suite 621 -> 628.
+
+Measured cold install twice with isolated `JHOL_CACHE_DIR` /
+`BUN_INSTALL_CACHE_DIR`: jhol ahead 4/5 then 5/5, jest 12.7s -> 2.5s. Warm is
+still bun's by 4-17x because `install <pkg> --no-save` re-resolves (no
+lockfile to bind). That is the next perf item.
+
+Watch-out: `build_chart_from_constraints` lives in `atlas`, not `chart` — three
+wrong import paths before it compiled. Read the module header, not the fn name.

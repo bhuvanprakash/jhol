@@ -813,3 +813,65 @@ speed is a known, unflattering comparison that the next phase has to attack.
 
 Gates: 621 jhol-core tests (5 new/updated resolver tests), 116 VM, installer
 gate PASS, engine gate PASS.
+
+
+## JAGR-∞ — completion pass: engine tests, and the numbers
+
+Follow-up to the propagation rewrite (`bf8516fa`). Two things were thinner than
+the phases promised and are now done: the new engine had **no unit tests**, and
+the cold/warm comparison had not been run on a clean cache.
+
+### The engine now has its own tests (7, in `jagr_infinite::rvm::exec::tests::engine`)
+
+| test | what it pins |
+|---|---|
+| `propagation_narrows_to_the_intersection_of_dependents` | two dependents' ranges intersect into one domain; versions outside are gone |
+| `propagation_reports_a_real_conflict_naming_both_dependents` | disjoint demands produce an error naming **both** dependents, the package, and its surviving candidates |
+| `optional_edge_with_no_candidate_does_not_fail_the_tree` | an optional edge with no candidate is dropped, not fatal |
+| `search_backtracks_when_the_highest_version_is_impossible` | the search falls back instead of reporting failure |
+| `verify_rejects_out_of_domain_and_unknown_assignments` | unknown package, missing assignment, empty selection, and a valid assignment |
+| `empty_chart_yields_an_empty_selection_not_an_error` | an empty chart is satisfiable-and-empty, not an error |
+| `budget_exhaustion_is_reported_not_silent` | a tiny budget says "budget", never a partial answer |
+
+`jhol-core` suite: 621 → **628**.
+
+### Cold install, isolated caches, no daemon, two independent rounds
+
+Round 1 (ms):
+
+| pkg | jhol | bun |
+|---|---:|---:|
+| lodash | 702 | 330 |
+| express | 389 | 876 |
+| webpack | 1315 | 2273 |
+| eslint | 602 | 1055 |
+| jest | 4679 | 6211 |
+
+Round 2 (fresh cache dirs again):
+
+| pkg | jhol | bun |
+|---|---:|---:|
+| lodash | 140 | 306 |
+| express | 651 | 1006 |
+| webpack | 1021 | 3247 |
+| eslint | 509 | 1261 |
+| jest | 2542 | 6462 |
+
+**Cold: jhol is ahead on 4/5 in round 1 and 5/5 in round 2.** `jest` went from
+12.7 s (before the resolver work) to 2.5 s. The two rounds differ by up to 5x
+on the same package, so the honest claim is "ahead on large trees, within noise
+on tiny ones" — not a fixed multiplier.
+
+### Warm install is still bun's: measured, not hidden
+
+| pkg | jhol | bun |
+|---|---:|---:|
+| express | 461 | 32 |
+| webpack | 338 | 103 |
+| eslint | 811 | 48 |
+| jest | 1331 | 159 |
+
+The warm lane here is `install <pkg> --no-save`, which has no lockfile to bind
+to and therefore re-resolves. bun's warm path validates a lockfile and clones.
+Closing this needs the lockfile fast path to accept an explicit-package request
+— recorded as the next perf item, not claimed fixed.

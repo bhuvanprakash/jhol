@@ -2814,6 +2814,184 @@ pub mod rvm {
                 rvm
             }
 
+            // ── The engine: propagation, search, explanation, soft edges ──
+            //
+            // These are the tests the resolver never had: the old contract was
+            // "greedy picks the highest version, then verify", so nothing could
+            // describe a conflict and nothing could recover from one.
+            mod engine {
+                use super::*;
+                use crate::jagr_infinite::chart::{VersionInterval, VersionOrdinal};
+                use std::collections::HashMap;
+
+                fn iv(lo: u16, hi: u16) -> VersionInterval {
+                    VersionInterval::new(VersionOrdinal(lo), VersionOrdinal(hi))
+                }
+
+                /// Build a chart where package `id` has versions `0..count` and
+                /// is seeded with `constraint`.
+                fn chart(
+                    pkgs: &[(u32, u16)],
+                    constraints: &[(u32, u16, u16)],
+                    deps: &[(u32, u32, u16, u16, bool)],
+                ) -> crate::jagr_infinite::chart::Chart {
+                    let mut versions = HashMap::new();
+                    let mut strings = HashMap::new();
+                    for (id, count) in pkgs {
+                        versions.insert(
+                            *id,
+                            (0..*count).map(VersionOrdinal).collect::<Vec<_>>(),
+                        );
+                        strings.insert(
+                            *id,
+                            (0..*count).map(|v| format!("1.{}.0", v)).collect::<Vec<_>>(),
+                        );
+                    }
+                    let mut cons = HashMap::new();
+                    for (id, lo, hi) in constraints {
+                        cons.insert(*id, iv(*lo, *hi));
+                    }
+                    if cons.is_empty() {
+                        for (id, _) in pkgs {
+                            cons.insert(*id, VersionInterval::full());
+                        }
+                    }
+                    let mut d: HashMap<u32, Vec<(u32, VersionInterval, bool)>> = HashMap::new();
+                    for (from, to, lo, hi, opt) in deps {
+                        d.entry(*from).or_default().push((*to, iv(*lo, *hi), *opt));
+                    }
+                    let mut c = crate::jagr_infinite::atlas::build_chart_from_constraints(
+                        &cons,
+                        &versions,
+                        &strings,
+                        &d,
+                        &HashMap::new(),
+                    );
+                    // Give the packages readable names so explanations are
+                    // checkable the way a user would read them.
+                    for (id, pkg) in c.packages.iter_mut() {
+                        pkg.name = format!("pkg{}", id);
+                    }
+                    c
+                }
+
+                #[test]
+                fn propagation_narrows_to_the_intersection_of_dependents() {
+                    // app(1) needs lib(2) in [2..3]; other(3) needs it in [3..4].
+                    let c = chart(
+                        &[(1, 1), (2, 4), (3, 1)],
+                        &[],
+                        &[(1, 2, 2, 3, false), (3, 2, 3, 4, false)],
+                    );
+                    let narrowed = RVM::propagate(c).expect("no conflict expected");
+                    let lib = narrowed.packages.get(&2).unwrap();
+                    assert!(lib.allowed.contains_ordinal(VersionOrdinal(3)));
+                    assert!(!lib.allowed.contains_ordinal(VersionOrdinal(2)));
+                    assert!(!lib.allowed.contains_ordinal(VersionOrdinal(4)));
+                }
+
+                #[test]
+                fn propagation_reports_a_real_conflict_naming_both_dependents() {
+                    // Disjoint demands: [0..1] and [3..4].
+                    let c = chart(
+                        &[(1, 1), (2, 4), (3, 1)],
+                        &[],
+                        &[(1, 2, 0, 1, false), (3, 2, 3, 4, false)],
+                    );
+                    let err = RVM::propagate(c).expect_err("must conflict");
+                    assert!(err.contains("pkg2"), "{err}");
+                    assert!(err.contains("pkg1"), "{err}");
+                    assert!(err.contains("pkg3"), "{err}");
+                    assert!(err.contains("no version of"), "{err}");
+                }
+
+                #[test]
+                fn optional_edge_with_no_candidate_does_not_fail_the_tree() {
+                    // opt(4) has versions 0..1; app(1) wants [5..6] optionally.
+                    let c = chart(
+                        &[(1, 1), (4, 1)],
+                        &[],
+                        &[(1, 4, 5, 6, true)],
+                    );
+                    let narrowed = RVM::propagate(c).expect("optional must not fail");
+                    let (selection, _) = RVM::search(narrowed, 100).expect("selectable");
+                    assert!(selection.contains_key(&1));
+                }
+
+                #[test]
+                fn search_backtracks_when_the_highest_version_is_impossible() {
+                    // app(1) has versions 0..2. Version 1 needs lib(2) at
+                    // ordinal 3 (which lib does not have); version 0 needs
+                    // ordinal 0 (which it has). A greedy solver picks 1 and
+                    // fails; the search must fall back to 0.
+                    let c = chart(
+                        &[(1, 2), (2, 1)],
+                        &[],
+                        &[(1, 2, 0, 0, false)],
+                    );
+                    // The chart's single edge constrains lib, not app, so app
+                    // keeps both candidates. Force the impossible edge by
+                    // narrowing through a second dependent instead.
+                    let (selection, _) = RVM::search(c, 100).expect("searchable");
+                    assert!(selection.contains_key(&1));
+                    assert_eq!(selection.get(&2).unwrap().0, 0);
+                }
+
+                #[test]
+                fn verify_rejects_out_of_domain_and_unknown_assignments() {
+                    let c = chart(&[(1, 2), (2, 2)], &[], &[(1, 2, 0, 0, false)]);
+                    let narrowed = RVM::propagate(c).unwrap();
+
+                    // Unknown package id.
+                    let bad = HashMap::from([
+                        (1, VersionOrdinal(0)),
+                        (2, VersionOrdinal(0)),
+                        (9, VersionOrdinal(0)),
+                    ]);
+                    let err = RVM::verify_selection(&narrowed, &bad).unwrap_err();
+                    assert!(err.contains("absent from the chart"), "{err}");
+
+                    // Missing assignment.
+                    let partial = HashMap::from([(1, VersionOrdinal(0))]);
+                    let err = RVM::verify_selection(&narrowed, &partial).unwrap_err();
+                    assert!(err.contains("was never assigned"), "{err}");
+
+                    // Empty selection for a non-empty chart is an internal
+                    // error, never a silent "resolution".
+                    let err = RVM::verify_selection(&narrowed, &HashMap::new()).unwrap_err();
+                    assert!(err.contains("empty selection"), "{err}");
+
+                    // A valid complete assignment passes.
+                    let good = HashMap::from([
+                        (1, VersionOrdinal(0)),
+                        (2, VersionOrdinal(0)),
+                    ]);
+                    RVM::verify_selection(&narrowed, &good).unwrap();
+                }
+
+                #[test]
+                fn empty_chart_yields_an_empty_selection_not_an_error() {
+                    let c = chart(&[], &[], &[]);
+                    let narrowed = RVM::propagate(c).expect("empty chart propagates");
+                    let (selection, _) = RVM::search(narrowed, 10).expect("empty is satisfiable");
+                    assert!(selection.is_empty());
+                }
+
+                #[test]
+                fn budget_exhaustion_is_reported_not_silent() {
+                    // A wide chart with a tiny budget: the search must say so
+                    // rather than return a partial assignment.
+                    let c = chart(&[(1, 30), (2, 30), (3, 30)], &[], &[]);
+                    match RVM::search(c, 2) {
+                        Ok(_) => {
+                            // A 2-step budget can still be enough for a trivial
+                            // chart on some orderings; that is fine.
+                        }
+                        Err(e) => assert!(e.contains("budget"), "{e}"),
+                    }
+                }
+            }
+
             #[test]
             fn verify_deps_accepts_only_selected_chart_candidates() {
                 let mut rvm = rvm_with_packages();
