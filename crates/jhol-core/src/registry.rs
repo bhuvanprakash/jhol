@@ -2287,6 +2287,76 @@ pub(crate) fn version_satisfies_parsed(spec: &str, version: &Version) -> bool {
     req.matches(version)
 }
 
+/// A range compiled once, so matching N published versions does not take the
+/// global spec cache lock N times.
+///
+/// `version_satisfies_parsed` is correct but is written for one-off checks: it
+/// trims, probes for an exact pin, and takes a mutex-guarded cache lock on every
+/// call. Selecting a version means answering "does this spec match?" for every
+/// published version of the target, and on a real 275-package corpus that was
+/// 141 ms of the 145 ms chart build. Compiling the spec first — exact pin, `*`,
+/// `||` alternatives, or a parsed `VersionReq` — makes the inner loop pure
+/// comparison with no allocation, no hashing and no locking.
+///
+/// Semantics are identical to `version_satisfies_parsed` by construction: the
+/// same predicates decide the variant, and the same `matches` decides the answer.
+pub(crate) enum CompiledSpec {
+    /// `""` or `*`: stable versions only (npm excludes prereleases).
+    Any,
+    /// A bare pin: exact equality, not caret.
+    Exact(Version),
+    /// One `VersionReq`, or several joined by `||`.
+    Alternatives(Vec<VersionReq>),
+    /// Unparseable: matches nothing, exactly as the one-off predicate does.
+    Unsupported,
+}
+
+impl CompiledSpec {
+    #[inline]
+    pub(crate) fn matches(&self, version: &Version) -> bool {
+        match self {
+            CompiledSpec::Any => version.pre.is_empty(),
+            CompiledSpec::Exact(pin) => version == pin,
+            CompiledSpec::Alternatives(reqs) => reqs.iter().any(|r| r.matches(version)),
+            CompiledSpec::Unsupported => false,
+        }
+    }
+}
+
+pub(crate) fn compile_spec(spec: &str) -> CompiledSpec {
+    let spec = spec.trim();
+    if spec.is_empty() || spec == "*" {
+        return CompiledSpec::Any;
+    }
+    if is_exact_version_pin(spec) {
+        let bare = spec
+            .strip_prefix('v')
+            .or_else(|| spec.strip_prefix('=').map(str::trim))
+            .unwrap_or(spec);
+        return match Version::parse(bare) {
+            Ok(pin) => CompiledSpec::Exact(pin),
+            Err(_) => CompiledSpec::Unsupported,
+        };
+    }
+    if spec.contains("||") {
+        let mut reqs = Vec::new();
+        for part in spec.split("||") {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            if let Some(req) = cached_version_req(part) {
+                reqs.push(req);
+            }
+        }
+        return CompiledSpec::Alternatives(reqs);
+    }
+    match cached_version_req(spec) {
+        Some(req) => CompiledSpec::Alternatives(vec![req]),
+        None => CompiledSpec::Unsupported,
+    }
+}
+
 /// True if any version in the packument satisfies at least one of the given
 /// constraints. Used to detect when a single-version synth packument cannot
 /// satisfy a ranged request (e.g. latest is 2.x but the constraint pins <2.0.0).
@@ -4605,4 +4675,41 @@ fn scoped_registry_identity_routes_packument_and_isolates_cache() {
         request.contains("authorization: bearer local-secret"),
         "scoped registry auth header missing"
     );
+}
+
+#[cfg(test)]
+mod compiled_spec_tests {
+    use super::{compile_spec, version_satisfies_parsed, Version};
+
+    /// `CompiledSpec` exists purely for speed, so the one thing it must never do
+    /// is answer differently from the predicate it replaces. Checked across the
+    /// range grammar's shapes and a spread of versions, including prereleases,
+    /// pins, wildcards, OR-ranges and junk.
+    #[test]
+    fn compiled_spec_agrees_with_the_one_off_predicate() {
+        let specs = [
+            "*", "", "^1.2.3", "~1.2.3", "1.2.3", "=1.2.3", "v1.2.3", ">=1.0.0 <2",
+            ">1.0.0", "<2.0.0", "1.x", "1.2.x", "^0.0.1", "^0.0.0", ">=1.0.0",
+            "^3.0.0 || ^4.0.0", "||", "^1 || ", "1.2.3 - 2.0.0", "latest",
+            "not a range", "1.0.0-nightly.1", "^4.0.0-nightly.1", "~2", "^2.3",
+        ];
+        let versions = [
+            "0.0.0", "0.0.1", "1.0.0", "1.2.3", "1.2.4", "1.3.0", "1.9.9", "2.0.0",
+            "2.3.0", "3.0.0", "3.5.1", "4.0.0", "4.2.11", "1.0.0-nightly.1",
+            "2.0.0-rc.1", "10.1.0",
+        ];
+        for spec in specs {
+            let compiled = compile_spec(spec);
+            for v in versions {
+                let parsed = Version::parse(v).expect("test version parses");
+                assert_eq!(
+                    compiled.matches(&parsed),
+                    version_satisfies_parsed(spec, &parsed),
+                    "spec {:?} version {}: compiled vs one-off disagree",
+                    spec,
+                    v
+                );
+            }
+        }
+    }
 }

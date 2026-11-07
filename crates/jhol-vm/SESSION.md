@@ -1928,3 +1928,25 @@ a lockfile we know can be wrong is not acceptable at any speed.
 
 Lesson: proof obligations are not paperwork. Two of the four I wrote failed on
 the first run, and one of them was hiding inside a benchmark that looked fine.
+
+## Journal — 2026-11-07 (cont.): measured the resolver, found the real hot loop
+
+Built a benchmark over the real packument cache and instrumented chart build
+instead of guessing. Two wrong guesses before the right one:
+
+1. "Semver parsing of versions dominates" — parsed them once per package:
+   148 -> 140 ms. Wrong.
+2. "JSON extraction dominates" — measured: extraction is 2.4 ms of 144 ms. Wrong.
+3. Mask assembly was 141.6 ms: `version_satisfies_parsed` takes a global
+   mutex-guarded spec cache **per call**, and selecting a version asks it once
+   per published version. Compiling the range once per mask: **141.6 -> 11.4 ms,
+   12.4x**. Chart build now 14.5 ms.
+
+Kept the win behind an equivalence test (25 spec shapes x 16 versions) so "faster"
+cannot mean "different".
+
+Also learned where not to optimise: capability-equivalence classes were my
+top pick and the measurement says they would save search time, not build time —
+search never even runs on real trees, because propagation hits a genuine
+multi-major conflict that a flat solve cannot represent. That blocker is now the
+headline item in docs/JAGR-INFINITE-IDEAS.md.

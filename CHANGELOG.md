@@ -1305,3 +1305,43 @@ missing packages are still detected and repaired.
 `jhol-core` 641 tests (7 ignored, each carrying its reason), `jhol-treecheck`
 12, installer gate PASS. Design for the remaining resolver work is in
 `docs/JAGR-INFINITE-ROADMAP.md`.
+
+
+## JAGR-∞: chart assembly 12.4× faster (compile the range once)
+
+Measured first, optimised second. A benchmark over the real packument cache
+(`crates/jhol-core/examples/resolve_bench.rs`, reading the same gzipped HTTP
+bodies an install reads) plus phase timings showed chart build was **144 ms of a
+145 ms solve**, and that mask assembly — not version extraction (2.4 ms) — was
+98% of it.
+
+Cause: `version_satisfies_parsed` is written for one-off checks. It trims, probes
+for an exact pin, and takes a mutex-guarded global cache lock **per call**.
+Deciding which versions a spec allows asks that question once per published
+version of the target, so the lock and hashing were the inner loop.
+
+`registry::compile_spec` now decides the variant once — `Any` (stable only),
+`Exact` (a bare pin is equality, not caret), `Alternatives` (a `VersionReq`, or
+several joined by `||`), `Unsupported` — and matching becomes a pure comparison.
+Published version strings are also parsed once per package rather than once per
+`(spec, version)` pair.
+
+| phase | before | after |
+|---|---:|---:|
+| mask assembly | 141.6 ms | **11.4 ms** |
+| chart total | 144.0 ms | **14.5 ms** |
+| propagate | 0.6 ms | 0.7 ms |
+
+Semantics are unchanged by construction and pinned by `compiled_spec_tests`: 25
+spec shapes x 16 versions (pins, wildcards, prereleases, `||`, hyphen ranges,
+junk) comparing the compiled answer with the one-off predicate.
+
+Also landed: mask memoisation per `(target, spec)` (6,715 edges collapse to 3,774
+computations, 1.78x), a `SolveStats` phase report, and `JAGR_PROFILE_CHART=1`.
+
+Not landed, with reasons in `docs/JAGR-INFINITE-IDEAS.md`: capability-equivalence
+classes (measured: chart build is mask-bound, so classes would save search time,
+not build time), and everything search-dependent — real trees hit a genuine
+multi-major conflict in propagation, which a flat solve cannot represent.
+
+`jhol-core` 649 tests, installer gate PASS.

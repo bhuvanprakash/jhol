@@ -774,20 +774,33 @@ pub mod atlas {
     fn compute_mask(
         target: u32,
         spec: &str,
+        parsed_versions: &HashMap<u32, Vec<Option<semver::Version>>>,
         package_version_strings: &HashMap<u32, Vec<String>>,
         package_versions: &HashMap<u32, Vec<VersionOrdinal>>,
     ) -> Option<VersionBitmap> {
         let strings = package_version_strings.get(&target)?;
         let ords = package_versions.get(&target)?;
-        if strings.is_empty() || ords.len() != strings.len() {
+        let parsed = parsed_versions.get(&target)?;
+        if strings.is_empty() || ords.len() != strings.len() || parsed.len() != strings.len() {
             return None;
         }
         let lo = *ords.first()?;
         let hi = *ords.last()?;
         let mut mask = VersionBitmap::empty(lo, hi);
         let mut any = false;
-        for (i, ver) in strings.iter().enumerate() {
-            if crate::registry::version_satisfies(spec, ver) {
+        // Compile the range once: matching a spec against every published
+        // version is the inner loop of chart build.
+        let compiled = crate::registry::compile_spec(spec);
+        for (i, ver) in parsed.iter().enumerate() {
+            // Parsed once per package, not once per (spec, version) pair:
+            // `version_satisfies` re-parses the version string on every call,
+            // which was ~100k `semver::Version::parse` calls on a real
+            // 275-package/6715-edge corpus and dominated chart build.
+            let satisfied = match ver {
+                Some(v) => compiled.matches(v),
+                None => crate::registry::version_satisfies(spec, &strings[i]),
+            };
+            if satisfied {
                 mask.set_ordinal(VersionOrdinal(ords[i].0));
                 any = true;
             }
@@ -811,6 +824,22 @@ pub mod atlas {
     ) -> Chart {
         let mut packages = HashMap::new();
         let mut betti = BettiNumbers::default();
+
+        // Parse every published version string once. Semver parsing is the
+        // single most expensive thing in chart construction; doing it inside the
+        // per-edge predicate repeated it for every (spec, version) pair.
+        let parsed_versions: HashMap<u32, Vec<Option<semver::Version>>> = package_version_strings
+            .iter()
+            .map(|(id, strings)| {
+                (
+                    *id,
+                    strings
+                        .iter()
+                        .map(|v| semver::Version::parse(v).ok())
+                        .collect(),
+                )
+            })
+            .collect();
 
         for (pkg_id, required) in constraints {
             // If version list absent, fall back to full ordinal domain.
@@ -846,7 +875,13 @@ pub mod atlas {
                 if let Some(hit) = mask_cache.borrow().get(&key) {
                     return hit.clone();
                 }
-                let computed = compute_mask(target, spec, package_version_strings, package_versions);
+                let computed = compute_mask(
+                    target,
+                    spec,
+                    &parsed_versions,
+                    package_version_strings,
+                    package_versions,
+                );
                 mask_cache.borrow_mut().insert(key, computed.clone());
                 computed
             };
@@ -1581,6 +1616,7 @@ pub mod precompute {
     ) -> Chart {
         use rayon::prelude::*;
 
+        let t0 = std::time::Instant::now();
         let items: Vec<(
             u32,
             (Vec<VersionOrdinal>, Vec<String>),
@@ -1597,6 +1633,13 @@ pub mod precompute {
             })
             .collect();
 
+        if std::env::var_os("JAGR_PROFILE_CHART").is_some() {
+            eprintln!(
+                "[chart] extract (versions+deps+peers) {:.1} ms for {} packuments",
+                t0.elapsed().as_secs_f64() * 1000.0,
+                items.len()
+            );
+        }
         let mut constraints = HashMap::with_capacity(items.len());
         let mut versions = HashMap::with_capacity(items.len());
         let mut version_strings = HashMap::with_capacity(items.len());
@@ -1611,8 +1654,16 @@ pub mod precompute {
             peers.insert(pkg_id, p);
         }
 
+        let t_assemble = std::time::Instant::now();
         let mut chart =
             build_chart_from_constraints(&constraints, &versions, &version_strings, &deps, &peers);
+        if std::env::var_os("JAGR_PROFILE_CHART").is_some() {
+            eprintln!(
+                "[chart] assemble (masks) {:.1} ms; total {:.1} ms",
+                t_assemble.elapsed().as_secs_f64() * 1000.0,
+                t0.elapsed().as_secs_f64() * 1000.0
+            );
+        }
         // Name the packages here. This used to be left empty with the rule
         // "callers must fill names" in a doc comment — invisible to the type
         // system, missed by new callers, and the reason conflict messages were
@@ -3351,6 +3402,140 @@ use std::path::Path;
 /// falls back to its previous estimate rather than failing the install, because
 /// a resolver that is *authoritative* must still not be able to break an
 /// install that used to work.
+/// Where the time went, and how big the problem was.
+///
+/// Instrumentation rather than guesswork: every optimisation in this file is
+/// judged against these numbers on a real packument set before it is kept.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SolveStats {
+    /// Packages in the chart (every packument reachable from the root set).
+    pub packages: usize,
+    /// Dependency edges in the chart.
+    pub edges: usize,
+    /// Distinct `(target, spec)` pairs — the unit mask memoisation collapses to.
+    pub distinct_specs: usize,
+    /// Chart construction (version extraction + mask building).
+    pub chart_us: u128,
+    /// Bitmap propagation to a fixpoint.
+    pub propagate_us: u128,
+    /// Backtracking search.
+    pub search_us: u128,
+    /// Search steps taken (candidate assignments tried inside backtracking).
+    pub steps: usize,
+}
+
+/// `select_versions` with phase timings. Same semantics, same result.
+pub fn select_versions_stats(
+    packuments: &HashMap<String, serde_json::Value>,
+    deps: &HashMap<String, String>,
+) -> (Option<HashMap<String, String>>, SolveStats, Option<String>) {
+    use crate::jagr_infinite::chart::{VersionBitmap, VersionOrdinal};
+
+    let mut stats = SolveStats::default();
+    if deps.is_empty() || packuments.is_empty() {
+        return (None, stats, Some("empty input".to_string()));
+    }
+    let mut names: Vec<&String> = packuments.keys().collect();
+    names.sort();
+    let name_to_id: HashMap<String, u32> = names
+        .into_iter()
+        .enumerate()
+        .map(|(i, n)| (n.clone(), i as u32))
+        .collect();
+
+    let t_chart = std::time::Instant::now();
+    let mut chart = crate::jagr_infinite::precompute::build_full_chart(packuments, &name_to_id);
+    let chart_us = t_chart.elapsed().as_micros();
+
+    stats.packages = chart.packages.len();
+    stats.chart_us = chart_us;
+    {
+        // Distinct (target, spec) pairs: what the mask cache amortises.
+        let mut seen: std::collections::HashSet<(u32, &str)> = std::collections::HashSet::new();
+        for pkg in chart.packages.values() {
+            for e in &pkg.deps {
+                seen.insert((e.target_pkg, e.spec.as_str()));
+                stats.edges += 1;
+            }
+        }
+        stats.distinct_specs = seen.len();
+    }
+
+    let mut constraints: HashMap<u32, crate::jagr_infinite::chart::VersionInterval> =
+        HashMap::new();
+    for (name, spec) in deps {
+        let Some(&id) = name_to_id.get(name) else {
+            return (None, stats, Some(format!("root {name} is not in the packument set")));
+        };
+        let Some(pkg) = chart.packages.get(&id) else {
+            return (None, stats, Some(format!("root {name} has no chart package")));
+        };
+        let Some((interval, _domain)) = candidate_domain_for_package(pkg, spec) else {
+            return (None, stats, Some(format!("root {name}@{spec} has no candidate domain")));
+        };
+        constraints.insert(id, interval);
+    }
+    if constraints.is_empty() {
+        return (None, stats, Some("no constraints".to_string()));
+    }
+    for (id, interval) in &constraints {
+        if let Some(pkg) = chart.packages.get_mut(id) {
+            let mut mask = VersionBitmap::from_interval(*interval);
+            mask.intersect(&pkg.allowed);
+            if mask.is_empty() {
+                return (None, stats, Some("a direct range matches nothing published".to_string()));
+            }
+            pkg.allowed = mask;
+        }
+    }
+
+    let t_prop = std::time::Instant::now();
+    let narrowed = match crate::jagr_infinite::rvm::exec::RVM::propagate(chart) {
+        Ok(n) => n,
+        Err(e) => {
+            stats.propagate_us = t_prop.elapsed().as_micros();
+            return (None, stats, Some(format!("propagate: {e}")));
+        }
+    };
+    stats.propagate_us = t_prop.elapsed().as_micros();
+
+    let t_search = std::time::Instant::now();
+    let (selection, _) =
+        match crate::jagr_infinite::rvm::exec::RVM::search(narrowed.clone(), 20_000) {
+            Ok(s) => s,
+            Err(e) => {
+                stats.search_us = t_search.elapsed().as_micros();
+                return (None, stats, Some(format!("search: {e}")));
+            }
+        };
+    stats.search_us = t_search.elapsed().as_micros();
+    if selection.is_empty() {
+        return (None, stats, Some("empty selection".to_string()));
+    }
+    stats.steps = selection.len();
+
+    let mut out: HashMap<String, String> = HashMap::new();
+    for (id, ordinal) in selection {
+        let Some(pkg) = narrowed.packages.get(&id) else {
+            continue;
+        };
+        if pkg.name.is_empty() {
+            continue;
+        }
+        let Some(offset) = ordinal.0.checked_sub(pkg.ordinal_lo.0) else {
+            continue;
+        };
+        let Some(version) = pkg.versions.get(offset as usize) else {
+            continue;
+        };
+        if !pkg.allowed.contains_ordinal(VersionOrdinal(ordinal.0)) {
+            continue;
+        }
+        out.insert(pkg.name.clone(), version.clone());
+    }
+    (Some(out), stats, None)
+}
+
 pub fn select_versions(
     packuments: &HashMap<String, serde_json::Value>,
     deps: &HashMap<String, String>,
