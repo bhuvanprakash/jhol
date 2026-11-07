@@ -6978,3 +6978,24 @@ Honest > green.
 Trap for next time: `build_full_chart` leaves `ChartPackage.name` empty; any
 code returning names must fill them, and any code reading `allowed` on a chart
 from that builder must apply the direct ranges itself (it seeds `full`).
+
+## Journal — 2026-11-07 (cont.): JAGR-∞ per-edge masks
+
+Closed the defect from the previous entry: edges now carry a `VersionBitmap`
+resolved against the *target's* version list, so transitive requirements actually
+narrow. `propagate`/`search`/`verify` prefer the mask and fall back to the
+interval (old caches deserialize as `None` — no migration needed).
+
+Two precision bugs found while doing it:
+- dedup keyed on (target, interval) collapsed `^1.0.0` and `~1.2.0` because the
+  generic-scale interval for both was `full`. Now keyed with the spec.
+- untrimmed specs made `" ^1.0.0 "` a separate edge.
+Both are the kind of thing that only shows up when you stop treating a range as
+an opaque blob.
+
+Fixture trap worth remembering: a hand-built chart test must express its edge
+specs in the *fixture's* version space (`=1.2.0`, `>=1.0.0 <1.3.0`), not in
+ordinals — an ordinal written as a semver spec matches nothing and every mask
+comes back empty, which reads as "no versions available" rather than "bad test".
+
+632 core tests, both gates PASS, 19/19 real packages.

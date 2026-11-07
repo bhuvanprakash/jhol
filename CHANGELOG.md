@@ -938,3 +938,54 @@ ignored transitive case; plus the 7 engine tests added earlier).
 Real packages install: 15/15 and 19/19 in two isolated sweeps after the wiring
 (`express lodash axios react chalk typescript webpack eslint prettier mocha jest
 zod prisma next vite` …). Installer gate PASS, engine gate PASS.
+
+
+## JAGR-∞: per-edge masks — transitive narrowing now works
+
+The defect recorded in `ebeda053` is fixed.
+
+**What was wrong.** Chart edges carried a `VersionInterval` produced by
+`parse_single_range`, which returns the *full* range for exact pins and plain
+versions and otherwise a **generic** ordinal scale — not the target package's
+ordinals. So a requirement could never narrow anything downstream: every
+transitive dependency resolved to its newest version, and `--omit`,
+peer checks and conflict detection all saw a graph that was not the real one.
+
+**What changed.** `DependencyEdge` and `PeerEdge` now carry
+`required_mask: Option<VersionBitmap>` — the requirement evaluated against the
+*target's* published version list, one version at a time, at chart-build time.
+`propagate`, `solve_backtrack` and `verify_selection` narrow/verify with that
+mask when present and fall back to the interval otherwise (older cached charts
+deserialize with `None` and behave exactly as before).
+
+Two precision fixes fell out of it:
+
+- **Dedup is on `(target, spec, interval, optional)`**, not `(target, interval)`.
+  `^1.0.0` and `~1.2.0` used to collapse into one edge because their generic
+  intervals were identical; they now produce two masks, each precise.
+- **Specs are trimmed before dedup**, so `" ^1.0.0 "` no longer creates a second
+  edge for the same requirement.
+
+`resolves_a_transitive_edge_through_propagation` is **no longer `#[ignore]`d** —
+it passes: `app@1.0.0` requiring `lib ^1` drags `lib` to 1.0.0 instead of 2.0.0.
+
+### Tests
+
+`jhol-core`: **632 passing, 6 ignored** (was 631/7 — the ignored transitive case
+is now a passing one). Two old tests were updated because they pinned the lossy
+behaviour: `repeated_dependency_and_peer_specs_keep_same_unique_edges` now
+asserts two distinct specs and their exact text, which is strictly stronger than
+counting one collapsed edge.
+
+### Verified
+
+Cold install, isolated caches, no daemon:
+
+| pkg | jhol | bun |
+|---|---:|---:|
+| express | 646 | 1417 |
+| webpack | 1974 | 4738 |
+| eslint | 1652 | 1732 |
+| jest | 4961 | 33082 |
+
+Real packages: 19/19 in an isolated sweep. Installer gate PASS, engine gate PASS.

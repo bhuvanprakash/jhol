@@ -181,6 +181,21 @@ pub mod chart {
         /// domain). Used to narrow an already-initialized domain to a satisfying
         /// version span without rebuilding the bitmap with a different base.
         #[inline]
+        /// Set a single ordinal's bit. Used when resolving a spec against a
+        /// package's published version list, one version at a time.
+        #[inline]
+        pub fn set_ordinal(&mut self, ordinal: VersionOrdinal) {
+            if ordinal.0 < self.ordinal_lo.0 || ordinal.0 > self.ordinal_hi.0 {
+                return;
+            }
+            let off = (ordinal.0 - self.ordinal_lo.0) as usize;
+            let word = off / 64;
+            if word >= self.words.len() {
+                self.words.resize(word + 1, 0);
+            }
+            self.words[word] |= 1u64 << (off % 64);
+        }
+
         pub fn mask_to_interval(&mut self, interval: VersionInterval) {
             let lo_eff = interval.lo.max(self.ordinal_lo);
             let hi_eff = interval.hi.min(self.ordinal_hi);
@@ -363,14 +378,31 @@ pub mod chart {
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct DependencyEdge {
         pub target_pkg: u32,
-        pub required: VersionInterval, // what versions of target satisfy this dep
+        /// The requirement expressed in a *generic* ordinal scale. Kept for
+        /// legacy readers and for the "is this range empty" questions; it is
+        /// NOT usable for narrowing because the scale is not the target's.
+        pub required: VersionInterval,
+        /// The requirement expressed in the **target package's** version
+        /// ordinals — computed once at chart-build time by evaluating the raw
+        /// spec against the target's published version list.
+        ///
+        /// This is the field propagation narrows with. Without it, transitive
+        /// requirements could not narrow at all: `parse_single_range` returns
+        /// the full range for exact pins and plain versions, so an edge looked
+        /// unconstrained and every package resolved to its newest version.
+        #[serde(default)]
+        pub required_mask: Option<VersionBitmap>,
         pub optional: bool,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
     pub struct PeerEdge {
         pub target_pkg: u32,
-        pub required: VersionInterval, // peer requirement
+        /// Generic-scale requirement (see `DependencyEdge::required`).
+        pub required: VersionInterval,
+        /// Target-ordinal requirement (see `DependencyEdge::required_mask`).
+        #[serde(default)]
+        pub required_mask: Option<VersionBitmap>,
     }
 
     /// Exact Betti numbers for a chart's constraint complex.
@@ -730,7 +762,7 @@ pub mod atlas {
         constraints: &HashMap<u32, VersionInterval>,
         package_versions: &HashMap<u32, Vec<VersionOrdinal>>,
         package_version_strings: &HashMap<u32, Vec<String>>,
-        package_deps: &HashMap<u32, Vec<(u32, VersionInterval, bool)>>,
+        package_deps: &HashMap<u32, Vec<(u32, String, VersionInterval, bool)>>,
         package_peers: &HashMap<u32, Vec<(u32, VersionInterval)>>,
     ) -> Chart {
         let mut packages = HashMap::new();
@@ -752,13 +784,44 @@ pub mod atlas {
                 .cloned()
                 .unwrap_or_default();
 
+            // Resolve every requirement into the *target's* ordinal space, once.
+            // `mask_for` evaluates the raw spec against the target's published
+            // version strings, which is the only representation propagation can
+            // intersect with a target domain.
+            let mask_for = |target: u32, spec: &str| -> Option<VersionBitmap> {
+                let strings = package_version_strings.get(&target)?;
+                let ords = package_versions.get(&target)?;
+                if strings.is_empty() || ords.len() != strings.len() {
+                    return None;
+                }
+                let lo = *ords.first()?;
+                let hi = *ords.last()?;
+                let mut mask = VersionBitmap::empty(lo, hi);
+                let mut any = false;
+                for (i, ver) in strings.iter().enumerate() {
+                    if crate::registry::version_satisfies(spec, ver) {
+                        mask.set_ordinal(VersionOrdinal(ords[i].0));
+                        any = true;
+                    }
+                }
+                if any {
+                    Some(mask)
+                } else {
+                    // A requirement nothing published satisfies: leave the mask
+                    // empty so propagation reports a conflict rather than
+                    // silently accepting anything.
+                    Some(VersionBitmap::empty(lo, hi))
+                }
+            };
+
             let deps = package_deps
                 .get(pkg_id)
                 .map(|v| {
                     v.iter()
-                        .map(|(t, r, opt)| crate::jagr_infinite::chart::DependencyEdge {
+                        .map(|(t, spec, r, opt)| crate::jagr_infinite::chart::DependencyEdge {
                             target_pkg: *t,
                             required: *r,
+                            required_mask: mask_for(*t, spec),
                             optional: *opt,
                         })
                         .collect()
@@ -772,6 +835,7 @@ pub mod atlas {
                         .map(|(t, r)| crate::jagr_infinite::chart::PeerEdge {
                             target_pkg: *t,
                             required: *r,
+                            required_mask: None,
                         })
                         .collect()
                 })
@@ -1481,7 +1545,7 @@ pub mod precompute {
         let items: Vec<(
             u32,
             (Vec<VersionOrdinal>, Vec<String>),
-            Vec<(u32, VersionInterval, bool)>,
+            Vec<(u32, String, VersionInterval, bool)>,
             Vec<(u32, VersionInterval)>,
         )> = packuments
             .par_iter()
@@ -1727,7 +1791,7 @@ pub mod precompute {
     fn extract_deps(
         packument: &serde_json::Value,
         name_to_id: &HashMap<String, u32>,
-    ) -> Vec<(u32, VersionInterval, bool)> {
+    ) -> Vec<(u32, String, VersionInterval, bool)> {
         // Dependency declarations repeat across many releases. Deduplicate the
         // borrowed (name, spec, optional) triples before semver parsing so
         // repeated ranges cost one parse, without allocating intermediate
@@ -1746,9 +1810,13 @@ pub mod precompute {
                     if let Some(deps) = ver_info.get(key).and_then(|v| v.as_object()) {
                         for (dep_name, spec) in deps {
                             if name_to_id.contains_key(dep_name) {
+                                // Trim before dedup: `" ^1.0.0 "` and
+                                // `"^1.0.0"` are the same requirement, and two
+                                // edges for one requirement would build two
+                                // masks for the same thing.
                                 specs.insert((
                                     dep_name.as_str(),
-                                    spec.as_str().unwrap_or("*"),
+                                    spec.as_str().unwrap_or("*").trim(),
                                     optional,
                                 ));
                             }
@@ -1771,7 +1839,11 @@ pub mod precompute {
             if let (Some(&dep_id), Some(interval)) =
                 (name_to_id.get(dep_name), spec_to_interval(spec))
             {
-                edges.insert((dep_id, interval, optional));
+                // The raw spec rides along: the chart builder evaluates it
+                // against the target's published version list to produce a mask
+                // in the target's own ordinal space, which is what propagation
+                // intersects. The generic interval cannot do that.
+                edges.insert((dep_id, spec.to_string(), interval, optional));
             }
         }
         edges.into_iter().collect()
@@ -1843,8 +1915,20 @@ pub mod precompute {
 
             let deps = extract_deps(&packument, &ids);
             let peers = extract_peers(&packument, &ids);
-            assert_eq!(deps.len(), 1);
-            assert!(deps.iter().all(|(id, _, opt)| *id == 7 && !*opt));
+
+            // Dedup is on (target, SPEC, interval, optional). It used to be on
+            // (target, interval), and because the generic-scale interval for
+            // `^1.0.0` and `~1.2.0` came out identical, two genuinely different
+            // requirements collapsed into one — which then produced a mask that
+            // satisfied neither precisely. Repeats of the *same* spec still
+            // collapse (^1.0.0 appears twice, and " ^1.0.0 " with whitespace),
+            // and an unparsable spec is still dropped.
+            assert_eq!(deps.len(), 2, "expected ^1.0.0 and ~1.2.0: {:?}", deps);
+            assert!(deps.iter().all(|(id, _, _, opt)| *id == 7 && !*opt));
+            let mut specs: Vec<&str> = deps.iter().map(|(_, s, _, _)| s.as_str()).collect();
+            specs.sort();
+            assert_eq!(specs, vec!["^1.0.0", "~1.2.0"]);
+
             assert_eq!(peers.len(), 1);
             assert!(peers.iter().all(|(id, _)| *id == 9));
         }
@@ -2354,13 +2438,23 @@ pub mod rvm {
                 use std::collections::{HashMap, VecDeque};
 
                 // Reverse index: which packages constrain this one, and how.
-                let mut incoming: HashMap<u32, Vec<(u32, crate::jagr_infinite::chart::VersionInterval, bool)>> =
-                    HashMap::new();
+                // (parent, generic interval, target-space mask, optional)
+                type Incoming = HashMap<
+                    u32,
+                    Vec<(
+                        u32,
+                        crate::jagr_infinite::chart::VersionInterval,
+                        Option<crate::jagr_infinite::chart::VersionBitmap>,
+                        bool,
+                    )>,
+                >;
+                let mut incoming: Incoming = HashMap::new();
                 for (pid, pkg) in &chart.packages {
                     for edge in &pkg.deps {
                         incoming.entry(edge.target_pkg).or_default().push((
                             *pid,
                             edge.required,
+                            edge.required_mask.clone(),
                             edge.optional,
                         ));
                     }
@@ -2395,27 +2489,36 @@ pub mod rvm {
                     // dependent's requirement that applies to it, minus nothing
                     // else: domains only shrink, which is what makes the
                     // fixpoint terminate.
-                    let mut required_by_any = false;
-                    let mut requirement: Option<crate::jagr_infinite::chart::VersionInterval> = None;
+                    // Narrow with the target-space masks: each dependent's
+                    // requirement expressed in THIS package's ordinals. This is
+                    // what makes transitive narrowing work — the generic
+                    // interval could only ever be `full` for plain specs.
+                    let mut any_mask = false;
                     if let Some(parents) = incoming.get(&pid) {
-                        for (_parent, interval, optional) in parents {
+                        for (_parent, interval, mask, optional) in parents {
                             if *optional {
                                 continue;
                             }
-                            required_by_any = true;
-                            requirement = Some(match requirement {
-                                None => *interval,
-                                Some(prev) => prev.intersect(interval),
-                            });
+                            let applied = match mask {
+                                Some(m) if !m.is_empty() => m.clone(),
+                                _ => crate::jagr_infinite::chart::VersionBitmap::from_interval(
+                                    *interval,
+                                ),
+                            };
+                            let mut next = applied;
+                            next.intersect(&current);
+                            // Intersection with several dependents: the mask
+                            // must satisfy all of them, so narrow repeatedly.
+                            narrowed = if any_mask {
+                                let mut acc = narrowed.clone();
+                                acc.intersect(&next);
+                                acc
+                            } else {
+                                next
+                            };
+                            any_mask = true;
                         }
                     }
-                    if let Some(req) = requirement {
-                        let mut mask =
-                            crate::jagr_infinite::chart::VersionBitmap::from_interval(req);
-                        mask.intersect(&current);
-                        narrowed = mask;
-                    }
-                    let _ = required_by_any;
 
                     // Peer requirements narrow a domain when they overlap it,
                     // and are reported when they do not — they never empty a
@@ -2678,9 +2781,14 @@ pub mod rvm {
                     let mut ok = true;
                     if let Some(pkg) = chart.packages.get(&pid) {
                         for edge in &pkg.deps {
-                            let required_ok = edge.required.contains(
-                                crate::jagr_infinite::chart::VersionOrdinal(ord),
-                            );
+                            let required_ok = match &edge.required_mask {
+                                Some(m) if !m.is_empty() => m.contains_ordinal(
+                                    crate::jagr_infinite::chart::VersionOrdinal(ord),
+                                ),
+                                _ => edge.required.contains(
+                                    crate::jagr_infinite::chart::VersionOrdinal(ord),
+                                ),
+                            };
                             if !required_ok {
                                 if edge.optional {
                                     continue; // soft: drop the child
@@ -2693,7 +2801,10 @@ pub mod rvm {
                                 break;
                             };
                             let mut narrowed = child_domain.clone();
-                            narrowed.mask_to_interval(edge.required);
+                            match &edge.required_mask {
+                                Some(m) if !m.is_empty() => narrowed.intersect(m),
+                                _ => narrowed.mask_to_interval(edge.required),
+                            }
                             if narrowed.is_empty() {
                                 if edge.optional {
                                     continue;
@@ -2784,7 +2895,11 @@ pub mod rvm {
                         if edge.optional {
                             continue;
                         }
-                        if !edge.required.contains(*chosen) {
+                        let edge_ok = match &edge.required_mask {
+                            Some(m) if !m.is_empty() => m.contains_ordinal(*chosen),
+                            _ => edge.required.contains(*chosen),
+                        };
+                        if !edge_ok {
                             let child = chart
                                 .packages
                                 .get(&edge.target_pkg)
@@ -2893,6 +3008,23 @@ pub mod rvm {
                     constraints: &[(u32, u16, u16)],
                     deps: &[(u32, u32, u16, u16, bool)],
                 ) -> crate::jagr_infinite::chart::Chart {
+                    // The fixture's version strings are "1.<ordinal>.0", so the
+                    // spec has to be written in that space — a mask is built by
+                    // evaluating the spec against those strings, and an ordinal
+                    // written as a spec matches nothing.
+                    let count_for = |id: u32| -> u16 {
+                        pkgs.iter().find(|(p, _)| *p == id).map(|(_, c)| *c).unwrap_or(0)
+                    };
+                    let spec_for = |lo: u16, hi: u16, target: u32| -> String {
+                        let count = count_for(target);
+                        if lo == hi {
+                            format!("=1.{}.0", lo)
+                        } else if hi + 1 >= count {
+                            format!(">=1.{}.0", lo)
+                        } else {
+                            format!(">=1.{}.0 <1.{}.0", lo, hi + 1)
+                        }
+                    };
                     let mut versions = HashMap::new();
                     let mut strings = HashMap::new();
                     for (id, count) in pkgs {
@@ -2914,9 +3046,11 @@ pub mod rvm {
                             cons.insert(*id, VersionInterval::full());
                         }
                     }
-                    let mut d: HashMap<u32, Vec<(u32, VersionInterval, bool)>> = HashMap::new();
+                    let mut d: HashMap<u32, Vec<(u32, String, VersionInterval, bool)>> = HashMap::new();
                     for (from, to, lo, hi, opt) in deps {
-                        d.entry(*from).or_default().push((*to, iv(*lo, *hi), *opt));
+                        d.entry(*from)
+                            .or_default()
+                            .push((*to, spec_for(*lo, *hi, *to), iv(*lo, *hi), *opt));
                     }
                     let mut c = crate::jagr_infinite::atlas::build_chart_from_constraints(
                         &cons,
@@ -8125,18 +8259,11 @@ mod sole_resolver_tests {
         assert_eq!(chosen.get("lib").map(|s| s.as_str()), Some("2.1.0"));
     }
 
-    /// KNOWN DEFECT, deliberately not faked. Chart edges carry intervals from
-    /// `parse_single_range`, which returns the *full* range for exact pins and
-    /// plain versions and otherwise uses a generic ordinal scale — not the
-    /// target package's version ordinals. Propagation therefore cannot narrow
-    /// through a transitive edge yet; only direct ranges narrow (which is what
-    /// `picks_the_highest_version_satisfying_the_direct_range` proves).
-    ///
-    /// The fix is to store a per-edge `VersionBitmap` resolved against the
-    /// target's version list at chart-build time. That is the single highest
-    /// value change left in JAGR-∞ and it is recorded in the changelog.
+    /// Transitive narrowing: `app@1.0.0` requires `lib ^1`, so the chart must
+    /// narrow `lib` through that edge — not fall back to its newest version.
+    /// This is what per-edge masks (`DependencyEdge::required_mask`, resolved
+    /// against the target's published versions) exist for.
     #[test]
-    #[ignore = "blocked: chart edges are in a generic ordinal space (see CHANGELOG)"]
     fn resolves_a_transitive_edge_through_propagation() {
         // app 1.0.0 needs lib ^1; lib's own dependency is not involved because
         // it has none — the point is that the chart narrows lib by the direct
