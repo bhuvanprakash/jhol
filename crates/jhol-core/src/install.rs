@@ -8499,3 +8499,4 @@ mod install_materialization_tests {
         assert!(result.is_err(), "install must report failed .bin creation");
     }
 }
+

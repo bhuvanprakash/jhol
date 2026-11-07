@@ -1037,3 +1037,42 @@ versus bun's clone-from-cache).
 `jhol-core`: 632 passing, 6 ignored. Both gates PASS (the installer gate's first
 run reported a transient failure while the release binary was being rewritten;
 re-run green, 2,107 files deterministic).
+
+
+## Warm-install investigation: measured the cause, reverted the fix
+
+Follow-up to the peer-mask commit. Two hypotheses were tested and one change
+was **reverted** because it did not do what it claimed.
+
+**Hypothesis 1: explicit installs re-resolve because they never bind to the
+lockfile.** True as a mechanism (`can_reuse_prepared_layout` requires an empty
+package list or `from_lockfile`), so `lockfile_satisfies_request` was written to
+mark a request bound when every requested spec is already pinned. Measured:
+
+| workload | before | with the binding |
+|---|---:|---:|
+| repeat `install express --no-save` (68 pkgs) | 351-479 ms | 279-416 ms |
+
+The binding never engaged — not even when `express` *was* a declared dependency,
+which means the helper's view of "the lockfile answers this" disagrees with the
+installer's. Rather than ship a flag that silently does nothing, **the whole
+change was reverted**; the helper, the CLI block and the re-export are gone. The
+tree is back to the verified peer-mask state.
+
+**Hypothesis 2 (now the recorded conclusion): the warm cost is
+materialisation, not resolution.** Same 68-package tree, same cache:
+
+| path | warm time |
+|---|---:|
+| manifest + lockfile (`jhol install`) | 50-69 ms |
+| explicit (`jhol install express`) | 279-480 ms |
+
+Resolution is identical work in both cases once the expansion cache hits; the
+difference is that the manifest path projects a whole prepared tree
+(clonefile/CoW of one bundle) while the explicit path materialises 68
+directories individually. **The next attempt should target materialisation for
+explicit requests — reusing the prepared-tree projection rather than re-deriving
+it — not the resolver.**
+
+Recorded because a failed optimization is a fact about the system: the resolver
+was not the problem, and the fix belongs one layer down.

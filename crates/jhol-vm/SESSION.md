@@ -1802,3 +1802,20 @@ binding a lockfile. On the real path — manifest + lockfile, node_modules wiped
 it is jhol ~57ms vs bun ~22ms, i.e. **2.5x**, and the cause is materialisation
 (68 dirs rebuilt from the content store) not resolution. Measure the path users
 take, not the one that is convenient to script.
+
+## Journal — 2026-11-07 (cont.): warm-install fix attempted, reverted
+
+Tried to make an explicit `install <pkg>` bind to the lockfile so the prepared
+lanes engage (`lockfile_satisfies_request` + `from_lockfile = true`). Measured
+279-416ms vs 351-479ms — and the binding never actually fired, even with the
+package declared. Reverted the whole thing rather than ship a no-op with a log
+line that lies.
+
+What the numbers say instead: manifest+lockfile warm is 50-69ms, explicit is
+279-480ms for the same 68 packages and the same cache. Resolution is the same
+work; materialisation is not — the manifest path projects one prepared tree
+(clonefile/CoW), the explicit path writes 68 directories. Next session: make the
+explicit path project the prepared tree too.
+
+Lesson: a "flag that should make it fast" needs a measurement that shows the
+flag *firing*, not just a benchmark that shows a number moving.
