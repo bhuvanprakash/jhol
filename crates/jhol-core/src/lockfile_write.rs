@@ -2897,3 +2897,184 @@ mod pubgrub_fallback_tests {
         assert!(!called.get(), "pubgrub must not even be invoked");
     }
 }
+
+/// Resolve the manifest into a node-keyed tree using per-dependent instances.
+///
+/// This is the multi-major path: `jagr_nest` decides *which* versions must
+/// coexist, and this function decides *where* they live, then attaches each one's
+/// tarball URL and integrity. It replaces the flat solver here because a flat
+/// domain cannot represent a tree where `ansi-styles` is needed at 6, 5 and 4
+/// simultaneously — which is most real trees.
+///
+/// Placement rule, deterministic: the instance required by the most dependents
+/// takes the top of `node_modules` (ties: highest version); every other instance
+/// is nested under the dependent that requires it. That is hoisting, expressed as
+/// the smallest rule that produces a working tree.
+pub fn resolve_full_tree_nested(
+    package_json_path: &Path,
+) -> Result<HashMap<String, ResolvedPackage>, String> {
+    use crate::jagr_nest;
+
+    let manifest_deps = crate::lockfile::read_package_json_deps(package_json_path)
+        .ok_or_else(|| "no dependencies in package.json".to_string())?;
+    if manifest_deps.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let roots: HashMap<String, String> = manifest_deps
+        .iter()
+        .map(|(name, spec)| (name.clone(), spec.clone()))
+        .collect();
+
+    // Fetch-and-retry: the nested resolver reports which package it needs, this
+    // loop provides it. That is how a resolver should fail — with a request, not
+    // a shrug — and it keeps the resolver independent of the transport.
+    let mut provider = RegistryProvider::new();
+    let mut world: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut resolved = loop {
+        match jagr_nest::resolve(&world, &roots) {
+            Ok(r) => break r,
+            Err(e) if e.needs_fetch() => {
+                if world.contains_key(&e.package) {
+                    return Err(format!(
+                        "nested resolver asked again for {} after it was provided: {}",
+                        e.package,
+                        e.describe()
+                    ));
+                }
+                let meta = provider.metadata(&e.package)?.clone();
+                let mut meta = meta;
+                crate::registry::prune_packument_in_place(&mut meta);
+                world.insert(e.package, meta);
+            }
+            Err(e) => return Err(e.describe()),
+        }
+    };
+
+    // Which instance wins the top of node_modules, per package.
+    let mut demand: HashMap<&str, usize> = HashMap::new();
+    for i in &resolved.instances {
+        *demand.entry(i.package.as_str()).or_default() += 1;
+    }
+    let mut winner: HashMap<(String, String), bool> = HashMap::new();
+    {
+        let mut best: HashMap<&str, (usize, (u64, u64, u64))> = HashMap::new();
+        for i in &resolved.instances {
+            let key = (i.package.as_str(), i.version.as_str());
+            let vk = semver::Version::parse(&i.version)
+                .map(|v| (v.major, v.minor, v.patch))
+                .unwrap_or((0, 0, 0));
+            let d = i.required_by.len();
+            let e = best.entry(i.package.as_str()).or_insert((0, (0, 0, 0)));
+            if d > e.0 || (d == e.0 && vk > e.1) {
+                *e = (d, vk);
+                for other in resolved.instances.iter() {
+                    if other.package == i.package {
+                        winner.insert(
+                            (other.package.clone(), other.version.clone()),
+                            other.version == i.version,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    let _ = demand;
+
+    // Assign paths. A winner sits at the top; everything else nests under a
+    // dependent whose path is already known.
+    let mut path_of: HashMap<(String, String), String> = HashMap::new();
+    for i in &resolved.instances {
+        let key = (i.package.clone(), i.version.clone());
+        if winner.get(&key).copied().unwrap_or(false) {
+            let name = if i.installed_as.is_empty() {
+                i.package.clone()
+            } else {
+                i.installed_as.clone()
+            };
+            path_of.insert(key, format!("node_modules/{}", name));
+        }
+    }
+    // Fixpoint over the remaining instances; sorted iteration keeps it stable.
+    let mut ordered: Vec<&jagr_nest::Instance> = resolved.instances.iter().collect();
+    ordered.sort_by(|a, b| {
+        (a.package.as_str(), std::cmp::Reverse(a.version.as_str()))
+            .cmp(&(b.package.as_str(), std::cmp::Reverse(b.version.as_str())))
+    });
+    let mut progress = true;
+    while progress {
+        progress = false;
+        for inst in &ordered {
+            let key = (inst.package.clone(), inst.version.clone());
+            if path_of.contains_key(&key) {
+                continue;
+            }
+            // Find a dependent instance with a known path.
+            let mut placed = None;
+            for (dependent, _spec) in &inst.required_by {
+                if dependent == "<root>" {
+                    continue;
+                }
+                let Some((dname, dver)) = dependent.rsplit_once('@') else {
+                    continue;
+                };
+                if let Some(parent_path) = path_of.get(&(dname.to_string(), dver.to_string())) {
+                    let name = if inst.installed_as.is_empty() {
+                        inst.package.clone()
+                    } else {
+                        inst.installed_as.clone()
+                    };
+                    placed = Some(format!("{}/node_modules/{}", parent_path, name));
+                    break;
+                }
+            }
+            if let Some(p) = placed {
+                path_of.insert(key, p);
+                progress = true;
+            }
+        }
+    }
+    // Anything still unplaced (a cycle in required_by) goes to the top level:
+    // wrong layout is better than a missing package, and it cannot happen for a
+    // DAG, which npm trees are.
+    for i in &resolved.instances {
+        let key = (i.package.clone(), i.version.clone());
+        if !path_of.contains_key(&key) {
+            let name = if i.installed_as.is_empty() {
+                i.package.clone()
+            } else {
+                i.installed_as.clone()
+            };
+            path_of.insert(key, format!("node_modules/{}", name));
+        }
+    }
+
+    let mut out: HashMap<String, ResolvedPackage> = HashMap::new();
+    for inst in &resolved.instances {
+        let key = (inst.package.clone(), inst.version.clone());
+        let Some(path) = path_of.get(&key) else {
+            continue;
+        };
+        // Deduplicate: two instances of the same name+version are the same
+        // directory.
+        if out.contains_key(path) {
+            continue;
+        }
+        let snap = match provider.snapshot(&inst.package, &inst.version) {
+            Ok(s) => s,
+            Err(e) => return Err(format!("metadata for {}: {}", inst.package, e)),
+        };
+        out.insert(
+            path.clone(),
+            ResolvedPackage {
+                version: inst.version.clone(),
+                resolved: snap.resolved,
+                integrity: snap.integrity,
+                dependencies: snap.dependencies,
+                peer_dependencies: snap.peer_dependencies,
+                peer_dependencies_meta: snap.peer_dependencies_meta,
+            },
+        );
+    }
+    let _ = &mut resolved;
+    Ok(out)
+}

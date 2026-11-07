@@ -168,10 +168,16 @@ Two things real data taught us, both now handled:
   alias before deciding a fetch is needed.
 * **Optional edges to unavailable packages** are dropped, not fatal.
 
-Still open: peers are recorded but not binding (npm installs and warns); hoisting
-is a simple most-demanded rule (`flatten_for_tree`); and **the installer's
-materialisation still uses its own nested layout** — wiring these instances into
-the tree and lockfile is the next step, not a redesign.
+**Wired into the tree** (opt-in, `JHOL_NEST_RESOLVER=1`):
+`lockfile_write::resolve_full_tree_nested` turns instances into a node-keyed
+tree, attaches tarball URLs and integrity from the registry provider, and retries
+on `MissingPackument`. `jhol install jest@29.7.0` installs 266 packages with
+nested majors and a working `jest` bin.
+
+Still open: the tree is not yet stable (a warm run reports `function-bind` listed
+but absent, i.e. a planned path that materialisation does not write), so the
+default stays on the previous path. Peers are recorded, not binding; hoisting is
+a most-demanded rule.
 
 ## Earlier blocker note (kept for the record)
 

@@ -7267,12 +7267,44 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                         );
                     }
                 }
+                // Primary: per-dependent instances (`jagr_nest`), which can hold
+                // several majors of one package — the case a flat domain cannot
+                // represent and the reason real trees used to fail here.
+                // Fallback: the previous flat-then-nest resolver, so a graph the
+                // instance resolver rejects still installs.
+                // OPT-IN until the plan and materialisation agree: the instance
+                // resolver installs jest end to end (266 packages, nested majors
+                // and all), but the resulting tree is not yet stable — a warm run
+                // reports a package the lockfile lists and the tree lacks
+                // (`function-bind`), i.e. one instance's planned path is not the
+                // path that gets materialised. A resolver whose output the
+                // installer only partly honours must not be the default.
+                let nested_first = matches!(
+                    std::env::var("JHOL_NEST_RESOLVER").as_deref(),
+                    Ok("1") | Ok("true")
+                );
                 let resolved_tree: Result<
                     HashMap<String, crate::lockfile_write::ResolvedPackage>,
                     String,
                 > = match fast_layout {
                     Some(layout) => Ok(layout.into_iter().collect()),
-                    None => crate::lockfile_write::resolve_full_tree(pj),
+                    None => {
+                        let mut attempt = if nested_first {
+                            crate::lockfile_write::resolve_full_tree_nested(pj)
+                        } else {
+                            Err("disabled".to_string())
+                        };
+                        if attempt.is_err() {
+                            if nested_first && !options.quiet {
+                                crate::utils::log(&format!(
+                                    "nested resolver: {}; falling back to the flat resolver",
+                                    attempt.as_ref().err().map(|e| e.as_str()).unwrap_or("")
+                                ));
+                            }
+                            attempt = crate::lockfile_write::resolve_full_tree(pj);
+                        }
+                        attempt
+                    }
                 };
                 match resolved_tree {
                     Ok(mut tree) => {

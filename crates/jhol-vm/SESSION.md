@@ -2012,3 +2012,23 @@ That distinction is what lets a caller act instead of apologising.
 
 Still not wired into materialisation or the lockfile. Said plainly in the docs
 rather than implied by the word "resolved".
+
+## Journal — 2026-11-07 (cont.): jest installs, but I will not call it ready
+
+Wired jagr_nest into the real tree path (resolve_full_tree_nested): instances ->
+paths -> tarball+integrity, with fetch-and-retry. `jhol install jest@29.7.0`
+now installs 266 packages, nested majors included, jest bin present. It failed
+outright before.
+
+I made it opt-in anyway. A warm run reports a package the lockfile lists and the
+tree lacks (function-bind) and repairs 1-2 packages per run — the planned path
+for one instance is not the path materialisation writes. That is a plumbing bug,
+but "installs 266 packages and then quietly needs repair" is not production
+ready, and the default path is unchanged so nobody inherits it.
+
+Also hit the disk wall again (152 MiB free, build failed). Removed 12 GB of
+regenerable target/debug. The standing rule earned its place.
+
+Costs: cold jest 54-70 s, ~270 sequential metadata fetches; resolver itself
+~103 ms. Parallel metadata fetch is the next change, and it is transport, not
+algorithm.

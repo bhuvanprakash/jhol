@@ -1444,3 +1444,55 @@ Not yet wired: the installer's materialisation still uses its own nested layout.
 Peers are recorded, not binding. Hoisting is a deterministic most-demanded rule.
 
 `jhol-core` 656 tests, `jhol-treecheck` 12, installer gate PASS.
+
+
+## Nested resolution wired into the tree — `jhol install jest` works (opt-in)
+
+`jagr_nest` now feeds the real install path through
+`lockfile_write::resolve_full_tree_nested`: instances decide the versions, a
+placement rule decides the directories, and the registry provider supplies each
+one's tarball URL and integrity. Fetch-and-retry is built in — the resolver
+reports which package it needs and the loop provides it, so the resolver stays
+independent of the transport.
+
+Measured, cold cache, `jest@29.7.0`:
+
+```
+nest: Added 266 packages | 197 top-level dirs | jest bin present
+      node_modules/@babel/core/node_modules/semver
+      node_modules/jest-worker/node_modules/supports-color
+      node_modules/p-locate/node_modules/p-limit
+      ansi-styles coexisting at 2 majors
+```
+
+`jhol install jest` previously failed outright on this manifest.
+
+### Why it is opt-in (`JHOL_NEST_RESOLVER=1`)
+
+The tree is not yet **stable**: a warm run reports a package the lockfile lists
+and the tree lacks (`node_modules/function-bind`), then repairs one or two
+packages per run. That is a disagreement between the planned path for an instance
+and the path materialisation writes — a plumbing bug, not a resolution bug, and
+exactly the class of "fast path answers a question it cannot see" this project has
+been removing. A resolver the installer only partly honours must not be the
+default, so the default path is unchanged and shows no regression:
+
+| manifest | default | `JHOL_NEST_RESOLVER=1` |
+|---|---|---|
+| `express@^4` | 71 packages ✅ | 71 packages ✅ |
+| `jest@29.7.0` | conflict error (pre-existing) | **266 packages ✅** |
+
+### Costs measured
+
+Cold `jest` takes 54–70 s, dominated by fetching ~270 packuments sequentially
+plus 266 tarballs. The resolver itself is ~103 ms on that corpus. Parallel
+metadata fetch is the obvious next step, and it is a transport change, not a
+resolver change.
+
+`jhol-core` 656 tests, `jhol-treecheck` 12, installer gate PASS.
+
+### Housekeeping
+
+The build failed with `No space left on device` (152 MiB free). Removed 12 GB of
+regenerable `target/debug` before rebuilding — the standing rule exists because
+this has bitten before.
