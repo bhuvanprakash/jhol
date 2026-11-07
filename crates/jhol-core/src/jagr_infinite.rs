@@ -763,7 +763,7 @@ pub mod atlas {
         package_versions: &HashMap<u32, Vec<VersionOrdinal>>,
         package_version_strings: &HashMap<u32, Vec<String>>,
         package_deps: &HashMap<u32, Vec<(u32, String, VersionInterval, bool)>>,
-        package_peers: &HashMap<u32, Vec<(u32, VersionInterval)>>,
+        package_peers: &HashMap<u32, Vec<(u32, String, VersionInterval)>>,
     ) -> Chart {
         let mut packages = HashMap::new();
         let mut betti = BettiNumbers::default();
@@ -832,10 +832,10 @@ pub mod atlas {
                 .get(pkg_id)
                 .map(|v| {
                     v.iter()
-                        .map(|(t, r)| crate::jagr_infinite::chart::PeerEdge {
+                        .map(|(t, spec, r)| crate::jagr_infinite::chart::PeerEdge {
                             target_pkg: *t,
                             required: *r,
-                            required_mask: None,
+                            required_mask: mask_for(*t, spec),
                         })
                         .collect()
                 })
@@ -1546,7 +1546,7 @@ pub mod precompute {
             u32,
             (Vec<VersionOrdinal>, Vec<String>),
             Vec<(u32, String, VersionInterval, bool)>,
-            Vec<(u32, VersionInterval)>,
+            Vec<(u32, String, VersionInterval)>,
         )> = packuments
             .par_iter()
             .filter_map(|(name, packument)| {
@@ -1853,7 +1853,7 @@ pub mod precompute {
     fn extract_peers(
         packument: &serde_json::Value,
         name_to_id: &HashMap<String, u32>,
-    ) -> Vec<(u32, VersionInterval)> {
+    ) -> Vec<(u32, String, VersionInterval)> {
         // Same borrowed pre-deduplication as extract_deps; peer ranges also
         // recur heavily across release histories.
         let mut specs: HashSet<(&str, &str)> = HashSet::new();
@@ -1862,7 +1862,10 @@ pub mod precompute {
                 if let Some(peers) = ver_info.get("peerDependencies").and_then(|v| v.as_object()) {
                     for (peer_name, spec) in peers {
                         if name_to_id.contains_key(peer_name) {
-                            specs.insert((peer_name.as_str(), spec.as_str().unwrap_or("*")));
+                            specs.insert((
+                                peer_name.as_str(),
+                                spec.as_str().unwrap_or("*").trim(),
+                            ));
                         }
                     }
                 }
@@ -1873,7 +1876,10 @@ pub mod precompute {
             if let (Some(&peer_id), Some(interval)) =
                 (name_to_id.get(peer_name), spec_to_interval(spec))
             {
-                edges.insert((peer_id, interval));
+                // The raw spec rides along so the chart builder can build a
+                // mask in the *peer's* ordinal space — the same reason
+                // dependencies carry theirs.
+                edges.insert((peer_id, spec.to_string(), interval));
             }
         }
         edges.into_iter().collect()
@@ -1930,7 +1936,7 @@ pub mod precompute {
             assert_eq!(specs, vec!["^1.0.0", "~1.2.0"]);
 
             assert_eq!(peers.len(), 1);
-            assert!(peers.iter().all(|(id, _)| *id == 9));
+            assert!(peers.iter().all(|(id, _, _)| *id == 9));
         }
     }
 
@@ -2536,10 +2542,12 @@ pub mod rvm {
                             // Does the peer's range overlap anything the domain
                             // still allows? Test by intersecting the peer mask
                             // with the live domain — no interval round-trip.
-                            let mut mask =
-                                crate::jagr_infinite::chart::VersionBitmap::from_interval(
+                            let mut mask = match &peer.required_mask {
+                                Some(m) if !m.is_empty() => m.clone(),
+                                _ => crate::jagr_infinite::chart::VersionBitmap::from_interval(
                                     peer.required,
-                                );
+                                ),
+                            };
                             mask.intersect(&narrowed);
                             if !mask.is_empty() {
                                 narrowed = mask;

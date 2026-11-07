@@ -989,3 +989,51 @@ Cold install, isolated caches, no daemon:
 | jest | 4961 | 33082 |
 
 Real packages: 19/19 in an isolated sweep. Installer gate PASS, engine gate PASS.
+
+
+## JAGR-∞: peer masks, and a correction to the warm-install number
+
+### Peer masks wired
+
+`PeerEdge.required_mask` is populated now (it was always `None`), so peer
+requirements narrow in the *peer's* ordinal space exactly as dependencies do:
+`extract_peers` carries the raw spec, the chart builder evaluates it against the
+peer's published versions, and `propagate` prefers the mask over the generic
+interval. The peer loop previously did `let _ = peer;`, then briefly only
+narrowed by the generic interval — which was `full` for plain specs, i.e. no
+narrowing at all.
+
+### Correction: the warm-install gap is ~2.5x, not 14x
+
+The 14x figure recorded earlier compared `jhol install <pkg> --no-save` (which
+has no manifest entry and therefore re-resolves on every run) against bun binding
+a lockfile. Measured on the path users actually take — a project with
+`package.json` + `package-lock.json`, `node_modules` wiped:
+
+| | jhol | bun |
+|---|---:|---:|
+| warm install, express (68 packages) | 50 / 54 / 69 ms | 21 / 22 / 22 ms |
+
+So **~2.5x**, not 14x. The genuine defect is narrower and still real:
+`install <pkg> --no-save` re-resolves every time (351–479 ms for the same tree)
+because the request never matches the lockfile's root dependency set.
+
+### Numbers, final state of this session
+
+| workload | jhol | bun |
+|---|---:|---:|
+| cold express | 646 | 1417 |
+| cold webpack | 1974 | 4738 |
+| cold eslint | 1652 | 1732 |
+| cold jest | 4961 | 33082 |
+| warm express (lockfile) | ~57 | ~22 |
+
+Cold is comfortably ahead; warm is behind by 2.5x and the reason is known
+(materialisation, not resolution — 68 directories rebuilt from the content store
+versus bun's clone-from-cache).
+
+### Tests
+
+`jhol-core`: 632 passing, 6 ignored. Both gates PASS (the installer gate's first
+run reported a transient failure while the release binary was being rewritten;
+re-run green, 2,107 files deterministic).

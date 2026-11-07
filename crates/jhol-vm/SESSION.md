@@ -1789,3 +1789,16 @@ ordinals — an ordinal written as a semver spec matches nothing and every mask
 comes back empty, which reads as "no versions available" rather than "bad test".
 
 632 core tests, both gates PASS, 19/19 real packages.
+
+## Journal — 2026-11-07 (cont.): peer masks + warm-number correction
+
+Wired PeerEdge.required_mask (extract_peers carries the spec, builder resolves
+it against the peer's versions, propagate prefers it). Peers now narrow like
+dependencies instead of not at all.
+
+Correction worth remembering: my earlier "warm is 14x behind bun" compared
+`install <pkg> --no-save` (re-resolves every run; no manifest entry) against bun
+binding a lockfile. On the real path — manifest + lockfile, node_modules wiped —
+it is jhol ~57ms vs bun ~22ms, i.e. **2.5x**, and the cause is materialisation
+(68 dirs rebuilt from the content store) not resolution. Measure the path users
+take, not the one that is convenient to script.
