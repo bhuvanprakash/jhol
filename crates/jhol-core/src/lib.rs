@@ -63,6 +63,7 @@ pub mod selective_extract;
 pub mod soul_path;
 pub mod spec_grammar;
 pub mod task_queue;
+pub use jhol_treecheck as tree_state;
 pub mod utils;
 pub mod ux;
 pub mod workspaces;

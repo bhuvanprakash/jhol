@@ -290,6 +290,72 @@ impl InstallProgress {
     }
 }
 
+/// Set when a fast lane declined or pruned because the tree disagreed with the
+/// lockfile. The summary must not then say "Up to date": the install repaired
+/// something, and saying otherwise is the same class of lie the verification
+/// exists to stop.
+static TREE_REPAIRED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Ask the tree whether anything needs doing, reconcile whatever needs no
+/// resolution to fix, and report honestly. `true` means the install is already
+/// done.
+///
+/// This exists so "is it up to date?" is answered in exactly one place. Before
+/// it, five gates answered with five kinds of evidence — an mtime marker, a
+/// lockfile fingerprint, a prepared-tree proof, `nm_fresh()`, a daemon verdict —
+/// and none of them could see a package.json edited inside a package, or a
+/// directory the lockfile never authorised.
+fn tree_is_current_and_reported(quiet: bool) -> bool {
+    use jhol_core::tree_state::{reconcile_tree, verify_tree};
+    let before = verify_tree(Path::new("."));
+    let state = reconcile_tree(Path::new("."));
+    if !before.is_match() && !matches!(before, jhol_core::tree_state::TreeState::Unverified { .. })
+    {
+        // The tree disagreed with the lockfile when we arrived, so whatever the
+        // install ends up doing, the summary must not say "Up to date".
+        TREE_REPAIRED.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    if !state.is_match() {
+        if env::var("JHOL_VERBOSE").is_ok() {
+            eprintln!("[jhol] tree needs work: {}", state.describe());
+        }
+        return false;
+    }
+    let repaired = TREE_REPAIRED.swap(false, std::sync::atomic::Ordering::Relaxed);
+    if !quiet {
+        let total = jhol_core::count_installed_packages(Path::new("."));
+        if repaired {
+            println!("Repaired ({} packages in node_modules)", total);
+        } else {
+            println!("Up to date ({} packages in node_modules)", total);
+        }
+    }
+    true
+}
+
+/// For a plain `jhol install` / `jhol i` with no package arguments and no flags
+/// that change what is installed: if the tree already matches the lockfile,
+/// report it and finish — no clap parsing, no workspace walk, no daemon, no
+/// lane.
+fn plain_install_fully_settled() -> bool {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let Some(first) = args.first() else {
+        return false;
+    };
+    if first != "install" && first != "i" {
+        return false;
+    }
+    for arg in &args[1..] {
+        match arg.as_str() {
+            "-q" | "--quiet" | "--native-only" | "--offline" | "--no-scripts" => {}
+            _ => return false,
+        }
+    }
+    let quiet = args.iter().any(|a| a == "-q" || a == "--quiet")
+        || std::env::var("JHOL_QUIET").is_ok();
+    tree_is_current_and_reported(quiet)
+}
+
 /// Print the final install summary line using accurate per-install metrics.
 /// Summary semantics from before/after package counts on disk. A fresh tree
 /// reports the full count as `added`; no change reports "up to date" instead
@@ -378,7 +444,9 @@ fn print_install_summary(
         } else {
             format!("{:.2}s", elapsed.as_secs_f64())
         };
-        if up_to_date {
+        if up_to_date && TREE_REPAIRED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            println!("Repaired ({} packages in node_modules)", total);
+        } else if up_to_date {
             println!("Up to date ({} packages in node_modules)", total);
         } else {
             let extra = if total != added {
@@ -2185,8 +2253,20 @@ fn try_fast_install() -> Option<Result<(usize, usize), String>> {
     // Count what is on disk before any fast lane runs, so the caller can say
     // honestly whether the tree changed and by how many packages.
     let count_before = jhol_core::count_installed_packages(Path::new("."));
-    let result = if jhol_core::instant_lock_proof::prepared_tree_is_valid(Path::new(".")) {
-        // 1. Zero-cost recheck: node_modules already matches lockfile fingerprint
+    // "The prepared tree is valid" is a statement about a proof, not about the
+    // tree. A package.json edited on disk and a directory the lockfile never
+    // authorises both satisfied it, and this lane returns before
+    // install_package() can notice. Verify the tree itself here, and prune what
+    // the lockfile does not authorise (that needs no resolution).
+    let tree_ok = {
+        let state = jhol_core::tree_state::reconcile_tree(Path::new("."));
+        if !state.is_match() && env::var("JHOL_VERBOSE").is_ok() {
+            eprintln!("[jhol] fast lane declined: {}", state.describe());
+        }
+        state.is_match()
+    };
+    let result = if tree_ok && jhol_core::instant_lock_proof::prepared_tree_is_valid(Path::new(".")) {
+        // 1. Zero-cost recheck: node_modules already matches the lockfile
         Some(Ok(()))
     } else if jhol_core::instant_lock_proof::try_direct_bundle_projection(Path::new(".")) {
         // 2. Direct L0 bundle projection from cache
@@ -2286,16 +2366,33 @@ fn run() -> Result<(), String> {
     let fast_start = std::time::Instant::now();
     if let Some(fast_res) = try_fast_install() {
         let fast_elapsed = fast_start.elapsed();
-        return match fast_res {
+        match fast_res {
             Ok((before, after)) => {
-                let (added, _) = install_summary_counts(before, after);
-                let fast_quiet = env::var("JHOL_QUIET").is_ok()
-                    || env::args().any(|a| a == "-q" || a == "--quiet");
-                print_install_summary(added, after, fast_elapsed, fast_quiet, false);
-                Ok(())
+                // The ONE convergence point. Regardless of which lane won, the
+                // tree must now agree with the lockfile; a lane that returns
+                // "done" while the tree still disagrees has not finished the
+                // job, and claiming success here is how a tampered package and
+                // an unauthorised directory both survived an install.
+                let state = jhol_core::tree_state::reconcile_tree(Path::new("."));
+                if state.is_match() {
+                    let (added, _) = install_summary_counts(before, after);
+                    let fast_quiet = env::var("JHOL_QUIET").is_ok()
+                        || env::args().any(|a| a == "-q" || a == "--quiet");
+                    if added == 0 && env::var("JHOL_VERBOSE").is_ok() {
+                        eprintln!("[jhol] fast lane verified: {}", state.describe());
+                    }
+                    print_install_summary(added, after, fast_elapsed, fast_quiet, false);
+                    return Ok(());
+                }
+                if env::var("JHOL_VERBOSE").is_ok() {
+                    eprintln!("[jhol] fast lane incomplete: {}", state.describe());
+                }
+                TREE_REPAIRED.store(true, std::sync::atomic::Ordering::Relaxed);
+                // Fall through to the full CLI install, which can resolve and
+                // materialise whatever is actually missing or wrong.
             }
-            Err(e) => Err(e),
-        };
+            Err(e) => return Err(e),
+        }
     }
 
     // Splash first: it states which machine platform-specific packages are being
@@ -8347,6 +8444,13 @@ fn main() {
     // panicked with "Broken pipe" — and release builds use panic=abort, so that
     // killed the process. Restore the default before any output.
     jhol_core::restore_default_sigpipe();
+
+    // THE freshness authority, before any lane is chosen. See
+    // tree_is_current_and_reported: five downstream gates each answer with
+    // evidence too weak for the question, and which one runs decides the result.
+    if plain_install_fully_settled() {
+        return;
+    }
 
     // An engine name that resolves to nothing used to silently run the script
     // on a different backend, which then surfaced engine-specific errors (a raw

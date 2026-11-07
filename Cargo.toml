@@ -19,6 +19,7 @@ members = [
     # Phase D optional remote CAS (not a default binary dep)
     "crates/jhol-remote",
     "crates/jhol-trampoline",
+    "crates/jhol-treecheck",
     "crates/jhol-vm",
 ]
 resolver = "2"

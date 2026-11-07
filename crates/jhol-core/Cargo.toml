@@ -19,6 +19,7 @@ hardware-sha = ["sha2/asm"]
 pipeline = []  # JGrid instant-materialization layer (in-tree module)
 
 [dependencies]
+jhol-treecheck = { path = "../jhol-treecheck" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = "0.4"

@@ -5658,7 +5658,26 @@ fn try_capsule_install(
     // skip ALL install work — packages and bin links are already up to date.
     // This saves 15-20ms of filesystem syscalls on every warm install.
     if nm_fresh().is_some() && crate::daemon_cache::can_skip_install_for_dir(project_dir) {
-        return Ok(Some([0u8; 8])); // sentinel: skip marker writes (already fresh)
+        // The fingerprint proves nothing *around* the tree changed. It does not
+        // prove the tree is still what the lockfile authorises: a package.json
+        // edited on disk and a directory the lockfile never mentions both
+        // survive it. Ask the tree, not the fingerprint.
+        let state = crate::tree_state::verify_tree(project_dir);
+        if state.is_match() {
+            return Ok(Some([0u8; 8])); // sentinel: skip marker writes (already fresh)
+        }
+        if std::env::var("JHOL_VERBOSE").is_ok() {
+            eprintln!("[jhol] warm tree rejected: {}", state.describe());
+        }
+        // Unauthorised directories need no resolution to remove, so prune them
+        // and re-check: a tree that was only dirty is then genuinely up to date.
+        if matches!(state, crate::tree_state::TreeState::Extraneous { .. }) {
+            let _ = crate::tree_state::prune_extraneous(project_dir);
+            if crate::tree_state::verify_tree(project_dir).is_match() {
+                return Ok(Some([0u8; 8]));
+            }
+        }
+        // Anything else (missing package, wrong version) needs a real install.
     }
     if std::env::var("JHOL_PROFILE_INSTALL").is_ok() {
         eprintln!(
@@ -6684,8 +6703,19 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
     // as the front door. Mtime-only status markers do not bind lockfiles,
     // install paths, policy, or platform and therefore cannot authorize reuse.
     if options.omit.is_empty() && can_use_instant_lock_proof(packages, options, Path::new(".")) {
-        profiler.mark("lane0_warm_bypass");
-        return Ok(());
+        // The proof says the prepared tree was valid when it was written. It
+        // cannot say the tree is still what the lockfile authorises: a
+        // package.json edited on disk and a directory the lockfile never
+        // mentions both satisfy it. Ask the tree itself before skipping work.
+        let state = crate::tree_state::reconcile_tree(Path::new("."));
+        if state.is_match() {
+            profiler.mark("lane0_warm_bypass");
+            return Ok(());
+        }
+        if std::env::var("JHOL_VERBOSE").is_ok() {
+            eprintln!("[jhol] lane0 rejected: {}", state.describe());
+        }
+        // Missing or wrong versions fall through to the real install.
     }
 
     // Capsule-first fast path: mmap'd zero-parse graph → install.

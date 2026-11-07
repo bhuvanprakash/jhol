@@ -11,6 +11,7 @@ name = "jhol-trampoline"
 path = "src/main.rs"
 
 [dependencies]
+jhol-treecheck = { path = "../jhol-treecheck" }
 serde_json = "1"
 sha2 = "0.10"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }

@@ -1819,3 +1819,30 @@ explicit path project the prepared tree too.
 
 Lesson: a "flag that should make it fast" needs a measurement that shows the
 flag *firing*, not just a benchmark that shows a number moving.
+
+## Journal — 2026-11-07 (cont.): the core issue, and fixing it at the entry point
+
+Found the real thing. Three repros on one express project: a tampered package
+survives `jhol install` ("Up to date"), an unauthorised directory is kept
+forever, a deleted package is repaired. Inconsistent because FIVE components
+decide "up to date" with different evidence (trampoline mtime, prepared-tree
+proof, bundle projection, lockfile fingerprint, daemon verdict) and none of them
+can see inside the tree.
+
+Fix: `crates/jhol-treecheck` — Match|Missing|Wrong|Extraneous|Unverified, one
+package.json read per package, `reconcile_tree()` prunes what is unauthorised.
+Consulted at the entry point before any lane, and at the convergence point after
+them. Lanes may save work; they may not decide truth.
+
+Cost of learning it: I patched four wrong gates first — the capsule lane, lane 0,
+the CLI fast lane, the run() convergence — and each time the deciding gate was
+somewhere else. Twice my patch silently no-opped (bad anchor, `replace` with no
+match) and I read a benchmark instead of checking the patch landed. Verify the
+patch applied before believing the measurement.
+
+Also caught in my own code: the verifier's walker descended into package
+internals, so `node_modules/a/lib` looked like an unauthorised package that
+pruning would have deleted. Fixed + tested.
+
+Result: tamper detected and repaired, extraneous pruned 3/3, honest "Repaired"
+summary, warm install 9-11ms and stable.

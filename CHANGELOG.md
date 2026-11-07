@@ -1076,3 +1076,69 @@ it — not the resolver.**
 
 Recorded because a failed optimization is a fact about the system: the resolver
 was not the problem, and the fix belongs one layer down.
+
+
+## The core issue: fast paths answered a question they could not see
+
+Three reproducible defects, all on a plain `express@^4` project, all the same
+shape — a decision made from evidence too weak for the question:
+
+| what was done to the tree | jhol said | truth |
+|---|---|---|
+| deleted `node_modules/express` | Added 1 packages | repaired |
+| edited `node_modules/express/package.json` → `9.9.9` | **Up to date** | tampered version kept |
+| added `node_modules/evil-leftover` (not in the lockfile) | **Up to date** | kept forever |
+
+A tampered package surviving an install and an unauthorised package being
+permanent are not performance misses; they are the two properties a package
+manager exists to guarantee. They were possible because **five components
+independently decided "already up to date"**, each with different evidence:
+
+1. the trampoline's `.jhol-ok` mtime,
+2. the CLI's prepared-tree proof,
+3. the JGrid bundle projection lane,
+4. `lockfile_fingerprint_matches()`,
+5. the daemon's verdict,
+
+plus `nm_fresh()` inside `install_package`. A fingerprint can prove "nothing
+changed *around* the tree". None of them could prove "*the tree is what the
+lockfile authorises*" — which is why the answer depended on which lane won.
+
+### The fix: one predicate, one decision point
+
+New crate **`crates/jhol-treecheck`** (deps: `serde_json`; 10 tests):
+
+```
+Match | Missing{path} | Wrong{path,want,got} | Extraneous{path} | Unverified{reason}
+```
+
+It reads one small `package.json` per installed package and no archives, so it
+is cheap enough to run on every warm install. `reconcile_tree()` verifies,
+removes unauthorised directories (which needs no resolution), and verifies
+again. `jhol-core` re-exports it, so the CLI, the installer lanes and the
+trampoline share one implementation — the trampoline deliberately does not
+depend on `jhol-core`, which is why this had to be its own crate.
+
+It is consulted **at the entry point**, before any lane is chosen, and again at
+the single convergence point where every fast lane's success is checked. A lane
+may now only *save work*; it cannot *decide truth*.
+
+### Measured
+
+| | before | after |
+|---|---|---|
+| package.json edited to 9.9.9 | Up to date, kept | `Repaired`, restored to 4.22.3 |
+| unauthorised directory | Up to date, kept | `Repaired`, removed (3/3 runs) |
+| clean warm install (71 pkgs) | 8-33 ms | **9-11 ms** |
+
+`Repaired (n packages in node_modules)` is a new outcome: an install that fixed
+something no longer claims it did nothing.
+
+### A bug found in the verifier itself
+
+The first walker descended into a package's own subdirectories, so
+`node_modules/a/lib` was reported as an unauthorised package and would have been
+**pruned with real files inside it**. The queue now holds `node_modules`
+directories, never package directories; a test pins scoped and nested layouts.
+
+`jhol-core` 632 tests, `jhol-treecheck` 10, installer gate PASS.
