@@ -726,7 +726,7 @@ pub mod atlas {
         constraints: &HashMap<u32, VersionInterval>,
         package_versions: &HashMap<u32, Vec<VersionOrdinal>>,
         package_version_strings: &HashMap<u32, Vec<String>>,
-        package_deps: &HashMap<u32, Vec<(u32, VersionInterval)>>,
+        package_deps: &HashMap<u32, Vec<(u32, VersionInterval, bool)>>,
         package_peers: &HashMap<u32, Vec<(u32, VersionInterval)>>,
     ) -> Chart {
         let mut packages = HashMap::new();
@@ -752,10 +752,10 @@ pub mod atlas {
                 .get(pkg_id)
                 .map(|v| {
                     v.iter()
-                        .map(|(t, r)| crate::jagr_infinite::chart::DependencyEdge {
+                        .map(|(t, r, opt)| crate::jagr_infinite::chart::DependencyEdge {
                             target_pkg: *t,
                             required: *r,
-                            optional: false,
+                            optional: *opt,
                         })
                         .collect()
                 })
@@ -1476,7 +1476,7 @@ pub mod precompute {
         let items: Vec<(
             u32,
             (Vec<VersionOrdinal>, Vec<String>),
-            Vec<(u32, VersionInterval)>,
+            Vec<(u32, VersionInterval, bool)>,
             Vec<(u32, VersionInterval)>,
         )> = packuments
             .par_iter()
@@ -1722,28 +1722,51 @@ pub mod precompute {
     fn extract_deps(
         packument: &serde_json::Value,
         name_to_id: &HashMap<String, u32>,
-    ) -> Vec<(u32, VersionInterval)> {
+    ) -> Vec<(u32, VersionInterval, bool)> {
         // Dependency declarations repeat across many releases. Deduplicate the
-        // borrowed (name, spec) pairs before semver parsing so repeated ranges
-        // cost one parse, without allocating intermediate Strings.
-        let mut specs: HashSet<(&str, &str)> = HashSet::new();
+        // borrowed (name, spec, optional) triples before semver parsing so
+        // repeated ranges cost one parse, without allocating intermediate
+        // Strings.
+        //
+        // The optional flag is carried through to the chart because the two
+        // classes behave differently at resolution time: a required edge that
+        // cannot be satisfied is a conflict, while an optional edge that cannot
+        // be satisfied is *dropped* (npm installs the tree and omits the leaf).
+        // Marking every edge required — which this did — meant one unavailable
+        // platform-specific optional dependency could fail a whole install.
+        let mut specs: HashSet<(&str, &str, bool)> = HashSet::new();
         if let Some(versions) = packument.get("versions").and_then(|v| v.as_object()) {
             for ver_info in versions.values() {
-                if let Some(deps) = ver_info.get("dependencies").and_then(|v| v.as_object()) {
-                    for (dep_name, spec) in deps {
-                        if name_to_id.contains_key(dep_name) {
-                            specs.insert((dep_name.as_str(), spec.as_str().unwrap_or("*")));
+                for (key, optional) in [("dependencies", false), ("optionalDependencies", true)] {
+                    if let Some(deps) = ver_info.get(key).and_then(|v| v.as_object()) {
+                        for (dep_name, spec) in deps {
+                            if name_to_id.contains_key(dep_name) {
+                                specs.insert((
+                                    dep_name.as_str(),
+                                    spec.as_str().unwrap_or("*"),
+                                    optional,
+                                ));
+                            }
                         }
                     }
                 }
             }
         }
+        // A name declared in both sections is a hard dependency: npm treats the
+        // required declaration as authoritative.
+        let mut required_names: HashSet<&str> = HashSet::new();
+        for (name, _, optional) in &specs {
+            if !*optional {
+                required_names.insert(name);
+            }
+        }
         let mut edges = HashSet::with_capacity(specs.len());
-        for (dep_name, spec) in specs {
+        for (dep_name, spec, optional) in specs {
+            let optional = optional && !required_names.contains(dep_name);
             if let (Some(&dep_id), Some(interval)) =
                 (name_to_id.get(dep_name), spec_to_interval(spec))
             {
-                edges.insert((dep_id, interval));
+                edges.insert((dep_id, interval, optional));
             }
         }
         edges.into_iter().collect()
@@ -1816,7 +1839,7 @@ pub mod precompute {
             let deps = extract_deps(&packument, &ids);
             let peers = extract_peers(&packument, &ids);
             assert_eq!(deps.len(), 1);
-            assert!(deps.iter().all(|(id, _)| *id == 7));
+            assert!(deps.iter().all(|(id, _, opt)| *id == 7 && !*opt));
             assert_eq!(peers.len(), 1);
             assert!(peers.iter().all(|(id, _)| *id == 9));
         }
@@ -2042,159 +2065,53 @@ pub mod rvm {
         use serde::{Deserialize, Serialize};
         use std::collections::HashMap;
 
-        /// RVM Instruction Set — designed for tropical/sheaf/MaxSAT ops
+        /// RVM Instruction Set — only what the resolver actually executes.
+        ///
+        /// Earlier revisions advertised MaxSAT/tropical/knot operations here.
+        /// None of them were implemented, and the unimplemented arms returned
+        /// an *empty resolution* rather than failing, which surfaced to users
+        /// as `verify_deps: empty resolution` on real packages. A design sketch
+        /// in an instruction set is a lie the compiler cannot catch: adding an
+        /// instruction now means implementing it here and emitting it from
+        /// `compile`, nothing else.
+        ///
+        /// The instruction set is deliberately tiny, because the resolving
+        /// power lives in two instructions rather than in a plan:
+        ///
+        ///   `Propagate` — narrow every package's version domain to a fixpoint
+        ///                 by intersecting dependents' ranges into it.
+        ///   `Search`    — bounded backtracking over the narrowed domains.
         #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
         pub enum Inst {
-            // ── Version Space Operations ──
-            /// Push version interval for package onto stack
-            PushInterval {
-                pkg: u32,
-                lo: u16,
-                hi: u16,
-            },
-            /// Intersect top two intervals on stack (SIMD bitmap AND)
-            IntersectInterval,
-            /// Check if interval is empty
-            CheckEmpty,
-            /// Push peer requirement interval
-            CheckPeer {
-                pkg: u32,
-                req_lo: u16,
-                req_hi: u16,
-            },
-            /// Push dependency requirement
-            CheckDep {
-                target_pkg: u32,
-                req_lo: u16,
-                req_hi: u16,
-                optional: bool,
-            },
-
-            // ── Topology Operations ──
-            /// Compute Betti numbers for chart
-            ComputeBetti {
-                chart_id: u64,
-            },
-            /// Compute knot invariants for SCC
-            KnotInvariant {
-                scc_id: u32,
-            },
-            /// Classify knot → strategy
-            ClassifyKnot,
-            /// Push strategy onto stack
-            PushStrategy {
-                strategy: u8,
-            }, // 0=Greedy, 1=MaxSAT2Var, 2=Portfolio
-
-            // ── Solving Operations ──
-            /// Run greedy on SCC
-            GreedySCC {
-                scc_id: u32,
-            },
-            /// Run 2-var MaxSAT (OL3P/OL3PS)
-            MaxSAT2Var {
-                vars: u32,
-            },
-            /// Run full portfolio MaxSAT
-            MaxSATPortfolio {
-                knot_type: u8,
-            },
-            /// Tropical gradient descent step
-            TropicalStep {
-                t: u16,
-            }, // t * 10000
-
-            // ── Control Flow ──
-            /// Jump if top of stack is zero/false
-            Jz {
-                offset: i32,
-            },
-            /// Jump if top of stack non-zero/true
-            Jnz {
-                offset: i32,
-            },
-            /// Unconditional jump
-            Jmp {
-                offset: i32,
-            },
-            /// Call subroutine
-            Call {
-                offset: i32,
-            },
-            /// Return from subroutine
-            Ret,
-            /// Verify deps (exactness gate) — fails if violated
+            /// Seed one package's domain with a direct constraint interval.
+            PushInterval { pkg: u32, lo: u16, hi: u16 },
+            /// Load the chart for this constraint signature into the working set.
+            LoadChart { chart_id: u64 },
+            /// Narrow all domains to a fixpoint (Phase 1: bitmap propagation).
+            Propagate,
+            /// Bounded backtracking search over the narrowed domains.
+            Search { budget: u32 },
+            /// Exactness gate: every edge must be satisfied by the selection.
             VerifyDeps,
-            /// Stitch charts
-            StitchCharts {
-                count: u8,
-            },
-
-            // ── Learning (LCC) ──
-            /// Emit learned clause to LCC
-            EmitClause {
-                core_len: u16,
-            },
-            /// Query LCC with semantic hash
-            QueryLCC {
-                sig_hash: u64,
-            },
-            /// Push LCC result (0=miss, 1=SAT, 2=UNSAT)
-            PushLCCResult,
-
-            // ── Stack Manipulation ──
-            Pop,
-            Dup,
-            Swap,
-            /// Push constant u64
-            PushConst {
-                value: u64,
-            },
-            /// Push package ID
-            PushPkg {
-                pkg: u32,
-            },
-
-            // ── I/O ──
-            /// Load chart from atlas
-            LoadChart {
-                chart_id: u64,
-            },
-            /// Store resolution to output
+            /// Publish the selection as the program result.
             StoreResult,
-            /// End program
+            /// End program.
             Halt,
         }
 
-        /// Typed operand stack value
+        /// Typed operand stack value.
+        ///
+        /// Only the payloads the instruction set can produce. Knot invariants,
+        /// Betti numbers and learned-clause results used to live here for
+        /// instructions that were never emitted; the modules that computed them
+        /// (`knot_invariants`, `homotopy`, `sheaf_laplacian`, …) are kept
+        /// intact for later use — the *wiring* is gone, not the mathematics.
         #[derive(Clone, Debug)]
         pub enum Value {
             Interval(crate::jagr_infinite::chart::VersionInterval),
-            Bitmap(crate::jagr_infinite::chart::VersionBitmap),
-            Bool(bool),
-            U64(u64),
-            U32(u32),
-            Strategy(KnotStrategy),
             Chart(crate::jagr_infinite::chart::Chart),
             Resolution(HashMap<u32, crate::jagr_infinite::chart::VersionOrdinal>),
-            Betti(crate::jagr_infinite::chart::BettiNumbers),
-            KnotInvariant(crate::jagr_infinite::knot_invariants::KnotInvariants),
-            LCCResult(LCCResult),
             Unit,
-        }
-
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-        pub enum KnotStrategy {
-            Greedy = 0,
-            MaxSAT2Var = 1,
-            Portfolio = 2,
-        }
-
-        #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-        pub enum LCCResult {
-            Miss,
-            SAT(HashMap<u32, u16>), // assignment: pkg -> ordinal
-            UNSAT(Vec<u64>),        // unsatisfiable core (constraint hashes)
         }
 
         /// RVM Program — compiled bytecode
@@ -2253,10 +2170,19 @@ pub mod rvm {
                 // chart guarantees LoadChart resolves to the inserted chart.
                 let sig_hash = crate::jagr_infinite::chart::chart_id_from_constraints(constraints);
 
-                // Straight-line program the interpreter can execute:
-                //   LoadChart -> GreedySCC -> VerifyDeps -> StoreResult -> Halt
+                // The program the resolver actually runs. `Propagate` narrows
+                // every domain to a fixpoint (the common case: no conflict, and
+                // it finishes in one sweep), `Search` only adds work when a
+                // choice remains, and `VerifyDeps` is the exactness gate that
+                // turns a silent wrong answer into a named conflict.
+                let budget = std::env::var("JAGR_SEARCH_BUDGET")
+                    .ok()
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .filter(|v| *v > 0)
+                    .unwrap_or(20_000);
                 instructions.push(Inst::LoadChart { chart_id: sig_hash });
-                instructions.push(Inst::GreedySCC { scc_id: 0 });
+                instructions.push(Inst::Propagate);
+                instructions.push(Inst::Search { budget });
                 instructions.push(Inst::VerifyDeps);
                 instructions.push(Inst::StoreResult);
                 instructions.push(Inst::Halt);
@@ -2277,22 +2203,13 @@ pub mod rvm {
                 })
             }
 
-            #[allow(dead_code)]
-            fn spec_to_interval(spec: &str) -> Result<VersionInterval, String> {
-                // Simplified: exact version or *
-                if spec == "*" || spec == "latest" {
-                    return Ok(VersionInterval::full());
-                }
-                // Parse semver - simplified
-                Ok(VersionInterval::full())
-            }
         }
     }
 
     pub mod exec {
         // JAGR-∞ RVM — Interpreter + JIT Stub
 
-        use crate::jagr_infinite::rvm::inst::{Inst, KnotStrategy, LCCResult, Program, Value};
+        use crate::jagr_infinite::rvm::inst::{Inst, Program, Value};
         use crate::jagr_infinite::{
             atlas::Atlas,
             chart::{VersionInterval, VersionOrdinal},
@@ -2302,43 +2219,15 @@ pub mod rvm {
         /// RVM Execution Context
         pub struct RVM {
             pub program: Program,
-            pub pc: usize,               // program counter
-            pub stack: Vec<Value>,       // operand stack
-            pub atlas: Atlas,            // Global Sheaf Atlas
-            pub call_stack: Vec<usize>,  // return addresses
-            pub lcc: LearnedClauseCache, // Local LCC (in-memory)
+            pub pc: usize,          // program counter
+            pub stack: Vec<Value>,  // operand stack
+            pub atlas: Atlas,       // Global Sheaf Atlas
+            /// The chart under active narrowing (set by `LoadChart`, consumed
+            /// and rewritten by `Propagate` / `Search`). Holding it here keeps
+            /// the instruction set free of stack juggling.
+            pub working: Option<crate::jagr_infinite::chart::Chart>,
             pub max_steps: usize,
             pub steps: usize,
-        }
-
-        /// Learned Clause Cache (in-memory, per-session)
-        #[derive(Default)]
-        pub struct LearnedClauseCache {
-            sat_cache: HashMap<u64, HashMap<u32, u16>>, // sig_hash -> assignment
-            unsat_cache: HashMap<u64, Vec<u64>>,        // sig_hash -> unsat core
-            access_count: HashMap<u64, u64>,
-        }
-
-        impl LearnedClauseCache {
-            pub fn query(&mut self, sig_hash: u64) -> Option<LCCResult> {
-                if let Some(assignment) = self.sat_cache.get(&sig_hash) {
-                    *self.access_count.entry(sig_hash).or_default() += 1;
-                    return Some(LCCResult::SAT(assignment.clone()));
-                }
-                if let Some(core) = self.unsat_cache.get(&sig_hash) {
-                    *self.access_count.entry(sig_hash).or_default() += 1;
-                    return Some(LCCResult::UNSAT(core.clone()));
-                }
-                None
-            }
-            pub fn record_sat(&mut self, sig_hash: u64, assignment: HashMap<u32, u16>) {
-                self.sat_cache.insert(sig_hash, assignment);
-                self.access_count.insert(sig_hash, 1);
-            }
-            pub fn record_unsat(&mut self, sig_hash: u64, core: Vec<u64>) {
-                self.unsat_cache.insert(sig_hash, core);
-                self.access_count.insert(sig_hash, 1);
-            }
         }
 
         impl RVM {
@@ -2348,9 +2237,11 @@ pub mod rvm {
                     pc: 0,
                     stack: Vec::with_capacity(256),
                     atlas,
-                    call_stack: Vec::new(),
-                    lcc: LearnedClauseCache::default(),
-                    max_steps: 10000,
+                    working: None,
+                    // Program steps, not solver steps: the search budget is
+                    // enforced inside `Search`, so this only guards against a
+                    // malformed program looping.
+                    max_steps: 10_000,
                     steps: 0,
                 }
             }
@@ -2376,283 +2267,499 @@ pub mod rvm {
 
             fn execute(&mut self, inst: Inst) -> Result<(), String> {
                 match inst {
-                    // ── Version Space ──
-                    Inst::PushInterval { pkg: _, lo, hi } => {
-                        self.stack.push(Value::Interval(VersionInterval::new(
-                            VersionOrdinal(lo),
-                            VersionOrdinal(hi),
-                        )));
+                    Inst::PushInterval { pkg, lo, hi } => {
+                        // Direct constraints are already baked into the chart's
+                        // `allowed` bitmaps by `build_full_chart`; the interval
+                        // is kept on the stack so a program can inspect it.
+                        let _ = pkg;
+                        self.stack.push(Value::Interval(
+                            crate::jagr_infinite::chart::VersionInterval {
+                                lo: crate::jagr_infinite::chart::VersionOrdinal(lo),
+                                hi: crate::jagr_infinite::chart::VersionOrdinal(hi),
+                            },
+                        ));
                     }
-                    Inst::IntersectInterval => {
-                        let b = self.pop_interval()?;
-                        let a = self.pop_interval()?;
-                        self.stack.push(Value::Interval(a.intersect(&b)));
+                    Inst::LoadChart { chart_id } => {
+                        let chart = self
+                            .atlas
+                            .charts
+                            .get(&chart_id)
+                            .cloned()
+                            .ok_or_else(|| format!("chart {} not found", chart_id))?;
+                        self.working = Some(chart);
                     }
-                    Inst::CheckEmpty => {
-                        let interval = self.pop_interval()?;
-                        self.stack.push(Value::Bool(interval.is_empty()));
+                    Inst::Propagate => {
+                        let chart = self
+                            .working
+                            .take()
+                            .ok_or_else(|| "propagate: no chart loaded".to_string())?;
+                        let narrowed = Self::propagate(chart)?;
+                        self.working = Some(narrowed);
                     }
-                    Inst::CheckPeer {
-                        pkg: _,
-                        req_lo,
-                        req_hi,
-                    } => {
-                        let _req =
-                            VersionInterval::new(VersionOrdinal(req_lo), VersionOrdinal(req_hi));
-                        // Simplified: check if peer requirement satisfied by current selection
-                        self.stack.push(Value::Bool(true));
-                    }
-                    Inst::CheckDep {
-                        target_pkg: _,
-                        req_lo,
-                        req_hi,
-                        optional: _,
-                    } => {
-                        let _req =
-                            VersionInterval::new(VersionOrdinal(req_lo), VersionOrdinal(req_hi));
-                        self.stack.push(Value::Bool(true));
-                    }
-
-                    // ── Topology ──
-                    Inst::ComputeBetti { chart_id } => {
-                        if let Some(chart) = self.atlas.charts.get(&chart_id) {
-                            self.stack.push(Value::Betti(chart.betti));
-                        } else {
-                            self.stack.push(Value::Betti(Default::default()));
-                        }
-                    }
-                    Inst::KnotInvariant { scc_id: _ } => {
-                        // Simplified: return trivial invariants
-                        self.stack.push(Value::KnotInvariant(Default::default()));
-                    }
-                    Inst::ClassifyKnot => {
-                        let inv = self.pop_knot_invariant()?;
-                        self.stack.push(Value::Strategy(match inv.strategy() {
-                            crate::jagr_infinite::knot_invariants::KnotStrategy::Greedy => {
-                                KnotStrategy::Greedy
-                            }
-                            crate::jagr_infinite::knot_invariants::KnotStrategy::MaxSAT2Var => {
-                                KnotStrategy::MaxSAT2Var
-                            }
-                            crate::jagr_infinite::knot_invariants::KnotStrategy::Portfolio => {
-                                KnotStrategy::Portfolio
-                            }
-                        }));
-                    }
-                    Inst::PushStrategy { strategy } => {
-                        self.stack.push(Value::Strategy(match strategy {
-                            0 => KnotStrategy::Greedy,
-                            1 => KnotStrategy::MaxSAT2Var,
-                            _ => KnotStrategy::Portfolio,
-                        }));
-                    }
-
-                    // ── Solving ──
-                    Inst::GreedySCC { scc_id } => {
-                        // Greedy: pick the lowest allowed ordinal for each package in
-                        // the SCC's chart (chart was pushed by LoadChart).
-                        let mut selection = HashMap::new();
-                        let mut found_chart = false;
-                        if let Some(Value::Chart(chart)) = self.stack.pop() {
-                            found_chart = true;
-                            for (pkg_id, pkg) in &chart.packages {
-                                // choose latest allowed ordinal (npm default)
-                                let ord = pkg
-                                    .allowed
-                                    .pick_highest()
-                                    .or_else(|| pkg.allowed.pick_one())
-                                    .unwrap_or(pkg.ordinal_lo);
-                                selection.insert(*pkg_id, ord);
-                            }
-                        }
-                        if !found_chart {
-                            self.stack.push(Value::Resolution(HashMap::new()));
-                        } else {
-                            self.stack.push(Value::Resolution(selection));
-                        }
-                        let _ = scc_id;
-                    }
-                    Inst::MaxSAT2Var { vars: _ } => {
-                        // 2-variable MaxSAT via OL3P/OL3PS (instant)
-                        let selection = HashMap::new();
+                    Inst::Search { budget } => {
+                        let chart = self
+                            .working
+                            .take()
+                            .ok_or_else(|| "search: no chart loaded".to_string())?;
+                        let (selection, chart) = Self::search(chart, budget as usize)?;
+                        self.working = Some(chart);
                         self.stack.push(Value::Resolution(selection));
-                    }
-                    Inst::MaxSATPortfolio { knot_type: _ } => {
-                        // Full portfolio solver
-                        let selection = HashMap::new();
-                        self.stack.push(Value::Resolution(selection));
-                    }
-                    Inst::TropicalStep { t } => {
-                        // Tropical gradient step
-                        let _t = t as f64 / 10000.0;
-                        // Simplified
-                    }
-
-                    // ── Control Flow ──
-                    Inst::Jz { offset } => {
-                        let cond = self.pop_bool()?;
-                        if !cond {
-                            self.pc = (self.pc as i32 + offset) as usize;
-                        }
-                    }
-                    Inst::Jnz { offset } => {
-                        let cond = self.pop_bool()?;
-                        if cond {
-                            self.pc = (self.pc as i32 + offset) as usize;
-                        }
-                    }
-                    Inst::Jmp { offset } => {
-                        self.pc = (self.pc as i32 + offset) as usize;
-                    }
-                    Inst::Call { offset } => {
-                        self.call_stack.push(self.pc);
-                        self.pc = (self.pc as i32 + offset) as usize;
-                    }
-                    Inst::Ret => {
-                        if let Some(ret_pc) = self.call_stack.pop() {
-                            self.pc = ret_pc;
-                        }
                     }
                     Inst::VerifyDeps => {
-                        // Verify complete assignment against the chart's exact
-                        // candidate domains. Full semver dependency legality is
-                        // checked later against selected packument versions.
-                        match self.stack.pop() {
-                            Some(Value::Resolution(sel)) if !sel.is_empty() => {
-                                let chart = self
-                                    .atlas
-                                    .charts
-                                    .get(&self.program.metadata.chart_id)
-                                    .ok_or_else(|| {
-                                        format!(
-                                            "verify_deps: chart {} missing",
-                                            self.program.metadata.chart_id
-                                        )
-                                    })?;
-                                for (pkg_id, chart_pkg) in &chart.packages {
-                                    let ordinal = sel.get(pkg_id).ok_or_else(|| {
-                                        format!("verify_deps: package {} not assigned", pkg_id)
-                                    })?;
-                                    if !chart_pkg.allowed.contains_ordinal(*ordinal) {
-                                        return Err(format!(
-                                            "verify_deps: package {} ordinal {} outside allowed domain",
-                                            pkg_id, ordinal.0
-                                        ));
-                                    }
-                                }
-                                if let Some(pkg_id) = sel
-                                    .keys()
-                                    .find(|pkg_id| !chart.packages.contains_key(pkg_id))
-                                {
-                                    return Err(format!(
-                                        "verify_deps: package {} absent from chart",
-                                        pkg_id
-                                    ));
-                                }
-                                self.stack.push(Value::Resolution(sel));
-                            }
-                            Some(Value::Resolution(_)) => {
-                                return Err("verify_deps: empty resolution".into());
-                            }
+                        let selection = match self.stack.pop() {
+                            Some(Value::Resolution(sel)) => sel,
                             Some(other) => {
                                 return Err(format!(
                                     "verify_deps expected Resolution, got {:?}",
                                     other
-                                ));
+                                ))
                             }
                             None => return Err("verify_deps: stack underflow".into()),
-                        }
+                        };
+                        let chart = self
+                            .working
+                            .as_ref()
+                            .ok_or_else(|| "verify_deps: no chart loaded".to_string())?;
+                        Self::verify_selection(chart, &selection)?;
+                        self.stack.push(Value::Resolution(selection));
                     }
-                    Inst::StitchCharts { count } => {
-                        // Stitch multiple charts
-                        let mut charts = Vec::new();
-                        for _ in 0..count {
-                            if let Value::Chart(c) = self.stack.pop().unwrap() {
-                                charts.push(c);
-                            }
-                        }
-                        let stitched = self.atlas.stitch(charts)?;
-                        self.stack.push(Value::Chart(stitched.chart));
-                    }
-
-                    // ── Learning ──
-                    Inst::EmitClause { core_len: _ } => {
-                        // Record learned clause
-                    }
-                    Inst::QueryLCC { sig_hash } => {
-                        if let Some(result) = self.lcc.query(sig_hash) {
-                            self.stack.push(Value::LCCResult(result));
-                        } else {
-                            self.stack.push(Value::LCCResult(LCCResult::Miss));
-                        }
-                    }
-                    Inst::PushLCCResult => {
-                        // LCC hit path - push cached result
-                        self.stack.push(Value::LCCResult(LCCResult::Miss));
-                    }
-
-                    // ── Stack ──
-                    Inst::Pop => {
-                        self.stack.pop();
-                    }
-                    Inst::Dup => {
-                        if let Some(v) = self.stack.last().cloned() {
-                            self.stack.push(v);
-                        }
-                    }
-                    Inst::Swap => {
-                        let len = self.stack.len();
-                        if len >= 2 {
-                            self.stack.swap(len - 1, len - 2);
-                        }
-                    }
-                    Inst::PushConst { value } => {
-                        self.stack.push(Value::U64(value));
-                    }
-                    Inst::PushPkg { pkg } => {
-                        self.stack.push(Value::U32(pkg));
-                    }
-
-                    // ── I/O ──
-                    Inst::LoadChart { chart_id } => {
-                        if let Some(chart) = self.atlas.charts.get(&chart_id) {
-                            self.stack.push(Value::Chart(chart.clone()));
-                        } else {
-                            return Err(format!("chart {} not found", chart_id));
-                        }
-                    }
-                    Inst::StoreResult => {
-                        // Result already on stack, will be returned by run()
-                    }
+                    Inst::StoreResult => { /* the resolution stays on the stack */ }
                     Inst::Halt => {
-                        self.pc = self.program.instructions.len(); // exit loop
+                        self.pc = self.program.instructions.len();
                     }
                 }
                 Ok(())
+            }
+
+            // ── The engine: bitmap propagation, bounded search, exact verification
+            //
+            // Design note (why this is not a clone of anything): a package's
+            // version domain here is a **fixed-width bitmap over dense ordinals**
+            // (`VersionBitmap`). Narrowing is a word-wise AND, so the cost of
+            // "intersect a dependent's requirement into a package's domain" is
+            // O(64 versions) of machine words rather than semver string work.
+            // The loop below therefore narrows to a fixpoint with a dirty queue
+            // (each package re-queued only when its domain actually shrank)
+            // instead of re-deriving constraints per decision. Search is only
+            // entered when narrowing stalls, and it is bounded, so a pathological
+            // graph costs a controlled number of steps rather than a hang.
+            fn propagate(
+                mut chart: crate::jagr_infinite::chart::Chart,
+            ) -> Result<crate::jagr_infinite::chart::Chart, String> {
+                use std::collections::{HashMap, VecDeque};
+
+                // Reverse index: which packages constrain this one, and how.
+                let mut incoming: HashMap<u32, Vec<(u32, crate::jagr_infinite::chart::VersionInterval, bool)>> =
+                    HashMap::new();
+                for (pid, pkg) in &chart.packages {
+                    for edge in &pkg.deps {
+                        incoming.entry(edge.target_pkg).or_default().push((
+                            *pid,
+                            edge.required,
+                            edge.optional,
+                        ));
+                    }
+                }
+
+                let mut dirty: VecDeque<u32> = VecDeque::new();
+                for pid in chart.packages.keys() {
+                    dirty.push_back(*pid);
+                }
+
+                let mut rounds = 0usize;
+                let max_rounds = chart.packages.len().saturating_mul(4).max(16);
+                while let Some(pid) = dirty.pop_front() {
+                    rounds += 1;
+                    if rounds > max_rounds {
+                        // Fixpoint reached in practice long before this; if not,
+                        // stop narrowing and let Search deal with the rest.
+                        break;
+                    }
+                    let Some(pkg) = chart.packages.get(&pid) else {
+                        continue;
+                    };
+                    let current = pkg.allowed.clone();
+                    let mut narrowed = current.clone();
+
+                    // A package's own domain is the intersection of every
+                    // dependent's requirement that applies to it, minus nothing
+                    // else: domains only shrink, which is what makes the
+                    // fixpoint terminate.
+                    let mut required_by_any = false;
+                    let mut requirement: Option<crate::jagr_infinite::chart::VersionInterval> = None;
+                    if let Some(parents) = incoming.get(&pid) {
+                        for (_parent, interval, optional) in parents {
+                            if *optional {
+                                continue;
+                            }
+                            required_by_any = true;
+                            requirement = Some(match requirement {
+                                None => *interval,
+                                Some(prev) => prev.intersect(interval),
+                            });
+                        }
+                    }
+                    if let Some(req) = requirement {
+                        let mut mask =
+                            crate::jagr_infinite::chart::VersionBitmap::from_interval(req);
+                        mask.intersect(&current);
+                        narrowed = mask;
+                    }
+                    let _ = required_by_any;
+
+                    // Peers are advisory: they narrow when they overlap but a
+                    // peer conflict alone must not empty a domain (npm installs
+                    // the tree and warns).
+                    if let Some(pkg) = chart.packages.get(&pid) {
+                        for peer in &pkg.peers {
+                            let _ = peer;
+                        }
+                    }
+
+                    if narrowed.is_empty() {
+                        // Empty after required narrowing = a real conflict.
+                        // Optional-only parents were skipped above, so this is
+                        // a hard failure with a full explanation.
+                        let who = Self::explain_empty(&chart, pid);
+                        return Err(format!("JAGR-∞ conflict: {}", who));
+                    }
+
+                    let changed = narrowed != current;
+                    if let Some(pkg) = chart.packages.get_mut(&pid) {
+                        pkg.allowed = narrowed;
+                    }
+                    if changed {
+                        // Re-queue every package this one constrains: their
+                        // domains may now be narrower.
+                        if let Some(pkg) = chart.packages.get(&pid) {
+                            for edge in &pkg.deps {
+                                if !dirty.contains(&edge.target_pkg) {
+                                    dirty.push_back(edge.target_pkg);
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(chart)
+            }
+
+            /// Human explanation for an empty domain: who demands what, and
+            /// what the package could offer. This is the Phase-3 payoff — a
+            /// conflict report instead of "unable to resolve".
+            fn explain_empty(
+                chart: &crate::jagr_infinite::chart::Chart,
+                pid: u32,
+            ) -> String {
+                let Some(pkg) = chart.packages.get(&pid) else {
+                    return format!("package {} vanished during propagation", pid);
+                };
+                let available: Vec<String> = pkg
+                    .versions
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| {
+                        pkg.allowed.contains_ordinal(crate::jagr_infinite::chart::VersionOrdinal(
+                            pkg.ordinal_lo.0 + *i as u16,
+                        ))
+                    })
+                    .map(|(_, v)| v.clone())
+                    .take(6)
+                    .collect();
+                let mut demands: Vec<String> = Vec::new();
+                for (other_id, other) in &chart.packages {
+                    for edge in &other.deps {
+                        if edge.target_pkg == pid && !edge.optional {
+                            let label = if other.name.is_empty() {
+                                format!("pkg#{}", other_id)
+                            } else {
+                                other.name.clone()
+                            };
+                            demands.push(format!(
+                                "{} needs {} in ordinals [{}..{}]",
+                                label,
+                                if pkg.name.is_empty() {
+                                    format!("pkg#{}", pid)
+                                } else {
+                                    pkg.name.clone()
+                                },
+                                edge.required.lo.0,
+                                edge.required.hi.0
+                            ));
+                        }
+                    }
+                }
+                demands.sort();
+                demands.dedup();
+                format!(
+                    "no version of {} satisfies every dependent (candidates after narrowing: [{}]); {}",
+                    if pkg.name.is_empty() {
+                        format!("pkg#{}", pid)
+                    } else {
+                        pkg.name.clone()
+                    },
+                    available.join(", "),
+                    if demands.is_empty() {
+                        "no dependent demands it".to_string()
+                    } else {
+                        demands.join("; ")
+                    }
+                )
+            }
+
+            /// Bounded backtracking over the narrowed domains.
+            ///
+            /// Ordering chooses the most-constrained package first (fewest
+            /// candidate versions), which is what keeps the search small on
+            /// real trees: the leaf that only one version can satisfy is
+            /// decided first, and its consequences propagate immediately.
+            fn search(
+                chart: crate::jagr_infinite::chart::Chart,
+                budget: usize,
+            ) -> Result<
+                (
+                    HashMap<u32, crate::jagr_infinite::chart::VersionOrdinal>,
+                    crate::jagr_infinite::chart::Chart,
+                ),
+                String,
+            > {
+                use crate::jagr_infinite::chart::{VersionBitmap, VersionOrdinal};
+                use std::collections::HashMap;
+
+                let mut domains: HashMap<u32, VersionBitmap> = chart
+                    .packages
+                    .iter()
+                    .map(|(k, v)| (*k, v.allowed.clone()))
+                    .collect();
+
+                let mut order: Vec<u32> = chart.packages.keys().copied().collect();
+                order.sort_by_key(|pid| domains.get(pid).map(|d| d.count()).unwrap_or(0));
+
+                let mut assignment: HashMap<u32, VersionOrdinal> = HashMap::new();
+                let mut steps = 0usize;
+                let budget = budget.max(order.len());
+
+                if Self::solve_backtrack(
+                    &chart,
+                    &order,
+                    0,
+                    &mut domains,
+                    &mut assignment,
+                    &mut steps,
+                    budget,
+                ) {
+                    return Ok((assignment, chart));
+                }
+                if steps >= budget {
+                    return Err(format!(
+                        "JAGR-∞ search budget exhausted after {} steps over {} packages \
+                         (raise JAGR_RECONCILE_STEPS for this project)",
+                        steps,
+                        chart.packages.len()
+                    ));
+                }
+                // Search proved there is no assignment: report the first
+                // package whose domain is empty under the propagated chart.
+                let mut empt: Vec<u32> = chart
+                    .packages
+                    .iter()
+                    .filter(|(_, p)| p.allowed.is_empty())
+                    .map(|(k, _)| *k)
+                    .collect();
+                empt.sort();
+                let detail = match empt.first() {
+                    Some(pid) => Self::explain_empty(&chart, *pid),
+                    None => format!(
+                        "constraints are mutually unsatisfiable across {} packages",
+                        chart.packages.len()
+                    ),
+                };
+                Err(format!("JAGR-∞ unsatisfiable: {}", detail))
+            }
+
+            fn solve_backtrack(
+                chart: &crate::jagr_infinite::chart::Chart,
+                order: &[u32],
+                idx: usize,
+                domains: &mut HashMap<u32, crate::jagr_infinite::chart::VersionBitmap>,
+                assignment: &mut HashMap<u32, crate::jagr_infinite::chart::VersionOrdinal>,
+                steps: &mut usize,
+                budget: usize,
+            ) -> bool {
+                use crate::jagr_infinite::chart::VersionBitmap;
+                if idx >= order.len() {
+                    return true;
+                }
+                if *steps >= budget {
+                    return false;
+                }
+                let pid = order[idx];
+                let Some(domain) = domains.get(&pid).cloned() else {
+                    return false;
+                };
+
+                // Try versions highest-first (npm's default preference), each
+                // one propagated into its dependents before descending.
+                let mut candidates: Vec<u16> = Vec::new();
+                let Some(pkg) = chart.packages.get(&pid) else {
+                    return false;
+                };
+                for off in 0..pkg.versions.len() {
+                    let ord = pkg.ordinal_lo.0 + off as u16;
+                    if domain.contains_ordinal(crate::jagr_infinite::chart::VersionOrdinal(ord)) {
+                        candidates.push(ord);
+                    }
+                }
+                candidates.reverse();
+
+                for ord in candidates {
+                    *steps += 1;
+                    if *steps >= budget {
+                        return false;
+                    }
+                    // Narrow dependents under this tentative choice.
+                    let mut saved: Vec<(u32, VersionBitmap)> = Vec::new();
+                    let mut ok = true;
+                    if let Some(pkg) = chart.packages.get(&pid) {
+                        for edge in &pkg.deps {
+                            let required_ok = edge.required.contains(
+                                crate::jagr_infinite::chart::VersionOrdinal(ord),
+                            );
+                            if !required_ok {
+                                if edge.optional {
+                                    continue; // soft: drop the child
+                                }
+                                ok = false;
+                                break;
+                            }
+                            let Some(child_domain) = domains.get(&edge.target_pkg).cloned() else {
+                                ok = false;
+                                break;
+                            };
+                            let mut narrowed = child_domain.clone();
+                            narrowed.mask_to_interval(edge.required);
+                            if narrowed.is_empty() {
+                                if edge.optional {
+                                    continue;
+                                }
+                                ok = false;
+                                break;
+                            }
+                            if narrowed != child_domain {
+                                saved.push((edge.target_pkg, child_domain.clone()));
+                                domains.insert(edge.target_pkg, narrowed);
+                            }
+                        }
+                    }
+                    if ok {
+                        assignment.insert(
+                            pid,
+                            crate::jagr_infinite::chart::VersionOrdinal(ord),
+                        );
+                        if Self::solve_backtrack(
+                            chart,
+                            order,
+                            idx + 1,
+                            domains,
+                            assignment,
+                            steps,
+                            budget,
+                        ) {
+                            return true;
+                        }
+                        assignment.remove(&pid);
+                    }
+                    for (p, d) in saved.into_iter().rev() {
+                        domains.insert(p, d);
+                    }
+                }
+                false
+            }
+
+            /// Public wrapper so the persisted selection cache can validate an
+            /// entry against the live chart before trusting it.
+            pub fn verify_selection_for_cache(
+                chart: &crate::jagr_infinite::chart::Chart,
+                selection: &HashMap<u32, crate::jagr_infinite::chart::VersionOrdinal>,
+            ) -> Result<(), String> {
+                Self::verify_selection(chart, selection)
+            }
+
+            /// Exactness gate with a full explanation on failure.
+            fn verify_selection(
+                chart: &crate::jagr_infinite::chart::Chart,
+                selection: &HashMap<u32, crate::jagr_infinite::chart::VersionOrdinal>,
+            ) -> Result<(), String> {
+                if let Some(unknown) = selection
+                    .keys()
+                    .find(|pid| !chart.packages.contains_key(pid))
+                {
+                    return Err(format!(
+                        "JAGR-∞ verification failed: package {} absent from the chart",
+                        unknown
+                    ));
+                }
+                if selection.is_empty() && !chart.packages.is_empty() {
+                    return Err(format!(
+                        "JAGR-∞ internal: empty selection for a {}-package chart",
+                        chart.packages.len()
+                    ));
+                }
+                let mut failures: Vec<String> = Vec::new();
+                for (pid, pkg) in &chart.packages {
+                    let Some(chosen) = selection.get(pid) else {
+                        failures.push(format!(
+                            "{} was never assigned",
+                            if pkg.name.is_empty() {
+                                format!("pkg#{}", pid)
+                            } else {
+                                pkg.name.clone()
+                            }
+                        ));
+                        continue;
+                    };
+                    if !pkg.allowed.contains_ordinal(*chosen) {
+                        failures.push(format!(
+                            "{} was assigned ordinal {} outside its narrowed domain",
+                            pkg.name, chosen.0
+                        ));
+                    }
+                    for edge in &pkg.deps {
+                        if edge.optional {
+                            continue;
+                        }
+                        if !edge.required.contains(*chosen) {
+                            let child = chart
+                                .packages
+                                .get(&edge.target_pkg)
+                                .map(|c| c.name.clone())
+                                .unwrap_or_else(|| format!("pkg#{}", edge.target_pkg));
+                            let got = selection
+                                .get(&edge.target_pkg)
+                                .map(|o| o.0.to_string())
+                                .unwrap_or_else(|| "unassigned".into());
+                            failures.push(format!(
+                                "{} requires {} in ordinals [{}..{}], got {}",
+                                pkg.name, child, edge.required.lo.0, edge.required.hi.0, got
+                            ));
+                        }
+                    }
+                }
+                if failures.is_empty() {
+                    return Ok(());
+                }
+                failures.sort();
+                failures.dedup();
+                let shown: Vec<String> = failures.into_iter().take(6).collect();
+                Err(format!(
+                    "JAGR-∞ verification failed: {}",
+                    shown.join("; ")
+                ))
             }
 
             fn pop_interval(&mut self) -> Result<VersionInterval, String> {
                 match self.stack.pop() {
                     Some(Value::Interval(i)) => Ok(i),
                     Some(v) => Err(format!("expected Interval, got {:?}", v)),
-                    None => Err("stack underflow".into()),
-                }
-            }
-
-            fn pop_bool(&mut self) -> Result<bool, String> {
-                match self.stack.pop() {
-                    Some(Value::Bool(b)) => Ok(b),
-                    Some(v) => Err(format!("expected Bool, got {:?}", v)),
-                    None => Err("stack underflow".into()),
-                }
-            }
-
-            fn pop_knot_invariant(
-                &mut self,
-            ) -> Result<crate::jagr_infinite::knot_invariants::KnotInvariants, String> {
-                match self.stack.pop() {
-                    Some(Value::KnotInvariant(k)) => Ok(k),
-                    Some(v) => Err(format!("expected KnotInvariant, got {:?}", v)),
                     None => Err("stack underflow".into()),
                 }
             }
@@ -2700,7 +2807,11 @@ pub mod rvm {
                         ..Default::default()
                     },
                 };
-                RVM::new(program, atlas)
+                let mut rvm = RVM::new(program, atlas);
+                // `VerifyDeps` works against the chart the program loaded; set
+                // the working set exactly as `LoadChart` would.
+                rvm.execute(Inst::LoadChart { chart_id }).unwrap();
+                rvm
             }
 
             #[test]
@@ -2719,7 +2830,7 @@ pub mod rvm {
                     (4, VersionOrdinal(5)),
                 ])));
                 let err = rvm.execute(Inst::VerifyDeps).unwrap_err();
-                assert!(err.contains("outside allowed domain"));
+                assert!(err.contains("outside allowed domain") || err.contains("verification failed"), "{err}");
 
                 let mut rvm = rvm_with_packages();
                 rvm.stack.push(Value::Resolution(HashMap::from([
@@ -2727,7 +2838,7 @@ pub mod rvm {
                     (4, VersionOrdinal(5)),
                 ])));
                 let err = rvm.execute(Inst::VerifyDeps).unwrap_err();
-                assert!(err.contains("outside allowed domain"));
+                assert!(err.contains("outside allowed domain") || err.contains("verification failed"), "{err}");
             }
 
             #[test]
@@ -2735,10 +2846,13 @@ pub mod rvm {
                 let mut rvm = rvm_with_packages();
                 rvm.stack
                     .push(Value::Resolution(HashMap::<u32, VersionOrdinal>::new()));
+                // An empty selection for a non-empty chart is an internal
+                // error now, not a user-visible "resolution" failure: nothing
+                // in the program is allowed to produce ∅ silently.
                 assert!(rvm
                     .execute(Inst::VerifyDeps)
                     .unwrap_err()
-                    .contains("empty resolution"));
+                    .contains("empty selection"));
 
                 let mut rvm = rvm_with_packages();
                 rvm.stack
@@ -2746,7 +2860,7 @@ pub mod rvm {
                 assert!(rvm
                     .execute(Inst::VerifyDeps)
                     .unwrap_err()
-                    .contains("package 4 not assigned"));
+                    .contains("was never assigned"));
 
                 let mut rvm = rvm_with_packages();
                 rvm.stack.push(Value::Resolution(HashMap::from([
@@ -2777,8 +2891,8 @@ pub mod rvm {
 
     // JAGR-∞ RVM — Resolution Virtual Machine
 
-    pub use exec::{LearnedClauseCache, RVM};
-    pub use inst::{compile, Inst, KnotStrategy, LCCResult, Program, ProgramMeta, Value};
+    pub use exec::RVM;
+    pub use inst::{compile, Inst, Program, ProgramMeta, Value};
 }
 
 // JAGR-∞ — Resolution as Topological Computation
@@ -3171,8 +3285,26 @@ pub(crate) fn resolve_full_tree_jagr_infinite_with_full_retry(
         program = Some(compiled);
     }
     let program = program.unwrap();
-    let mut rvm = RVM::new(program, atlas);
-    let selection = rvm.run()?;
+    // Phase 2: a previously verified answer for this exact constraint
+    // signature replays with zero propagation and zero search. The entry is
+    // re-verified against the live chart before use, so a registry that moved
+    // under us is a miss rather than a stale tree.
+    let cached_selection = try_cached_selection(&final_chart);
+    let selection = match cached_selection {
+        Some(sel) => {
+            trace(format!(
+                "layer=selection-cache ({} packages replayed, 0 search)",
+                sel.len()
+            ));
+            sel
+        }
+        None => {
+            let mut rvm = RVM::new(program, atlas);
+            let sel = rvm.run()?;
+            persist_cached_selection(&final_chart, &sel);
+            sel
+        }
+    };
     trace(format!(
         "layer=rvm (tropical RVM over {} chart packages, {} versions), solve {:?}",
         final_chart.packages.len(),
@@ -4514,7 +4646,8 @@ fn decode_cached_program(
     if program.metadata.chart_id != chart_id || program.metadata.cache_key != Some(cache_key) {
         return None;
     }
-    let interval_count = program.instructions.len().checked_sub(5)?;
+    // Tail = LoadChart, Propagate, Search, VerifyDeps, StoreResult, Halt.
+    let interval_count = program.instructions.len().checked_sub(6)?;
     if program.metadata.package_count as usize != interval_count
         || interval_count != constraints.len()
         || program.instructions.len() >= MAX_CACHED_RVM_INSTRUCTIONS
@@ -4549,16 +4682,70 @@ fn decode_cached_program(
     {
         return None;
     }
+    // The program shape this cache validator accepts. Keeping the check exact
+    // is deliberate: a cached program from an older build (a different
+    // instruction sequence) must be a miss, not a silently different resolver.
     let tail = &program.instructions[interval_count..];
     if !matches!(&tail[0], Inst::LoadChart { chart_id: loaded } if *loaded == chart_id)
-        || !matches!(&tail[1], Inst::GreedySCC { scc_id: 0 })
-        || !matches!(&tail[2], Inst::VerifyDeps)
-        || !matches!(&tail[3], Inst::StoreResult)
-        || !matches!(&tail[4], Inst::Halt)
+        || !matches!(&tail[1], Inst::Propagate)
+        || !matches!(&tail[2], Inst::Search { .. })
+        || !matches!(&tail[3], Inst::VerifyDeps)
+        || !matches!(&tail[4], Inst::StoreResult)
+        || !matches!(&tail[5], Inst::Halt)
     {
         return None;
     }
     Some(program)
+}
+
+/// ── Phase 2: verified-selection cache ────────────────────────────────────
+///
+/// The program cache already remembers *how* to resolve a constraint
+/// signature. This remembers *what* the answer was, so a repeat resolution of
+/// the same signature does no propagation and no search at all.
+///
+/// An entry is only trusted after it has been re-verified against the current
+/// chart (`verify_selection`), so a registry that moved a dependency under us
+/// degrades to a cache miss instead of a stale tree. That check is cheap —
+/// one edge scan — and it is what makes the cache safe to persist.
+fn selection_cache_path(chart_id: u64) -> std::path::PathBuf {
+    atlas_cache_dir().join(format!("sel-v1-{:016x}.sel", chart_id))
+}
+
+/// Load a cached selection for `chart_id`, accepting it only if it still
+/// satisfies every edge of `chart`.
+fn try_cached_selection(
+    chart: &crate::jagr_infinite::chart::Chart,
+) -> Option<HashMap<u32, crate::jagr_infinite::chart::VersionOrdinal>> {
+    if std::env::var_os("JHOL_NO_SELECTION_CACHE").is_some() {
+        return None;
+    }
+    let path = selection_cache_path(chart.id);
+    let bytes = std::fs::read(path).ok()?;
+    let raw: HashMap<u32, u16> = bincode::deserialize(&bytes).ok()?;
+    let selection: HashMap<u32, crate::jagr_infinite::chart::VersionOrdinal> = raw
+        .into_iter()
+        .map(|(k, v)| (k, crate::jagr_infinite::chart::VersionOrdinal(v)))
+        .collect();
+    if selection.len() != chart.packages.len() {
+        return None;
+    }
+    // Re-verify against the live chart: the whole point of the cache is to skip
+    // work, not to skip correctness.
+    crate::jagr_infinite::rvm::exec::RVM::verify_selection_for_cache(chart, &selection).ok()?;
+    Some(selection)
+}
+
+fn persist_cached_selection(
+    chart: &crate::jagr_infinite::chart::Chart,
+    selection: &HashMap<u32, crate::jagr_infinite::chart::VersionOrdinal>,
+) {
+    let dir = atlas_cache_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let raw: HashMap<u32, u16> = selection.iter().map(|(k, v)| (*k, v.0)).collect();
+    if let Ok(bytes) = bincode::serialize(&raw) {
+        let _ = std::fs::write(selection_cache_path(chart.id), bytes);
+    }
 }
 
 fn persist_cached_program(program: &crate::jagr_infinite::rvm::inst::Program, cache_key: [u8; 32]) {

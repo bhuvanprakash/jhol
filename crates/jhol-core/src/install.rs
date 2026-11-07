@@ -2757,21 +2757,20 @@ fn expand_with_transitive_dependencies(
     let flat_conflict = flat_constraint_conflict(&selected, &metadata_cache);
 
     let mut specs: Vec<String> = selected
-        .into_iter()
+        .iter()
         .map(|(name, version)| format!("{}@{}", name, version))
         .collect();
-    // `npm:` aliases: the real package was resolved under its own name above;
-    // make sure it is in the returned spec list even when nothing else pulls
-    // it in (a package may alias a dep that no other dependency needs). The
-    // alias path is linked after the install.
-    for (alias, real) in recorded_aliases() {
-        let _ = alias;
+    // `npm:` aliases resolve to the REAL package, which may not be pulled in by
+    // anything else. Add it by its resolved version — `real@*` produced a spec
+    // with no tarball (`react-is@*: download: HTTP 404`), because a literal
+    // `*` is not something the downloader can pin.
+    for (_alias, real) in recorded_aliases() {
         if specs.iter().any(|s| base_name(s) == real) {
             continue;
         }
-        // Reuse the version the alias range selected when we have it,
-        // otherwise let the resolver pick.
-        specs.push(format!("{}@*", real));
+        if let Some(version) = selected.get(&real) {
+            specs.push(format!("{}@{}", real, version));
+        }
     }
     specs.sort();
     specs.dedup();

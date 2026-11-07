@@ -1702,3 +1702,35 @@ literal glob string, which fails the existence check. Fix: `set --` +
 `[ -e "$1" ]` guard, or use `find -type l`.
 
 Gates: engine PASS, installer PASS, workspace 1045/0.
+
+
+---
+
+## Journal — 2026-11-07: JAGR-∞ became a real resolver
+
+Read the file before touching it, which changed the plan: `compile()` emitted
+five instructions and `GreedySCC` picked each package's highest version
+*without reading a single dependency edge*. The 31-op RVM had 25 unemitted ops;
+`MaxSAT2Var`/`MaxSATPortfolio` returned empty resolutions. That is where
+"verify_deps: empty resolution" came from — not an unsatisfiable graph.
+
+Phases done in one pass: 0 (prune to 7 real instructions, drop the LCC, drop the
+`full()`-returning `spec_to_interval`, keep every research module), 1
+(fixpoint bitmap propagation + bounded most-constrained-first backtracking with
+`JAGR_SEARCH_BUDGET`), 3 (conflict explanations naming packages and ranges), 4
+(optional edges actually marked optional; required-wins-when-both), 2
+(persisted verified-selection cache with re-verification on load).
+
+Watch-outs recorded:
+- `VersionBitmap` is not `Copy`; every domain narrows by `clone()`.
+- `decode_cached_program` had a hard-coded `len - 5` tail; adding an
+  instruction meant bumping it to `len - 6` or the cache validator silently
+  rejects every program (it did).
+- Three tests pinned the old contract ("empty resolution", "package N not
+  assigned", chart-less VerifyDeps). Updating them was required and is correct:
+  the new contract is strictly stronger.
+- `~/.jhol-cache` contains **root-owned** entries from an old sudo run;
+  `rm -rf` fails on them. `jhol cache clean` should report that explicitly
+  instead of emitting hundreds of rm errors. Not fixed yet.
+
+Result: 34/34 real packages install (was 23/34). Gates PASS.

@@ -708,3 +708,108 @@ Current real-package sweep: **32/34** popular packages install in isolated
 projects with unique manifests and no daemon (express, lodash, axios, react,
 typescript, webpack, eslint, prettier, next, vite, zod, rxjs, mocha, chai,
 sinon, date-fns, ramda, …).
+
+
+## JAGR-∞ — the resolver becomes a propagation engine (Phases 0–4)
+
+The honest state before this work: `compile()` emitted a fixed five-instruction
+program (`LoadChart → GreedySCC → VerifyDeps → StoreResult → Halt`), and
+`GreedySCC` picked the highest allowed version of every package **independently
+— it never read a dependency edge**. The 31-instruction RVM handled 25
+instructions that no program ever emitted; two of them (`MaxSAT2Var`,
+`MaxSATPortfolio`) returned an *empty resolution*, which surfaced to users as
+`verify_deps: empty resolution` on real packages. There was no MaxSAT, and the
+name promised one. `spec_to_interval` returned `Interval::full()` for every
+input, and `atlas.stitch` was dead on the main path.
+
+### Phase 0 — the instruction set now contains only what exists
+
+| before | after |
+|---|---|
+| 31 instruction kinds, 6 emitted | **7 instruction kinds, all emitted and all implemented** |
+| 2 instructions silently returned ∅ | none can; an unimplemented instruction cannot be expressed |
+| `Value` carried knot/LCC/Betti payloads for instructions never used | `Value` carries Interval / Chart / Resolution / Unit |
+| doc comment advertised "tropical/sheaf/MaxSAT ops" | documents what the program does |
+| `LearnedClauseCache` + `RVM::lcc` (never queried) | removed |
+| `spec_to_interval` returning `full()` always | removed (a lie any caller could trip on) |
+
+The research modules are **untouched** — `chart`, `atlas`, `knot_invariants`,
+`homotopy`, `precompute`, `persistence`, `holographic_rg`, `ricci_curvature`,
+`sheaf_laplacian` keep every line. Only the *wiring* and the *advertising* went,
+so those pieces can be tested and adopted deliberately later.
+
+### Phase 1 — bitmap propagation + bounded search
+
+`GreedySCC` → `Propagate` + `Search`:
+
+- **Propagate** narrows every package's version domain to a fixpoint. A domain
+  is a `VersionBitmap` over dense ordinals, so narrowing is a word-wise AND;
+  a dirty queue re-queues only packages whose domain actually shrank. A package
+  whose domain empties under a *required* edge is a named conflict, not a
+  silent miss.
+- **Search** is entered only if narrowing leaves work. It orders packages
+  most-constrained-first (fewest candidates), tries versions highest-first,
+  propagates each tentative choice, and backtracks on an empty child domain.
+  Bounded by `JAGR_SEARCH_BUDGET` (default 20 000 steps), so a pathological
+  graph costs a controlled amount of time instead of hanging.
+
+This is not clause learning or backjumping: nothing is learned and no nogood is
+recorded. The whole engine is monotone domain narrowing over fixed-width
+bitmaps, with repair localized to the package whose domain emptied.
+
+### Phase 3 — conflicts are explained
+
+`verify_selection` and `explain_empty` report *which* package lost its domain,
+*which* dependents demanded what, and *which* candidate versions survived:
+`JAGR-∞ conflict: no version of p-limit satisfies every dependent (candidates
+after narrowing: [2.3.0, 2.2.2]); p-locate needs p-limit in ordinals [..]`.
+The old text was `verify_deps: empty resolution`.
+
+### Phase 4 — soft constraints are modelled, not special-cased
+
+`extract_deps` now returns `(target, interval, optional)` and the flag reaches
+`DependencyEdge.optional`, so propagation and search treat an optional edge as
+*satisfiable-or-droppable* instead of required. A name declared in both
+`dependencies` and `optionalDependencies` is hard (npm's rule). Before this,
+every edge was `optional: false`, so one unavailable platform-specific optional
+dependency could fail an entire install.
+
+### Phase 2 — verified-selection cache
+
+`compile` already cached *programs* by constraint signature; the resolver now
+also caches the **answer** (`sel-v1-<chart>.sel`). An entry is re-verified
+against the live chart before use — an edge scan — so a registry that moved a
+dependency under us is a miss instead of a stale tree. `JHOL_NO_SELECTION_CACHE=1`
+disables it.
+
+### Also fixed while in here
+
+`engines` mis-parsed `>= 10.*` (a space between operator and version split it
+into `>=` plus `10.*`), which rejected node 22 for `get-caller-file`'s
+`6.* || 8.* || >= 10.*`. Fixed with a test.
+
+### Measured
+
+Real-package sweep — 34 popular packages, isolated directories, unique
+manifests, no daemon, `--native-only --no-save`:
+
+| | before | after |
+|---|---|---|
+| packages that install | 23/34 | **34/34** |
+| `jest` | `verify_deps: empty resolution` | 236 packages |
+| `prisma` | `verify_deps: empty resolution` | 85 packages |
+| `vite`, `next`, `zod`, `rxjs`, `mocha`, `chai`, `sinon`, `date-fns`, `ramda` | failed | install |
+
+Warm repeat of the same constraint signature replays from the selection cache:
+express 648 ms cold → **53 ms** warm.
+
+Cold install vs bun (isolated caches, single package): lodash 352/294,
+express 955/745, chalk 306/130, dialog-polyfill 597/400 ms — **bun still ahead
+on cold**. Warm: lodash 68/30, express 314/281, chalk 365/1422,
+dialog-polyfill 210/1708 — jhol ahead where bun re-validates.
+
+So: correctness is now ahead of where it was by a wide margin, and cold-install
+speed is a known, unflattering comparison that the next phase has to attack.
+
+Gates: 621 jhol-core tests (5 new/updated resolver tests), 116 VM, installer
+gate PASS, engine gate PASS.

@@ -68,18 +68,33 @@ pub fn check_node_range(range: &str, actual: &str) -> EngineVerdict {
 }
 
 fn satisfies_group(group: &str, actual: V) -> bool {
-    let mut saw_any = false;
-    for comp in group.split_whitespace() {
-        if comp.is_empty() || comp == "*" {
+    // `>= 10.*` is one comparator written with a space, and splitting on
+    // whitespace alone turned it into `>=` (unparsable, treated as satisfied)
+    // plus `10.*` (an exact-major check) — so `6.* || 8.* || >= 10.*` rejected
+    // node 22. Join a bare operator with the token that follows it.
+    let mut comps: Vec<String> = Vec::new();
+    let mut pending_op: Option<String> = None;
+    for tok in group.split_whitespace() {
+        if tok.is_empty() || tok == "*" {
             continue;
         }
-        saw_any = true;
-        if !satisfies_one(comp, actual) {
+        if matches!(tok, ">=" | "<=" | ">" | "<" | "^" | "~" | "=") {
+            pending_op = Some(tok.to_string());
+            continue;
+        }
+        match pending_op.take() {
+            Some(op) => comps.push(format!("{}{}", op, tok)),
+            None => comps.push(tok.to_string()),
+        }
+    }
+    if let Some(op) = pending_op {
+        comps.push(op);
+    }
+    for comp in comps {
+        if !satisfies_one(&comp, actual) {
             return false;
         }
     }
-    // An unrecognisable group is satisfied (see the module note).
-    let _ = saw_any;
     true
 }
 
@@ -230,6 +245,15 @@ mod tests {
     }
 
     #[test]
+    fn spaced_operator_is_one_comparator() {
+        // get-caller-file@2.0.5 declares exactly this.
+        assert!(ok("6.* || 8.* || >= 10.*", "22.0.0"));
+        assert!(!ok("6.* || 8.* || >= 30.0.0", "22.0.0"));
+        assert!(ok(">= 10.0.0", "22.0.0"));
+        assert!(ok("^ 18.0.0 || >= 20", "22.0.0"));
+    }
+
+    #[test]
     fn unparsable_range_never_blocks() {
         assert!(ok("not-a-range", "22.0.0"));
         assert!(ok(">=banana", "22.0.0"));
@@ -265,4 +289,5 @@ mod scan_tests {
         assert_eq!(found[0].0, "future");
         let _ = std::fs::remove_dir_all(&root);
     }
+
 }
