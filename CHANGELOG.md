@@ -660,3 +660,51 @@ pass returns an empty tree instead of resolving it.
 
 Both are correctness bugs, not missing features, and both are recorded here
 rather than papered over.
+
+
+## Fixed — the replay lane installed an unrelated project's tree
+
+**Symptom.** `jhol install zod` in a fresh directory whose `package.json`
+read `{"name":"t","version":"1.0.0"}` produced **express's 68-package tree**,
+and `jest`, `next`, `vite` and friends all produced the same tree. Any two
+projects with a byte-identical manifest shared a bundle.
+
+**Cause.** `BundleCache::deps_manifest_key` hashes `package.json` + platform
+only. The publish side aliased its bundle to that key, so a bundle published
+by `install express` answered a later `install zod` in a different directory
+that happened to carry the same manifest. The key described the *manifest*;
+the bundle answered a *request*.
+
+**Fix.** A manifest-keyed alias is only published when the install had no CLI
+packages — a plain `jhol install`, where the manifest genuinely is the
+request (`request_has_packages()`). The key version is bumped
+(`jhol-bundle-deps-v1` → `v2`, in both `jhol-core` and the trampoline, which
+must stay in lockstep), so aliases published by older builds are unreachable
+rather than silently wrong.
+
+Verified: `install express` then `install zod` in two directories with an
+identical manifest now yields 68 and 1 packages respectively.
+
+## Still open — `jest` and `prisma`
+
+Both fail with `verify_deps: empty resolution` from the nested resolver:
+
+```
+flat resolution conflict (pretty-format requires ansi-styles ^5.2.0, resolved <missing>);
+resolving nested layout
+single-pass: rejected by the completeness guard; using the full resolver
+Error: Application error in resolve_nested_layout: verify_deps: empty resolution
+```
+
+Reading: the flat pass correctly detects the conflict, and the nested
+(JAGR-∞ chart/MaxSAT) pass returns an **empty resolution** — `Inst::VerifyDeps`
+in `jagr_infinite.rs` rejects an empty selection before it reaches the
+legality check. The empty chart is the thing to diagnose: it means the
+program was built with no candidate packages for that graph, not that the
+solver found the graph unsatisfiable. That is where the next session should
+start (`Inst::VerifyDeps`, ~line 2519).
+
+Current real-package sweep: **32/34** popular packages install in isolated
+projects with unique manifests and no daemon (express, lodash, axios, react,
+typescript, webpack, eslint, prettier, next, vite, zod, rxjs, mocha, chai,
+sinon, date-fns, ramda, …).

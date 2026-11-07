@@ -1052,7 +1052,7 @@ fn bundle_within_ttl(marker: &Path) -> bool {
 fn deps_manifest_key(pj: &[u8]) -> String {
     use xxhash_rust::xxh3::xxh3_64;
     let mut seed = Vec::with_capacity(pj.len() + 32);
-    seed.extend_from_slice(b"jhol-bundle-deps-v1");
+    seed.extend_from_slice(b"jhol-bundle-deps-v2");
     seed.push(0);
     seed.extend_from_slice(std::env::consts::OS.as_bytes());
     seed.push(0);

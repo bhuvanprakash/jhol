@@ -1187,6 +1187,34 @@ impl ColdResolveStrategy for ManifestThenPackumentStrategy {
 /// `npm:` alias does (`npm:real@range`), and the naive `rfind('@')` produced the
 /// bogus name `my-lodash@npm:lodash`, which then leaked into resolution as a
 /// package to fetch (HTTP 404) and broke the alias install.
+/// The CLI-requested package list for the install currently running.
+///
+/// A JGrid bundle answers *one request*. The manifest-only replay key
+/// (`BundleCache::deps_manifest_key`) hashes just `package.json` + platform,
+/// so two projects with a byte-identical manifest but different
+/// `jhol install <pkg>` arguments collided: `install zod` in a fresh
+/// directory whose manifest read `{"name":"t","version":"1.0.0"}` replayed
+/// the bundle published by an earlier `install express` in another directory
+/// and produced express's tree. Publishing a manifest-keyed alias is
+/// therefore only legal when the install had no CLI packages at all — a
+/// plain `jhol install`, where the manifest *is* the request.
+fn request_slot() -> &'static std::sync::Mutex<Vec<String>> {
+    static REQ: std::sync::OnceLock<std::sync::Mutex<Vec<String>>> = std::sync::OnceLock::new();
+    REQ.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+fn set_request_key(packages: &[&str]) {
+    if let Ok(mut slot) = request_slot().lock() {
+        *slot = packages.iter().map(|s| s.to_string()).collect();
+        slot.sort();
+    }
+}
+
+/// True when this install was asked for by name (not by manifest alone).
+pub fn request_has_packages() -> bool {
+    request_slot().lock().map(|s| !s.is_empty()).unwrap_or(false)
+}
+
 /// Transitive `npm:` aliases discovered while expanding the graph:
 /// `alias_name -> real_name`. Filled by the expansion, consumed after the
 /// install to materialise the alias path.
@@ -6036,7 +6064,13 @@ fn post_install_jgrid_ingest(
                 // lockfile. The bundle also carries the publisher's lockfile so the
                 // replay lane can restore a complete, valid project state — same
                 // reuse contract (and staleness rule) as a committed lockfile.
-                if let Ok(pj) = std::fs::read("package.json") {
+                // Manifest-keyed aliasing is only sound for a request that IS
+                // the manifest. With CLI packages the bundle answers a
+                // different question, and aliasing it here made an unrelated
+                // project with the same package.json replay this tree.
+                let manifest_only = !request_has_packages();
+                if manifest_only {
+                    let pj = std::fs::read("package.json").unwrap_or_default();
                     let deps_key = crate::jgrid::BundleCache::deps_manifest_key(&pj);
                     let mut targets: Vec<String> = vec![full_hash.clone()];
                     if let Some(id) = prepared_identity.as_ref() {
@@ -6568,6 +6602,7 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
     // Scope the omission set for the whole install: the materialisation layer
     // consults it, and the guard restores the previous value on exit.
     let _omit_guard = crate::omit::scoped(options.omit);
+    set_request_key(packages);
     let omit_filtered: Vec<String> = if options.omit.is_empty() {
         Vec::new()
     } else {
