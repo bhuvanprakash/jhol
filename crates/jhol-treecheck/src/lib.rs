@@ -177,6 +177,58 @@ fn installed_paths(project_dir: &Path) -> Option<Vec<String>> {
     Some(out)
 }
 
+/// Does the lockfile account for everything its own entries declare?
+///
+/// A lockfile can be *incomplete*: the installer materialises a tree and the
+/// lockfile writer records a subset. Real case found while wiring this up —
+/// `express@latest` installed 68 packages and wrote 56 entries, and none of the
+/// 12 missing ones appeared in any entry's `dependencies` either. Such a
+/// lockfile is not an authority on what is authorised, so pruning against it
+/// deletes packages a previous install legitimately created.
+///
+/// Conservative on purpose: we prune only when every dependency declared by a
+/// locked package is itself locked. Otherwise the tree is reported but never
+/// modified.
+fn lockfile_is_complete(project_dir: &Path) -> bool {
+    let Some(path) = ["package-lock.json", "npm-shrinkwrap.json", "jhol-lock.json"]
+        .iter()
+        .map(|n| project_dir.join(n))
+        .find(|p| p.exists())
+    else {
+        return false;
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    let Some(packages) = v.get("packages").and_then(|p| p.as_object()) else {
+        return false;
+    };
+    // Names that are locked, keyed the way dependency maps refer to them.
+    let mut locked_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for key in packages.keys() {
+        if let Some(idx) = key.rfind("node_modules/") {
+            locked_names.insert(&key[idx + "node_modules/".len()..]);
+        }
+    }
+    for entry in packages.values() {
+        for section in ["dependencies", "optionalDependencies"] {
+            let Some(deps) = entry.get(section).and_then(|d| d.as_object()) else {
+                continue;
+            };
+            for name in deps.keys() {
+                // A nested duplicate is legal; the name must exist somewhere.
+                if !locked_names.contains(name.as_str()) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
 /// Compare the installed tree against the lockfile.
 ///
 /// Cheap by design: one `package.json` read per installed package. Returns the
@@ -229,6 +281,15 @@ pub fn verify_tree(project_dir: &Path) -> TreeState {
     }
     let mut installed_sorted = installed.clone();
     installed_sorted.sort();
+    let has_extras = installed_sorted.iter().any(|p| !locked.contains_key(p));
+    if has_extras && !lockfile_is_complete(project_dir) {
+        // Installed packages the lockfile does not mention, *and* a lockfile
+        // that does not account for its own dependencies: this is a lockfile
+        // defect, not an unauthorised package. Report it; never delete for it.
+        return TreeState::Unverified {
+            reason: "lockfile does not account for every package it installed".to_string(),
+        };
+    }
     for path in installed_sorted {
         if !locked.contains_key(&path) {
             return TreeState::Extraneous { path };
@@ -249,8 +310,22 @@ pub fn reconcile_tree(project_dir: &Path) -> TreeState {
     if state.is_match() || matches!(state, TreeState::Unverified { .. }) {
         return state;
     }
-    let _ = prune_extraneous(project_dir);
-    verify_tree(project_dir)
+    // Pruning is opt-in.
+    //
+    // It is only sound when the lockfile is a complete record of what belongs on
+    // disk, and today it sometimes is not: `express@latest` installs 68 packages
+    // and writes 56 entries, and the 12 omissions appear in no dependency map
+    // either — so the lockfile looks internally consistent while being wrong.
+    // Deleting on that basis removed real packages from a working tree. Until
+    // the lockfile writer records everything it materialises, the safe default
+    // is to *report* an unauthorised directory and leave it alone;
+    // `jhol prune` (JHOL_PRUNE_EXTRANEOUS=1) opts in.
+    let prune = std::env::var_os("JHOL_PRUNE_EXTRANEOUS").is_some();
+    if prune && matches!(state, TreeState::Extraneous { .. }) {
+        let _ = prune_extraneous(project_dir);
+        return verify_tree(project_dir);
+    }
+    state
 }
 
 /// Remove directories the lockfile does not authorise.
@@ -411,7 +486,11 @@ mod tests {
         pkg(d, "node_modules/a", "1.0.0");
         pkg(d, "node_modules/evil-leftover", "6.6.6");
         assert!(!verify_tree(d).is_match());
-        assert_eq!(reconcile_tree(d), TreeState::Match);
+        // Pruning is opt-in: a lockfile can be an incomplete record.
+        std::env::set_var("JHOL_PRUNE_EXTRANEOUS", "1");
+        let reconciled = reconcile_tree(d);
+        std::env::remove_var("JHOL_PRUNE_EXTRANEOUS");
+        assert_eq!(reconciled, TreeState::Match);
         assert!(!d.join("node_modules/evil-leftover").exists());
     }
 
@@ -455,5 +534,88 @@ mod tests {
         .unwrap();
         pkg(d, "node_modules/a", "1.0.0");
         assert_eq!(verify_tree(d), TreeState::Match);
+    }
+}
+
+#[cfg(test)]
+mod completeness_tests {
+    use super::*;
+    use std::fs;
+
+    /// A lockfile that omits packages it itself declares must not authorise
+    /// deletions: the reproduction is `express@latest`, where the installer
+    /// wrote 56 entries for 68 installed packages and none of the 12 appeared in
+    /// any dependency map either. Pruning against it removed real code.
+    #[test]
+    fn incomplete_lockfile_is_unverified_not_extraneous() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path();
+        fs::create_dir_all(d.join("node_modules/a")).unwrap();
+        // The lockfile declares a dependency on `ghost`, which it never locks.
+        fs::write(
+            d.join("package-lock.json"),
+            r#"{"packages":{"":{"name":"root"},"node_modules/a":{"version":"1.0.0","dependencies":{"ghost":"^1"}}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            d.join("node_modules/a/package.json"),
+            r#"{"name":"a","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(d.join("node_modules/ghost")).unwrap();
+        fs::write(
+            d.join("node_modules/ghost/package.json"),
+            r#"{"name":"ghost","version":"1.0.0"}"#,
+        )
+        .unwrap();
+
+        let state = verify_tree(d);
+        assert!(
+            matches!(state, TreeState::Unverified { .. }),
+            "expected Unverified, got {:?}",
+            state
+        );
+        // Reconciliation must leave the tree alone.
+        assert_eq!(reconcile_tree(d), state);
+        assert!(d.join("node_modules/ghost").exists());
+    }
+
+    /// A complete lockfile still prunes real intruders — the guard must not
+    /// disable the feature it exists to make safe.
+    #[test]
+    fn complete_lockfile_still_authorises_pruning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path();
+        fs::create_dir_all(d.join("node_modules/a")).unwrap();
+        fs::write(
+            d.join("package-lock.json"),
+            r#"{"packages":{"":{"name":"root"},"node_modules/a":{"version":"1.0.0"}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            d.join("node_modules/a/package.json"),
+            r#"{"name":"a","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(d.join("node_modules/intruder")).unwrap();
+        fs::write(
+            d.join("node_modules/intruder/package.json"),
+            r#"{"name":"intruder","version":"9.9.9"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            verify_tree(d),
+            TreeState::Extraneous {
+                path: "node_modules/intruder".into()
+            }
+        );
+        // Pruning is opt-in (see reconcile_tree): a lockfile can be wrong.
+        std::env::set_var("JHOL_PRUNE_EXTRANEOUS", "1");
+        let reconciled = reconcile_tree(d);
+        std::env::remove_var("JHOL_PRUNE_EXTRANEOUS");
+        assert_eq!(reconciled, TreeState::Match);
+        assert!(!d.join("node_modules/intruder").exists());
+        assert!(d.join("node_modules/a").exists());
     }
 }

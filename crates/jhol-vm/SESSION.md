@@ -1899,3 +1899,32 @@ to every tree-writing command and set the repair flag on any arrival mismatch.
 Lesson: when the same code reads options from two builders, the flags are part of
 the contract — and reading a missing one is not "false", it is undefined
 behaviour. Make absence explicit.
+
+## Journal — 2026-11-07 (cont.): resolver proof obligations, two defects, honest stop
+
+Wrote the obligations JAGR-∞ claims (soundness, determinism, monotonicity,
+completeness, perf corpus). They immediately paid for themselves: two real bugs.
+
+1. `VersionBitmap::intersect` ignores `ordinal_lo`. Bitmaps anchored at different
+   ordinals were ANDed word-by-word, i.e. compared unrelated versions. My
+   completeness test caught it as a spurious conflict; the same misalignment can
+   silently select a version the range excludes.
+2. The lockfile omits packages the installer materialises (express@latest: 68
+   installed, 56 recorded, the 12 unreferenced anywhere). Pruning against that
+   lockfile deleted real code — my own verifier did it, twice, before I noticed.
+
+I wrote and verified the base-aware intersect fix, then discovered that with it
+`jest` no longer resolves — because its tree genuinely needs multiple majors of
+chalk/semver, and the flat path requires one version to satisfy every dependent.
+So the old behaviour was false success: it accepted incompatible versions and the
+nested layout hid it. Reverted the behavioural changes rather than ship a
+half-correct resolver; kept the data model, the memoisation, the contract fix and
+the tests; pinned defect 1 as an ignored test naming its fix.
+
+Pruning is opt-in now, because deleting a user's node_modules on the strength of
+a lockfile we know can be wrong is not acceptable at any speed.
+
+`docs/JAGR-INFINITE-ROADMAP.md` specifies items 2-5 with acceptance tests.
+
+Lesson: proof obligations are not paperwork. Two of the four I wrote failed on
+the first run, and one of them was hiding inside a benchmark that looked fine.

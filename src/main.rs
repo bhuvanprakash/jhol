@@ -365,6 +365,23 @@ fn tree_is_current_and_reported(quiet: bool) -> bool {
         // install ends up doing, the summary must not say "Up to date".
         TREE_REPAIRED.store(true, std::sync::atomic::Ordering::Relaxed);
     }
+    if let jhol_core::tree_state::TreeState::Extraneous { path } = &state {
+        // Installed but not in the lockfile, and pruning is opt-in because a
+        // lockfile can be an incomplete record of what it installed (see
+        // jhol-treecheck). Report it plainly, keep the tree, and do not re-run
+        // the install on every invocation for a superset.
+        if !quiet {
+            eprintln!(
+                "jhol: warning: {} is not in the lockfile (prune with JHOL_PRUNE_EXTRANEOUS=1)",
+                path
+            );
+        }
+        let total = jhol_core::count_installed_packages(Path::new("."));
+        if !quiet {
+            println!("Up to date ({} packages in node_modules)", total);
+        }
+        return true;
+    }
     if !state.is_match() {
         if env::var("JHOL_VERBOSE").is_ok() {
             eprintln!("[jhol] tree needs work: {}", state.describe());
