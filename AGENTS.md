@@ -6958,3 +6958,23 @@ lockfile to bind). That is the next perf item.
 
 Watch-out: `build_chart_from_constraints` lives in `atlas`, not `chart` — three
 wrong import paths before it compiled. Read the module header, not the fn name.
+
+## Journal — 2026-11-07 (cont.): JAGR-∞ is the sole resolver
+
+Wired `select_versions` into the flat install path so one authority answers
+"which version", with the old greedy picks demoted to a fetch-scheduling
+estimate. Fixed determinism (tie-break by package id — same manifest could
+produce different trees), the quadratic dirty queue, and made peers actually
+participate (they were collected, stored, written to the lockfile and ignored:
+`let _ = peer;`).
+
+The wiring exposed the real remaining defect: chart edges use
+`parse_single_range`, which returns `full` for plain specs and otherwise a
+generic ordinal scale, so **transitive** narrowing is impossible — only direct
+ranges narrow. Recorded as an `#[ignore]`d test with the reason and the exact
+fix (per-edge `VersionBitmap` resolved against the target's version list).
+Honest > green.
+
+Trap for next time: `build_full_chart` leaves `ChartPackage.name` empty; any
+code returning names must fill them, and any code reading `allowed` on a chart
+from that builder must apply the direct ranges itself (it seeds `full`).

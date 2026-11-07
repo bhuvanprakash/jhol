@@ -413,6 +413,10 @@ pub mod chart {
         pub betti: BettiNumbers,
         pub merkle_root: [u8; 32], // content hash for Atlas DAG
         pub created_at: u64,       // Unix timestamp
+        /// Peer requirements that could not be satisfied. Advisory: npm
+        /// installs the tree and warns, and `--strict-peer-deps` escalates.
+        #[serde(default)]
+        pub peer_warnings: Vec<String>,
     }
 
     impl Chart {
@@ -797,6 +801,7 @@ pub mod atlas {
             id,
             packages,
             transitions: HashMap::new(),
+            peer_warnings: Vec::new(),
             betti,
             merkle_root: [0; 32],
             created_at: std::time::SystemTime::now()
@@ -2343,7 +2348,7 @@ pub mod rvm {
             // instead of re-deriving constraints per decision. Search is only
             // entered when narrowing stalls, and it is bounded, so a pathological
             // graph costs a controlled number of steps rather than a hang.
-            fn propagate(
+            pub(crate) fn propagate(
                 mut chart: crate::jagr_infinite::chart::Chart,
             ) -> Result<crate::jagr_infinite::chart::Chart, String> {
                 use std::collections::{HashMap, VecDeque};
@@ -2362,13 +2367,18 @@ pub mod rvm {
                 }
 
                 let mut dirty: VecDeque<u32> = VecDeque::new();
+                // Membership side-set: `VecDeque::contains` is a linear scan,
+                // so a naive re-queue was O(n^2) on a large graph.
+                let mut queued: std::collections::HashSet<u32> = std::collections::HashSet::new();
                 for pid in chart.packages.keys() {
                     dirty.push_back(*pid);
+                    queued.insert(*pid);
                 }
 
                 let mut rounds = 0usize;
                 let max_rounds = chart.packages.len().saturating_mul(4).max(16);
                 while let Some(pid) = dirty.pop_front() {
+                    queued.remove(&pid);
                     rounds += 1;
                     if rounds > max_rounds {
                         // Fixpoint reached in practice long before this; if not,
@@ -2407,12 +2417,55 @@ pub mod rvm {
                     }
                     let _ = required_by_any;
 
-                    // Peers are advisory: they narrow when they overlap but a
-                    // peer conflict alone must not empty a domain (npm installs
-                    // the tree and warns).
+                    // Peer requirements narrow a domain when they overlap it,
+                    // and are reported when they do not — they never empty a
+                    // domain on their own, because npm installs the tree and
+                    // warns rather than failing. `--strict-peer-deps` turns the
+                    // report into a failure at the call site.
+                    //
+                    // Before this, peers were collected, stored, written to the
+                    // lockfile and then ignored by resolution: `PeerEdge`
+                    // existed and had no consumer, so `--strict-peer-deps` had
+                    // nothing to act on.
+                    let mut peer_notes: Vec<String> = Vec::new();
                     if let Some(pkg) = chart.packages.get(&pid) {
                         for peer in &pkg.peers {
-                            let _ = peer;
+                            // Does the peer's range overlap anything the domain
+                            // still allows? Test by intersecting the peer mask
+                            // with the live domain — no interval round-trip.
+                            let mut mask =
+                                crate::jagr_infinite::chart::VersionBitmap::from_interval(
+                                    peer.required,
+                                );
+                            mask.intersect(&narrowed);
+                            if !mask.is_empty() {
+                                narrowed = mask;
+                            } else if !narrowed.is_empty() {
+                                let peer_name = chart
+                                    .packages
+                                    .get(&peer.target_pkg)
+                                    .map(|c| c.name.clone())
+                                    .filter(|n| !n.is_empty())
+                                    .unwrap_or_else(|| format!("pkg#{}", peer.target_pkg));
+                                peer_notes.push(format!(
+                                    "{} cannot satisfy peer {} (wants ordinals [{}..{}])",
+                                    if pkg.name.is_empty() {
+                                        format!("pkg#{}", pid)
+                                    } else {
+                                        pkg.name.clone()
+                                    },
+                                    peer_name,
+                                    peer.required.lo.0,
+                                    peer.required.hi.0
+                                ));
+                            }
+                        }
+                    }
+                    if !peer_notes.is_empty() {
+                        // Collected, not fatal: the caller decides. Recorded on
+                        // the chart so `verify_selection` can surface it.
+                        for note in peer_notes {
+                            chart.peer_warnings.push(note);
                         }
                     }
 
@@ -2433,7 +2486,7 @@ pub mod rvm {
                         // domains may now be narrower.
                         if let Some(pkg) = chart.packages.get(&pid) {
                             for edge in &pkg.deps {
-                                if !dirty.contains(&edge.target_pkg) {
+                                if queued.insert(edge.target_pkg) {
                                     dirty.push_back(edge.target_pkg);
                                 }
                             }
@@ -2512,7 +2565,7 @@ pub mod rvm {
             /// candidate versions), which is what keeps the search small on
             /// real trees: the leaf that only one version can satisfy is
             /// decided first, and its consequences propagate immediately.
-            fn search(
+            pub(crate) fn search(
                 chart: crate::jagr_infinite::chart::Chart,
                 budget: usize,
             ) -> Result<
@@ -2532,7 +2585,11 @@ pub mod rvm {
                     .collect();
 
                 let mut order: Vec<u32> = chart.packages.keys().copied().collect();
-                order.sort_by_key(|pid| domains.get(pid).map(|d| d.count()).unwrap_or(0));
+                // Most-constrained-first, tie-broken by package id. Without the
+                // tie-break the order of equal-sized domains followed HashMap
+                // iteration, so the *same* manifest could produce different
+                // trees on different runs. A resolver must be a function.
+                order.sort_by_key(|pid| (domains.get(pid).map(|d| d.count()).unwrap_or(0), *pid));
 
                 let mut assignment: HashMap<u32, VersionOrdinal> = HashMap::new();
                 let mut steps = 0usize;
@@ -2793,6 +2850,7 @@ pub mod rvm {
                     packages: HashMap::from([(3, package(3, "pkg")), (4, package(4, "peer"))]),
                     transitions: HashMap::new(),
                     betti: BettiNumbers::default(),
+                    peer_warnings: Vec::new(),
                     merkle_root: [0; 32],
                     created_at: 0,
                 };
@@ -3087,6 +3145,108 @@ use crate::jagr_infinite::{
 use crate::lockfile_write::ResolvedPackage;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+
+/// ── JAGR-∞ as the sole resolver ──────────────────────────────────────────
+///
+/// `select_versions` answers the one question every install path needs — *which
+/// version of each package?* — using the chart machinery rather than a greedy
+/// per-package pick. The caller supplies the packuments it already fetched
+/// (abbreviated or full), so this costs no extra network work; the flat
+/// pipeline keeps its fetch scheduling and stops making the decision itself.
+///
+/// Returns `None` when the chart cannot be built (missing packument for a
+/// direct dep, or no published version matching a direct range) — the caller
+/// falls back to its previous estimate rather than failing the install, because
+/// a resolver that is *authoritative* must still not be able to break an
+/// install that used to work.
+pub fn select_versions(
+    packuments: &HashMap<String, serde_json::Value>,
+    deps: &HashMap<String, String>,
+) -> Option<HashMap<String, String>> {
+    use crate::jagr_infinite::chart::{VersionBitmap, VersionOrdinal};
+
+    if deps.is_empty() || packuments.is_empty() {
+        return None;
+    }
+
+    // Deterministic id assignment (name order), so a chart is a function of its
+    // inputs and the selection cache keys stay stable.
+    let mut names: Vec<&String> = packuments.keys().collect();
+    names.sort();
+    let name_to_id: HashMap<String, u32> = names
+        .into_iter()
+        .enumerate()
+        .map(|(i, n)| (n.clone(), i as u32))
+        .collect();
+
+    let mut chart = crate::jagr_infinite::precompute::build_full_chart(packuments, &name_to_id);
+    // `build_full_chart` leaves `name` empty (the solver path maps ids back
+    // through its own table). Naming them here is what lets this function
+    // return names instead of ids — and it makes conflict messages readable.
+    for (name, id) in &name_to_id {
+        if let Some(pkg) = chart.packages.get_mut(id) {
+            pkg.name = name.clone();
+        }
+    }
+
+    let mut constraints: HashMap<u32, crate::jagr_infinite::chart::VersionInterval> =
+        HashMap::new();
+    for (name, spec) in deps {
+        let id = *name_to_id.get(name)?;
+        let pkg = chart.packages.get(&id)?;
+        let (interval, _domain) = candidate_domain_for_package(pkg, spec)?;
+        constraints.insert(id, interval);
+    }
+    if constraints.is_empty() {
+        return None;
+    }
+
+    // Apply each direct range to its package's domain. `build_full_chart`
+    // seeds every package with the *full* ordinal range because its other
+    // caller derives domains later; without this step the solver happily picks
+    // the newest version regardless of the requested range (caught by
+    // `picks_the_highest_version_satisfying_the_direct_range`).
+    for (id, interval) in &constraints {
+        if let Some(pkg) = chart.packages.get_mut(id) {
+            let mut mask = crate::jagr_infinite::chart::VersionBitmap::from_interval(*interval);
+            mask.intersect(&pkg.allowed);
+            if mask.is_empty() {
+                return None; // requested range matches nothing published
+            }
+            pkg.allowed = mask;
+        }
+    }
+
+    let mut atlas = crate::jagr_infinite::atlas::Atlas::new();
+    atlas.insert_chart(chart.clone());
+
+    let mut narrowed = crate::jagr_infinite::rvm::exec::RVM::propagate(chart).ok()?;
+    let (selection, _) =
+        crate::jagr_infinite::rvm::exec::RVM::search(narrowed.clone(), 20_000).ok()?;
+    if selection.is_empty() {
+        return None;
+    }
+
+    let mut out: HashMap<String, String> = HashMap::new();
+    for (id, ordinal) in selection {
+        let Some(pkg) = narrowed.packages.get(&id) else {
+            return None;
+        };
+        if pkg.name.is_empty() {
+            continue;
+        }
+        let offset = ordinal.0.checked_sub(pkg.ordinal_lo.0)? as usize;
+        let Some(version) = pkg.versions.get(offset) else {
+            return None;
+        };
+        if !pkg.allowed.contains_ordinal(VersionOrdinal(ordinal.0)) {
+            return None;
+        }
+        out.insert(pkg.name.clone(), version.clone());
+        let _ = VersionBitmap::new;
+    }
+    Some(out)
+}
 
 /// Main entry point for JAGR-∞ resolver.
 
@@ -3483,6 +3643,34 @@ pub(crate) fn resolve_full_tree_jagr_infinite_with_full_retry(
             sel
         }
     };
+    // Peer requirements that could not be satisfied. Advisory (npm installs the
+    // tree and warns); `--strict-peer-deps` or JHOL_STRICT_PEER_DEPS escalates.
+    // Propagation records them on the chart, so this is the one place that has
+    // to report them.
+    if !final_chart.peer_warnings.is_empty() {
+        let strict = std::env::var("JHOL_STRICT_PEER_DEPS")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let shown: Vec<String> = final_chart.peer_warnings.iter().take(6).cloned().collect();
+        let more = if final_chart.peer_warnings.len() > 6 {
+            format!(" (+{} more)", final_chart.peer_warnings.len() - 6)
+        } else {
+            String::new()
+        };
+        if strict {
+            return Err(format!(
+                "peer dependency conflicts: {}{}",
+                shown.join("; "),
+                more
+            ));
+        }
+        crate::utils::log(&format!(
+            "warning: {} peer requirement(s) unsatisfied: {}{}",
+            final_chart.peer_warnings.len(),
+            shown.join("; "),
+            more
+        ));
+    }
     trace(format!(
         "layer=rvm (tropical RVM over {} chart packages, {} versions), solve {:?}",
         final_chart.packages.len(),
@@ -6483,6 +6671,7 @@ mod tests {
             packages: HashMap::from([(1, versions.clone())]),
             transitions: HashMap::new(),
             betti: chart::BettiNumbers::default(),
+            peer_warnings: Vec::new(),
             merkle_root: [0; 32],
             created_at: 0,
         };
@@ -7896,5 +8085,90 @@ mod jres_codec_tests {
         // rewrites in the new codec — no crash, no corrupt tree, self-healing.
         let legacy = bincode::serialize(&sample()).unwrap();
         assert!(jres_decode(&legacy).is_none());
+    }
+}
+
+#[cfg(test)]
+mod sole_resolver_tests {
+    use super::select_versions;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    fn packument(name: &str, versions: &[(&str, serde_json::Value)]) -> serde_json::Value {
+        let mut map = serde_json::Map::new();
+        for (v, deps) in versions {
+            map.insert(
+                (*v).to_string(),
+                json!({ "name": name, "version": v, "dependencies": deps }),
+            );
+        }
+        json!({ "name": name, "versions": map })
+    }
+
+    #[test]
+    fn picks_the_highest_version_satisfying_the_direct_range() {
+        let mut packs = HashMap::new();
+        packs.insert(
+            "lib".to_string(),
+            packument(
+                "lib",
+                &[
+                    ("1.0.0", json!({})),
+                    ("2.0.0", json!({})),
+                    ("2.1.0", json!({})),
+                    ("3.0.0", json!({})),
+                ],
+            ),
+        );
+        let deps = HashMap::from([("lib".to_string(), "^2.0.0".to_string())]);
+        let chosen = select_versions(&packs, &deps).expect("solvable");
+        assert_eq!(chosen.get("lib").map(|s| s.as_str()), Some("2.1.0"));
+    }
+
+    /// KNOWN DEFECT, deliberately not faked. Chart edges carry intervals from
+    /// `parse_single_range`, which returns the *full* range for exact pins and
+    /// plain versions and otherwise uses a generic ordinal scale — not the
+    /// target package's version ordinals. Propagation therefore cannot narrow
+    /// through a transitive edge yet; only direct ranges narrow (which is what
+    /// `picks_the_highest_version_satisfying_the_direct_range` proves).
+    ///
+    /// The fix is to store a per-edge `VersionBitmap` resolved against the
+    /// target's version list at chart-build time. That is the single highest
+    /// value change left in JAGR-∞ and it is recorded in the changelog.
+    #[test]
+    #[ignore = "blocked: chart edges are in a generic ordinal space (see CHANGELOG)"]
+    fn resolves_a_transitive_edge_through_propagation() {
+        // app 1.0.0 needs lib ^1; lib's own dependency is not involved because
+        // it has none — the point is that the chart narrows lib by the direct
+        // range rather than taking `latest`.
+        let mut packs = HashMap::new();
+        packs.insert(
+            "app".to_string(),
+            packument("app", &[("1.0.0", json!({ "lib": "^1.0.0" }))]),
+        );
+        packs.insert(
+            "lib".to_string(),
+            packument("lib", &[("1.0.0", json!({})), ("2.0.0", json!({}))]),
+        );
+        let deps = HashMap::from([("app".to_string(), "^1.0.0".to_string())]);
+        let chosen = select_versions(&packs, &deps).expect("solvable");
+        assert_eq!(chosen.get("app").map(|s| s.as_str()), Some("1.0.0"));
+        // lib is dragged in by app's edge and must be the 1.x satisfying it.
+        assert_eq!(chosen.get("lib").map(|s| s.as_str()), Some("1.0.0"));
+    }
+
+    #[test]
+    fn unsatisfiable_direct_range_returns_none_not_a_bad_pick() {
+        let mut packs = HashMap::new();
+        packs.insert("lib".to_string(), packument("lib", &[("1.0.0", json!({}))]));
+        let deps = HashMap::from([("lib".to_string(), "^9.0.0".to_string())]);
+        assert!(select_versions(&packs, &deps).is_none());
+    }
+
+    #[test]
+    fn missing_packument_returns_none() {
+        let packs = HashMap::new();
+        let deps = HashMap::from([("nope".to_string(), "^1.0.0".to_string())]);
+        assert!(select_versions(&packs, &deps).is_none());
     }
 }

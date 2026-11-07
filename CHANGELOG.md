@@ -875,3 +875,66 @@ The warm lane here is `install <pkg> --no-save`, which has no lockfile to bind
 to and therefore re-resolves. bun's warm path validates a lockfile and clones.
 Closing this needs the lockfile fast path to accept an explicit-package request
 — recorded as the next perf item, not claimed fixed.
+
+
+## JAGR-∞ wired as the sole resolver — and the defect that fix exposed
+
+### Done
+
+**Determinism.** Search ordered packages by candidate count only, so equal-sized
+domains followed `HashMap` iteration: the *same manifest* could produce different
+trees on different runs. Now `(count, package_id)`. A resolver must be a function.
+
+**Quadratic fix.** The propagation dirty queue tested membership with
+`VecDeque::contains` — a linear scan per enqueue. A `HashSet` side-set makes it
+O(1). On a wide graph this was O(n²) work in the hot loop.
+
+**Peers are enforced.** `extract_peers` collected them, `PeerEdge` stored them,
+the lockfile recorded them, and resolution did `let _ = peer;`. Peers now narrow
+a domain when they overlap it and are *reported* when they cannot, on
+`Chart.peer_warnings` (serde-default so older caches still load). Advisory by
+default, escalated to a hard error by `JHOL_STRICT_PEER_DEPS` /
+`--strict-peer-deps` — which until now had nothing to escalate.
+
+**JAGR-∞ decides.** New `jagr_infinite::select_versions(packuments, deps)`
+answers *which version of each package* through chart propagation + search. The
+flat install path's own greedy picks are now explicitly an **estimate used only
+for fetch scheduling**; `select_versions` replaces them before the conflict
+check. When the chart cannot be built (missing packument, no published version
+matching a direct range) the estimate stands — a sole resolver must not be able
+to turn a working install into a failing one.
+
+`jhol install <pkg>` therefore has one authority for version choice instead of
+two that disagreed (the earlier `p-locate requires p-limit ^2.2.0, resolved
+3.1.0` → nested re-solve dance).
+
+### The defect this exposed (recorded, not papered over)
+
+Chart **edges** are built with `parse_single_range`, which returns the *full*
+range for exact pins and plain versions and otherwise uses a generic ordinal
+scale — **not** the target package's version ordinals. So:
+
+- **direct** ranges narrow correctly (`select_versions` applies
+  `candidate_domain_for_package` to each direct dependency, now covered by a
+  test), and
+- **transitive** ranges cannot narrow at all, because the interval is not in the
+  target's coordinate space.
+
+`resolves_a_transitive_edge_through_propagation` is `#[ignore]`d with that
+reason rather than deleted or faked. The fix is one well-scoped change: resolve
+each edge's spec against the *target's* version list at chart-build time and
+store a per-edge `VersionBitmap`, then have `propagate` intersect that mask
+instead of the generic interval. That is the highest-value item left in
+JAGR-∞.
+
+### Tests
+
+`jhol-core` 628 → **631 passing, 7 ignored** (4 new: highest-satisfying-version,
+unsatisfiable-range-returns-None, missing-packument-returns-None, and the
+ignored transitive case; plus the 7 engine tests added earlier).
+
+### Verified
+
+Real packages install: 15/15 and 19/19 in two isolated sweeps after the wiring
+(`express lodash axios react chalk typescript webpack eslint prettier mocha jest
+zod prisma next vite` …). Installer gate PASS, engine gate PASS.

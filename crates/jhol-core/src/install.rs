@@ -441,7 +441,7 @@ mod tests {
     /// selected 5.1.2. This must be reported so the caller nests instead.
     #[test]
     fn flat_conflict_detected_when_transitive_range_unsatisfied() {
-        let selected = HashMap::from([
+        let mut selected = HashMap::from([
             ("cliui".to_string(), "8.0.1".to_string()),
             ("string-width".to_string(), "5.1.2".to_string()),
         ]);
@@ -1826,6 +1826,11 @@ fn optional_dependency_names() -> HashSet<String> {
     lockfile::read_optional_dependency_names(Path::new("package.json"))
 }
 
+
+/// Quiet unless JHOL_VERBOSE is set — this note is diagnostic, not noise.
+fn quiet_hint() -> bool {
+    std::env::var_os("JHOL_VERBOSE").is_none()
+}
 fn expand_with_transitive_dependencies(
     packages: &[&str],
     offline: bool,
@@ -2754,6 +2759,47 @@ fn expand_with_transitive_dependencies(
     // versions and every package's manifest are in hand. Doing it in the caller
     // failed: the global metadata snapshot was empty at that point, so the check
     // silently saw nothing and the wrong tree was installed anyway.
+    // ── JAGR-∞ is the resolver, not an advisor ───────────────────────────
+    //
+    // Every version choice above is an *estimate* kept for scheduling: the
+    // binary/lattice fast paths and the greedy candidate pick exist to decide
+    // what to fetch next. The authoritative answer comes from one place — the
+    // chart solver — so the flat path cannot disagree with the nested path
+    // about the same graph (that disagreement was a real bug: `p-locate
+    // requires p-limit ^2.2.0, resolved 3.1.0`, then the nested layout
+    // re-solved it).
+    //
+    // If the chart cannot be built or the solve fails, the estimate stands and
+    // the conflict check below still runs. A sole resolver must not be able to
+    // turn a working install into a failed one.
+    // `metadata_cache` holds `Arc<Value>`s; the solver wants the values.
+    let packument_values: HashMap<String, serde_json::Value> = metadata_cache
+        .iter()
+        .map(|(k, v)| (k.clone(), (**v).clone()))
+        .collect();
+    let direct_specs: HashMap<String, String> = packages
+        .iter()
+        .map(|p| (base_name(p).to_string(), requested_version_spec(p)))
+        .collect();
+    let jagr_choice = crate::jagr_infinite::select_versions(&packument_values, &direct_specs);
+    if let Some(choice) = jagr_choice {
+        let mut corrected = 0usize;
+        for (name, version) in choice.iter() {
+            if let Some(prev) = selected.get(name) {
+                if prev != version {
+                    corrected += 1;
+                }
+            }
+        }
+        if corrected > 0 && !quiet_hint() {
+            crate::utils::log(&format!(
+                "JAGR-∞: {} version(s) differ from the fetch estimate; using the chart solution",
+                corrected
+            ));
+        }
+        selected = choice;
+    }
+
     let flat_conflict = flat_constraint_conflict(&selected, &metadata_cache);
 
     let mut specs: Vec<String> = selected
