@@ -2163,3 +2163,20 @@ calling fetch_metadata_full directly and printing time_entries.
 
 Honest costs: dated installs take 21-24 s vs 0.5 s, need full packuments, and fail
 loudly rather than falling back to today.
+
+## Journal — 2026-11-07 (cont.): license policy at resolution time
+
+--allow-license makes the license a constraint the solver honours rather than an
+audit run afterwards. Real express tree: MIT alone refuses at qs (BSD), MIT+BSD
+refuses at setprototypeof (ISC), MIT+BSD+ISC+Apache installs 71 packages with zero
+violations and zero unknown licenses.
+
+Decisions that make it a policy rather than a gesture: unknown licenses excluded by
+default (escape hatch explicit), both npm license forms read, SPDX "OR" treated as
+the disjunction it is, case-insensitive matching.
+
+And the same trap as --as-of, twice over: the prune that keeps installs small strips
+per-version license, so the feature saw "unlicensed" everywhere until
+prune_packument_in_place_keeping retained it. Third time this session that a
+feature was broken by our own pruning. The rule I keep writing down: when data
+"looks missing", check what upstream deleted before blaming the source.

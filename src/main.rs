@@ -2654,6 +2654,18 @@ fn run() -> Result<(), String> {
                         .help("Resolve as of a date (YYYY-MM-DD or RFC3339): only versions published by then are eligible"),
                 )
                 .arg(
+                    Arg::new("allow-license")
+                        .long("allow-license")
+                        .value_name("LIST")
+                        .help("Only resolve versions under these licenses (comma separated, e.g. MIT,Apache-2.0)"),
+                )
+                .arg(
+                    Arg::new("license-allow-unknown")
+                        .long("license-allow-unknown")
+                        .action(ArgAction::SetTrue)
+                        .help("With --allow-license, also allow versions that declare no license"),
+                )
+                .arg(
                     Arg::new("global")
                         .short('g')
                         .long("global")
@@ -6517,6 +6529,12 @@ fn run() -> Result<(), String> {
             // any lane can act on the manifest.
             if let Some(as_of) = sub_m.get_one::<String>("as-of") {
                 std::env::set_var("JHOL_AS_OF", as_of);
+            }
+            if let Some(list) = sub_m.get_one::<String>("allow-license") {
+                std::env::set_var("JHOL_ALLOW_LICENSE", list);
+            }
+            if flag(&sub_m, "license-allow-unknown") {
+                std::env::set_var("JHOL_LICENSE_ALLOW_UNKNOWN", "1");
             }
             // --omit / --prod / --include-dev, composed with NODE_ENV.
             // Resolved once here; both the sequential and parallel workspace

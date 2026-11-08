@@ -300,14 +300,21 @@ pub fn registry_auth_token() -> Option<String> {
 /// document it had itself pruned, and reported "no publish dates" about metadata
 /// that had arrived complete.
 pub fn prune_packument_in_place_keeping(v: &mut serde_json::Value, keep_top: &[&str]) {
-    prune_packument_inner(v, keep_top)
+    // A license policy reads `versions[*].license`; without this the version
+    // metadata is pruned out from under it and every package looks unlicensed.
+    let keep_version: &[&str] = if keep_top.contains(&"license") {
+        &["license", "licenses"]
+    } else {
+        &[]
+    };
+    prune_packument_inner(v, keep_top, keep_version)
 }
 
 pub fn prune_packument_in_place(v: &mut serde_json::Value) {
-    prune_packument_inner(v, &[])
+    prune_packument_inner(v, &[], &[])
 }
 
-fn prune_packument_inner(v: &mut serde_json::Value, keep_top: &[&str]) {
+fn prune_packument_inner(v: &mut serde_json::Value, keep_top: &[&str], keep_version: &[&str]) {
     let top_keys: Vec<&str> = {
         let mut v = vec!["name", "versions", "dist-tags"];
         v.extend_from_slice(keep_top);
@@ -340,7 +347,9 @@ fn prune_packument_inner(v: &mut serde_json::Value, keep_top: &[&str]) {
     if let Some(versions) = obj.get_mut("versions").and_then(|x| x.as_object_mut()) {
         for (_ver, meta) in versions.iter_mut() {
             if let Some(m) = meta.as_object_mut() {
-                m.retain(|k, _| VERSION_KEYS.contains(&k.as_str()));
+                m.retain(|k, _| {
+                    VERSION_KEYS.contains(&k.as_str()) || keep_version.contains(&k.as_str())
+                });
             }
         }
     }

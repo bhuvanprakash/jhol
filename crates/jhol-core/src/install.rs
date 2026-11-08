@@ -7205,7 +7205,12 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
             // satisfying, no dates) and the single-pass layout, which reuses the
             // flat selection. Either turns `--as-of` into "as of today" — the
             // worst failure mode for a reproducibility feature.
-            let as_of_requested = std::env::var("JHOL_AS_OF").is_ok();
+            // History and license policy are resolution inputs. Both need features
+            // the flat expansion does not implement (publish dates, per-version
+            // license), so both force the policy-aware resolver and forbid the
+            // single-pass shortcut that reuses flat picks.
+            let as_of_requested = std::env::var("JHOL_AS_OF").is_ok()
+                || std::env::var("JHOL_ALLOW_LICENSE").is_ok();
             if as_of_requested {
                 std::env::set_var("JHOL_NEST_RESOLVER", "1");
             }
@@ -7316,9 +7321,11 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                             // outcome a reproducibility feature must never
                             // produce. Fail with the reason instead.
                             if as_of_requested {
+                                // One label for both policy inputs; the message
+                                // names the package, the range and the reason.
                                 return Err(crate::error_handling::utils::application_error(
-                                    "resolve_as_of",
-                                    Some("as_of_unavailable"),
+                                    "resolve_policy",
+                                    Some("policy_unavailable"),
                                     attempt.as_ref().err().map(|e| e.as_str()).unwrap_or("unknown"),
                                 ));
                             }

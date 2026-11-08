@@ -1819,3 +1819,43 @@ still dropped by the default one.
   wrong.
 
 `jhol-core` 675 tests, `jhol-treecheck` 12, installer gate PASS.
+
+
+## License policy as a resolution input — `--allow-license`
+
+Policy is not an audit run afterwards; it is an input to the solve. Given
+`--allow-license MIT,BSD-3-Clause,ISC,Apache-2.0`, the resolver only considers
+versions whose declared license is in the set, so the tree it builds complies by
+construction.
+
+Verified on a real `express@^4` tree:
+
+| policy | result |
+|---|---|
+| `MIT` | refused at `qs` (BSD-3-Clause), nothing installed |
+| `MIT,BSD-3-Clause` | refused at `setprototypeof` (ISC), nothing installed |
+| `MIT,BSD-3-Clause,ISC,Apache-2.0` | **71 packages installed, 0 policy violations, 0 unknown** |
+
+The refusal names the package and the range, like every other conflict.
+
+### Details that decide whether a policy is real
+
+* **Unknown licenses are excluded by default.** A policy that silently accepts
+  unlicensed packages is not a policy; `--license-allow-unknown` is the explicit
+  escape hatch.
+* **Both licence forms are read**: `"license": "MIT"` and
+  `"license": {"type": "Apache-2.0"}`, plus SPDX expressions
+  (`"MIT OR GPL-3.0"` is permitted when *any* part is allowed — which is what an
+  SPDX disjunction means).
+* **Matching is case-insensitive**, because publishers are inconsistent.
+* **Full metadata is fetched only when a policy is asked for.** The abbreviated
+  documents used for normal installs carry no per-version `license`, and the prune
+  that keeps installs small strips it — so `prune_packument_in_place_keeping` now
+  retains `time` and `license` when those features are active. This is the same
+  bug that blocked `--as-of`: metadata pruned out from under the feature that
+  needed it, twice.
+
+No competitor does this at resolution time: an audit tells you your installed tree
+is unacceptable; this builds one that is acceptable.
+
+`jhol-core` 678 tests, `jhol-treecheck` 12, installer gate PASS.

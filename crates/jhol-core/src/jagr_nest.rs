@@ -202,10 +202,11 @@ fn expand_alias(name: &str, spec: &str) -> (String, String) {
 
 /// Newest published version satisfying `compiled`, at or before `cutoff`.
 fn newest_matching(
+    doc: &Value,
     versions_desc: &[String],
     published: &HashMap<&str, i64>,
     compiled: &crate::registry::CompiledSpec,
-    cutoff: Option<i64>,
+    options: &ResolveOptions,
 ) -> Option<String> {
     versions_desc
         .iter()
@@ -216,13 +217,86 @@ fn newest_matching(
             if !ok {
                 return false;
             }
-            match cutoff {
+            let dated = match options.cutoff {
                 None => true,
                 // No date means we cannot prove it existed then; exclude.
                 Some(t) => published.get(v.as_str()).map(|p| *p <= t).unwrap_or(false),
-            }
+            };
+            dated && options.license_allows(doc, v)
         })
         .cloned()
+}
+
+/// Inputs beyond "what does the manifest ask for".
+///
+/// Both are *resolution* inputs, not post-hoc filters: a tree that violates policy
+/// must never be built and then audited.
+#[derive(Debug, Clone, Default)]
+pub struct ResolveOptions {
+    /// Only versions published at or before this unix timestamp (`--as-of`).
+    pub cutoff: Option<i64>,
+    /// When set, only versions whose declared license is in this list are
+    /// eligible (`--allow-license`).
+    pub allowed_licenses: Option<Vec<String>>,
+    /// Whether a version with no license field may be used anyway. Default false:
+    /// a license policy that silently accepts unknown licenses is not a policy.
+    pub allow_unknown_license: bool,
+}
+
+impl ResolveOptions {
+    pub fn is_default(&self) -> bool {
+        self.cutoff.is_none() && self.allowed_licenses.is_none() && !self.allow_unknown_license
+    }
+
+    /// License declared by `version` in `doc`, normalised to lower case.
+    ///
+    /// npm allows a string (`"MIT"`) or an object (`{"type": "MIT"}`); SPDX
+    /// expressions (`"MIT OR Apache-2.0"`) are matched by any of their parts.
+    fn licenses_of(&self, doc: &Value, version: &str) -> Vec<String> {
+        let Some(info) = doc.get("versions").and_then(|v| v.get(version)) else {
+            return Vec::new();
+        };
+        let raw = info.get("license").or_else(|| info.get("licenses"));
+        let mut out = Vec::new();
+        let push = |s: &str, out: &mut Vec<String>| {
+            for part in s.split(" OR ").flat_map(|p| p.split(" AND ")) {
+                let p = part.trim().trim_start_matches('(').trim_end_matches(')');
+                if !p.is_empty() {
+                    out.push(p.to_lowercase());
+                }
+            }
+        };
+        match raw {
+            Some(Value::String(s)) => push(s, &mut out),
+            Some(Value::Object(o)) => {
+                if let Some(t) = o.get("type").and_then(|t| t.as_str()) {
+                    push(t, &mut out);
+                }
+            }
+            Some(Value::Array(items)) => {
+                for item in items {
+                    if let Some(t) = item.get("type").and_then(|t| t.as_str()) {
+                        push(t, &mut out);
+                    }
+                }
+            }
+            _ => {}
+        }
+        out
+    }
+
+    /// May `version` be used under this policy?
+    fn license_allows(&self, doc: &Value, version: &str) -> bool {
+        let Some(allowed) = &self.allowed_licenses else {
+            return true;
+        };
+        let allowed_lower: Vec<String> = allowed.iter().map(|l| l.trim().to_lowercase()).collect();
+        let found = self.licenses_of(doc, version);
+        if found.is_empty() {
+            return self.allow_unknown_license;
+        }
+        found.iter().any(|l| allowed_lower.iter().any(|a| a == l))
+    }
 }
 
 fn version_key(v: &str) -> (u64, u64, u64, String) {
@@ -262,6 +336,22 @@ pub fn resolve_with_cutoff(
     roots: &HashMap<String, String>,
     cutoff: Option<i64>,
 ) -> Result<NestedResolution, NestConflict> {
+    resolve_with_options(
+        packuments,
+        roots,
+        &ResolveOptions {
+            cutoff,
+            ..Default::default()
+        },
+    )
+}
+
+/// Resolve under every policy input: history (`--as-of`) and license policy.
+pub fn resolve_with_options(
+    packuments: &HashMap<String, Value>,
+    roots: &HashMap<String, String>,
+    options: &ResolveOptions,
+) -> Result<NestedResolution, NestConflict> {
     const MAX_INSTANCES: usize = 20_000;
     const MAX_STEPS: usize = 200_000;
 
@@ -269,6 +359,9 @@ pub fn resolve_with_cutoff(
     // once. `None` means "not in the packument set": the caller decides whether
     // that is fatal, we report it as a conflict with an empty published list.
     struct Meta<'a> {
+        /// The packument itself, for policy fields (license) that are read per
+        /// version and are not worth copying into their own map.
+        doc: &'a Value,
         versions: Vec<String>,
         /// Publish time per version, when the packument is a full one.
         published: HashMap<&'a str, i64>,
@@ -332,6 +425,7 @@ pub fn resolve_with_cutoff(
         meta.insert(
             name.as_str(),
             Meta {
+                doc,
                 versions: sorted.into_iter().map(|(_, k)| k).collect(),
                 published,
                 deps,
@@ -408,13 +502,14 @@ pub fn resolve_with_cutoff(
                 // Newest published version that satisfies the requirement and,
                 // when a cutoff is set, existed then.
                 let chosen = newest_matching(
+                    meta.doc,
                     &meta.versions,
                     &meta.published,
                     &compiled,
-                    cutoff,
+                    options,
                 );
                 let Some(chosen) = chosen else {
-                    if cutoff.is_some() && meta.published.is_empty() {
+                    if options.cutoff.is_some() && meta.published.is_empty() {
                         return Err(NestConflict {
                             failure: NestFailure::MissingDates,
                             package: target,
@@ -929,5 +1024,72 @@ mod as_of_tests {
         assert!(err.describe().contains("no publish dates"), "{}", err.describe());
         // Without a cutoff the same world resolves.
         assert!(resolve(&w, &roots()).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod license_policy_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn world() -> HashMap<String, Value> {
+        HashMap::from([(
+            "app".to_string(),
+            json!({
+                "name": "app",
+                "versions": {
+                    "1.0.0": { "version": "1.0.0", "license": "MIT" },
+                    "1.1.0": { "version": "1.1.0", "license": "GPL-3.0" },
+                    "1.2.0": { "version": "1.2.0" },
+                    "1.3.0": { "version": "1.3.0", "license": { "type": "Apache-2.0" } },
+                    "1.4.0": { "version": "1.4.0", "license": "MIT OR GPL-3.0" }
+                }
+            }),
+        )])
+    }
+
+    fn roots() -> HashMap<String, String> {
+        HashMap::from([("app".to_string(), "*".to_string())])
+    }
+
+    fn opts(allow: &[&str], unknown: bool) -> ResolveOptions {
+        ResolveOptions {
+            allowed_licenses: Some(allow.iter().map(|s| (*s).to_string()).collect()),
+            allow_unknown_license: unknown,
+            ..Default::default()
+        }
+    }
+
+    /// Policy is a resolution input: the solver must pick a version that complies
+    /// rather than build a tree and audit it afterwards.
+    #[test]
+    fn policy_chooses_the_newest_compliant_version() {
+        // 1.4.0 declares `MIT OR GPL-3.0`, so MIT alone permits it and the newest
+        // compliant release wins; 1.1.0 (GPL) and 1.3.0 (Apache) are skipped.
+        let r = resolve_with_options(&world(), &roots(), &opts(&["MIT"], false)).unwrap();
+        assert_eq!(r.instances[0].version, "1.4.0");
+        // Matching is case-insensitive, because publishers are inconsistent.
+        let r = resolve_with_options(&world(), &roots(), &opts(&["mit"], false)).unwrap();
+        assert_eq!(r.instances[0].version, "1.4.0");
+    }
+
+    #[test]
+    fn object_and_spdx_forms_are_understood() {
+        let r = resolve_with_options(&world(), &roots(), &opts(&["Apache-2.0"], false)).unwrap();
+        assert_eq!(r.instances[0].version, "1.3.0");
+    }
+
+    /// A policy that silently accepts unknown licenses is not a policy.
+    #[test]
+    fn unknown_license_is_excluded_unless_allowed() {
+        let strict = resolve_with_options(&world(), &roots(), &opts(&["MIT"], false));
+        assert!(strict.is_ok());
+        let err = resolve_with_options(&world(), &roots(), &opts(&["BSD-3-Clause"], false));
+        assert!(err.is_err(), "nothing is BSD-3-Clause");
+        // 1.2.0 has no license at all; it is only reachable with the escape hatch,
+        // and then it is the newest eligible version.
+        let permissive =
+            resolve_with_options(&world(), &roots(), &opts(&["BSD-3-Clause"], true)).unwrap();
+        assert_eq!(permissive.instances[0].version, "1.2.0");
     }
 }

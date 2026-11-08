@@ -2944,10 +2944,32 @@ pub fn resolve_full_tree_nested(
                     .map(|dt| dt.and_utc().timestamp())
             })
     });
+    // License policy (`--allow-license`): also a resolution input, so it needs the
+    // per-version `license` field that abbreviation omits.
+    let allowed_licenses: Option<Vec<String>> = std::env::var("JHOL_ALLOW_LICENSE")
+        .ok()
+        .map(|raw| {
+            raw.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .filter(|v: &Vec<String>| !v.is_empty());
+    let allow_unknown_license = matches!(
+        std::env::var("JHOL_LICENSE_ALLOW_UNKNOWN").as_deref(),
+        Ok("1") | Ok("true")
+    );
+    let needs_full = as_of.is_some() || allowed_licenses.is_some();
+    let options = jagr_nest::ResolveOptions {
+        cutoff: as_of,
+        allowed_licenses: allowed_licenses.clone(),
+        allow_unknown_license,
+    };
+
     // One fetch function for both paths, so history and today never disagree
     // about which document they are reading.
     let fetch_one = move |name: &str| -> Result<serde_json::Value, String> {
-        if as_of.is_some() {
+        if needs_full {
             crate::registry::fetch_metadata_full(name)
         } else {
             crate::registry::fetch_metadata(name)
@@ -3012,7 +3034,11 @@ pub fn resolve_full_tree_nested(
                 for (name, doc) in results {
                     fetched_total += 1;
                     if let Some(mut doc) = doc {
-                        let keep: &[&str] = if as_of.is_some() { &["time"] } else { &[] };
+                        let keep: &[&str] = if needs_full {
+                            &["time", "license"]
+                        } else {
+                            &[]
+                        };
                         crate::registry::prune_packument_in_place_keeping(&mut doc, keep);
                         world.insert(name, doc);
                         progress += 1;
@@ -3039,7 +3065,7 @@ pub fn resolve_full_tree_nested(
     }
 
     let mut resolved = loop {
-        match jagr_nest::resolve_with_cutoff(&world, &roots, as_of) {
+        match jagr_nest::resolve_with_options(&world, &roots, &options) {
             Ok(r) => break r,
             Err(e) if e.needs_fetch() => {
                 if world.contains_key(&e.package) {
@@ -3054,7 +3080,11 @@ pub fn resolve_full_tree_nested(
                 // version pruned twice — the second call used the install-only key
                 // set and dropped `time` again, which made `--as-of` fail on any
                 // package fetched through this branch.
-                let keep: &[&str] = if as_of.is_some() { &["time"] } else { &[] };
+                let keep: &[&str] = if needs_full {
+                    &["time", "license"]
+                } else {
+                    &[]
+                };
                 crate::registry::prune_packument_in_place_keeping(&mut meta, keep);
                 world.insert(e.package, meta);
             }
