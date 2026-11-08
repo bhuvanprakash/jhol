@@ -7536,3 +7536,28 @@ it honest.
 
 Scope: decision support, not yet a wheel dependency graph. That needs the provider
 unification and a wheel resolver -- next slice.
+
+## Journal — 2026-11-07 (cont.): forks, attestation, replay — and regression to my own trap
+
+Three slices in one pass.
+
+1. env fork. First implementation hard-linked files so two trees share blocks. My own
+   test failed with a sentence I should have predicted: editing the fork changed the
+   original. Hard links are not isolation, and a fork exists precisely to be edited.
+   Rewrote with clonefile/FICLONE: 797 ms, 4,491 files cloned, 0 bytes added, and
+   isolation proven by editing the fork's chalk to 0.0.1 and watching the original stay
+   at 4.1.2.
+
+   That is twice this session that a dedupe scheme was wrong for the same reason (model
+   store, env fork). The rule I now believe: sharing storage is safe only for content
+   that is immutable by policy (read-only store entries), never for a working tree.
+
+2. attest. Deterministic (sorted keys, no timestamps), produced by verify_tree so the
+   proof cannot drift from the enforcement, covers models, refuses an unverifiable tree.
+
+3. replay. Spec -> plan -> execute by spawning the CLI commands themselves, so replay
+   semantics cannot diverge from the real ones; and it refuses to edit package.json
+   silently, printing the drift instead.
+
+Remaining: P0 (one Artifact shape + a wheel graph so axes resolve rather than advise),
+P2's partial materialisation, and the MCP surface for agents. Stated in docs/AI-FIRST.md.

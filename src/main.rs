@@ -3878,6 +3878,196 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    if let Some(("replay", sub_m)) = matches.subcommand() {
+        let path = sub_m
+            .get_one::<String>("spec")
+            .map(std::path::PathBuf::from)
+            .ok_or("replay needs a spec file")?;
+        let paper = jhol_core::paper::Paper::load(&path).map_err(|e| format!("replay: {e}"))?;
+        let current: std::collections::BTreeMap<String, String> =
+            jhol_core::lockfile::read_package_json_deps(std::path::Path::new("package.json"))
+                .map(|m| m.into_iter().collect())
+                .unwrap_or_default();
+        let drift = paper.diff_manifest(&current);
+        if !drift.is_empty() {
+            eprintln!("replay: the project does not match the spec:");
+            for (name, have, want) in &drift {
+                eprintln!("  {name}: have {} want {want}", have.clone().unwrap_or_else(|| "<none>".into()));
+            }
+            return Err(
+                "refusing to edit package.json silently; align the manifest with the spec first"
+                    .to_string(),
+            );
+        }
+        let plan = paper.plan();
+        if !flag(&sub_m, "execute") {
+            println!("replay plan for {}:", paper.name.clone().unwrap_or_else(|| path.display().to_string()));
+            for cmd in plan {
+                println!("  {cmd}");
+            }
+            return Ok(());
+        }
+        // Execute the same commands a user would type, so semantics cannot drift.
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        for cmd in &plan {
+            let mut parts = cmd.split_whitespace();
+            let _binary = parts.next();
+            let args: Vec<&str> = parts.collect();
+            let mut c = std::process::Command::new(&exe);
+            c.args(&args);
+            if let Some(as_of) = &paper.as_of {
+                c.env("JHOL_AS_OF", as_of);
+            }
+            let status = c.status().map_err(|e| format!("{cmd}: {e}"))?;
+            if !status.success() {
+                return Err(format!("replay step failed: {cmd}"));
+            }
+        }
+        println!("replay complete: {}", paper.name.clone().unwrap_or_default());
+        return Ok(());
+    }
+
+    if let Some(("env", sub_m)) = matches.subcommand() {
+        let envs = std::path::Path::new(".jhol/envs");
+        match sub_m.subcommand() {
+            Some(("fork", m)) => {
+                let name = m.get_one::<String>("name").cloned().unwrap_or_default();
+                if name.is_empty() || name.contains('/') || name.contains("..") {
+                    return Err("env fork: invalid name".into());
+                }
+                let from = m
+                    .get_one::<String>("from")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                let dest = envs.join(&name);
+                std::fs::create_dir_all(envs).map_err(|e| e.to_string())?;
+                let started = std::time::Instant::now();
+                // Only node_modules is forked: the fork shares the identity files by
+                // copying them, so both environments stay independently lockable.
+                let stats = jhol_core::env_fork::fork_tree(
+                    &from.join("node_modules"),
+                    &dest.join("node_modules"),
+                )
+                .map_err(|e| format!("env fork: {e}"))?;
+                for file in jhol_core::env_fork::identity_files(&from) {
+                    if let Some(name) = file.file_name() {
+                        let _ = std::fs::copy(&file, dest.join(name));
+                    }
+                }
+                if flag(&m, "json") {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "name": name,
+                            "dir": dest.display().to_string(),
+                            "dirs": stats.dirs, "files": stats.files,
+                            "cloned": stats.cloned, "copied": stats.copied,
+                            "referenced_bytes": stats.bytes,
+                            "added_bytes": stats.extra_bytes(),
+                            "ms": started.elapsed().as_millis() as u64,
+                        }))
+                        .unwrap_or_default()
+                    );
+                } else {
+                    println!(
+                        "forked {name} in {} ms — {}",
+                        started.elapsed().as_millis(),
+                        stats.describe()
+                    );
+                    println!("  run it with: cd {} · or copy it back when it works", dest.display());
+                }
+                return Ok(());
+            }
+            Some(("list", m)) => {
+                let mut names: Vec<String> = std::fs::read_dir(envs)
+                    .map(|rd| {
+                        rd.flatten()
+                            .filter(|e| e.path().is_dir())
+                            .filter_map(|e| e.file_name().to_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                names.sort();
+                if flag(&m, "json") {
+                    println!("{}", serde_json::to_string_pretty(&names).unwrap_or_default());
+                } else if names.is_empty() {
+                    println!("no forks (jhol env fork <name>)");
+                } else {
+                    for n in names {
+                        println!("{n}");
+                    }
+                }
+                return Ok(());
+            }
+            Some(("diff", m)) => {
+                let a = m.get_one::<String>("a").cloned().unwrap_or_default();
+                let b = m.get_one::<String>("b").cloned().unwrap_or_default();
+                let read = |name: &str| {
+                    jhol_core::lockfile::read_resolved_from_dir(&envs.join(name)).unwrap_or_default()
+                };
+                let (ma, mb) = (read(&a), read(&b));
+                let mut keys: Vec<&String> = ma.keys().chain(mb.keys()).collect();
+                keys.sort();
+                keys.dedup();
+                let mut n = 0;
+                for k in keys {
+                    let va = ma.get(k);
+                    let vb = mb.get(k);
+                    if va != vb {
+                        n += 1;
+                        println!(
+                            "{k}: {} -> {}",
+                            va.map(String::as_str).unwrap_or("-"),
+                            vb.map(String::as_str).unwrap_or("-")
+                        );
+                    }
+                }
+                if n == 0 {
+                    println!("{a} and {b} resolve identically");
+                }
+                return Ok(());
+            }
+            Some(("rm", m)) => {
+                let name = m.get_one::<String>("name").cloned().unwrap_or_default();
+                std::fs::remove_dir_all(envs.join(&name)).map_err(|e| e.to_string())?;
+                println!("removed fork {name}");
+                return Ok(());
+            }
+            _ => return Err("usage: jhol env fork|list|diff|rm".into()),
+        }
+    }
+
+    if let Some(("attest", sub_m)) = matches.subcommand() {
+        if flag(&sub_m, "verify") {
+            let Some(att) = jhol_core::attest::Attestation::load(std::path::Path::new(".")) else {
+                return Err("no attestation found; run `jhol attest` first".into());
+            };
+            match att.verify(std::path::Path::new(".")) {
+                Ok(()) => {
+                    if !flag(&sub_m, "json") {
+                        println!("attestation verified ({} pinned packages)", att.packages.len());
+                    }
+                    return Ok(());
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        let att = jhol_core::attest::Attestation::build(std::path::Path::new("."))
+            .map_err(|e| format!("attest: {e}"))?;
+        att.save(std::path::Path::new(".")).map_err(|e| e.to_string())?;
+        if flag(&sub_m, "json") {
+            println!("{}", serde_json::to_string_pretty(&att).unwrap_or_default());
+        } else {
+            println!(
+                "attested {} packages and {} models at {}",
+                att.packages.len(),
+                att.models.len(),
+                jhol_core::attest::Attestation::path(std::path::Path::new(".")).display()
+            );
+        }
+        return Ok(());
+    }
+
     if let Some(("axes", sub_m)) = matches.subcommand() {
         let mut host = jhol_core::axes::HostAxes::detect();
         if let Some(py) = sub_m.get_one::<String>("python") {
@@ -8351,6 +8541,46 @@ fn cli_command() -> Command {
                         .num_args(0)
                         .help("Approve every package that currently ships install scripts"),
                 )
+            )
+            .subcommand(
+                Command::new("replay")
+                    .about("Reproduce a published environment from a replay spec (deps as of a date, plus models)")
+                    .arg(Arg::new("spec").required(true).value_name("FILE.json"))
+                    .arg(
+                        Arg::new("execute")
+                            .long("execute")
+                            .action(ArgAction::SetTrue)
+                            .help("Run the plan instead of printing it"),
+                    ),
+            )
+            .subcommand(
+                Command::new("env")
+                    .about("Copy-on-write environment forks: try a change without touching the original")
+                    .subcommand(
+                        Command::new("fork")
+                            .about("Fork the current environment into .jhol/envs/<name>")
+                            .arg(Arg::new("name").required(true))
+                            .arg(Arg::new("from").long("from").value_name("DIR").help("Source project (default: .)"))
+                            .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
+                    )
+                    .subcommand(Command::new("list").about("List forks").arg(Arg::new("json").long("json").action(ArgAction::SetTrue)))
+                    .subcommand(
+                        Command::new("diff")
+                            .about("Compare the resolved versions of two forks")
+                            .arg(Arg::new("a").required(true))
+                            .arg(Arg::new("b").required(true)),
+                    )
+                    .subcommand(
+                        Command::new("rm")
+                            .about("Delete a fork")
+                            .arg(Arg::new("name").required(true)),
+                    ),
+            )
+            .subcommand(
+                Command::new("attest")
+                    .about("Record (or verify) a deterministic proof of this environment")
+                    .arg(Arg::new("verify").long("verify").action(ArgAction::SetTrue))
+                    .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
             )
             .subcommand(
                 Command::new("axes")

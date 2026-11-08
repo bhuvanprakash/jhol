@@ -2,6 +2,8 @@
 //! Used by the CLI binary; can be reused by other tools (e.g. LSP, server).
 
 pub mod adversarial_install;
+pub mod attest;
+pub mod env_fork;
 pub mod audit;
 pub mod axes;
 pub mod backend;
@@ -56,6 +58,7 @@ pub mod progress;
 pub mod project_lock;
 pub mod pubgrub;
 pub mod publish;
+pub mod paper;
 pub mod pypi;
 pub mod registry;
 pub mod registry_query;

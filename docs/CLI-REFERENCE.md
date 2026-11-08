@@ -103,6 +103,16 @@ written to `.npmrc` with mode 0600.
 
 ---
 
+## Environments, attestation, replay
+
+| command | effect |
+|---|---|
+| `jhol env fork <name>` | copy-on-write fork of the installed tree into `.jhol/envs/<name>` (isolated writes, shared blocks) |
+| `jhol env list` / `env diff a b` / `env rm <name>` | manage and compare forks |
+| `jhol attest` | write `.jhol/attestation.json`: manifest, lockfile, packages, models, host axes — deterministic |
+| `jhol attest --verify` | re-derive and compare; exit 1 with the reason on any change |
+| `jhol replay <spec.json> [--execute]` | reproduce a published environment (deps as of a date, plus models); refuses to edit the manifest silently |
+
 ## Hardware axes and wheels
 
 | command | effect |

@@ -2124,3 +2124,57 @@ which is the next slice. What exists answers the question that currently costs h
 *can this machine run this release, and if not, exactly why not.*
 
 `jhol-core` 691 tests, `jhol-ai` 13, `jhol-treecheck` 15, installer gate PASS.
+
+
+## AI-first slices 4–6: environment forks, attestation, replay
+
+Three slices landed, each measured rather than asserted.
+
+### `jhol env fork` — copy-on-write, because hard links are not isolation
+
+Forking a 266-package, 22.5 MB tree:
+
+```
+forked exp1 in 797 ms — 690 dirs, 4491 files (4491 cloned, 0 copied),
+                       22579752 bytes referenced, ~0 bytes added
+```
+
+My first implementation hard-linked files to share blocks. The test caught what that
+means: editing the forked `chalk` changed the **original** too, because an inode is an
+inode. A fork exists to be edited — a patch or a native build in the fork would have
+silently modified the environment it was meant to protect. Forks now use APFS
+`clonefile` / Linux `FICLONE`: writes isolated, blocks shared, `env list|diff|rm`
+alongside.
+
+### `jhol attest` — a proof produced by the thing that enforces it
+
+Deterministic: sorted keys, no timestamps, so two machines with the same environment
+produce byte-identical attestations. It records manifest digest, lockfile digest,
+resolved packages, model pins and host axes, and verification **re-derives** all of it
+rather than trusting the file. It refuses to attest a tree that does not match its
+lockfile, and it covers models.
+
+```
+$ jhol attest
+attested 260 packages and 0 models at ./.jhol/attestation.json
+$ jhol attest --verify      # after any change
+Error: attestation does not match: package.json changed    (exit 1)
+```
+
+### `jhol replay spec.json` — reproduction that will not rewrite your manifest
+
+A spec declares dependencies, an as-of date, models and expected hardware. `replay`
+prints the plan or executes it by spawning the same commands a user would type, so it
+cannot drift from the CLI's semantics — and it refuses drift in the other direction:
+
+```
+$ jhol replay paper.json --execute
+replay complete: 2024-express-repro          # express 4.18.2 as of 2024-01-01, 20 s
+
+$ # after adding a dependency the spec does not declare
+replay: the project does not match the spec:
+  lodash: have ^4 want <absent in spec>
+Error: refusing to edit package.json silently; align the manifest with the spec first
+```
+
+`jhol-core` 700 tests, `jhol-ai` 13, `jhol-treecheck` 15, installer gate PASS.
