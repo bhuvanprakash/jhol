@@ -2500,3 +2500,34 @@ matches node exactly.
 
 Corpus pair `47-symbols` (node-verified) pins all of it. `jhol-vm` 124 tests, corpus
 47/47, engine gate PASS.
+
+
+## Engine: well-known symbols are real symbols — and a latent protocol split was hiding there
+
+`Symbol.iterator` used to be the string `"Symbol(iterator)"` while the iteration protocol
+looked up `"@@iterator"`. The two never met, so `[][Symbol.iterator]` was `undefined` even
+on arrays — a split no test had noticed because everything iterated through the internal key.
+
+Well-known symbols are now real symbols whose id **is** that internal key, so both sides
+resolve to the same property:
+
+| expression | before | now |
+|---|---|---|
+| `typeof Symbol.iterator` | `string` | **`symbol`** |
+| `typeof [][Symbol.iterator]` | `undefined` | **`function`** |
+| `String(Symbol.iterator)` | `Symbol(iterator)` | `Symbol(Symbol.iterator)` |
+
+Iteration itself is unchanged and re-verified: `[...new Set([1,2,2])]`, `[..."ab"]`,
+`[...generator()]`, `Array.from(map)`, `for…of "ab"`.
+
+### The bug the migration exposed (documented, not rushed)
+
+`const [x, y] = new Set([3, 4])` yields `undefined, undefined`; node yields `3, 4`. Array
+patterns index the right-hand side instead of iterating it, so any non-array iterable
+destructures to nothing. The fix is to reuse the existing spread machinery (`__jhol_push_all`
+already drains an iterable) in the *binding* path — but it is a compiler change, and I would
+rather write it with its acceptance test than bolt it on at the end of a session. It is
+`ENGINE-GAPS.md` §8b with the mechanism named.
+
+Corpus pair `48-wellknown-symbols`. `jhol-vm` 124 tests, corpus 48/48, engine gate PASS,
+installer gate PASS.

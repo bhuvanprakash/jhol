@@ -7705,3 +7705,20 @@ undefined was treated as "no argument"). Node says "undefined". Fixed.
 Also removed a unit test module I had just written: it asserted on Debug strings while the
 node-verified corpus already pinned the same behaviour exactly. Two sources of truth for one
 fact is how tests start lying.
+
+## Journal — 2026-11-07 (cont.): well-known symbols, and the split they were hiding
+
+Symbol.iterator was a string "Symbol(iterator)" while the protocol looked up "@@iterator".
+Both sides were self-consistent, so nothing failed and no test noticed that
+[][Symbol.iterator] was undefined on arrays. Making well-knowns real symbols whose id IS the
+internal key closed the split in one change: typeof says symbol, array[Symbol.iterator] is a
+function, String() prints Symbol(Symbol.iterator), and iteration re-verified unchanged.
+
+The migration immediately exposed a different bug: [a, b] = new Set(...) gives undefined,
+undefined. Array patterns index instead of iterating. Node iterates. I documented it with the
+mechanism (reuse __jhol_push_all in the binding path) rather than patching the compiler at
+the end of a long session -- same rule as eval: no structural change without its test.
+
+Also: my .expected fixture was wrong (a|1 vs a,1 for Array.from(Map).join("|")). The engine
+was right and the corpus said so -- which is exactly why the corpus compares to node instead
+of to my memory.

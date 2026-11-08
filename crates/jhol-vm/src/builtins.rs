@@ -693,9 +693,11 @@ pub fn install(vm: &mut Vm) {
     // ---- Symbol statics ----
     set_fn(vm, sym_ctor, "for", n_symbol_for);
     set_fn(vm, sym_ctor, "keyFor", n_symbol_key_for);
-    // Well-known symbols: distinct constant spellings, the same way node's
-    // well-knowns are distinct objects. (Deviation: our Symbol values are
-    // strings, so `Symbol("a") === Symbol("a")` — see SESSION.md.)
+    // Well-known symbols are real symbols whose id is the *internal* key the
+    // protocols already use (`@@iterator`), so `obj[Symbol.iterator]` and
+    // `for…of` resolve to the same property. Before this they were strings
+    // spelled "Symbol(iterator)" while the protocol looked for "@@iterator", so the
+    // two never met: `obj[Symbol.iterator]` was undefined even on arrays.
     for (prop, desc) in [
         ("iterator", "iterator"),
         ("asyncIterator", "asyncIterator"),
@@ -710,7 +712,11 @@ pub fn install(vm: &mut Vm) {
         ("match", "match"),
         ("matchAll", "matchAll"),
     ] {
-        let v = vm.new_string(&format!("Symbol({})", desc));
+        let v = register_symbol(
+            vm,
+            format!("@@{}", desc),
+            format!("Symbol.{}", desc),
+        );
         let k = key(vm, prop);
         vm.set_prop(sym_ctor, k, v).unwrap();
     }

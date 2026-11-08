@@ -109,11 +109,20 @@ payload = the id, no heap object. Identity is the id, so:
 | `` `${Symbol("t")}` `` and `sym + ""` | **throws TypeError**, as the spec requires |
 | `o[sym] = 1` | symbol keys keep identity (`PropKey::Sym(id)`), so two same-description symbols do not collide |
 
-**Still open, stated:** well-known symbols (`Symbol.iterator`, `Symbol.asyncIterator`, …)
-are still strings. Converting them is a coordinated change: the iteration protocol looks
-those up by their current string keys, so the protocol and the constructor must move
-together, with `for…of` / spread / generators all covered by tests. Doing half of it would
-break iteration, which is a worse trade than an inconsistent `typeof` on two properties.
+**Well-known symbols are now real symbols too.** Each one's id is the *internal* key the
+protocols already use (`@@iterator`), so `obj[Symbol.iterator]` and `for…of` finally resolve
+to the same property. Before this they were strings spelled `"Symbol(iterator)"` while the
+protocol looked for `"@@iterator"`, so `[][Symbol.iterator]` was `undefined` even on arrays —
+a latent inconsistency that no test had noticed.
+
+| expression | result |
+|---|---|
+| `typeof Symbol.iterator` | `"symbol"` |
+| `String(Symbol.iterator)` | `"Symbol(Symbol.iterator)"` |
+| `typeof [][Symbol.iterator]` | `"function"` (was `undefined`) |
+| `[...new Set([1,2,2])]`, `[..."ab"]`, `[...g()]`, `Array.from(map)`, `for…of "ab"` | unchanged and still correct |
+
+Corpus pair `48-wellknown-symbols` pins them.
 
 Corpus pair `47-symbols` (node-verified) pins every row above.
 
@@ -209,6 +218,24 @@ allowed in strict code.
 
 Tests: `strict_assignment_tests` (five: strict function, class method, sloppy function,
 script level, existing global) and corpus pair `46-strict-assignment`.
+
+## 8b. Array destructuring does not use the iterator protocol
+
+**Today:** `const [x, y] = new Set([3, 4])` yields `undefined, undefined`; node yields `3, 4`.
+Array patterns index the value instead of iterating it, so any non-array iterable (Set, Map,
+generator, `arguments`-like) destructures to nothing.
+
+**What it needs:** the bind path for `Target::Array` should materialise the right-hand side
+through the iterator when it is not statically an array — the spread machinery already does
+this (`__jhol_push_all` drains an iterable into an array), so the fix is to reuse that op in
+the *binding* path, not to build a second iteration implementation.
+
+**Acceptance:** destructuring from a Set, a Map entry array, a generator and a string all
+match node; destructuring an array stays unchanged and allocation-free (the current path
+must still be taken when the right-hand side is a literal array).
+
+Found by the well-known-symbol migration: the same sweep that proved `[...set]` correct
+showed `[a, b] = set` wrong, because they use different paths.
 
 ## 9b. The note that led here (kept for the record)
 
