@@ -60,6 +60,7 @@ pub mod pubgrub;
 pub mod publish;
 pub mod paper;
 pub mod pypi;
+pub mod pyresolve;
 pub mod registry;
 pub mod registry_query;
 pub mod resolution_mirror;

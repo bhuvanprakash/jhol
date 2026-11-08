@@ -7561,3 +7561,24 @@ Three slices in one pass.
 
 Remaining: P0 (one Artifact shape + a wheel graph so axes resolve rather than advise),
 P2's partial materialisation, and the MCP surface for agents. Stated in docs/AI-FIRST.md.
+
+## Journal — 2026-11-07 (cont.): the wheel graph, and pre-releases earning their exclusion
+
+P0's resolution half landed: pysolve follows requires_dist, evaluates PEP 508 markers and
+picks artifacts that run on this host. torch@2.4.1 resolves to 10 packages in ~1s with the
+macOS/arm64/cp312 wheel named explicitly.
+
+Four rules, each caught by reality rather than by reading a spec:
+1. markers must be evaluated (win32 deps dropped on Linux; extra==... dropped always;
+   unevaluable markers mean "skip and record", because skipping is recoverable).
+2. versions compare numerically (3.12 > 3.9 is false as strings, which rejects valid deps).
+3. pre-releases do not win by being newest -- the first real run picked networkx 3.7rc0,
+   sympy 1.14.0rc2, typing-extensions 4.16.0rc2. That is a stability decision made on the
+   user's behalf; now excluded unless --pre or the specifier names one.
+4. a release with no wheel for this interpreter is skipped, not chosen to fail at import.
+
+Scope: resolution only. Nothing unpacks a Python tree yet, and no agent surface exists.
+Both are stated in the CHANGELOG status block rather than implied by a feature list.
+
+Also rewrote the CHANGELOG header into a status-at-a-glance block, because the history is
+now 2,200 lines and nobody should have to read it to learn what works today.

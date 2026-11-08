@@ -4093,6 +4093,70 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    if let Some(("pysolve", sub_m)) = matches.subcommand() {
+        let raw = sub_m
+            .get_one::<String>("spec")
+            .map(|s| s.as_str())
+            .unwrap_or_default();
+        let (pkg, ver) = match raw.rsplit_once('@') {
+            Some((p, v)) if !p.is_empty() && !v.is_empty() => (p.to_string(), Some(v.to_string())),
+            _ => (raw.to_string(), None),
+        };
+        let mut host = jhol_core::axes::HostAxes::detect();
+        if let Some(py) = sub_m.get_one::<String>("python") {
+            host.python = Some(py.clone());
+        }
+        let options = jhol_core::pyresolve::Options {
+            require_wheel: !flag(&sub_m, "allow-sdist"),
+            allow_prerelease: flag(&sub_m, "pre"),
+            ..Default::default()
+        };
+        let roots = vec![(pkg.clone(), ver.map(|v| format!("=={}", v)).unwrap_or_default())];
+        let mut provider = jhol_core::pyresolve::PyPIProvider::new();
+        let started = std::time::Instant::now();
+        let resolved = jhol_core::pyresolve::resolve(&mut provider, &roots, &host, &options)
+            .map_err(|e| format!("pysolve: {e}"))?;
+        if flag(&sub_m, "json") {
+            let packages: Vec<serde_json::Value> = resolved
+                .packages
+                .iter()
+                .map(|(name, (version, artifact))| {
+                    serde_json::json!({"name": name, "version": version, "artifact": artifact})
+                })
+                .collect();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "host": host.summary(),
+                    "packages": packages,
+                    "skipped": resolved.skipped,
+                    "ms": started.elapsed().as_millis() as u64,
+                }))
+                .unwrap_or_default()
+            );
+        } else {
+            println!(
+                "{} package(s) resolved in {} ms for {}",
+                resolved.packages.len(),
+                started.elapsed().as_millis(),
+                host.summary()
+            );
+            for (name, (version, artifact)) in &resolved.packages {
+                println!(
+                    "  {name} {version}{}",
+                    artifact
+                        .as_ref()
+                        .map(|a| format!("  ({a})"))
+                        .unwrap_or_default()
+                );
+            }
+            if !resolved.skipped.is_empty() {
+                println!("  skipped {} requirement(s) by environment marker", resolved.skipped.len());
+            }
+        }
+        return Ok(());
+    }
+
     if let Some(("wheels", sub_m)) = matches.subcommand() {
         let raw = sub_m
             .get_one::<String>("spec")
@@ -8592,6 +8656,30 @@ fn cli_command() -> Command {
                             .value_name("X.Y")
                             .help("Assume this Python version instead of the detected one"),
                     ),
+            )
+            .subcommand(
+                Command::new("pysolve")
+                    .about("Resolve a Python dependency graph to artifacts that run on this machine")
+                    .arg(
+                        Arg::new("spec")
+                            .required(true)
+                            .value_name("PACKAGE[@VERSION]")
+                            .help("e.g. requests or torch@2.4.1"),
+                    )
+                    .arg(Arg::new("python").long("python").value_name("X.Y"))
+                    .arg(
+                        Arg::new("allow-sdist")
+                            .long("allow-sdist")
+                            .action(ArgAction::SetTrue)
+                            .help("Also accept releases with no compatible wheel"),
+                    )
+                    .arg(
+                        Arg::new("pre")
+                            .long("pre")
+                            .action(ArgAction::SetTrue)
+                            .help("Allow pre-release versions"),
+                    )
+                    .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
             )
             .subcommand(
                 Command::new("wheels")

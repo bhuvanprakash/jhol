@@ -1,3 +1,27 @@
+# Jhol changelog
+
+> **Status at a glance** (append-only history below; this block is the current state)
+>
+> | capability | state | evidence |
+> |---|---|---|
+> | install / ci / verify / explain | shipped | 708 core tests, installer gate |
+> | multi-major npm trees | shipped | `jest@29.7.0` → 266 packages, warm stable |
+> | reproducible history | shipped | `--as-of` across three dates |
+> | license policy at resolution time | shipped | 0 violations on a real tree |
+> | security exclusion at resolution time | shipped | `--exclude-vuln`, OSV + re-resolve |
+> | models: inspect / pull / dedupe / verify | shipped | 10,760 B header, one inode per model |
+> | hardware axes + wheel compatibility | shipped | `axes`, `wheels` (6 rules, tested) |
+> | **Python wheel graph resolution** | **shipped (resolution only)** | `pysolve` — torch@2.4.1 → 10 pkgs, 1.1 s |
+> | environment forks (CoW) | shipped | 797 ms, 4,491 files cloned, 0 B added |
+> | attestation / replay | shipped | deterministic proof; spec → plan → execute |
+> | wheel **installation** (materialise a py tree) | **not built** | resolution names the artifact; nothing unpacks it |
+> | MCP tool surface with cost estimates | **not built** | server exists, tools are not wired |
+> | engine (JholVM) | shipped with known gaps | no Promise/BigInt/TDZ; documented |
+>
+> Honest summary: jhol can now *decide* a Python environment and *prove* an npm + model
+> one. It cannot yet unpack a Python tree, and an agent cannot drive it end to end. Those
+> two sentences are the roadmap.
+
 # Production gate — 2026-11-03
 
 Everything measured on this machine, dev profile, 17-crate workspace, Jhol 2.0.0
@@ -2178,3 +2202,49 @@ Error: refusing to edit package.json silently; align the manifest with the spec 
 ```
 
 `jhol-core` 700 tests, `jhol-ai` 13, `jhol-treecheck` 15, installer gate PASS.
+
+
+## AI-first slice 7: the Python wheel graph — axes now *resolve*, not advise
+
+`crates/jhol-core/src/pyresolve.rs` resolves a Python dependency graph to artifacts that
+run on this machine: it follows `requires_dist`, evaluates PEP 508 environment markers,
+and picks releases that publish a wheel for this host and interpreter.
+
+```
+$ jhol pysolve torch@2.4.1 --python 3.12
+10 package(s) resolved in 1057 ms for macos arm64 · libc unknown · python 3.12 · no cuda
+  MarkupSafe 3.0.4        (markupsafe-3.0.4-cp312-cp312-macosx_11_0_arm64.whl)
+  filelock 4.2.9          (filelock-4.2.9-py3-none-any.whl)
+  networkx 3.7            (networkx-3.7-py3-none-any.whl)
+  sympy 1.14.0            (sympy-1.14.0-py3-none-any.whl)
+  torch 2.4.1             (torch-2.4.1-cp312-none-macosx_11_0_arm64.whl)
+  …
+```
+
+That is the difference between "your machine cannot run this" and **"here is the set of
+artifacts that runs here"** — the CUDA/ABI matrix decided before anything is downloaded.
+
+### Rules this needed, each found by a test or a real resolution
+
+* **Markers are evaluated.** `sys_platform == "win32"` dependencies are dropped on Linux;
+  `extra == "test"` dependencies are dropped always; a marker that cannot be evaluated
+  (e.g. `platform_release`) is treated as *not applying* and recorded as skipped —
+  skipping is recoverable, installing the wrong thing is not.
+* **Versions compare numerically.** `python_version > "3.9"` must be true for 3.12;
+  string comparison says no and rejects correct dependencies.
+* **Pre-releases do not win by being newest.** The first real run selected
+  `networkx 3.7rc0`, `sympy 1.14.0rc2`, `typing-extensions 4.16.0rc2` — a stability
+  decision made on the user's behalf. Now excluded unless `--pre` or the specifier names
+  one (`==1.0rc1`).
+* **A release without a wheel for this interpreter is skipped**, not chosen and left to
+  fail at import: newest `numpy` publishing only `cp311` falls back on 3.12.
+* **Conflicts name both sides** ("c 1.0.0 is required by b 1.0.0, but 2.0.0 is already
+  selected") and unsatisfiable requirements list the rejections.
+
+### Scope, stated
+
+Resolution only. Nothing materialises a Python tree yet — that is the next slice, and it
+is plumbing rather than modelling: unpack wheels via the existing store, write a lock,
+and extend `jhol verify` to cover it the way it already covers npm and models.
+
+`jhol-core` 708 tests, `jhol-ai` 13, `jhol-treecheck` 15, installer gate PASS.
