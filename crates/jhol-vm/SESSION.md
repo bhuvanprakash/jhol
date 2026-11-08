@@ -2144,3 +2144,22 @@ fudge with a date filter that silently does nothing.
 
 Also fixed a genuinely flaky jhol-treecheck suite: two tests mutated the same env
 var and cargo runs tests in parallel. Serialised with a lock; three clean runs.
+
+## Journal — 2026-11-07 (cont.): --as-of works; the bug was my own prune
+
+Two days of assuming the metadata layer could not serve publish dates. It could:
+fetch_metadata_full returns a complete document with 322 time entries. The
+resolver saw none because the caller pruned them away -- twice. The second prune
+used the install-only key set and silently undid the keeping variant I had just
+added.
+
+Result: --as-of now installs express 4.17.1 for 2020-06-01, 4.18.2 for 2023-06-01
+and 4.22.3 today, from the same manifest.
+
+Lesson, and I want it written down because it is the third time: when a feature
+reports "the data is missing", check whether something upstream deleted it before
+believing the data source. The measurement that settled it was a three-line example
+calling fetch_metadata_full directly and printing time_entries.
+
+Honest costs: dated installs take 21-24 s vs 0.5 s, need full packuments, and fail
+loudly rather than falling back to today.

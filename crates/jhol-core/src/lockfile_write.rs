@@ -3012,7 +3012,8 @@ pub fn resolve_full_tree_nested(
                 for (name, doc) in results {
                     fetched_total += 1;
                     if let Some(mut doc) = doc {
-                        crate::registry::prune_packument_in_place(&mut doc);
+                        let keep: &[&str] = if as_of.is_some() { &["time"] } else { &[] };
+                        crate::registry::prune_packument_in_place_keeping(&mut doc, keep);
                         world.insert(name, doc);
                         progress += 1;
                     }
@@ -3048,9 +3049,13 @@ pub fn resolve_full_tree_nested(
                         e.describe()
                     ));
                 }
-                let meta = fetch_one(&e.package)?;
-                let mut meta = meta;
-                crate::registry::prune_packument_in_place(&mut meta);
+                let mut meta = fetch_one(&e.package)?;
+                // One prune, keeping the fields this path needs. The previous
+                // version pruned twice — the second call used the install-only key
+                // set and dropped `time` again, which made `--as-of` fail on any
+                // package fetched through this branch.
+                let keep: &[&str] = if as_of.is_some() { &["time"] } else { &[] };
+                crate::registry::prune_packument_in_place_keeping(&mut meta, keep);
                 world.insert(e.package, meta);
             }
             Err(e) => return Err(e.describe()),

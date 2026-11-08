@@ -1775,3 +1775,47 @@ now hold a lock. A flaky gate is worse than no gate.
 
 `jhol-core` 673 tests, `jhol-treecheck` 12 (three consecutive clean runs),
 installer gate PASS.
+
+
+## `--as-of` works end to end: reproducible historical trees
+
+The feature was blocked by my own pruning, not by missing metadata:
+
+```
+$ jhol install --as-of 2020-06-01   # express ^4
+Added 50 packages       express 4.17.1
+
+$ jhol install --as-of 2023-06-01
+Added 58 packages       express 4.18.2
+
+$ jhol install                       # today
+Added 71 packages       express 4.22.3
+```
+
+Three versions of the same manifest, three faithful trees. Nothing else in this
+space offers it without vendoring a lockfile from the past.
+
+### What was actually wrong
+
+`prune_packument_in_place` keeps `name`, `versions` and `dist-tags` — measured: the
+cache stores **abbreviated** documents (0 of 39 sampled carried `time`), while
+`fetch_metadata_full` returned a complete one with **322** `time` entries. The
+resolver then reported "no publish dates" because *the caller had just pruned them
+away*, twice: once in the prefetch and once in the sequential fetch, where a second
+`prune_packument_in_place` call undid the keeping variant.
+
+Fix: `prune_packument_in_place_keeping(v, &["time"])` and exactly one prune per
+fetched document. Two tests pin it — `time` survives the keeping variant and is
+still dropped by the default one.
+
+### Behaviour, deliberately strict
+
+* A version with no publish date cannot be shown to have existed before the cutoff,
+  so it is excluded rather than assumed old enough.
+* A dated install never falls back to the flat resolver (which ignores dates) — it
+  fails with the reason. Verified earlier: exit 1, zero packages installed.
+* Cost is honest: 21–24 s against 0.5 s undated, because history needs full
+  packuments plus their tarballs. An opt-in feature may be slow; it may not be
+  wrong.
+
+`jhol-core` 675 tests, `jhol-treecheck` 12, installer gate PASS.

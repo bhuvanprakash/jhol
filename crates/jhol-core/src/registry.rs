@@ -291,8 +291,29 @@ pub fn registry_auth_token() -> Option<String> {
 /// Guarded: a *manifest* (single-version JSON, no `versions` object) is left
 /// untouched, so this is safe to apply to every registry JSON parse.
 /// The on-disk packument cache keeps the untouched bytes.
+/// Fields a resolution needs that pruning would otherwise drop.
+///
+/// `time` carries per-version publish dates — the whole input to `--as-of` — and
+/// `license` per version is what policy masks need. Pruning to the install-only
+/// key set is right for a normal install and wrong for those two features, and
+/// the first version of `--as-of` failed exactly here: the resolver received a
+/// document it had itself pruned, and reported "no publish dates" about metadata
+/// that had arrived complete.
+pub fn prune_packument_in_place_keeping(v: &mut serde_json::Value, keep_top: &[&str]) {
+    prune_packument_inner(v, keep_top)
+}
+
 pub fn prune_packument_in_place(v: &mut serde_json::Value) {
-    const TOP_KEYS: &[&str] = &["name", "versions", "dist-tags"];
+    prune_packument_inner(v, &[])
+}
+
+fn prune_packument_inner(v: &mut serde_json::Value, keep_top: &[&str]) {
+    let top_keys: Vec<&str> = {
+        let mut v = vec!["name", "versions", "dist-tags"];
+        v.extend_from_slice(keep_top);
+        v
+    };
+    let TOP_KEYS: &[&str] = &top_keys;
     const VERSION_KEYS: &[&str] = &[
         "name",
         "version",
@@ -4793,5 +4814,42 @@ mod store_extract_guard_tests {
         let d = tmp.path();
         std::fs::write(d.join("index.js"), b"x").unwrap();
         assert!(!store_extract_complete(d));
+    }
+}
+
+#[cfg(test)]
+mod prune_keeping_tests {
+    use super::{prune_packument_in_place, prune_packument_in_place_keeping};
+    use serde_json::json;
+
+    /// `time` is the entire input to `--as-of`. Pruning it away made the resolver
+    /// declare "no publish dates" about metadata that had arrived complete — the
+    /// document was pruned by the caller itself.
+    #[test]
+    fn keeping_time_preserves_publish_dates() {
+        let mut doc = json!({
+            "name": "p",
+            "dist-tags": {"latest": "1.0.0"},
+            "time": {"1.0.0": "2020-01-01T00:00:00.000Z"},
+            "versions": {"1.0.0": {
+                "name": "p", "version": "1.0.0", "license": "MIT",
+                "dependencies": {"x": "^1"}, "dist": {"tarball": "u"}}},
+            "readme": "large, useless here"
+        });
+        prune_packument_in_place_keeping(&mut doc, &["time"]);
+        assert!(doc.get("time").is_some(), "time must survive");
+        assert!(doc.get("readme").is_none(), "unrelated keys are still dropped");
+        assert!(doc["versions"]["1.0.0"].get("dependencies").is_some());
+    }
+
+    #[test]
+    fn default_prune_still_drops_time() {
+        let mut doc = json!({
+            "name": "p",
+            "time": {"1.0.0": "2020-01-01T00:00:00.000Z"},
+            "versions": {"1.0.0": {"version": "1.0.0"}}
+        });
+        prune_packument_in_place(&mut doc);
+        assert!(doc.get("time").is_none());
     }
 }
