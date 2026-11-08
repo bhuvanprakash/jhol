@@ -2930,6 +2930,7 @@ pub fn resolve_full_tree_nested(
     // a shrug — and it keeps the resolver independent of the transport.
     let mut provider = RegistryProvider::new();
     let mut world: HashMap<String, serde_json::Value> = HashMap::new();
+
     let mut resolved = loop {
         match jagr_nest::resolve(&world, &roots) {
             Ok(r) => break r,

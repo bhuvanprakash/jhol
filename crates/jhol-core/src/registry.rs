@@ -4263,13 +4263,36 @@ pub(crate) fn ensure_store_unpacked_for_tarball_in(
 }
 
 pub fn store_extract_complete(dest_dir: &Path) -> bool {
+    // The manifest must have content, marker or not.
+    //
+    // A marker records "this extract finished", but a finished extract can still
+    // be unreadable: a zero-length `package.json` (truncated write, or an extract
+    // interrupted after the first entry) made every later install "repair" the
+    // package by re-cloning the same corruption — observable as an install that
+    // reports `Added 1 packages` on every warm run and never converges, because
+    // the tree never matches the lockfile. `function-bind` in a real `jest` tree
+    // was 0 bytes with the marker present.
+    // A manifest that exists but is empty is corruption, marker or not: every
+    // later install would "repair" the package by re-cloning the same bytes, so
+    // the tree never matches the lockfile (observed as a warm install reporting
+    // `Added 1 packages` forever; `function-bind` in a real `jest` tree was 0
+    // bytes with the marker present).
+    //
+    // A manifest that is *absent* is left to the marker, because extraction of
+    // a tarball without a root package.json is legitimate and the marker is the
+    // only evidence available for it.
+    let pkg_json = dest_dir.join("package.json");
+    if let Ok(meta) = pkg_json.metadata() {
+        if meta.is_file() && meta.len() == 0 {
+            return false;
+        }
+    }
     if dest_dir.join(STORE_COMPLETE_MARKER).exists() {
         return true;
     }
     // Legacy mark-free dirs: a real body file (regular file beyond package.json)
     // proves the tarball was fully materialized. The relink `node_modules/`
     // sibling is a symlink dir and must not satisfy this.
-    let pkg_json = dest_dir.join("package.json");
     if !pkg_json.exists() {
         return false;
     }
@@ -4711,5 +4734,51 @@ mod compiled_spec_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod store_extract_guard_tests {
+    use super::{store_extract_complete, STORE_COMPLETE_MARKER};
+
+    /// A finished extract can still be unreadable. A zero-length manifest with
+    /// the completion marker present used to count as complete, so every later
+    /// install re-cloned the same corruption: `jest` warm runs reported
+    /// `Added 1 packages` forever and the tree never matched the lockfile.
+    #[test]
+    fn zero_length_manifest_is_not_a_complete_extract() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path();
+        std::fs::write(d.join(STORE_COMPLETE_MARKER), b"ok").unwrap();
+        std::fs::write(d.join("package.json"), b"").unwrap();
+        std::fs::write(d.join("index.js"), b"module.exports = 1;").unwrap();
+        assert!(
+            !store_extract_complete(d),
+            "an empty manifest must not be treated as an installed package"
+        );
+
+        // Repairing the manifest makes the entry usable again, with no other
+        // change to the tree.
+        std::fs::write(d.join("package.json"), br#"{"name":"x","version":"1.0.0"}"#).unwrap();
+        assert!(store_extract_complete(d));
+    }
+
+    #[test]
+    fn marker_plus_manifest_is_complete() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path();
+        std::fs::write(d.join(STORE_COMPLETE_MARKER), b"ok").unwrap();
+        std::fs::write(d.join("package.json"), br#"{"name":"x","version":"1.0.0"}"#).unwrap();
+        assert!(store_extract_complete(d));
+    }
+
+    /// No manifest and no marker: still incomplete (the legacy branch needs a
+    /// real body file and a manifest).
+    #[test]
+    fn missing_manifest_without_marker_is_incomplete() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path();
+        std::fs::write(d.join("index.js"), b"x").unwrap();
+        assert!(!store_extract_complete(d));
     }
 }

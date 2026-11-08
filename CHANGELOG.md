@@ -1496,3 +1496,68 @@ resolver change.
 The build failed with `No space left on device` (152 MiB free). Removed 12 GB of
 regenerable `target/debug` before rebuilding — the standing rule exists because
 this has bitten before.
+
+
+## Nested resolution is the default; the corruption behind the instability
+
+### Promoted to default
+
+`resolve_full_tree_nested` (per-dependent instances) is now the resolver for the
+nested branch. That branch is only reached when the flat expansion has already
+failed, so this can only turn a failure into an install; it also falls back
+automatically if the instance resolver errors, and `JHOL_NEST_RESOLVER=0`
+restores the old path.
+
+Fresh cache, `jest@29.7.0`:
+
+```
+Added 266 packages in 51.3 s  |  197 top-level dirs  |  jest bin present
+warm: Up to date   (x3)
+```
+
+Previously this manifest failed with a resolution conflict. `express@^4` is
+unchanged at 71 packages, warm `Up to date`.
+
+### The instability was corrupted store content, not placement
+
+Warm runs reported `Added 1 packages` forever. The cause was not the layout plan:
+
+```
+node_modules/function-bind/package.json   0 bytes
+```
+
+`store_extract_complete` returned early whenever the completion marker existed,
+so a **finished extract with an unreadable manifest** counted as installed. Every
+install then "repaired" the package by re-cloning the same zero bytes, so the tree
+could never match the lockfile.
+
+The guard now treats a manifest that *exists but is empty* as corruption, marker
+or not, and lets extraction rebuild the entry. A manifest that is *absent* is
+still governed by the marker, because extracting a tarball with no root
+`package.json` is legitimate — the first version of the guard rejected those and
+broke two store tests and the installer gate, which is how that distinction was
+found rather than assumed.
+
+Three tests pin it: empty manifest with marker (incomplete), repaired manifest
+(complete), missing manifest without marker (incomplete). After the fix the
+corrupted entry re-extracted itself to 2262 bytes and the tree converged.
+
+### A change I reverted: parallel metadata prefetch
+
+The frontier walk (`jagr_nest::missing_packages`) followed `peerDependencies` as
+well as dependencies and looked at *every* published version of every package, so
+the prefetch fetched a graph that never closed: a cold `jest` install hung until a
+600 s timeout, 0 packages installed. Reverted rather than shipped. The sequential
+fetch-and-retry path is correct and costs 51 s cold; a future attempt needs a
+bounded frontier (skip peers, cap depth and count) and a hard ceiling that falls
+back to sequential.
+
+### Verified
+
+`jhol-core` 659 tests (7 ignored, each carrying its reason), `jhol-treecheck` 12,
+installer gate PASS, `jest` tree verifies `Match`.
+
+### Housekeeping
+
+Freed 12 GB of regenerable `target/debug` after `No space left on device` at
+152 MiB.

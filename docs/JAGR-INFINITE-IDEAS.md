@@ -168,16 +168,21 @@ Two things real data taught us, both now handled:
   alias before deciding a fetch is needed.
 * **Optional edges to unavailable packages** are dropped, not fatal.
 
-**Wired into the tree** (opt-in, `JHOL_NEST_RESOLVER=1`):
+**Wired into the tree and now the default** for the nested branch:
 `lockfile_write::resolve_full_tree_nested` turns instances into a node-keyed
 tree, attaches tarball URLs and integrity from the registry provider, and retries
 on `MissingPackument`. `jhol install jest@29.7.0` installs 266 packages with
 nested majors and a working `jest` bin.
 
-Still open: the tree is not yet stable (a warm run reports `function-bind` listed
-but absent, i.e. a planned path that materialisation does not write), so the
-default stays on the previous path. Peers are recorded, not binding; hoisting is
-a most-demanded rule.
+The instability that kept it opt-in was **not** placement: a store entry with a
+0-byte `package.json` and a completion marker counted as installed, so every
+install re-cloned the corruption. Fixed in `store_extract_complete` (an existing
+but empty manifest is corruption; an absent one is legitimate). `jest` now
+installs 266 packages in 51 s and stays `Up to date` on warm runs.
+
+Still open: peers are recorded, not binding; hoisting is a most-demanded rule;
+parallel metadata prefetch was attempted and reverted (unbounded peer frontier,
+documented above).
 
 ## Earlier blocker note (kept for the record)
 

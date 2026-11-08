@@ -456,6 +456,64 @@ pub fn resolve(
     })
 }
 
+/// Every package named by a dependency of a *known* package but absent from the
+/// map, sorted and deduplicated.
+///
+/// Resolution reports one missing package at a time, which forces one registry
+/// round trip per package: on `jest` that was ~270 sequential fetches and 54-70 s
+/// of a cold install. This walks the frontier so the caller can fetch in
+/// parallel. It over-approximates on purpose (it looks at every published
+/// version, not just the one that will be chosen) — fetching a packument that
+/// turns out not to be needed is cheap, and it avoids a second pass.
+pub fn missing_packages(
+    packuments: &HashMap<String, Value>,
+    roots: &HashMap<String, String>,
+) -> Vec<String> {
+    let mut missing: BTreeSet<String> = BTreeSet::new();
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut queue: std::collections::VecDeque<&str> = std::collections::VecDeque::new();
+
+    for (name, _spec) in roots.iter() {
+        match packuments.get_key_value(name.as_str()) {
+            Some((k, _)) => {
+                if seen.insert(k.as_str()) {
+                    queue.push_back(k.as_str());
+                }
+            }
+            None => {
+                missing.insert(name.clone());
+            }
+        }
+    }
+    while let Some(name) = queue.pop_front() {
+        let Some(doc) = packuments.get(name) else {
+            continue;
+        };
+        let Some(versions) = doc.get("versions").and_then(|v| v.as_object()) else {
+            continue;
+        };
+        for info in versions.values() {
+            for section in ["dependencies", "optionalDependencies", "peerDependencies"] {
+                let Some(map) = info.get(section).and_then(|v| v.as_object()) else {
+                    continue;
+                };
+                for dep in map.keys() {
+                    // An `npm:` alias targets a different package than its name.
+                    let (real, _) = expand_alias(dep, map.get(dep).and_then(|v| v.as_str()).unwrap_or("*"));
+                    if let Some((k, _)) = packuments.get_key_value(real.as_str()) {
+                        if seen.insert(k.as_str()) {
+                            queue.push_back(k.as_str());
+                        }
+                    } else {
+                        missing.insert(real);
+                    }
+                }
+            }
+        }
+    }
+    missing.into_iter().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

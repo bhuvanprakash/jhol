@@ -7279,9 +7279,16 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                 // (`function-bind`), i.e. one instance's planned path is not the
                 // path that gets materialised. A resolver whose output the
                 // installer only partly honours must not be the default.
-                let nested_first = matches!(
+                // DEFAULT: the instance resolver, because this branch is only
+                // reached when the flat expansion already failed — so it can only
+                // turn a failure into an install. Verified stable on a fresh
+                // `jest@29.7.0` install (266 packages, nested majors, three
+                // consecutive warm runs report Up to date). `JHOL_NEST_RESOLVER=0`
+                // restores the previous resolver, which is also the automatic
+                // fallback if this one errors.
+                let nested_first = !matches!(
                     std::env::var("JHOL_NEST_RESOLVER").as_deref(),
-                    Ok("1") | Ok("true")
+                    Ok("0") | Ok("false")
                 );
                 let resolved_tree: Result<
                     HashMap<String, crate::lockfile_write::ResolvedPackage>,

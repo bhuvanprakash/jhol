@@ -2032,3 +2032,27 @@ regenerable target/debug. The standing rule earned its place.
 Costs: cold jest 54-70 s, ~270 sequential metadata fetches; resolver itself
 ~103 ms. Parallel metadata fetch is the next change, and it is transport, not
 algorithm.
+
+## Journal — 2026-11-07 (cont.): default-on, and the corruption that looked like a layout bug
+
+Promoted the instance resolver to default in the nested branch. It is only
+reached when the flat expansion already failed, so it can only turn a failure
+into an install, and it falls back automatically.
+
+Warm runs still reported "Added 1 packages" forever. I assumed my placement plan
+was wrong; it was not. `node_modules/function-bind/package.json` was 0 bytes, and
+`store_extract_complete` returned early on the completion marker, so a finished
+extract with an unreadable manifest counted as installed — every install
+"repaired" it by re-cloning the same zero bytes.
+
+Two lessons, both cheap to state and expensive to skip:
+- The first guard required a non-empty manifest unconditionally; two store tests
+  and the installer gate failed, because a tarball with no root package.json is
+  legitimate. The narrower predicate (empty-and-present = corrupt) is the correct
+  one, and the gate taught me that, not reasoning.
+- I also tried parallel metadata prefetch. The frontier followed peerDependencies
+  and every published version, never closed, and a cold jest install hung to a
+  600 s timeout with 0 packages. Reverted. A hang is worse than slow.
+
+Now: jest 266 packages, 51 s cold, Up to date on three consecutive warm runs;
+659 tests; installer gate PASS.
