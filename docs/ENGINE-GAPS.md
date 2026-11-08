@@ -167,11 +167,24 @@ path, which is why the bug survived a 44-pair corpus. Every function now starts 
 scope; arrows get an empty one because their `this`/`new_target` are lexical.
 Test: `arrow_bodies_can_declare_bindings`.
 
-## 9. Assorted
+## 9. Strict-mode assignment to an undeclared name — deliberately not next
+
+`x = 1` where `x` is unresolvable must throw `ReferenceError` in strict code. The VM has
+per-function strictness (`proto.is_strict`), so the check itself is a few lines in
+`Op::SetGlobal`.
+
+It is not done because the **frame does not record whether it is the script entry**, and
+this engine marks `FnCtx::Script` strict. Node's `-e` evaluates scripts as sloppy, so
+implementing it naively would make `jhol eval 'x = 1'` throw where `node -e 'x = 1'`
+succeeds — a divergence introduced to fix a divergence. The fix needs the frame's context
+kind alongside its strictness; then the check is trivial and the acceptance test is
+"strict function throws, script does not".
+
+## 10. Assorted
 
 | gap | note |
 |---|---|
-| undeclared global assignment does not raise `ReferenceError` | needs strict-mode tracking through the compiler |
+| undeclared global assignment does not raise `ReferenceError` | strictness exists per function; the frame must also record whether it is the script entry (see §9) |
 | per-property enumerable/writable flags are not modelled | one adversarial fixture is an expected failure for this |
 | interpreter fallback is ~26× slower on impure loops with captured counters | JIT region rejects some real loops (`GetProp` on a non-virtual slot) |
 | `jhol eval -p` with statements | see §1; expressions work on every engine |

@@ -2419,3 +2419,20 @@ Both are pinned by `tdz_and_scope_tests` (three tests: throws, message names the
 legal uses stay legal; plus arrow `let`/`const`/destructuring).
 
 `jhol-vm` 119 tests, engine gate PASS, installer gate PASS.
+
+
+### Engine fixes pinned in the corpus
+
+The TDZ and arrow-scope fixes from the previous entry now have a corpus pair
+(`tests/js/45-tdz-and-arrows`, 45 pairs total) covering: `let` in an arrow body,
+destructuring in an arrow body, `var` in an arrow body, `for…of` with `const`,
+`let a = a`, a block read before its declaration, and the three legal cases that must
+*not* throw (read after declaration, closure evaluated after declaration, hoisted `var`).
+
+Recorded in `docs/ENGINE-GAPS.md` §9 why strict-mode assignment to an undeclared name is
+**not** the next fix: the frame does not record whether it is the script entry, this
+engine marks scripts strict, and node's `-e` is sloppy — implementing it naively would
+make `jhol eval 'x = 1'` throw where `node -e 'x = 1'` does not. Fix the frame's context
+first, then the check is trivial.
+
+`jhol-vm` 119 unit tests, corpus 45/45, engine gate PASS.
