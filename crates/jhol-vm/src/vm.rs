@@ -107,6 +107,10 @@ struct FrameCache {
 pub struct Vm {
     pub stack: Vec<Value>,
     pub(crate) frames: Vec<Frame>,
+    /// Microtasks: `(callable, args)`, run in FIFO order after the current
+    /// macrotask. Promise callbacks and `queueMicrotask` both land here, which is
+    /// what makes their ordering match node instead of depending on call depth.
+    microtasks: std::collections::VecDeque<(Value, Vec<Value>)>,
     fc: FrameCache,
     /// Bumped every time an accessor is installed anywhere. Together with a
     /// prototype's identity it answers "can any setter intercept here?" without
@@ -4281,6 +4285,41 @@ impl Vm {
     }
 
     /// Run until the script frame returns.
+    /// Queue a microtask. Runs after the current macrotask completes, before any
+    /// timer callback.
+    pub fn queue_microtask(&mut self, callable: Value, args: Vec<Value>) {
+        self.microtasks.push_back((callable, args));
+    }
+
+    pub fn has_microtasks(&self) -> bool {
+        !self.microtasks.is_empty()
+    }
+
+    /// Drain the microtask queue in FIFO order. Newly queued microtasks are picked
+    /// up by the same loop, which is what makes `then` chains run to completion
+    /// before the next macrotask.
+    pub fn drain_microtasks(&mut self) -> VmResult<()> {
+        let mut guard = 0usize;
+        while let Some((callable, args)) = self.microtasks.pop_front() {
+            guard += 1;
+            if guard > 1_000_000 {
+                return Err(crate::errors::reference_error(
+                    "microtask queue did not drain (runaway then chain)",
+                ));
+            }
+            let scope = self.arena().root_scope(&[]);
+            let mut pinned = Vec::with_capacity(args.len() + 1);
+            pinned.push(callable);
+            pinned.extend_from_slice(&args);
+            self.pin_temporaries(&pinned);
+            let out = self.call_direct_args(callable, Value::UNDEFINED, &args);
+            drop(scope);
+            self.retain_outcome(&out);
+            out?;
+        }
+        Ok(())
+    }
+
     pub fn run(&mut self) -> VmResult<Value> {
         let result = self.run_inner();
         self.retain_outcome(&result);
@@ -4457,6 +4496,7 @@ impl Vm {
                 ics: std::ptr::null(),
             },
             handlers: Vec::new(),
+            microtasks: std::collections::VecDeque::new(),
             globals: std::ptr::null_mut(),
             module_dirs: Vec::new(),
             protos: Vec::new(),
@@ -4839,6 +4879,14 @@ impl Engine {
         let module = crate::compiler::compile(&prog, name)
             .map_err(|m| VmError::Syntax(format!("{} ({})", m, name)))?;
         let out = self.vm.run_module(module.protos, module.entry);
+        // Microtasks queued by the script run before the process returns, and
+        // before any timer: that ordering is the whole point of a microtask.
+        if out.is_ok() {
+            let drain = self.vm.drain_microtasks();
+            if drain.is_err() {
+                return drain.map(|_| Value::UNDEFINED);
+            }
+        }
         self.vm.roots.clear();
         drop(scope);
         self.vm.retain_outcome(&out);
@@ -4874,6 +4922,8 @@ impl Engine {
     pub(crate) fn run_event_loop(&mut self) -> VmResult<()> {
         let mut guard = 0usize;
         loop {
+            // Microtasks drain before the next macrotask (a timer callback).
+            self.vm.drain_microtasks()?;
             let now = std::time::Instant::now();
             let due = take_due_timers(now);
             if due.is_empty() {

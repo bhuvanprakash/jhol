@@ -1,0 +1,9 @@
+sync-first
+resolved 1
+executor 2
+caught e
+microtask
+chain 2
+threw boom
+thenable 9
+timer

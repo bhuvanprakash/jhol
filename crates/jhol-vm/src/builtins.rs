@@ -464,6 +464,20 @@ pub fn install(vm: &mut Vm) {
     method(vm, bool_proto, "valueOf", n_bool_value_of);
     globals_def(vm, "Boolean", bool_ctor);
 
+    // ---- Promise / microtasks ----
+    let promise_proto = vm.new_object();
+    let promise_ctor = vm.new_function_native("Promise", n_promise_ctor, 1);
+    link(vm, promise_ctor, obj_proto);
+    PROMISE_PROTO.with(|c| c.set(promise_proto.bits()));
+    let proto_key = key(vm, "prototype");
+    vm.set_prop(promise_ctor, proto_key, promise_proto).unwrap();
+    method(vm, promise_proto, "then", n_promise_then);
+    method(vm, promise_proto, "catch", n_promise_catch);
+    set_fn(vm, promise_ctor, "resolve", n_promise_resolve_static);
+    set_fn(vm, promise_ctor, "reject", n_promise_reject_static);
+    globals_def(vm, "Promise", promise_ctor);
+    gcd(vm, "queueMicrotask", n_queue_microtask);
+
     let sym_obj = vm.new_object();
     let iter_key = vm.new_string(crate::vm::ITER_SYM);
     let k = key(vm, "iterator");
@@ -5658,4 +5672,266 @@ native!(n_date_to_time_string, |vm, this, _args| {
         a / 60,
         a % 60
     )))
+});
+
+// ---------------------------------------------------------------------------
+// Microtasks and Promise
+//
+// Everything here runs off one FIFO microtask queue. Promise callbacks are queued
+// rather than called inline, which is what makes `.then` ordering match node instead
+// of depending on where `resolve` happens to be called.
+//
+// Closures: a native fn receives no captured environment, so a callback that needs
+// data uses a *bound* function whose `bound` array carries it — the same mechanism
+// Function.prototype.bind uses. `n_promise_settle` gets its promise as `this`.
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// The Promise prototype, so a promise created by the constructor or by a
+    /// combinator is linked to `then`/`catch`. Without this, `p.then(...)` was
+    /// "undefined is not a function" — the object was linked to Object.prototype.
+    static PROMISE_PROTO: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+fn promise_hidden_key(vm: &mut Vm, name: &str) -> PropKey {
+    let id = vm.arena().intern_sym(&format!("\u{0}{}", name));
+    PropKey::Sym(id)
+}
+
+fn get_hidden(vm: &mut Vm, obj: Value, name: &str) -> Value {
+    let k = promise_hidden_key(vm, name);
+    vm.get_prop(obj, k).unwrap_or(Value::UNDEFINED)
+}
+
+fn set_hidden(vm: &mut Vm, obj: Value, name: &str, v: Value) {
+    let k = promise_hidden_key(vm, name);
+    vm.define_prop(obj, k, v);
+}
+
+native!(n_queue_microtask, |vm, _this, args| {
+    let f = arg(args, 0);
+    if !f.is_function() {
+        return Err(type_error("queueMicrotask expects a function"));
+    }
+    vm.queue_microtask(f, Vec::new());
+    Ok(Value::UNDEFINED)
+});
+
+/// New promise in the pending state.
+fn new_pending_promise(vm: &mut Vm) -> Value {
+    let p = vm.new_object();
+    let proto = PROMISE_PROTO.with(|c| c.get());
+    if proto != 0 {
+        let _ = vm.set_prototype(p, Value(proto));
+    }
+    set_hidden(vm, p, "state", Value::from_i32(0));
+    set_hidden(vm, p, "value", Value::UNDEFINED);
+    let handlers = vm.new_array();
+    set_hidden(vm, p, "handlers", handlers);
+    p
+}
+
+/// Bind `f` so that calling it runs with `this = bound_this`.
+fn bind_native(vm: &mut Vm, f: Value, bound_this: Value, bound: Vec<Value>) -> Value {
+    let f_proto_obj = unsafe { f.as_function() }.proto_obj;
+    let nf = JFunction::native(Value::UNDEFINED, n_noop, Value::UNDEFINED);
+    let fp = vm.arena().alloc_function(nf);
+    let v = Value::from_ptr(fp);
+    unsafe {
+        (*fp).hdr.flags |= FLAG_BOUND;
+        crate::arena::note_external_allocation(bound.capacity() * std::mem::size_of::<Value>());
+        (*fp).bound = bound;
+        (*fp).this_val = f;
+        (*fp).bound_this = bound_this;
+        (*fp).proto = Value::from_ptr(vm.proto_function_ptr() as *mut JFunction);
+        (*fp).proto_obj = f_proto_obj;
+    }
+    v
+}
+
+/// Settle the promise in `this`. `a` selects fulfilled (1) or rejected (2).
+fn settle(vm: &mut Vm, promise: Value, state: i32, value: Value) -> VmResult<()> {
+    if !promise.is_object() {
+        return Ok(());
+    }
+    let current = get_hidden(vm, promise, "state").as_i64();
+    if current != 0 {
+        return Ok(()); // A promise settles once.
+    }
+    set_hidden(vm, promise, "state", Value::from_i32(state));
+    set_hidden(vm, promise, "value", value);
+    // Run every handler that was attached while pending, as microtasks.
+    let handlers = get_hidden(vm, promise, "handlers");
+    if handlers.is_array() {
+        let list = unsafe { handlers.as_array() }.data.clone();
+        for h in list {
+            if h.is_array() {
+                let parts = unsafe { h.as_array() }.data.clone();
+                if parts.len() == 4 {
+                    let run = vm.new_function_native("promise-job", n_promise_job, 0);
+                    let job = bind_native(vm, run, Value::UNDEFINED, parts);
+                    vm.queue_microtask(job, Vec::new());
+                }
+            }
+        }
+        let empty = vm.new_array();
+        set_hidden(vm, promise, "handlers", empty);
+    }
+    Ok(())
+}
+
+native!(n_promise_fulfil, |vm, this, args| {
+    settle(vm, this, 1, arg(args, 0)).map(|_| Value::UNDEFINED)
+});
+native!(n_promise_reject_ref, |vm, this, args| {
+    settle(vm, this, 2, arg(args, 0)).map(|_| Value::UNDEFINED)
+});
+
+native!(n_promise_ctor, |vm, _this, args| {
+    let executor = arg(args, 0);
+    if !executor.is_function() {
+        return Err(type_error("Promise resolver is not a function"));
+    }
+    let p = new_pending_promise(vm);
+    let fulfil = vm.new_function_native("resolve", n_promise_fulfil, 1);
+    let reject = vm.new_function_native("reject", n_promise_reject_ref, 1);
+    let resolve_fn = bind_native(vm, fulfil, p, Vec::new());
+    let reject_fn = bind_native(vm, reject, p, Vec::new());
+    if let Err(e) = vm.call_direct_args(executor, Value::UNDEFINED, &[resolve_fn, reject_fn]) {
+        if let crate::errors::VmError::Exception(thrown) = &e {
+            settle(vm, p, 2, thrown.value)?;
+        }
+    }
+    Ok(p)
+});
+
+/// Run one `then` job: `bound = [promise, onFulfilled, onRejected, derived]`.
+native!(n_promise_job, |vm, _this, args| {
+    let p = arg(args, 0);
+    let on_f = arg(args, 1);
+    let on_r = arg(args, 2);
+    let derived = arg(args, 3);
+    let state = get_hidden(vm, p, "state").as_i64();
+    let value = get_hidden(vm, p, "value");
+    let handler = if state == 1 { on_f } else { on_r };
+    if !handler.is_function() {
+        // No handler for this outcome: the derived promise inherits it.
+        return settle(vm, derived, state as i32, value).map(|_| Value::UNDEFINED);
+    }
+    match vm.call_direct_args(handler, Value::UNDEFINED, &[value]) {
+        Ok(v) => resolve_with(vm, derived, v).map(|_| Value::UNDEFINED),
+        Err(crate::errors::VmError::Exception(thrown)) => {
+            settle(vm, derived, 2, thrown.value)?;
+            Ok(Value::UNDEFINED)
+        }
+        Err(e) => Err(e),
+    }
+});
+
+/// Resolve `p` with `v`, assimilating a thenable.
+fn resolve_with(vm: &mut Vm, p: Value, v: Value) -> VmResult<()> {
+    if v.is_object() {
+        let then_key = vm.arena().intern_sym("then");
+        let then = vm.get_prop(v, PropKey::Sym(then_key)).unwrap_or(Value::UNDEFINED);
+        if then.is_function() {
+            // The spec absorbs a thenable in a *job*, not inline: that extra
+            // microtask is observable, and calling `then` synchronously moved every
+            // subsequent `.then` one turn earlier than node.
+            let assimilate = vm.new_function_native("promise-assimilate", n_promise_assimilate, 0);
+            let job = bind_native(vm, assimilate, Value::UNDEFINED, vec![p, then, v]);
+            vm.queue_microtask(job, Vec::new());
+            return Ok(());
+        }
+    }
+    settle(vm, p, 1, v)
+}
+
+/// `bound = [promise, then, thenable]`: call the thenable's `then` with our
+/// resolve/reject pair, as a microtask.
+native!(n_promise_assimilate, |vm, _this, args| {
+    let p = arg(args, 0);
+    let then = arg(args, 1);
+    let thenable = arg(args, 2);
+    let fulfil = vm.new_function_native("resolve", n_promise_fulfil, 1);
+    let reject = vm.new_function_native("reject", n_promise_reject_ref, 1);
+    let rf = bind_native(vm, fulfil, p, Vec::new());
+    let rj = bind_native(vm, reject, p, Vec::new());
+    match vm.call_direct_args(then, thenable, &[rf, rj]) {
+        Ok(_) => Ok(Value::UNDEFINED),
+        Err(crate::errors::VmError::Exception(thrown)) => {
+            settle(vm, p, 2, thrown.value)?;
+            Ok(Value::UNDEFINED)
+        }
+        Err(e) => Err(e),
+    }
+});
+
+native!(n_promise_then, |vm, this, args| {
+    let derived = new_pending_promise(vm);
+    let on_f = arg(args, 0);
+    let on_r = arg(args, 1);
+    let state = get_hidden(vm, this, "state").as_i64();
+    if state == 0 {
+        let handlers = get_hidden(vm, this, "handlers");
+        let entry = vm.new_array();
+        for v in [this, on_f, on_r, derived] {
+            unsafe { entry.as_array_mut() }.push(v);
+        }
+        if handlers.is_array() {
+            unsafe { handlers.as_array_mut() }.push(entry);
+        }
+    } else {
+        let run = vm.new_function_native("promise-job", n_promise_job, 0);
+        let job = bind_native(vm, run, Value::UNDEFINED, vec![this, on_f, on_r, derived]);
+        vm.queue_microtask(job, Vec::new());
+    }
+    Ok(derived)
+});
+
+native!(n_promise_catch, |vm, this, args| {
+    let on_r = arg(args, 0);
+    let derived = new_pending_promise(vm);
+    let state = get_hidden(vm, this, "state").as_i64();
+    if state == 0 {
+        let handlers = get_hidden(vm, this, "handlers");
+        let entry = vm.new_array();
+        for v in [this, Value::UNDEFINED, on_r, derived] {
+            unsafe { entry.as_array_mut() }.push(v);
+        }
+        if handlers.is_array() {
+            unsafe { handlers.as_array_mut() }.push(entry);
+        }
+    } else if state == 2 {
+        let run = vm.new_function_native("promise-job", n_promise_job, 0);
+        let job = bind_native(vm, run, Value::UNDEFINED, vec![this, Value::UNDEFINED, on_r, derived]);
+        vm.queue_microtask(job, Vec::new());
+    } else {
+        let v = get_hidden(vm, this, "value");
+        settle(vm, derived, 1, v)?;
+    }
+    Ok(derived)
+});
+
+native!(n_promise_resolve_static, |vm, _this, args| {
+    let v = arg(args, 0);
+    // A promise resolves to itself.
+    if v.is_object() {
+        // `get_prop` returns Ok(undefined) for a missing key, so "is there a
+        // state slot" must check the value, not the Result — otherwise every
+        // object looked like a promise and `Promise.resolve(obj)` returned the
+        // object, whose own `then` then ran inline.
+        let k = promise_hidden_key(vm, "state");
+        if matches!(vm.get_prop(v, k), Ok(state) if !state.is_undefined()) {
+            return Ok(v);
+        }
+    }
+    let p = new_pending_promise(vm);
+    resolve_with(vm, p, v)?;
+    Ok(p)
+});
+
+native!(n_promise_reject_static, |vm, _this, args| {
+    let p = new_pending_promise(vm);
+    settle(vm, p, 2, arg(args, 0))?;
+    Ok(p)
 });

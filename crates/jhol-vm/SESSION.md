@@ -2545,3 +2545,15 @@ wrong without node-exact tests.
 
 Same rule as eval: no structural change without its acceptance test. The plan is in
 docs/ENGINE-GAPS.md section 2 with four ordered steps and the test for each.
+
+## Journal — 2026-11-07 (cont.): Promise core in 40 minutes
+
+Shipped the microtask queue + Promise core with node-exact ordering (corpus 50 compares a
+mixed script line for line). Bound natives carry the closure data, the same way bind does.
+
+Two ordering bugs, both invisible without node: get_prop(..).is_ok() is true for a missing
+key, so every object looked like a promise; and a thenable's then was called inline where the
+spec absorbs it in a job, which shifted every later .then one microtask early.
+
+Left open and named: async/await, all/race/finally, unhandled rejections -- additive on a
+queue that is now correct.

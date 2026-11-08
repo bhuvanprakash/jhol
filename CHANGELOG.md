@@ -2586,3 +2586,33 @@ reporting; (3) `all`/`allSettled`/`race`/`any`; (4) `async`/`await` lowering.
 The reason it is not shipped tonight: a half-built `Promise` is *worse* than an absent one,
 because libraries feature-detect it and would then take an async path that hangs or resolves
 in the wrong order. The ordering guarantee is the entire value.
+
+
+## Engine: Promise core + microtask queue, with node-exact ordering
+
+`Promise` was undefined and every async library feature-detected it away. There is now one
+FIFO microtask queue — drained after the entry script and before each timer callback — plus
+`queueMicrotask`, `new Promise(executor)`, `then` / `catch` / chaining, thenable
+assimilation, and `Promise.resolve`/`reject`.
+
+Ordering is the deliverable, and it is compared line-for-line against node by corpus pair
+`50-promise`: sync logs, `.then` chains, a throw inside `then` caught downstream,
+`queueMicrotask`, `setTimeout(0)`, and a thenable all interleave exactly as node does.
+
+**Closure mechanism:** native fns get no environment, so `resolve`/`reject` are natives bound
+to their promise via `bound_this`, and promise jobs are bound natives carrying
+`[promise, onFulfilled, onRejected, derived]` in `bound` — the same mechanism `bind` uses.
+
+**Two ordering bugs found while building it:**
+
+* `Promise.resolve(obj)` returned `obj` itself: "has a state slot" was checked with
+  `get_prop(..).is_ok()`, which is `Ok(undefined)` for a *missing* key, so any object looked
+  like a promise and its own `then` ran inline.
+* A thenable's `then` was called synchronously. The spec absorbs it in a *job*; inline made
+  every later `.then` land one microtask earlier than node.
+
+**Still open, stated:** `async`/`await` (rejected at compile time with a clear message),
+`Promise.all`/`allSettled`/`race`/`any`, `finally`, and unhandled-rejection reporting. All
+additive on the queue; the hard part — ordering — is done and pinned.
+
+`jhol-vm` 124 tests, corpus 50/50, engine gate PASS, installer gate PASS.
