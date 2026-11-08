@@ -5509,6 +5509,18 @@ fn run() -> Result<(), String> {
             for path in paths {
                 println!("{}", path);
             }
+            // Then the derivation the lockfile already records: which copies are
+            // installed, at what versions, and which range each dependent asked
+            // for. Offline, no re-resolution — the answer was written down when
+            // the tree was installed.
+            if let Some(report) =
+                jhol_core::why::explain(std::path::Path::new("."), package)
+            {
+                if !report.is_empty() {
+                    println!();
+                    print!("{}", report.render());
+                }
+            }
         }
         return Ok(());
     }

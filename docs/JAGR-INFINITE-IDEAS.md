@@ -15,7 +15,7 @@ Corpus: 275 packuments, 6,715 edges, 3,774 distinct `(target, spec)` pairs.
 | 2 | Capability-equivalence classes | **not yet justified** | chart build is mask-bound, not version-bound (see below) |
 | 3 | Time/policy as extra bitmap axes | **promising, unbuilt** | one extra `intersect` per axis |
 | 4 | Exactly-computed LCV ordering | **blocked** | search never runs on real trees (see blocker) |
-| 5 | Certificate lockfile / `why`-`why-not` | **promising, unbuilt** | derivation data already in the graph |
+| 5 | Certificate lockfile / `why`-`why-not` | **`why` landed** (lockfile, offline); `why-not` + cores next | copies, versions, declared ranges, nearest-ancestor attribution |
 
 ## Shipped and kept
 

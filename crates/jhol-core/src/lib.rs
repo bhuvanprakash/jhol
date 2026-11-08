@@ -66,6 +66,7 @@ pub mod spec_grammar;
 pub mod task_queue;
 pub use jhol_treecheck as tree_state;
 pub mod utils;
+pub mod why;
 pub mod ux;
 pub mod workspaces;
 pub mod zero_copy_metadata;

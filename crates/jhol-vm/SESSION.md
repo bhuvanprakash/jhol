@@ -2056,3 +2056,21 @@ Two lessons, both cheap to state and expensive to skip:
 
 Now: jest 266 packages, 51 s cold, Up to date on three consecutive warm runs;
 659 tests; installer gate PASS.
+
+## Journal — 2026-11-07 (cont.): why, from the lockfile; and the last HashMap in the pipeline
+
+`jhol why` already printed dependency chains; it now also prints the derivation
+the lockfile holds — copies, versions, paths, and the range each dependent asked
+for. Offline, no re-resolution. Attribution is nearest-declaring-ancestor, which
+I got wrong first (it picked the hoisted copy over the nested one) and the test
+caught in ten seconds.
+
+Also removed the last HashMap-ordering dependency in the resolver's pipeline:
+propagate's incoming lists and dirty queue are sorted. The fixpoint cannot change
+(it is monotone and idempotent) but reaching it by a different route is not the
+same as guaranteeing the same route, and the chart is the input the pure solver is
+judged on. Test: same world in forward, reverse and shuffled order must produce
+identical domains.
+
+Both are the kind of thing that makes a resolver liked rather than fast: an answer
+to "why is this here" that costs nothing, and determinism you can test.

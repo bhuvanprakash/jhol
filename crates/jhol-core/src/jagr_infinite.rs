@@ -2583,13 +2583,25 @@ pub mod rvm {
                     }
                 }
 
+                // Deterministic processing order. `incoming` is built by
+                // iterating a HashMap, so the order requirements were applied in
+                // depended on hashing — the same manifest could narrow by a
+                // different route and (with masks that tie) settle differently.
+                // Propagation is idempotent and monotone, so sorting cannot
+                // change the fixpoint, only guarantee it is reached identically.
+                for parents in incoming.values_mut() {
+                    parents.sort_by(|a, b| a.0.cmp(&b.0));
+                }
+
                 let mut dirty: VecDeque<u32> = VecDeque::new();
                 // Membership side-set: `VecDeque::contains` is a linear scan,
                 // so a naive re-queue was O(n^2) on a large graph.
                 let mut queued: std::collections::HashSet<u32> = std::collections::HashSet::new();
-                for pid in chart.packages.keys() {
-                    dirty.push_back(*pid);
-                    queued.insert(*pid);
+                let mut initial: Vec<u32> = chart.packages.keys().copied().collect();
+                initial.sort_unstable();
+                for pid in initial {
+                    dirty.push_back(pid);
+                    queued.insert(pid);
                 }
 
                 let mut rounds = 0usize;
@@ -8822,5 +8834,77 @@ mod proof_obligations {
         let edges: usize = 60;
         assert!(distinct * versions.len() < edges * versions.len() / 10);
         let _ = VersionOrdinal::MIN;
+    }
+}
+
+#[cfg(test)]
+mod determinism_proofs {
+    use super::*;
+    use crate::jagr_infinite::rvm::exec::RVM;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    fn packument(name: &str, deps: &[(&str, &str)]) -> serde_json::Value {
+        let mut d = serde_json::Map::new();
+        for (t, s) in deps {
+            d.insert((*t).to_string(), json!(s));
+        }
+        json!({
+            "name": name,
+            "versions": {
+                "1.0.0": { "version": "1.0.0", "dependencies": d.clone() },
+                "1.1.0": { "version": "1.1.0", "dependencies": d.clone() },
+                "2.0.0": { "version": "2.0.0", "dependencies": d },
+            }
+        })
+    }
+
+    /// The same manifest must propagate to the same domains regardless of map
+    /// insertion order. `propagate` iterated a HashMap when building its incoming
+    /// edges and its dirty queue, so this was not guaranteed even though the
+    /// solver downstream was pure.
+    #[test]
+    fn propagation_is_independent_of_input_order() {
+        let entries: Vec<(String, serde_json::Value)> = vec![
+            ("app".into(), packument("app", &[("a", "^1"), ("b", "^1")])),
+            ("a".into(), packument("a", &[("c", "^1")])),
+            ("b".into(), packument("b", &[("c", ">=1.0.0")])),
+            ("c".into(), packument("c", &[("d", "^2")])),
+            ("d".into(), packument("d", &[])),
+        ];
+        let roots: HashMap<String, String> =
+            HashMap::from([("app".to_string(), "*".to_string())]);
+
+        let run = |order: &[usize]| {
+            let mut world: HashMap<String, serde_json::Value> = HashMap::new();
+            for i in order {
+                let (k, v) = &entries[*i];
+                world.insert(k.clone(), v.clone());
+            }
+            let mut names: Vec<&String> = world.keys().collect();
+            names.sort();
+            let name_to_id: HashMap<String, u32> = names
+                .iter()
+                .enumerate()
+                .map(|(i, n)| ((*n).clone(), i as u32))
+                .collect();
+            let chart =
+                crate::jagr_infinite::precompute::build_full_chart(&world, &name_to_id);
+            let narrowed = RVM::propagate(chart).expect("propagates");
+            let mut domains: Vec<(u32, Vec<u64>)> = narrowed
+                .packages
+                .iter()
+                .map(|(id, p)| (*id, p.allowed.words.clone()))
+                .collect();
+            domains.sort();
+            domains
+        };
+
+        let forward: Vec<usize> = (0..entries.len()).collect();
+        let reverse: Vec<usize> = (0..entries.len()).rev().collect();
+        let shuffled: Vec<usize> = vec![3, 1, 4, 0, 2];
+        let _ = &roots;
+        assert_eq!(run(&forward), run(&reverse));
+        assert_eq!(run(&forward), run(&shuffled));
     }
 }

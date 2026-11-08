@@ -1561,3 +1561,48 @@ installer gate PASS, `jest` tree verifies `Match`.
 
 Freed 12 GB of regenerable `target/debug` after `No space left on device` at
 152 MiB.
+
+
+## `jhol why` answers from the lockfile; `propagate` is now order-independent
+
+### `jhol why <pkg>` — the derivation, offline
+
+The existing `why` printed dependency chains. It now also prints what the
+lockfile already records: every installed copy, its version, the path it lives
+at, and the range each dependent demanded. No registry, no re-resolution — the
+derivation was written down when the tree was installed.
+
+```
+$ jhol why ansi-styles
+jest -> jest-cli -> yargs -> cliui -> wrap-ansi -> ansi-styles
+...
+2 installed copies of ansi-styles
+  4.3.0  (node_modules/ansi-styles)
+    chalk@4.1.2 needs ansi-styles ^4.1.0
+    wrap-ansi@7.0.0 needs ansi-styles ^4.0.0
+  5.2.0  (node_modules/pretty-format/node_modules/ansi-styles)
+    pretty-format@29.7.0 needs ansi-styles ^5.0.0
+```
+
+Attribution is "nearest declaring ancestor": a dependent's own nested copy
+answers for it, and the hoisted copy is used only when there is no nested one.
+An installed package nothing declares is reported as such rather than being given
+an invented dependent, and a missing lockfile is a different answer from "not
+installed" — the caller says which.
+
+Five tests cover: transitive copy attribution, root-direct dependency, absent
+package, absent lockfile, and an extraneous copy.
+
+### Propagation is deterministic
+
+`propagate` built its incoming-edge lists and its dirty queue by iterating
+`HashMap`s, so the order requirements were applied in depended on hashing. It is
+idempotent and monotone, so the fixpoint cannot change — but reaching it by a
+different route is not the same as guaranteeing the same route, and the chart is
+the input the pure solver is judged on. Both are now sorted (incoming edges by
+package id, initial queue by package id), with a test that propagates the same
+world built in forward, reverse and shuffled insertion order and asserts
+identical domains.
+
+`jhol-core` 665 tests (7 ignored, each with its reason), `jhol-treecheck` 12,
+installer gate PASS; `jest` warm `Up to date`, `express` 71 packages.
