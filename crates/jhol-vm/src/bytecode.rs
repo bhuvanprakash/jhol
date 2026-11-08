@@ -192,6 +192,12 @@ pub enum Op {
     Return,
     /// `throw locals[a]`
     Throw,
+    /// `throw new ReferenceError("Cannot access 'x' before initialization")`.
+    /// `a` is the constant index of the binding name. Emitted only where the
+    /// compiler can prove the read precedes the declaration in the same block and
+    /// the same function, which is the subset of the TDZ that is decidable
+    /// statically.
+    ThrowTdz,
     /// push an exception handler: `c` = catch target ip, `b` = slot for the value
     PushTry,
     /// pop innermost handler

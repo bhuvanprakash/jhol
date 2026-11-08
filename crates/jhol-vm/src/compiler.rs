@@ -125,6 +125,11 @@ impl FnState {
 
 pub struct Compiler {
     states: Vec<FnState>,
+    /// `let`/`const` names declared *later* in each enclosing block, with the
+    /// function-state index they belong to. A read of such a name before its
+    /// declaration must throw instead of silently reading a global — the part of
+    /// the temporal dead zone that is decidable at compile time.
+    pending_lexical: Vec<(usize, std::collections::HashSet<String>)>,
     protos: Vec<FnProto>,
     /// A label handed down to the next loop construct, so `continue <label>`
     /// reaches the loop's own continue point rather than its end.
@@ -161,6 +166,7 @@ pub fn compile(prog: &Func, name: &str) -> Result<Module, String> {
         name_hint: None,
         finally_stack: Vec::new(),
         in_finally: 0,
+        pending_lexical: Vec::new(),
     };
     c.push_fn(prog, FnCtx::Script, Some(name.to_string()));
     // A module entry can carry parameters (CommonJS wrappers are compiled
@@ -418,29 +424,35 @@ impl Compiler {
             FnCtx::ClassMethod | FnCtx::Ctor | FnCtx::DerivedCtor | FnCtx::Script
         ) || has_directive;
         fs.proto.is_generator = f.is_generator;
+        // Every function starts with a scope, arrows included. An arrow has no own
+        // `this`/`new_target` (both are lexical, resolved as upvalues) so it gets an
+        // empty one — but it must exist: `declare_pattern` assumes a scope is present,
+        // and an arrow body declaring `let`/`const` or destructuring panicked with
+        // `Option::unwrap()` on a `None` scope until this was fixed. `var` worked by
+        // accident, which is why the gap survived.
+        let mut scope = Scope {
+            names: Vec::new(),
+        };
         if !f.is_arrow {
-            fs.scopes.push(Scope {
-                names: vec![
-                    (
-                        "\u{0}this".into(),
-                        Binding {
-                            slot: THIS_SLOT,
-                            captured: false,
-                        },
-                    ),
-                    (
-                        "\u{0}newtarget".into(),
-                        Binding {
-                            slot: NEWTARGET_SLOT,
-                            captured: false,
-                        },
-                    ),
-                ],
-            });
+            scope.names.push((
+                "\u{0}this".into(),
+                Binding {
+                    slot: THIS_SLOT,
+                    captured: false,
+                },
+            ));
+            scope.names.push((
+                "\u{0}newtarget".into(),
+                Binding {
+                    slot: NEWTARGET_SLOT,
+                    captured: false,
+                },
+            ));
             fs.locals_top = 2;
             fs.captured = vec![false, false];
             fs.cellified = vec![false, false];
         }
+        fs.scopes.push(scope);
         self.states.push(fs);
     }
 
@@ -899,8 +911,43 @@ impl Compiler {
                 self.free_temps_to(t);
             }
             Stmt::Var(kind, decls) => {
+                let fs = self.states.len() - 1;
                 for (t, init) in decls {
-                    self.declare(*kind, t, init)?;
+                    let lexical = matches!(kind, VarKind::Let | VarKind::Const);
+                    let simple = match t {
+                        Target::Simple(n) => Some(n.clone()),
+                        _ => None,
+                    };
+                    // The initializer is compiled *inside* `declare`, so the name must
+                    // be in the dead zone for its duration: `let x = x` reads x before
+                    // any value exists.
+                    if lexical {
+                        if let Some(n) = &simple {
+                            if let Some((_, set)) = self
+                                .pending_lexical
+                                .iter_mut()
+                                .rev()
+                                .find(|(owner, _)| *owner == fs)
+                            {
+                                set.insert(n.clone());
+                            }
+                        }
+                    }
+                    let declared = self.declare(*kind, t, init);
+                    // Reaching the end of the declaration ends the dead zone.
+                    if lexical {
+                        if let Some(n) = &simple {
+                            if let Some((_, set)) = self
+                                .pending_lexical
+                                .iter_mut()
+                                .rev()
+                                .find(|(owner, _)| *owner == fs)
+                            {
+                                set.remove(n.as_str());
+                            }
+                        }
+                    }
+                    declared?;
                 }
             }
             Stmt::Block(body) => {
@@ -908,9 +955,28 @@ impl Compiler {
                 // `var` belongs to the function scope and was hoisted at entry.
                 // Rebinding it here would hide the initialized slot after this block.
                 self.hoist_functions(body)?;
+                // Names this block declares with `let`/`const` are in their temporal
+                // dead zone until their declaration is reached. Pre-scanning them lets
+                // a read before that point throw instead of silently reading a global
+                // — the statically decidable part of the TDZ.
+                let mut pending = std::collections::HashSet::new();
+                for st in body {
+                    if let Stmt::Var(kind, decls) = st {
+                        if matches!(kind, VarKind::Let | VarKind::Const) {
+                            for (t, _) in decls {
+                                if let Target::Simple(n) = t {
+                                    pending.insert(n.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                let fs = self.states.len() - 1;
+                self.pending_lexical.push((fs, pending));
                 for s in body {
                     self.stmt(s)?;
                 }
+                self.pending_lexical.pop();
                 self.pop_scope();
             }
             Stmt::If(c, a, b) => {
@@ -2726,7 +2792,28 @@ impl Compiler {
         }
     }
 
+    /// Is `name` a `let`/`const` of an enclosing block that has not been declared
+    /// yet, in this same function? Then reading it must throw rather than look at
+    /// the global object (which is what it did before, silently).
+    fn is_pending_lexical(&self, name: &str) -> bool {
+        let fs = self.states.len() - 1;
+        self.pending_lexical
+            .iter()
+            .rev()
+            .find(|(owner, set)| *owner == fs && set.contains(name))
+            .is_some()
+    }
+
     fn load_name(&mut self, name: &str, dst: u32) -> Result<(), String> {
+        // Checked before the binding lookup: inside `let x = <init>` the slot for
+        // `x` is already allocated, so a binding exists before a value does. That
+        // ordering is exactly the dead zone.
+        if self.is_pending_lexical(name) {
+            let k = self.const_str(name);
+            let _unused = dst;
+            self.emit(Op::ThrowTdz, k, 0, 0);
+            return Ok(());
+        }
         if let Some(b) = self.find_binding(name) {
             // Reading an accumulated local materialises it first; afterwards the
             // slot is a plain string again.

@@ -2383,3 +2383,39 @@ works on all three engines.
 
 `docs/ENGINE-GAPS.md` now records the attempt as evidence, so the next person starts from
 "the stack layout is the obstacle", not from "add a builtin".
+
+
+## Engine: temporal dead zone fixed, and arrow-body declarations stop panicking
+
+Two engine defects closed, both found by running the engine rather than reading it.
+
+### `let` before initialisation now throws
+
+```
+$ jhol eval '(function(){ try { let a = a } catch (e) { console.log(e.message) } })()'
+Cannot access 'a' before initialization
+```
+
+The compiler pre-scans each block for `let`/`const` names and tracks them in a dead-zone
+set tagged with the function they belong to. `load_name` consults that set **before** the
+binding lookup — inside `let x = <init>` the slot already exists, which is precisely the
+dead zone — and a declaration clears its own name. A dedicated `Op::ThrowTdz` raises the
+`ReferenceError`, naming the binding.
+
+Limited on purpose to the current function: a nested function body starts with an empty
+set, so `let f = () => x; let x = 5; f()` stays legal. Dynamic TDZ (a function called
+before the `let` runs) still needs the per-frame initialised bitmap and is documented as
+such.
+
+### Arrow functions panicked the compiler
+
+`(() => { let z = 3; return z + 1 })()` aborted with `Option::unwrap()` on a `None` scope:
+arrows were pushed with **no scope at all**, and `declare_pattern` assumes one exists.
+`var` escaped because hoisting takes another path — which is why a 44-pair corpus never
+caught it. Every function now starts with a scope; arrows get an empty one, since their
+`this`/`new_target` are lexical.
+
+Both are pinned by `tdz_and_scope_tests` (three tests: throws, message names the binding,
+legal uses stay legal; plus arrow `let`/`const`/destructuring).
+
+`jhol-vm` 119 tests, engine gate PASS, installer gate PASS.

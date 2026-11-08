@@ -104,19 +104,38 @@ The registry already exists; the type does not.
 
 ---
 
-## 5. No temporal dead zone
+## 5. ~~No temporal dead zone~~ — **fixed for the statically decidable cases**
 
-**Today:** `let a = a;` yields `undefined` instead of throwing
-`ReferenceError: Cannot access 'a' before initialization`.
+**Was:** `let a = a;` yielded `undefined`; `{ q; let q = 1 }` read a global.
 
-**What it needs:** a per-frame "initialised" bitmap for block-scoped slots, a
-`CheckInit(slot)` instruction emitted before reads of `let`/`const` slots, and the
-compiler marking which slots are block-scoped. It touches the hot dispatch loop, so it
-needs the corpus and the JIT/interpreter agreement check to stay green.
+**Now:** both throw, naming the binding:
 
-**Acceptance:** the canonical cases (`let a = a`, `f(); let x = 1; function f(){ x }`,
-`class C { static x = C.y; static y = 1 }`) throw, and hoisted `var`/function bindings do
-not.
+```
+Cannot access 'a' before initialization
+```
+
+**How:** the compiler pre-scans each block for `let`/`const` names and keeps them in a
+dead-zone set tagged with the function they belong to; `load_name` consults that set
+*before* the binding lookup (inside `let x = <init>` the slot already exists, which is
+exactly the dead zone), and a declaration clears its own name. A dedicated
+`Op::ThrowTdz(name-const)` raises the `ReferenceError`.
+
+**Deliberately limited to the current function:** a nested function body starts with its
+own set, so `let f = () => x; let x = 5; f()` stays legal — the case a naive textual check
+breaks.
+
+**Still not caught (documented, not hidden):** dynamic TDZ — a function called before its
+`let` is initialised reading that binding at run time, e.g.
+
+```js
+f(); let x = 1; function f(){ return x }   // should throw; returns undefined here
+```
+
+That needs the per-frame initialised bitmap + `CheckInit` opcode described in
+`ENGINE-GAPS` history, because the information only exists at run time.
+
+**Tests:** `tdz_and_scope_tests` (three: throws, message names the binding, legal uses
+stay legal).
 
 ---
 
@@ -140,7 +159,15 @@ pattern-directed), or a translation to one. This is the largest single item here
 
 ---
 
-## 8. Assorted
+## 8. Arrow bodies used to panic the compiler — fixed
+
+`(() => { let z = 3 })()` aborted compilation: arrows were pushed with **no scope**, and
+`declare_pattern` unwraps `scopes.last()`. `var` escaped it because hoisting took another
+path, which is why the bug survived a 44-pair corpus. Every function now starts with a
+scope; arrows get an empty one because their `this`/`new_target` are lexical.
+Test: `arrow_bodies_can_declare_bindings`.
+
+## 9. Assorted
 
 | gap | note |
 |---|---|

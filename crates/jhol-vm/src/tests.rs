@@ -1935,3 +1935,62 @@ fn destructuring_targets_in_for_of_and_assignment() {
     fmt_roundtrip("const { x = 1, ...rest } = o;\n");
     fmt_roundtrip("({ a: [b, ...c] } = src);\n");
 }
+
+#[cfg(test)]
+mod tdz_and_scope_tests {
+    use crate::vm::Engine;
+
+    fn run(src: &str) -> f64 {
+        let mut e = Engine::new();
+        e.ensure_started();
+        e.eval_source(src, "<tdz-test>")
+            .expect("program must run")
+            .as_f64()
+    }
+
+    /// The temporal dead zone, for the cases that are decidable at compile time:
+    /// a read of a block-scoped name before its declaration in the same function.
+    #[test]
+    fn reading_a_let_before_its_declaration_throws() {
+        assert_eq!(
+            run(r#"(function(){ try { let a = a; return 0 } catch (e) { return 1 } })()"#),
+            1.0
+        );
+        assert_eq!(
+            run(r#"(function(){ try { { q; let q = 1; } return 0 } catch (e) { return 1 } })()"#),
+            1.0
+        );
+        // The message must name the binding, because "cannot access before
+        // initialization" without a name is a riddle.
+        assert_eq!(
+            run(r#"(function(){ try { let zzz = zzz } catch (e) { return e.message.indexOf("zzz") >= 0 ? 1 : 0 } })()"#),
+            1.0
+        );
+    }
+
+    #[test]
+    fn legal_scope_uses_stay_legal() {
+        // Reading after the declaration.
+        assert_eq!(run(r#"(function(){ let a = 1; return a + 1 })()"#), 2.0);
+        // `var` is hoisted and initialised to undefined: no dead zone.
+        assert_eq!(
+            run(r#"(function(){ var v = v; return v === undefined ? 1 : 0 })()"#),
+            1.0
+        );
+        // A closure created before the declaration reads it later, which is legal.
+        assert_eq!(
+            run(r#"(function(){ let f = function(){ return x }; let x = 5; return f() })()"#),
+            5.0
+        );
+    }
+
+    /// Arrow functions used to start with no scope at all, so any `let`/`const` or
+    /// destructuring in an arrow body panicked the compiler (`Option::unwrap` on a
+    /// None scope). `var` worked by accident, which is why it survived.
+    #[test]
+    fn arrow_bodies_can_declare_bindings() {
+        assert_eq!(run(r#"(() => { let z = 3; return z + 1 })()"#), 4.0);
+        assert_eq!(run(r#"(() => { const {a, b} = {a: 1, b: 2}; return a + b })()"#), 3.0);
+        assert_eq!(run(r#"(() => { var v = 7; return v })()"#), 7.0);
+    }
+}

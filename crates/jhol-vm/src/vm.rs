@@ -3947,6 +3947,15 @@ impl Vm {
                         let v = self.ld(reg_base, a);
                         return Err(crate::errors::Thrown::new(v).into());
                     }
+                    Op::ThrowTdz => {
+                        let k = unsafe { &*consts_ptr.add(a as usize) }.clone();
+                        let name = self.const_value(&k)?;
+                        let name = self.to_string(name)?;
+                        return Err(crate::errors::reference_error(&format!(
+                            "Cannot access '{}' before initialization",
+                            name
+                        )));
+                    }
                     Op::SetProto => {
                         let o = self.ld(reg_base, a);
                         let p = self.ld(reg_base, b);

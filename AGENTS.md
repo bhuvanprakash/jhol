@@ -7645,3 +7645,25 @@ tests) and the documented interim behaviour still works.
 The register now carries the attempt as evidence, which is more useful than the original
 "needs save/restore" sentence: the next attempt starts from the layout invariant, not from
 the builtin.
+
+## Journal — 2026-11-07 (cont.): TDZ shipped, and an arrow-function panic found on the way
+
+Two engine fixes, both verified by running the engine.
+
+TDZ: the compiler pre-scans blocks for let/const names, keeps them in a dead-zone set
+tagged by function, and load_name consults that set BEFORE the binding lookup -- because
+inside `let x = <init>` the slot already exists, which is exactly the dead zone. Ordering
+was the whole bug: my first version checked after find_binding and never fired. Now
+`let a = a` and `{ q; let q = 1 }` throw with the binding named, while `let f = () => x;
+let x = 5; f()` stays legal (nested function bodies get their own set).
+
+Bonus find: `(() => { let z = 3 })()` PANICKED the compiler -- arrows were pushed with no
+scope and declare_pattern unwraps scopes.last(). var escaped via hoisting, which is why
+44 corpus pairs never caught it. Every function now starts with a scope.
+
+I checked whether the panic was mine before fixing it (git stash, rebuild, probe): it
+reproduced at HEAD. That check cost a build and saved me from "fixing" my own regression
+story incorrectly.
+
+Left documented: dynamic TDZ needs the per-frame init bitmap; the arrow body lexical
+closure case still resolves as a global before declaration.
