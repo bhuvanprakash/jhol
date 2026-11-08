@@ -1902,3 +1902,21 @@ stated rather than implied.
 
 Written because "production ready" is a claim, and a claim without a command beside
 it is marketing.
+
+
+## Documentation: the whole system, in seven documents (1 282 lines)
+
+| document | lines | contents |
+|---|---:|---|
+| `docs/RESOLVER-JAGR.md` | 324 | bitmaps and bases, chart, propagation, search, why flat cannot represent an npm tree, instances and placement, aliases, index format, policy and history, obligations |
+| `docs/DEFECT-LOG.md` | 230 | twelve defects: symptom, root cause, how it was caught, the rule it produced, and the test born from it |
+| `docs/INSTALL-PIPELINE.md` | 180 | argv → tree: freshness authority, project lock, five lanes, resolution path, metadata, download/store invariants, materialisation, failure modes |
+| `docs/PRODUCTION-READINESS.md` | 163 | seven guarantees, each with the command that checks it; measured numbers; known gaps |
+| `docs/CLI-REFERENCE.md` | 138 | every command, flag, exit code and relevant env var |
+| `docs/ENGINE-JHOLVM.md` | 125 | lexer → JIT, NaN boxing, non-moving GC, fused ops/ICs, module system, builtins, formatter, and the compatibility limits stated plainly |
+| `docs/OPERATIONS.md` | 122 | workspace map, cache layout + invariants, gates, how to measure without lying to yourself, troubleshooting table, landmines |
+
+Written to be *checkable*: guarantees carry commands, numbers carry the harness that
+produced them, limits are stated rather than omitted, and defects record the rule
+instead of the anecdote. Nothing here claims a result the repository cannot
+reproduce.

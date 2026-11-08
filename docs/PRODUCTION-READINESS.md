@@ -3,6 +3,20 @@
 Every claim below has a command beside it. If a command stops producing the stated
 result, the claim is false — that is the point of writing it this way.
 
+
+## Documentation map
+
+| document | contents |
+|---|---|
+| `RESOLVER-JAGR.md` | the resolver: bitmaps, propagation, search, instances, index, policy, history, obligations |
+| `INSTALL-PIPELINE.md` | every stage from argv to tree: freshness authority, lock, lanes, resolution path, store, materialisation, failure modes |
+| `CLI-REFERENCE.md` | commands, flags, exit codes, environment |
+| `ENGINE-JHOLVM.md` | the JavaScript engine: pipeline, value representation, GC, JIT, modules, formatter, limits |
+| `OPERATIONS.md` | cache layout, gates, how to measure, troubleshooting, landmines |
+| `DEFECT-LOG.md` | twelve defects with root cause, how each was caught, and the rule it produced |
+| `JAGR-INFINITE-IDEAS.md` | the measured idea scorecard (what was tried, kept, and rejected, with numbers) |
+| `JAGR-INFINITE-ROADMAP.md` | what remains and in what order |
+
 ## Guarantees
 
 ### 1. The installed tree is what the lockfile authorises

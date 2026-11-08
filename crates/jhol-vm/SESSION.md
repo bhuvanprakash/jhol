@@ -2193,3 +2193,20 @@ to 4.1.2, verify exits 0, warm install 18 ms.
 
 Note for myself: 18 ms vs the 9-10 ms I remembered is tree size (266 vs 71
 packages), not a regression. I nearly wrote it up as one.
+
+## Journal — 2026-11-07 (cont.): documenting the system properly
+
+Wrote seven documents (1,282 lines): resolver internals, install pipeline, CLI
+reference, engine, operations, a defect log, and the production-readiness sheet with
+a documentation map.
+
+Two deliberate choices. First, every guarantee carries the command that checks it —
+a claim without a command is marketing. Second, the defect log records root causes
+and the *rule* each produced, because the rules are what stop repetition: "a fast
+path may save work, it may not decide truth"; "verify the patch applied before
+believing the measurement"; "when data looks missing, check what upstream deleted".
+
+I also wrote down the limits plainly (no Promise/microtasks, no BigInt, Symbol is
+string-backed, no TDZ, regex subset, advisory peers, simple hoisting, 179 env knobs).
+A system that documents its gaps is more trustworthy than one that only documents its
+features.
