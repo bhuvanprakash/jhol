@@ -1244,9 +1244,54 @@ pub fn lockfile_integrity_complete(dir: &Path) -> bool {
     // neither exemption applies to their resolved registry entries.
     let materialized = materialized_package_names(dir);
     let hashes = read_lockfile_integrities(dir).unwrap_or_default();
-    resolved
-        .keys()
-        .all(|name| hashes.contains_key(name) || materialized.contains(name))
+
+    // A package for another OS/CPU/libc is never downloaded, so it can never carry
+    // a hash we could check. Requiring one made `jhol ci` refuse a perfectly good
+    // `vite` tree: 21 `@esbuild/*` entries for other platforms, no integrity, and
+    // a strict-lockfile error about "integrity entries missing".
+    let platform_inapplicable = lockfile_platform_inapplicable(dir, &resolved);
+
+    resolved.keys().all(|name| {
+        hashes.contains_key(name)
+            || materialized.contains(name)
+            || platform_inapplicable.contains(name)
+    })
+}
+
+/// Names whose lockfile entry declares a platform this machine is not.
+fn lockfile_platform_inapplicable(
+    dir: &Path,
+    resolved: &HashMap<String, String>,
+) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    let Some(path) = ["package-lock.json", "npm-shrinkwrap.json", "jhol-lock.json"]
+        .iter()
+        .map(|n| dir.join(n))
+        .find(|p| p.exists())
+    else {
+        return out;
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return out;
+    };
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return out;
+    };
+    let Some(packages) = doc.get("packages").and_then(|p| p.as_object()) else {
+        return out;
+    };
+    for (key, entry) in packages {
+        if !key.contains("node_modules/") || jhol_treecheck::entry_platform_applies(entry) {
+            continue;
+        }
+        if let Some(idx) = key.rfind("node_modules/") {
+            let name = &key[idx + "node_modules/".len()..];
+            if resolved.contains_key(name) {
+                out.insert(name.to_string());
+            }
+        }
+    }
+    out
 }
 
 /// Read all resolved specs (name@version) from lockfile in dir.
@@ -2257,5 +2302,53 @@ mod omit_tests {
         .unwrap();
         assert!(!deps.contains_key("peer-d"));
         assert!(deps.contains_key("prod-a"));
+    }
+}
+
+#[cfg(test)]
+mod platform_integrity_tests {
+    use super::lockfile_integrity_complete;
+
+    /// A package for another OS/CPU can never be downloaded here, so it can never
+    /// carry a hash we could check. Requiring one made `jhol ci` refuse a good
+    /// `vite` tree (21 `@esbuild/*` entries for other platforms).
+    #[test]
+    fn platform_inapplicable_entries_need_no_integrity() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("package-lock.json"),
+            r#"{
+              "lockfileVersion": 3,
+              "packages": {
+                "": {},
+                "node_modules/esbuild": {"version": "0.21.5", "integrity": "sha512-abc",
+                                         "resolved": "https://r/esbuild.tgz"},
+                "node_modules/@esbuild/aix-ppc64": {"version": "0.21.5", "optional": true,
+                    "os": ["aix"], "cpu": ["ppc64"],
+                    "resolved": "https://r/aix-ppc64.tgz"}
+              }
+            }"#,
+        )
+        .unwrap();
+        assert!(
+            lockfile_integrity_complete(tmp.path()),
+            "an installable entry has its hash; the foreign one is exempt"
+        );
+    }
+
+    /// But a *downloadable* entry without a hash must still fail the gate.
+    #[test]
+    fn installable_entry_without_integrity_still_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("package-lock.json"),
+            r#"{"lockfileVersion": 3, "packages": {
+                "": {},
+                "node_modules/esbuild": {"version": "0.21.5",
+                    "resolved": "https://r/esbuild.tgz"}
+            }}"#,
+        )
+        .unwrap();
+        assert!(!lockfile_integrity_complete(tmp.path()));
     }
 }

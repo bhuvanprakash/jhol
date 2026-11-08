@@ -213,6 +213,31 @@ binary when a build might have been killed.
 
 ---
 
+## 13. The verifier demanded packages that cannot exist here
+
+**Observed.** `vite` installed cleanly and then failed verification:
+`node_modules/@esbuild/aix-ppc64 is missing`. `jhol ci` also refused the tree with
+"integrity entries missing".
+
+**Cause.** esbuild publishes one package per target; the lockfile records all 21 and
+each carries `os`/`cpu`. `verify_tree` required every lockfile entry to be on disk,
+so 20 packages that cannot exist on darwin/arm64 were reported missing. The same
+entries have no `integrity` (nothing was ever downloaded), so the strict-lockfile
+gate tripped too.
+
+**Fix.** `entry_platform_applies` (npm semantics: allow-list, `!` deny-list,
+`libc` only on Linux) excludes inapplicable entries from what must exist and from
+the integrity requirement; the writer now falls back to the packument's hash when a
+manifest names a tarball without one.
+
+**Caught by.** A ten-manifest sweep (install → verify → idempotency → `ci` →
+verify), not by unit tests. That is the argument for the sweep existing.
+
+**Rule.** A correctness check must know what is *legitimately absent* before it
+calls anything missing.
+
+---
+
 ## Tests born from these
 
 | defect | test |

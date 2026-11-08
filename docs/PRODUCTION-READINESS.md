@@ -107,6 +107,19 @@ date exits 1 with zero packages installed, and a license policy that cannot see 
 license excludes the version (with an explicit `--license-allow-unknown` escape
 hatch).
 
+### 8. Ten real manifests pass four dimensions
+
+```
+for each of express, vite, esbuild, jest, next, eslint, webpack, prisma,
+typescript, rollup:
+    jhol install   -> jhol verify (exit 0)  -> install again (Up to date)
+                   -> jhol ci (wipe + reinstall)  -> jhol verify (exit 0)
+```
+
+All ten pass all four. This is the check that found the platform-optional and
+lockfile-integrity defects; run it after any change to resolution, materialisation
+or verification.
+
 ## Numbers, from the harness (not from memory)
 
 | phase | value |

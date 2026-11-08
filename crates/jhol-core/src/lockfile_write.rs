@@ -108,7 +108,11 @@ impl RegistryProvider {
         let meta = self.metadata(name)?;
         let (resolved_url, integrity) = match registry::resolve_tarball_via_manifest(name, version)
         {
-            Ok(Some((_, url, integrity_opt))) => (url, integrity_opt),
+            // A manifest can name the tarball without its hash. Falling back to the
+            // packument matters: a lockfile written without integrity makes
+            // `jhol ci` refuse the tree it just produced (found on `vite`).
+            Ok(Some((_, url, Some(i)))) => (url, Some(i)),
+            Ok(Some((_, url, None))) => (url, registry::get_integrity_for_version(meta, version)),
             Ok(None) | Err(_) => (
                 crate::lockfile::tarball_url_from_registry(name, version),
                 registry::get_integrity_for_version(meta, version),

@@ -7458,3 +7458,23 @@ X" should read it.
 
 Doing three at once worked because they share one mechanism (options in the resolver)
 and because each got its own verification rather than a combined "looks fine".
+
+## Journal — 2026-11-07 (cont.): the sweep found two real defects
+
+I stopped adding features and validated ten real manifests on four dimensions each
+(install, verify, idempotent reinstall, ci + verify). Two genuine defects surfaced
+immediately, and neither would have come from unit tests:
+
+1. verify demanded 20 esbuild packages that cannot exist on darwin/arm64. The
+   lockfile is right, the tree is right, the *check* was wrong: it must know what is
+   legitimately absent. npm's os/cpu/libc semantics now decide, with `!` deny-lists.
+2. ci refused those same trees because foreign-platform entries have no integrity
+   (nothing was downloaded). The gate exempts them while still failing a real entry
+   with no hash, and the writer now falls back to the packument hash when a manifest
+   names a tarball without one.
+
+After the fixes: 10/10 manifests pass all four dimensions.
+
+Lesson: production readiness is a property of the whole system under real inputs, not
+a list of features. Every remaining doubt I have is now expressible as one more row in
+that table.

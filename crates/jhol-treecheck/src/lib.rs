@@ -69,6 +69,82 @@ impl TreeState {
     }
 }
 
+/// Does a lockfile entry's platform restriction apply to this machine?
+///
+/// npm records `os`/`cpu`/`libc` lists on optional platform-specific packages
+/// (esbuild publishes one per target: `@esbuild/aix-ppc64`, `@esbuild/darwin-arm64`,
+/// …). Exactly one of them installs here; the rest are *legitimately absent*, and a
+/// verifier that demands them reports a missing package on a perfectly good tree.
+/// Found on `vite`, which ships 21 of them.
+///
+/// Semantics follow npm: a plain list is an allow-list (any match passes), a
+/// leading `!` makes it a deny-list (no match may appear).
+pub fn entry_platform_applies(entry: &serde_json::Value) -> bool {
+    fn list(entry: &serde_json::Value, key: &str) -> Vec<String> {
+        match entry.get(key) {
+            Some(serde_json::Value::Array(a)) => a
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect(),
+            Some(serde_json::Value::String(s)) => vec![s.clone()],
+            _ => Vec::new(),
+        }
+    }
+
+    // Current machine in npm's vocabulary.
+    let here: &[&str] = &match std::env::consts::OS {
+        "macos" => &["darwin"][..],
+        "windows" => &["win32"][..],
+        other => &[other][..], // linux is "linux" in npm too
+    };
+    let arch: &[&str] = &match std::env::consts::ARCH {
+        "x86_64" => &["x64"][..],
+        "aarch64" => &["arm64"][..],
+        "x86" => &["ia32"][..],
+        other => &[other][..],
+    };
+
+    let mut check = |values: Vec<String>, candidates: &[&str]| -> bool {
+        if values.is_empty() {
+            return true;
+        }
+        let (negated, positive): (Vec<String>, Vec<String>) =
+            values.into_iter().partition(|v| v.starts_with('!'));
+        if !negated.is_empty() {
+            // A deny-list: nothing listed may be present.
+            return !negated
+                .iter()
+                .map(|n| n.trim_start_matches('!'))
+                .any(|n| candidates.iter().any(|c| c.eq_ignore_ascii_case(n)));
+        }
+        positive
+            .iter()
+            .any(|p| candidates.iter().any(|c| c.eq_ignore_ascii_case(p)))
+    };
+
+    if !check(list(entry, "os"), here) {
+        return false;
+    }
+    if !check(list(entry, "cpu"), arch) {
+        return false;
+    }
+    // `libc` only distinguishes Linux distributions; elsewhere it never applies.
+    let libc = list(entry, "libc");
+    if !libc.is_empty() {
+        let current: &[&str] = if cfg!(target_env = "musl") {
+            &["musl"]
+        } else if cfg!(target_os = "linux") {
+            &["glibc"]
+        } else {
+            &[]
+        };
+        if !check(libc, current) {
+            return false;
+        }
+    }
+    true
+}
+
 /// The lockfile's view: tree path -> locked version.
 ///
 /// Keys are `package-lock.json` `packages` keys (`node_modules/a`,
@@ -97,6 +173,12 @@ fn locked_paths(project_dir: &Path) -> Option<HashMap<String, String>> {
         }
         // Only real install locations are comparable to disk.
         if !key.contains("node_modules/") {
+            continue;
+        }
+        // A package for another OS/CPU/libc cannot be on this disk. Demanding it
+        // reported `@esbuild/aix-ppc64` missing on darwin/arm64 — a false alarm on
+        // a correct tree (21 such packages in `vite` alone).
+        if !entry_platform_applies(entry) {
             continue;
         }
         out.insert(key.clone(), version.to_string());
@@ -628,5 +710,40 @@ mod completeness_tests {
         assert_eq!(reconciled, TreeState::Match);
         assert!(!d.join("node_modules/intruder").exists());
         assert!(d.join("node_modules/a").exists());
+    }
+}
+
+#[cfg(test)]
+mod platform_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn other_platform_entries_are_not_required_here() {
+        // Whichever machine runs the test, these cannot apply everywhere.
+        let aix = json!({ "version": "0.21.5", "optional": true, "os": ["aix"], "cpu": ["ppc64"] });
+        assert!(!entry_platform_applies(&aix));
+
+        let linux_musl = json!({ "version": "1.0.0", "optional": true, "os": ["linux"], "libc": ["musl"] });
+        assert!(!entry_platform_applies(&linux_musl));
+    }
+
+    #[test]
+    fn this_platform_is_required() {
+        let here = json!({ "version": "1.0.0", "os": [std::env::consts::OS] });
+        // `macos` vs npm's `darwin` differ; a wrong-vocabulary list is simply a
+        // non-matching allow-list, which is the safe reading.
+        let expects = std::env::consts::OS != "macos";
+        assert_eq!(entry_platform_applies(&here), expects);
+
+        let any = json!({ "version": "1.0.0" });
+        assert!(entry_platform_applies(&any), "no restriction means every platform");
+    }
+
+    #[test]
+    fn negated_lists_exclude() {
+        let not_linux = json!({ "version": "1.0.0", "os": ["!linux"] });
+        let is_linux = std::env::consts::OS == "linux";
+        assert_eq!(entry_platform_applies(&not_linux), !is_linux);
     }
 }
