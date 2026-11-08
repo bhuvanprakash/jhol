@@ -144,6 +144,42 @@ pub fn handle_mcp_request(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                         }
                     },
                     {
+                        "name": "jhol_verify_environment",
+                        "description": "Verify that the installed tree, model pins and python distributions match their lockfiles. Returns one state per artifact kind plus a machine-readable failure reason. This is the check an agent should run before claiming an environment is ready.",
+                        "inputSchema": { "type": "object", "properties": {} }
+                    },
+                    {
+                        "name": "jhol_axes",
+                        "description": "Report the hardware/ABI axes jhol uses for compatibility decisions (os, arch, libc, python, CUDA driver, compute capability, GPU memory).",
+                        "inputSchema": { "type": "object", "properties": {} }
+                    },
+                    {
+                        "name": "jhol_why_not",
+                        "description": "Explain why a package range cannot be used in this project: returns the minimal set of requirements that forbid it, or the installed copy that already satisfies it. Offline, from the lockfile.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "package": { "type": "string" },
+                                "range": { "type": "string", "description": "Semver range, e.g. ^4" },
+                                "project_dir": { "type": "string", "description": "Defaults to ." }
+                            },
+                            "required": ["package"]
+                        }
+                    },
+                    {
+                        "name": "jhol_plan_python",
+                        "description": "Resolve a Python package (with its transitive wheel graph) for this machine without installing: returns the chosen artifact per package, what was skipped by environment markers, and the axes used.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "package": { "type": "string" },
+                                "version": { "type": "string" },
+                                "python": { "type": "string", "description": "e.g. 3.12" }
+                            },
+                            "required": ["package"]
+                        }
+                    },
+                    {
                         "name": "jhol_audit_report",
                         "description": "Get security vulnerability audit report and SBOM summary for the project.",
                         "inputSchema": {
@@ -345,6 +381,98 @@ fn execute_tool(name: &str, args: &Value) -> Value {
                     }
                 ]
             })
+        }
+        "jhol_verify_environment" => {
+            let root = Path::new(".");
+            let tree = crate::tree_state::verify_tree(root);
+            let models = crate::model_lock::ModelLock::load(root)
+                .map(|l| l.verify(root))
+                .unwrap_or(crate::model_lock::ModelState::NoLock);
+            let py = crate::pyinstall::PyLock::load(root)
+                .map(|l| l.verify(root))
+                .unwrap_or(crate::pyinstall::PyState::NoLock);
+            let ok = (tree.is_match() || matches!(tree, crate::tree_state::TreeState::Unverified { .. }))
+                && (models.is_match() || matches!(models, crate::model_lock::ModelState::NoLock))
+                && (py.is_match() || matches!(py, crate::pyinstall::PyState::NoLock));
+            json!({
+                "content": [{
+                    "type": "text",
+                    "text": serde_json::to_string_pretty(&json!({
+                        "ok": ok,
+                        "tree": { "match": tree.is_match(), "detail": tree.describe() },
+                        "models": { "match": models.is_match(), "detail": models.describe() },
+                        "python": { "match": py.is_match(), "detail": py.describe() },
+                    })).unwrap_or_default()
+                }]
+            })
+        }
+        "jhol_axes" => {
+            let host = crate::axes::HostAxes::detect();
+            json!({
+                "content": [{
+                    "type": "text",
+                    "text": serde_json::to_string_pretty(&json!({
+                        "summary": host.summary(),
+                        "os": host.os, "arch": host.arch, "libc": host.libc.to_string(),
+                        "python": host.python, "cuda_driver": host.cuda_driver,
+                        "sm": host.sm, "gpu_mem_mb": host.gpu_mem_mb,
+                    })).unwrap_or_default()
+                }]
+            })
+        }
+        "jhol_why_not" => {
+            let package = args.get("package").and_then(|v| v.as_str()).unwrap_or("");
+            let range = args.get("range").and_then(|v| v.as_str()).unwrap_or("*");
+            let dir = Path::new(
+                args.get("project_dir").and_then(|v| v.as_str()).unwrap_or("."),
+            );
+            let cache = std::path::PathBuf::from(crate::utils::get_cache_dir()).join("packuments");
+            match crate::why_not::explain(&cache, dir, package, range) {
+                Some(report) => json!({
+                    "content": [{ "type": "text", "text": report.render() }]
+                }),
+                None => json!({
+                    "content": [{ "type": "text", "text":
+                        format!("no cached metadata for {package}; install it once so its versions are known") }]
+                }),
+            }
+        }
+        "jhol_plan_python" => {
+            let package = args.get("package").and_then(|v| v.as_str()).unwrap_or("");
+            let version = args.get("version").and_then(|v| v.as_str());
+            let mut host = crate::axes::HostAxes::detect();
+            if let Some(py) = args.get("python").and_then(|v| v.as_str()) {
+                host.python = Some(py.to_string());
+            }
+            let roots = vec![(
+                package.to_string(),
+                version.map(|v| format!("=={v}")).unwrap_or_default(),
+            )];
+            let mut provider = crate::pyresolve::PyPIProvider::new();
+            match crate::pyresolve::resolve(&mut provider, &roots, &host, &Default::default()) {
+                Ok(resolved) => {
+                    let packages: Vec<serde_json::Value> = resolved
+                        .packages
+                        .iter()
+                        .map(|(name, (version, artifact))| {
+                            json!({"name": name, "version": version, "artifact": artifact})
+                        })
+                        .collect();
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&json!({
+                                "axes": host.summary(),
+                                "packages": packages,
+                                "skipped_by_marker": resolved.skipped,
+                            })).unwrap_or_default()
+                        }]
+                    })
+                }
+                Err(e) => json!({
+                    "content": [{ "type": "text", "text": format!("resolution failed: {e}") }]
+                }),
+            }
         }
         "jhol_audit_report" => {
             json!({

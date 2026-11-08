@@ -119,6 +119,7 @@ written to `.npmrc` with mode 0600.
 |---|---|
 | `jhol axes` | what jhol thinks this machine is: os, arch, libc, python, driver, sm, GPU memory (`--json`) |
 | `jhol wheels <pkg>[@<ver>]` | every published artifact of a PyPI release classified against this host, with a reason for each rejection; exits non-zero if nothing fits (`--python`, `--json`) |
+| `jhol py install <pkg>[@<ver>]` | resolve **and** install wheels for this machine into `.jhol/py/site-packages`, cached by content, recorded per-file (`--python`, `--pre`, `--json`); `jhol py list` |
 | `jhol pysolve <pkg>[@<ver>]` | resolve a full Python dependency graph to artifacts that run here: markers evaluated, pre-releases excluded, wheels filtered by ABI (`--python`, `--pre`, `--allow-sdist`, `--json`) |
 
 ## Models (AI-first)

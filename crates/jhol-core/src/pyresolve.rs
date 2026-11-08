@@ -25,13 +25,25 @@ pub trait Provider {
     fn versions(&mut self, name: &str) -> Result<Vec<String>, String>;
 }
 
+/// One downloadable artifact of a release.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ArtifactFile {
+    pub filename: String,
+    pub url: String,
+    /// SHA-256 published by the index; empty when the index did not provide one.
+    pub sha256: String,
+    pub size: u64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReleaseMeta {
     pub version: String,
     /// PEP 508 strings from `requires_dist`.
     pub requires_dist: Vec<String>,
-    /// Wheel filenames published for this release.
+    /// Wheel filenames published for this release (derived from `artifacts`).
     pub files: Vec<String>,
+    /// The same artifacts with URL and digest, for installing what was resolved.
+    pub artifacts: Vec<ArtifactFile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -514,16 +526,31 @@ impl Provider for PyPIProvider {
                 .and_then(|r| r.as_array())
                 .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
                 .unwrap_or_default(),
-            files: doc
+            files: Vec::new(),
+            artifacts: doc
                 .get("urls")
                 .and_then(|u| u.as_array())
                 .map(|a| {
                     a.iter()
-                        .filter_map(|f| f.get("filename")?.as_str().map(|s| s.to_string()))
+                        .filter_map(|f| {
+                            Some(ArtifactFile {
+                                filename: f.get("filename")?.as_str()?.to_string(),
+                                url: f.get("url").and_then(|u| u.as_str()).unwrap_or("").to_string(),
+                                sha256: f
+                                    .get("digests")
+                                    .and_then(|d| d.get("sha256"))
+                                    .and_then(|s| s.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                size: f.get("size").and_then(|s| s.as_u64()).unwrap_or(0),
+                            })
+                        })
                         .collect()
                 })
                 .unwrap_or_default(),
         };
+        let mut meta = meta;
+        meta.files = meta.artifacts.iter().map(|a| a.filename.clone()).collect();
         self.cache.insert(key, meta.clone());
         Ok(meta)
     }
@@ -591,10 +618,17 @@ mod tests {
     }
 
     fn meta(name: &str, ver: &str, py: &str, deps: &[&str]) -> ReleaseMeta {
+        let filename = wheel(name, ver, py);
         ReleaseMeta {
             version: ver.into(),
             requires_dist: deps.iter().map(|d| d.to_string()).collect(),
-            files: vec![wheel(name, ver, py)],
+            files: vec![filename.clone()],
+            artifacts: vec![ArtifactFile {
+                filename,
+                url: String::new(),
+                sha256: String::new(),
+                size: 0,
+            }],
         }
     }
 

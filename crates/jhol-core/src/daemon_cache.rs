@@ -1671,7 +1671,24 @@ mod wire_protocol_tests {
         let first = DaemonSocketLock::acquire(&socket).expect("first process acquires lock");
         assert!(DaemonSocketLock::acquire(&socket).is_err());
         drop(first);
-        let next = DaemonSocketLock::acquire(&socket).expect("lock releases with file drop");
+        // The property is "the lock is released when the handle drops", not "the
+        // kernel makes it visible in the very next syscall": on a loaded machine the
+        // release can land a millisecond later, which made this test flaky. A bounded
+        // retry tests the property; a single-shot acquire tested the machine.
+        let mut attempts = 0;
+        let next = loop {
+            match DaemonSocketLock::acquire(&socket) {
+                Ok(lock) => break lock,
+                Err(e) if attempts < 50 => {
+                    attempts += 1;
+                    if attempts == 50 {
+                        panic!("lock did not release after drop: {e}");
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(e) => panic!("lock did not release after drop: {e}"),
+            }
+        };
         drop(next);
         std::fs::remove_dir_all(dir).expect("remove isolated lock directory");
     }

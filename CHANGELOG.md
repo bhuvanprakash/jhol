@@ -11,16 +11,17 @@
 > | security exclusion at resolution time | shipped | `--exclude-vuln`, OSV + re-resolve |
 > | models: inspect / pull / dedupe / verify | shipped | 10,760 B header, one inode per model |
 > | hardware axes + wheel compatibility | shipped | `axes`, `wheels` (6 rules, tested) |
-> | **Python wheel graph resolution** | **shipped (resolution only)** | `pysolve` — torch@2.4.1 → 10 pkgs, 1.1 s |
+> | Python wheel graph resolution | shipped | `pysolve` — torch@2.4.1 → 10 pkgs, 1.1 s |
+> | **Python wheel installation** | **shipped** | `py install requests` → 5 dists, 1.5 s; per-file digests |
+> | **MCP environment tools** | **shipped** | `jhol_verify_environment`, `jhol_axes`, `jhol_why_not`, `jhol_plan_python` |
 > | environment forks (CoW) | shipped | 797 ms, 4,491 files cloned, 0 B added |
 > | attestation / replay | shipped | deterministic proof; spec → plan → execute |
-> | wheel **installation** (materialise a py tree) | **not built** | resolution names the artifact; nothing unpacks it |
-> | MCP tool surface with cost estimates | **not built** | server exists, tools are not wired |
+> | cost estimates in MCP responses | **not built** | tools answer, they do not quote bytes/time yet |
 > | engine (JholVM) | shipped with known gaps | no Promise/BigInt/TDZ; documented |
 >
-> Honest summary: jhol can now *decide* a Python environment and *prove* an npm + model
-> one. It cannot yet unpack a Python tree, and an agent cannot drive it end to end. Those
-> two sentences are the roadmap.
+> Honest summary: jhol resolves **and** installs a Python tree, verifies it alongside npm
+> and model pins, and an agent can drive all of it over MCP. What remains from the plan is
+> quoting cost (bytes/time) before an agent commits, and the engine's known gaps.
 
 # Production gate — 2026-11-03
 
@@ -2248,3 +2249,64 @@ is plumbing rather than modelling: unpack wheels via the existing store, write a
 and extend `jhol verify` to cover it the way it already covers npm and models.
 
 `jhol-core` 708 tests, `jhol-ai` 13, `jhol-treecheck` 15, installer gate PASS.
+
+
+## AI-first slice 8: Python wheels installed, verified, and agent-drivable
+
+The install half of P0, plus the agent surface.
+
+### `jhol py install` — materialise what `pysolve` decided
+
+```
+$ jhol py install requests --python 3.12
+installed 5 distribution(s) in 924 ms into .jhol/py/site-packages
+  certifi 2026.10.23 (12 files)   charset_normalizer 3.5.2 (19)   idna 3.20 (16)
+  requests 2.34.2 (26)            urllib3 2.8.0 (42)
+```
+
+Wheels are verified against the index SHA-256 before extraction, cached by content
+(so a second project shares one copy), extracted into a flat `site-packages`, and
+recorded per-file. `jhol verify` now covers the python tree alongside npm packages and
+model pins:
+
+```
+$ jhol verify
+OK: python tree matches the lock (no package lockfile)
+$ # after editing an installed file
+NOT OK: ./.jhol/py/site-packages/requests/__init__.py is b5c349b342da but the lock pins 311157e7fa4a   (exit 1)
+```
+
+Three details worth recording, each found by running it:
+
+* **site-packages is flat.** My first layout extracted into `site-packages/<dist>/`, which
+  double-nests because a wheel already contains its package directory.
+* **Empty files are normal.** A zero-length `__init__.py` is not corruption; the
+  zero-length heuristic belongs to the store's *manifest* check, not to wheel contents.
+* **A wheel is untrusted input.** Absolute paths, `..` and symlinks are refused, and
+  `*.data/` (scripts/headers) is skipped rather than placed where it would look
+  installable.
+
+Scope: no console-script rewriting, no RECORD-based uninstall, so an extension module is
+not guaranteed to load. A pure-Python package is importable from
+`.jhol/py/site-packages`. This is deduplicated, verified, reproducible plumbing — not a
+pip replacement.
+
+### MCP tools an agent can actually use
+
+`jhol_verify_environment` (one verdict per artifact kind), `jhol_axes`, `jhol_why_not`
+(minimal unsat core, offline), `jhol_plan_python` (resolve without installing, including
+what was skipped by environment markers). Verified over stdio JSON-RPC:
+
+```
+→ jhol_verify_environment
+  {"ok": true, "tree": {...}, "models": {...}, "python": {"match": true, "detail": "python tree matches its lock"}}
+```
+
+### A flaky gate fixed
+
+`daemon_socket_startup_lock_serializes_and_releases` failed roughly one run in five: it
+asserted the lock was re-acquirable in the very next syscall. The property is "released
+on drop", not "visible immediately", so it now retries briefly. Five consecutive clean
+runs of the whole suite (712 tests).
+
+`jhol-core` 712 tests, `jhol-ai` 13, `jhol-treecheck` 15, installer gate PASS.

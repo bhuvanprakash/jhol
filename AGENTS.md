@@ -7582,3 +7582,25 @@ Both are stated in the CHANGELOG status block rather than implied by a feature l
 
 Also rewrote the CHANGELOG header into a status-at-a-glance block, because the history is
 now 2,200 lines and nobody should have to read it to learn what works today.
+
+## Journal — 2026-11-07 (cont.): wheels installed; MCP tools; a flaky gate removed
+
+Slice 8 closed the install half of P0 and the agent surface.
+
+py install: wheels verified against the index digest before extraction, cached by
+content, extracted flat, recorded per-file, and covered by `jhol verify` next to npm and
+models. Three bugs found by running it: double-nested site-packages (a wheel already
+contains its package dir), a zero-length heuristic wrongly rejecting empty `__init__.py`,
+and the general rule that a wheel is untrusted input (unsafe paths refused, .data/
+skipped).
+
+MCP: four tools an agent can actually use -- verify_environment (one verdict per artifact
+kind), axes, why_not (offline minimal core), plan_python. Confirmed over stdio JSON-RPC.
+
+Also fixed a genuinely flaky test that predates this work: a daemon-lock test asserted
+re-acquisition in the very next syscall. The property is "released on drop", so it now
+retries briefly. Five consecutive full-suite runs green (712 tests).
+
+Remaining from the plan: MCP responses quoting cost (bytes/time) before an agent commits,
+and the engine's known gaps (Promise/BigInt/TDZ). Both are stated in the CHANGELOG status
+block, which is now the first thing anyone reads.

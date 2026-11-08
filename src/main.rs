@@ -4093,6 +4093,86 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    if let Some(("py", sub_m)) = matches.subcommand() {
+        match sub_m.subcommand() {
+            Some(("install", m)) => {
+                let raw = m.get_one::<String>("spec").map(|s| s.as_str()).unwrap_or_default();
+                let (pkg, ver) = match raw.rsplit_once('@') {
+                    Some((p, v)) if !p.is_empty() && !v.is_empty() => (p.to_string(), Some(v.to_string())),
+                    _ => (raw.to_string(), None),
+                };
+                let mut host = jhol_core::axes::HostAxes::detect();
+                if let Some(py) = m.get_one::<String>("python") {
+                    host.python = Some(py.clone());
+                }
+                let options = jhol_core::pyresolve::Options {
+                    allow_prerelease: flag(&m, "pre"),
+                    ..Default::default()
+                };
+                let roots = vec![(pkg.clone(), ver.map(|v| format!("=={}", v)).unwrap_or_default())];
+                let mut provider = jhol_core::pyresolve::PyPIProvider::new();
+                let started = std::time::Instant::now();
+                let resolved = jhol_core::pyresolve::resolve(&mut provider, &roots, &host, &options)
+                    .map_err(|e| format!("py install: {e}"))?;
+                use jhol_core::pyresolve::Provider as _;
+                // Collect artifact metadata (URL + digest) for the chosen files.
+                let mut artifacts: std::collections::BTreeMap<String, jhol_core::pyresolve::ArtifactFile> =
+                    std::collections::BTreeMap::new();
+                for (name, (version, chosen)) in &resolved.packages {
+                    let Some(chosen) = chosen else { continue };
+                    let meta = provider
+                        .release(name, Some(version))
+                        .map_err(|e| format!("{name} {version}: {e}"))?;
+                    if let Some(a) = meta.artifacts.iter().find(|a| &a.filename == chosen) {
+                        artifacts.insert(a.filename.clone(), a.clone());
+                    }
+                }
+                let cache = std::path::PathBuf::from(jhol_core::utils::get_cache_dir()).join("py_store");
+                let cap: u64 = 2 * 1024 * 1024 * 1024;
+                let lock = jhol_core::pyinstall::install(
+                    std::path::Path::new("."),
+                    &resolved,
+                    &artifacts,
+                    &cache,
+                    |artifact, dest| {
+                        jhol_core::http_client::download_to_path(&artifact.url, dest, cap)
+                            .map(|_| ())
+                    },
+                )
+                .map_err(|e| format!("py install: {e}"))?;
+                if flag(&m, "json") {
+                    println!("{}", serde_json::to_string_pretty(&lock).unwrap_or_default());
+                } else {
+                    println!(
+                        "installed {} distribution(s) in {} ms into {}",
+                        lock.distributions.len(),
+                        started.elapsed().as_millis(),
+                        jhol_core::pyinstall::SITE_PACKAGES
+                    );
+                    for (name, d) in &lock.distributions {
+                        println!("  {name} {}  ({} files)", d.version, d.files.len());
+                    }
+                }
+                return Ok(());
+            }
+            Some(("list", m)) => {
+                let lock = jhol_core::pyinstall::PyLock::load(std::path::Path::new("."))
+                    .unwrap_or_default();
+                if flag(&m, "json") {
+                    println!("{}", serde_json::to_string_pretty(&lock).unwrap_or_default());
+                } else if lock.distributions.is_empty() {
+                    println!("no python distributions installed (jhol py install <pkg>)");
+                } else {
+                    for (name, d) in &lock.distributions {
+                        println!("{name} {}  ({})", d.version, d.artifact);
+                    }
+                }
+                return Ok(());
+            }
+            _ => return Err("usage: jhol py install|list".into()),
+        }
+    }
+
     if let Some(("pysolve", sub_m)) = matches.subcommand() {
         let raw = sub_m
             .get_one::<String>("spec")
@@ -4235,6 +4315,27 @@ fn run() -> Result<(), String> {
         let model_state = jhol_core::model_lock::ModelLock::load(std::path::Path::new("."))
             .map(|lock| lock.verify(std::path::Path::new(".")))
             .unwrap_or(jhol_core::model_lock::ModelState::NoLock);
+        // Python trees are verified by the same command as packages and models.
+        let py_state = jhol_core::pyinstall::PyLock::load(std::path::Path::new("."))
+            .map(|lock| lock.verify(std::path::Path::new(".")))
+            .unwrap_or(jhol_core::pyinstall::PyState::NoLock);
+        if !py_state.is_match()
+            && !matches!(py_state, jhol_core::pyinstall::PyState::NoLock)
+        {
+            if flag(&sub_m, "json") {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "py": py_state.describe(),
+                    }))
+                    .unwrap_or_default()
+                );
+            } else {
+                eprintln!("NOT OK: {}", py_state.describe());
+                eprintln!("  reinstall the wheels: jhol py install <pkg>");
+            }
+            return Err("a python distribution does not match its lock".to_string());
+        }
         let json = flag(&sub_m, "json");
         let quiet = flag(&sub_m, "quiet");
         if !model_state.is_match()
@@ -4273,11 +4374,17 @@ fn run() -> Result<(), String> {
                 // Models can be the only pinned artifacts in a project (a manifest
                 // with no npm dependencies). Saying "not verified" while the model
                 // lock was checked and matched would be wrong.
-                if model_state.is_match() {
+                let py_match = py_state.is_match();
+                if model_state.is_match() || py_match {
                     if json {
-                        println!("{{\"state\":\"models_only\"}}");
+                        println!("{{\"state\":\"artifacts_only\"}}");
                     } else if !quiet {
-                        println!("OK: models match the lock (no package lockfile)");
+                        let what = match (model_state.is_match(), py_match) {
+                            (true, true) => "models and python tree match the lock",
+                            (true, false) => "models match the lock",
+                            _ => "python tree matches the lock",
+                        };
+                        println!("OK: {} (no package lockfile)", what);
                     }
                     return Ok(());
                 }
@@ -8656,6 +8763,19 @@ fn cli_command() -> Command {
                             .value_name("X.Y")
                             .help("Assume this Python version instead of the detected one"),
                     ),
+            )
+            .subcommand(
+                Command::new("py")
+                    .about("Python environments: resolve, materialise and verify wheels")
+                    .subcommand(
+                        Command::new("install")
+                            .about("Resolve and install wheels for this machine into .jhol/py")
+                            .arg(Arg::new("spec").required(true).value_name("PACKAGE[@VERSION]"))
+                            .arg(Arg::new("python").long("python").value_name("X.Y"))
+                            .arg(Arg::new("pre").long("pre").action(ArgAction::SetTrue))
+                            .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
+                    )
+                    .subcommand(Command::new("list").about("List installed python distributions").arg(Arg::new("json").long("json").action(ArgAction::SetTrue))),
             )
             .subcommand(
                 Command::new("pysolve")
