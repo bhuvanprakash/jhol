@@ -91,16 +91,38 @@ promotes and refuses to mix with Number (as the spec requires).
 
 ---
 
-## 4. `Symbol` is string-backed
+## 4. ~~`Symbol` is string-backed~~ — **fixed** (one documented exception)
 
-**Today:** `typeof Symbol("x")` reports `string`, and two `Symbol("x")` compare equal.
+**Was:** `Symbol("x")` returned the string `"Symbol(x)"`, so `typeof` said `string` and two
+calls with the same description were equal.
 
-**What it needs:** a distinct symbol primitive in the boxing scheme (a tag with an interned
-description), identity comparison, and `Symbol.for`/`keyFor` over the existing registry.
-The registry already exists; the type does not.
+**Now:** a symbol is a **tagged interned id** in the existing NaN-boxing layout — subtag 3,
+payload = the id, no heap object. Identity is the id, so:
 
-**Acceptance:** `typeof Symbol() === "symbol"`, `Symbol() !== Symbol()`,
-`Symbol.for("a") === Symbol.for("a")`.
+| expression | result |
+|---|---|
+| `typeof Symbol("x")` | `"symbol"` — the only divergence in a 20-idiom differential sweep |
+| `Symbol("x") === Symbol("x")` | `false` |
+| `Symbol.for("k") === Symbol.for("k")` | `true` |
+| `Symbol.keyFor(Symbol.for("k"))` | `"k"` (and `undefined` for an unregistered symbol) |
+| `String(Symbol("d"))` | `"Symbol(d)"` |
+| `` `${Symbol("t")}` `` and `sym + ""` | **throws TypeError**, as the spec requires |
+| `o[sym] = 1` | symbol keys keep identity (`PropKey::Sym(id)`), so two same-description symbols do not collide |
+
+**Still open, stated:** well-known symbols (`Symbol.iterator`, `Symbol.asyncIterator`, …)
+are still strings. Converting them is a coordinated change: the iteration protocol looks
+those up by their current string keys, so the protocol and the constructor must move
+together, with `for…of` / spread / generators all covered by tests. Doing half of it would
+break iteration, which is a worse trade than an inconsistent `typeof` on two properties.
+
+Corpus pair `47-symbols` (node-verified) pins every row above.
+
+### A bug this uncovered
+
+Writing the symbol tests exposed an older one: `String(undefined)` and `String(null)`
+returned `""` because a present `undefined`/`null` argument was treated as "no argument".
+Node returns `"undefined"` / `"null"`, and `String()` alone is `""`. Fixed in
+`n_string_ctor`.
 
 ---
 

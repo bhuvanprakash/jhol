@@ -2465,3 +2465,38 @@ Behaviour, matched to node rather than to intuition:
 Five unit tests (`strict_assignment_tests`) and corpus pair `46-strict-assignment`.
 
 `jhol-vm` 124 tests, corpus 46/46, engine gate PASS, installer gate PASS.
+
+
+## Engine: symbols are primitives now — plus a `String(undefined)` bug they uncovered
+
+A differential sweep of 20 common idioms against node found **exactly one** divergence:
+`typeof Symbol("x")` reported `string`. Symbols were strings internally, so identity,
+`keyFor` and printing were all wrong in the same way.
+
+They are now a **tagged interned id** in the existing NaN-boxing layout — subtag 3,
+payload = id, no heap object — which makes identity free:
+
+| expression | node | jholvm |
+|---|---|---|
+| `typeof Symbol("x")` | `symbol` | ✅ |
+| `Symbol("x") === Symbol("x")` | `false` | ✅ |
+| `Symbol.for("k") === Symbol.for("k")` | `true` | ✅ |
+| `Symbol.keyFor(Symbol.for("k"))` / on an ad-hoc symbol | `k` / `undefined` | ✅ |
+| `String(Symbol("d"))` | `Symbol(d)` | ✅ |
+| `` `${Symbol("t")}` ``, `sym + ""` | throws | ✅ throws |
+| `o[sym] = 1` then `o[sym]` | `1`, no collisions | ✅ |
+
+**Still strings on purpose:** well-known symbols (`Symbol.iterator`, …). The iteration
+protocol looks them up by their current string keys, so constructor and protocol must move
+together with `for…of`, spread and generators covered by tests; doing half of it would break
+iteration — worse than an inconsistent `typeof` on two properties.
+
+### A bug the symbol work uncovered
+
+`String(undefined)` and `String(null)` returned `""`, because a present `undefined`/`null`
+argument was treated as "no argument". Node returns `"undefined"`/`"null"`, and `String()`
+alone is `""`. Fixed; `JSON.stringify([String(undefined), String(null), String()])` now
+matches node exactly.
+
+Corpus pair `47-symbols` (node-verified) pins all of it. `jhol-vm` 124 tests, corpus
+47/47, engine gate PASS.

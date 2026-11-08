@@ -931,9 +931,38 @@ fn err(_vm: &mut Vm) -> Value {
 
 native!(n_noop, |_vm, _this, _args| Ok(Value::UNDEFINED));
 native!(n_obj_value_of, |_vm, this, _args| Ok(this));
+// id -> description, so a symbol prints as `Symbol(desc)` and `keyFor` can answer.
+thread_local! {
+    static SYM_DESC: std::cell::RefCell<std::collections::HashMap<u32, String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    static SYM_NEXT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Description of a symbol id, for printing and `Symbol.keyFor`.
+pub fn symbol_description(id: u32) -> Option<String> {
+    SYM_DESC.with(|m| m.borrow().get(&id).cloned())
+}
+
+fn register_symbol(vm: &mut Vm, key: String, desc: String) -> Value {
+    let id = vm.arena().intern_sym(&key);
+    SYM_DESC.with(|m| {
+        m.borrow_mut().insert(id, desc);
+    });
+    Value::from_symbol(id)
+}
+
 native!(n_symbol_ctor, |vm, _this, args| {
-    let d = to_str(vm, arg(args, 0)).unwrap_or_default();
-    Ok(vm.new_string(&format!("Symbol({})", d)))
+    let d = match args.first() {
+        Some(v) if !v.is_undefined() => to_str(vm, *v)?,
+        _ => String::new(),
+    };
+    // Unique key per call: two `Symbol("x")` must not be equal.
+    let n = SYM_NEXT.with(|c| {
+        let v = c.get();
+        c.set(v + 1);
+        v
+    });
+    Ok(register_symbol(vm, format!("\u{0}sym:{}:{}", n, d), d))
 });
 native!(n_is_enumerable, |vm, this, args| {
     let k = keyv(vm, arg(args, 0));
@@ -2240,8 +2269,21 @@ native!(n_string_ctor, |vm, _this, args| {
     if v.is_string() {
         return Ok(v);
     }
-    if v.is_nil() {
+    // `String()` with no argument is "", but `String(undefined)` and `String(null)`
+    // are "undefined"/"null". Treating a present nil argument as "no argument" made
+    // all three return "" — found by a symbol test that used String(o[k]) to probe a
+    // missing key.
+    if args.is_empty() {
         return Ok(vm.new_string(""));
+    }
+    // The one conversion a symbol allows. `vm.to_string` throws for symbols, which is
+    // what makes `${sym}` and `sym + ""` errors while `String(sym)` works.
+    if let Some(id) = v.as_symbol() {
+        let text = match symbol_description(id) {
+            Some(d) => format!("Symbol({})", d),
+            None => "Symbol()".to_string(),
+        };
+        return Ok(vm.new_string(&text));
     }
     let __s = vm.to_string(v)?;
     Ok(vm.new_string(&__s))
@@ -4664,26 +4706,27 @@ fn symbol_registry() -> &'static std::cell::RefCell<std::collections::HashMap<St
 
 native!(n_symbol_for, |vm, _this, args| {
     let d = to_str(vm, arg(args, 0))?;
-    let bits = symbol_registry().borrow().get(&d).copied();
-    if let Some(bits) = bits {
-        return Ok(Value::from_bits(bits));
-    }
-    let sym = vm.arena().intern_atom(&format!("Symbol({})", d));
-    symbol_registry().borrow_mut().insert(d, sym.bits());
-    Ok(sym)
+    // Identity comes from the key itself, so a second `for` call returns the same
+    // symbol on any path — no registry needed for equality.
+    Ok(register_symbol(vm, format!("\u{0}for:{}", d), d))
 });
 
 native!(n_symbol_key_for, |vm, _this, args| {
     let v = arg(args, 0);
-    if !v.is_string() {
+    let Some(id) = v.as_symbol() else {
         return Err(type_error("Symbol.keyFor requires a symbol"));
+    };
+    // Spec: only symbols created through `Symbol.for` have a registry key, and those
+    // are exactly the ones interned under the for-prefix.
+    let registered = crate::vm::Vm::sym_name_of(id)
+        .is_some_and(|name| name.starts_with("\u{0}for:"));
+    if !registered {
+        return Ok(Value::UNDEFINED);
     }
-    for (desc, &bits) in symbol_registry().borrow().iter() {
-        if bits == v.bits() {
-            return Ok(vm.new_string(desc));
-        }
+    match symbol_description(id) {
+        Some(d) => Ok(vm.new_string(&d)),
+        None => Ok(Value::UNDEFINED),
     }
-    Ok(Value::UNDEFINED)
 });
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

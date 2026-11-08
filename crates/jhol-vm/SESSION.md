@@ -2474,3 +2474,24 @@ point), and assigning an existing globalThis name in strict code is still allowe
 
 Lesson repeated: a probe without output is not evidence. `$J eval 'x'` discards the value;
 I had to add console.log before the five cases meant anything.
+
+## Journal — 2026-11-07 (cont.): symbols, found by measuring instead of assuming
+
+Before picking the next fix I ran a differential sweep: 20 common idioms, node as oracle.
+Result: 19 matched exactly, one diverged -- typeof Symbol(). That is a much better way to
+choose work than reading my own register and guessing.
+
+Symbols became a tagged interned id (subtag 3, payload = id, no heap object). Identity then
+comes free: Symbol("x") !== Symbol("x"), Symbol.for("k") === Symbol.for("k"), keyFor
+answers only for registered ones, o[sym] keeps identity as a property key, String(sym) works
+and implicit conversion throws.
+
+Two deliberate limits: well-known symbols stay strings because the iteration protocol keys
+off them and moving half the protocol would break for-of/spread -- documented, not fudged.
+
+Bonus bug found by my own test scaffolding: String(undefined) returned "" (a present
+undefined was treated as "no argument"). Node says "undefined". Fixed.
+
+Also removed a unit test module I had just written: it asserted on Debug strings while the
+node-verified corpus already pinned the same behaviour exactly. Two sources of truth for one
+fact is how tests start lying.

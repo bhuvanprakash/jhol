@@ -45,6 +45,9 @@ pub const OFFSET_MAX: u64 = 0x0000_0FFF_FFFF_FFFF;
 const SUB_PTR: u64 = 0;
 const SUB_SMI: u64 = 1;
 const SUB_SINGLETON: u64 = 2;
+/// A symbol: a 44-bit interned id, so identity is the id and no heap object is
+/// needed. Symbols are primitives, not strings — `typeof` says so.
+const SUB_SYMBOL: u64 = 3;
 
 const SING_UNDEFINED: u64 = 0;
 const SING_NULL: u64 = 1;
@@ -409,7 +412,35 @@ impl Value {
     }
 
     /// `typeof`, fixed string results.
+    /// A symbol primitive carrying an interned id.
+    ///
+    /// Symbols are primitives: identity is the id, so `Symbol() !== Symbol()` and
+    /// `Symbol.for("x") === Symbol.for("x")` both fall out of equality on the word
+    /// itself — no heap object, no comparison path of its own.
+    #[inline]
+    pub fn from_symbol(id: u32) -> Value {
+        Value(BOX_TAG | (SUB_SYMBOL << SUB_SHIFT) | (id as u64 & SMI_MASK))
+    }
+
+    #[inline]
+    pub fn is_symbol(&self) -> bool {
+        (self.0 & 0xFFFF_0000_0000_0000) == BOX_TAG
+            && ((self.0 >> SUB_SHIFT) & 0xF) == SUB_SYMBOL
+    }
+
+    #[inline]
+    pub fn as_symbol(&self) -> Option<u32> {
+        if self.is_symbol() {
+            Some((self.0 & SMI_MASK) as u32)
+        } else {
+            None
+        }
+    }
+
     pub fn type_of(&self) -> &'static str {
+        if self.is_symbol() {
+            return "symbol";
+        }
         if self.is_smi() || self.is_double() {
             "number"
         } else if self.is_string() {

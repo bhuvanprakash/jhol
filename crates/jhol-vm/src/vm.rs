@@ -1388,7 +1388,20 @@ impl Vm {
         k
     }
 
+    /// Name of an interned symbol id (used by `Symbol.keyFor` to tell registered
+    /// symbols from ad-hoc ones without a second registry).
+    pub fn sym_name_of(id: u32) -> Option<String> {
+        let arena = crate::arena::active();
+        let name = arena.sym_name(id);
+        (!name.is_empty()).then(|| name.to_string())
+    }
+
     pub fn key_from_value(&mut self, v: Value) -> PropKey {
+        // A symbol key keeps its identity: `o[Symbol()]` must not collide with
+        // `o[Symbol()]`, which is exactly what stringifying it would do.
+        if let Some(id) = v.as_symbol() {
+            return PropKey::Sym(id);
+        }
         if v.is_smi() || v.is_double() {
             if v.is_smi() {
                 let i = v.as_i64();
@@ -1603,6 +1616,12 @@ impl Vm {
         }
         if prim.is_smi() || prim.is_double() {
             return Ok(f64_to_js_string(prim.as_f64()));
+        }
+        if prim.is_symbol() {
+            // ToString(symbol) throws: `${sym}` and `sym + ""` are errors. The
+            // explicit `String(sym)` path is handled by the String constructor, which
+            // is the only conversion that succeeds.
+            return Err(type_error("Cannot convert a Symbol value to a string"));
         }
         if prim.is_bool() {
             return Ok(if prim.as_bool() {
