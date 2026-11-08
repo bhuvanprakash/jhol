@@ -4828,6 +4828,9 @@ fn run() -> Result<(), String> {
             if flag(&sub_m, "license-allow-unknown") {
                 std::env::set_var("JHOL_LICENSE_ALLOW_UNKNOWN", "1");
             }
+            if flag(&sub_m, "exclude-vuln") {
+                std::env::set_var("JHOL_EXCLUDE_VULN", "1");
+            }
             // --omit / --prod / --include-dev, composed with NODE_ENV.
             // Resolved once here; both the sequential and parallel workspace
             // paths and the direct-install closure read the same value.
@@ -7177,6 +7180,12 @@ fn cli_command() -> Command {
                         .long("license-allow-unknown")
                         .action(ArgAction::SetTrue)
                         .help("With --allow-license, also allow versions that declare no license"),
+                )
+                .arg(
+                    Arg::new("exclude-vuln")
+                        .long("exclude-vuln")
+                        .action(ArgAction::SetTrue)
+                        .help("Do not resolve versions with known advisories (queries OSV, then re-resolves)"),
                 )
                 .arg(
                     Arg::new("global")

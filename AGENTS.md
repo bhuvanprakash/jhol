@@ -7438,3 +7438,23 @@ Kept `flag(&m, name)` as defence in depth: undeclared reads are off, not a panic
 Documented the landmine as resolved rather than deleting the entry — the reason it
 existed is still true, and the next person to think "just a second command tree for
 X" should read it.
+
+## Journal — 2026-11-07 (cont.): three items at once, and what each actually cost
+
+1. --exclude-vuln: banned versions became a resolver input; the caller resolves,
+   asks OSV in parallel, bans what is vulnerable, resolves again (4 rounds max). An
+   exact pin that is vulnerable is refused with a widening hint rather than silently
+   overridden. Verified both ways on real lodash.
+
+2. --as-of caching: full packuments are cached under a representation-aware key, so
+   the second dated install of the same date drops 24.7s -> 8.1s -> 6.2s, same tree
+   each time. The remaining cost is tarballs and full metadata; the fetch path is the
+   next target.
+
+3. Knob audit: 180 JHOL_* classified into diagnostics (24), escape hatches (~40),
+   tuning (~20), interface (~30). Nothing retired, and the document says so plainly.
+   The rule for a new one is written down; retiring an escape hatch without fixing
+   the default it guards is how a project keeps the unsafe thing and renames it.
+
+Doing three at once worked because they share one mechanism (options in the resolver)
+and because each got its own verification rather than a combined "looks fine".

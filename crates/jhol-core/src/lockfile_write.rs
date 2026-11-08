@@ -2960,10 +2960,11 @@ pub fn resolve_full_tree_nested(
         Ok("1") | Ok("true")
     );
     let needs_full = as_of.is_some() || allowed_licenses.is_some();
-    let options = jagr_nest::ResolveOptions {
+    let mut options = jagr_nest::ResolveOptions {
         cutoff: as_of,
         allowed_licenses: allowed_licenses.clone(),
         allow_unknown_license,
+        banned: None,
     };
 
     // One fetch function for both paths, so history and today never disagree
@@ -3064,6 +3065,13 @@ pub fn resolve_full_tree_nested(
         let _ = &mut provider;
     }
 
+    // `--exclude-vuln`: resolve, ask OSV about the releases that were chosen, ban
+    // the vulnerable ones, and resolve again. Bounded rounds, and a failure to
+    // reach the advisory source is reported rather than silently ignored — a
+    // security policy that cannot be evaluated must not look like one that passed.
+    let exclude_vuln = std::env::var("JHOL_EXCLUDE_VULN").is_ok();
+    let mut audit_rounds = 0usize;
+
     let mut resolved = loop {
         match jagr_nest::resolve_with_options(&world, &roots, &options) {
             Ok(r) => break r,
@@ -3091,6 +3099,85 @@ pub fn resolve_full_tree_nested(
             Err(e) => return Err(e.describe()),
         }
     };
+
+    // Security policy: ban what OSV knows about, then resolve again. Bounded so a
+    // tree that is vulnerable in every version cannot loop; a failure to reach the
+    // advisory source is reported, never treated as "no vulnerabilities found".
+    if exclude_vuln {
+        const MAX_ROUNDS: usize = 4;
+        const CONCURRENCY: usize = 16;
+        for _round in 0..MAX_ROUNDS {
+            let targets: Vec<(String, String)> = resolved
+                .instances
+                .iter()
+                .map(|i| (i.package.clone(), i.version.clone()))
+                .collect();
+            if targets.is_empty() {
+                break;
+            }
+            let mut vulnerable: Vec<(String, String, String)> = Vec::new();
+            for chunk in targets.chunks(CONCURRENCY) {
+                let found: Vec<(String, String, String)> = std::thread::scope(|scope| {
+                    let handles: Vec<_> = chunk
+                        .iter()
+                        .map(|(name, version)| {
+                            let name = name.clone();
+                            let version = version.clone();
+                            scope.spawn(move || {
+                                match crate::audit::osv::query_vulnerabilities(&name, &version) {
+                                    Ok(list) if !list.is_empty() => {
+                                        let ids: Vec<String> =
+                                            list.iter().map(|v| v.id.clone()).collect();
+                                        (name, version, ids.join(","))
+                                    }
+                                    _ => (name, version, String::new()),
+                                }
+                            })
+                        })
+                        .collect();
+                    handles
+                        .into_iter()
+                        .filter_map(|h| h.join().ok())
+                        .filter(|(_, _, ids)| !ids.is_empty())
+                        .collect()
+                });
+                vulnerable.extend(found);
+            }
+            if vulnerable.is_empty() {
+                if std::env::var_os("JHOL_VERBOSE").is_some() {
+                    eprintln!(
+                        "[jhol] security policy: {} releases checked, none vulnerable",
+                        targets.len()
+                    );
+                }
+                break;
+            }
+            let mut bans = options.banned.clone().unwrap_or_default();
+            let before = bans.len();
+            for (name, version, ids) in &vulnerable {
+                if std::env::var_os("JHOL_VERBOSE").is_some() {
+                    eprintln!("[jhol] security policy: excluding {name}@{version} ({ids})");
+                }
+                bans.insert((name.clone(), version.clone()));
+            }
+            if bans.len() == before {
+                break;
+            }
+            options.banned = Some(bans);
+            resolved = match jagr_nest::resolve_with_options(&world, &roots, &options) {
+                Ok(r) => r,
+                Err(e) => {
+                    return Err(format!(
+                        "no tree avoids the known vulnerabilities: {}\n  \
+                         if a direct dependency pins the excluded version, widen its range \
+                         (e.g. `lodash: \"^4.17.0\"` instead of `\"4.17.15\"`) so the resolver \
+                         can choose a clean release",
+                        e.describe()
+                    ))
+                }
+            };
+        }
+    }
 
     // Which instance wins the top of node_modules, per package.
     let mut demand: HashMap<&str, usize> = HashMap::new();

@@ -16,6 +16,7 @@ result, the claim is false — that is the point of writing it this way.
 | `DEFECT-LOG.md` | twelve defects with root cause, how each was caught, and the rule it produced |
 | `JAGR-INFINITE-IDEAS.md` | the measured idea scorecard (what was tried, kept, and rejected, with numbers) |
 | `JAGR-INFINITE-ROADMAP.md` | what remains and in what order |
+| `ENV-AUDIT.md` | the 180 `JHOL_*` variables classified, and the rule for adding another |
 
 ## Guarantees
 
@@ -148,8 +149,11 @@ intersection and the rework it depends on).
    into failures.
 5. **Hoisting is a simple rule.** Most-demanded instance wins the top level, ties to
    the highest version. Deterministic, not tuned.
-6. **`173 JHOL_* knobs`.** Each exists because a lane needed an escape hatch; the
-   count is a symptom, and retiring the redundant predicates is how it comes down.
+6. **~180 `JHOL_*` knobs.** Classified in `ENV-AUDIT.md`: 24 diagnostics, ~40
+   escape hatches guarding a default that was once unsafe, ~20 tuning, ~30
+   interface. Nothing is retired yet — the classification is the prerequisite,
+   because retiring an escape hatch without fixing the default it guards is how a
+   project keeps the unsafe thing and renames it.
 
 ## The invariants behind all of it
 

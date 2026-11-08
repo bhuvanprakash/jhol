@@ -7210,7 +7210,8 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
             // license), so both force the policy-aware resolver and forbid the
             // single-pass shortcut that reuses flat picks.
             let as_of_requested = std::env::var("JHOL_AS_OF").is_ok()
-                || std::env::var("JHOL_ALLOW_LICENSE").is_ok();
+                || std::env::var("JHOL_ALLOW_LICENSE").is_ok()
+                || std::env::var("JHOL_EXCLUDE_VULN").is_ok();
             if as_of_requested {
                 std::env::set_var("JHOL_NEST_RESOLVER", "1");
             }

@@ -202,6 +202,7 @@ fn expand_alias(name: &str, spec: &str) -> (String, String) {
 
 /// Newest published version satisfying `compiled`, at or before `cutoff`.
 fn newest_matching(
+    package: &str,
     doc: &Value,
     versions_desc: &[String],
     published: &HashMap<&str, i64>,
@@ -215,6 +216,9 @@ fn newest_matching(
                 .map(|p| compiled.matches(&p))
                 .unwrap_or(false);
             if !ok {
+                return false;
+            }
+            if options.is_banned(package, v) {
                 return false;
             }
             let dated = match options.cutoff {
@@ -241,11 +245,27 @@ pub struct ResolveOptions {
     /// Whether a version with no license field may be used anyway. Default false:
     /// a license policy that silently accepts unknown licenses is not a policy.
     pub allow_unknown_license: bool,
+    /// Versions that must not be chosen, as `(package, version)` — known
+    /// vulnerabilities. A security exclusion that only reports afterwards leaves
+    /// the user to re-run the install and hope; making it an input means the
+    /// resolver *finds* a tree that avoids them.
+    pub banned: Option<std::collections::HashSet<(String, String)>>,
 }
 
 impl ResolveOptions {
     pub fn is_default(&self) -> bool {
-        self.cutoff.is_none() && self.allowed_licenses.is_none() && !self.allow_unknown_license
+        self.cutoff.is_none()
+            && self.allowed_licenses.is_none()
+            && !self.allow_unknown_license
+            && self.banned.is_none()
+    }
+
+    /// Is this exact release excluded by a security policy?
+    fn is_banned(&self, package: &str, version: &str) -> bool {
+        match &self.banned {
+            Some(set) => set.contains(&(package.to_string(), version.to_string())),
+            None => false,
+        }
     }
 
     /// License declared by `version` in `doc`, normalised to lower case.
@@ -491,8 +511,12 @@ pub fn resolve_with_options(
         let compiled = crate::registry::compile_spec(&lookup_spec);
         let existing = by_package.get(&lookup).and_then(|ids| {
             ids.iter().copied().find(|i| {
-                semver::Version::parse(&instances[*i].version)
-                    .map(|v| compiled.matches(&v))
+                let v = &instances[*i].version;
+                if options.is_banned(&lookup, v) {
+                    return false;
+                }
+                semver::Version::parse(v)
+                    .map(|p| compiled.matches(&p))
                     .unwrap_or(false)
             })
         });
@@ -502,6 +526,7 @@ pub fn resolve_with_options(
                 // Newest published version that satisfies the requirement and,
                 // when a cutoff is set, existed then.
                 let chosen = newest_matching(
+                    &target,
                     meta.doc,
                     &meta.versions,
                     &meta.published,
@@ -1091,5 +1116,61 @@ mod license_policy_tests {
         let permissive =
             resolve_with_options(&world(), &roots(), &opts(&["BSD-3-Clause"], true)).unwrap();
         assert_eq!(permissive.instances[0].version, "1.2.0");
+    }
+}
+
+#[cfg(test)]
+mod banned_tests {
+    use super::*;
+    use serde_json::json;
+    use std::collections::HashSet;
+
+    fn world() -> HashMap<String, Value> {
+        HashMap::from([(
+            "app".to_string(),
+            json!({
+                "name": "app",
+                "versions": {
+                    "1.0.0": { "version": "1.0.0" },
+                    "1.1.0": { "version": "1.1.0" },
+                    "1.2.0": { "version": "1.2.0" }
+                }
+            }),
+        )])
+    }
+
+    fn roots() -> HashMap<String, String> {
+        HashMap::from([("app".to_string(), "^1".to_string())])
+    }
+
+    /// A security exclusion is a resolution input: the newest vulnerable release is
+    /// skipped and the newest *clean* one is chosen, without the user having to pin.
+    #[test]
+    fn banned_versions_are_skipped() {
+        let banned: HashSet<(String, String)> = HashSet::from([(
+            "app".to_string(),
+            "1.2.0".to_string(),
+        )]);
+        let opts = ResolveOptions {
+            banned: Some(banned),
+            ..Default::default()
+        };
+        let r = resolve_with_options(&world(), &roots(), &opts).unwrap();
+        assert_eq!(r.instances[0].version, "1.1.0");
+    }
+
+    #[test]
+    fn banning_every_candidate_is_an_honest_conflict() {
+        let banned: HashSet<(String, String)> = ["1.2.0", "1.1.0", "1.0.0"]
+            .iter()
+            .map(|v| ("app".to_string(), (*v).to_string()))
+            .collect();
+        let opts = ResolveOptions {
+            banned: Some(banned),
+            ..Default::default()
+        };
+        let err = resolve_with_options(&world(), &roots(), &opts).unwrap_err();
+        assert_eq!(err.failure, NestFailure::Unsatisfiable);
+        assert!(err.describe().contains("published"), "{}", err.describe());
     }
 }

@@ -1953,3 +1953,64 @@ real CLI. `flag(&m, name)` remains as defence in depth: an undeclared flag reads
 *off* rather than panicking.
 
 `jhol-core` 678 tests, `jhol-treecheck` 12, installer gate PASS.
+
+
+## Security exclusion as a resolution input — `--exclude-vuln`
+
+The third policy axis, built the same way as the other two: resolve, ask OSV about
+the releases that were chosen, ban the vulnerable ones, resolve again (bounded to
+four rounds). The resolver *finds* a tree without known advisories instead of
+reporting them after the fact.
+
+```
+$ jhol install --exclude-vuln        # lodash pinned to 4.17.15
+[jhol] security policy: excluding lodash@4.17.15
+      (GHSA-29mw-wpgm-hmr9, GHSA-35jh-r3h4-6jhm, GHSA-p6mc-m468-83gw, …)
+Error: no tree avoids the known vulnerabilities: no version of lodash satisfies 4.17.15
+  if a direct dependency pins the excluded version, widen its range
+  (e.g. `lodash: "^4.17.0"` instead of `"4.17.15"`) so the resolver can choose a clean release
+```
+
+```
+$ jhol install --exclude-vuln        # lodash ^4.17.0
+[jhol] security policy: 1 releases checked, none vulnerable
+Added 1 packages      -> lodash 4.18.1
+```
+
+An exact pin is reported as unsatisfiable rather than silently overridden — the
+manifest asked for that version, and a package manager that quietly installs a
+different one is not one you can trust. When the range allows movement, it moves.
+
+Bounded by construction: four audit rounds, sixteen concurrent OSV queries, and a
+failure to reach the advisory source is reported, never treated as "no
+vulnerabilities found".
+
+### `--as-of` caching: 24.7 s → 6.2 s on repeat
+
+Full packuments are cached under a representation-aware key, so a repeated dated
+install reuses them:
+
+| run | time |
+|---|---:|
+| 1 (cold) | 24.7 s |
+| 2 | 8.1 s |
+| 3 | 6.2 s |
+
+Same tree (`express 4.17.1`) every time. The remaining cost is tarballs plus a
+couple of hundred full metadata documents — the fetch path is the next target, not
+the resolver.
+
+### `docs/ENV-AUDIT.md`: the 180 knobs classified
+
+Nothing is retired yet, and the document says so: 24 are diagnostics (they found
+most of this project's defects), ~40 are escape hatches guarding a default that was
+once unsafe, ~20 are tuning, ~30 are interface. The rule for adding another:
+
+> A new environment variable must name a behaviour that cannot be a default, and
+> the commit that adds it must say which default it is avoiding and what would make
+> that default safe.
+
+Retiring an escape hatch without fixing the default it guards is how a project keeps
+the unsafe thing and renames it.
+
+`jhol-core` 680 tests, `jhol-treecheck` 12, installer gate PASS.

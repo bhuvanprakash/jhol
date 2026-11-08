@@ -15,6 +15,7 @@ refusal, dated install that cannot be honoured) · **127** broken install layout
 | `--as-of <DATE>` | resolve as of a date (`YYYY-MM-DD` or RFC3339); needs full metadata |
 | `--allow-license <LIST>` | only versions under these licenses (comma separated) |
 | `--license-allow-unknown` | with the above, also allow versions declaring no license |
+| `--exclude-vuln` | do not resolve releases with known advisories (queries OSV, bans them, re-resolves) |
 | `--omit=dev,optional,peer` | leave those classes out (also `--prod`, `--include-dev`) |
 | `--save`, `--save-dev/-D`, `--save-peer`, `--save-optional/-O`, `--save-exact/-E` | persist the request |
 | `--filter/-F <PATTERN>` | workspace selection |
