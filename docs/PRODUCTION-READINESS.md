@@ -16,6 +16,7 @@ result, the claim is false — that is the point of writing it this way.
 | `DEFECT-LOG.md` | twelve defects with root cause, how each was caught, and the rule it produced |
 | `JAGR-INFINITE-IDEAS.md` | the measured idea scorecard (what was tried, kept, and rejected, with numbers) |
 | `JAGR-INFINITE-ROADMAP.md` | what remains and in what order |
+| `AI-FIRST.md` | models as first-class artifacts: what shipped, what is measured, what remains |
 | `ENV-AUDIT.md` | the 180 `JHOL_*` variables classified, and the rule for adding another |
 
 ## Guarantees

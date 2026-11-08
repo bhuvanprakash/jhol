@@ -2014,3 +2014,39 @@ Retiring an escape hatch without fixing the default it guards is how a project k
 the unsafe thing and renames it.
 
 `jhol-core` 680 tests, `jhol-treecheck` 12, installer gate PASS.
+
+
+## AI-first, slice 1: models become inspectable and deduplicated
+
+First slice of `docs/AI-FIRST.md`: two primitives that make a model a first-class
+artifact rather than an opaque blob.
+
+### `jhol ai inspect` — structure without weights
+
+safetensors is `[u64 LE header length][JSON header][data]` with a byte range per
+tensor, so a checkpoint's structure lives in kilobytes. Two byte-range requests:
+
+```
+100 tensors, 126,851 parameters, header 10752 bytes (data starts at 10760)
+dtypes: F32 x99, I64 x1
+```
+
+Measured: **10,760 bytes** fetched and 1.16 s for a 520 KB file; the same 10,760
+bytes for a 7 GB checkpoint. `header_len` caps the declared size so a hostile header
+cannot choose our allocation.
+
+### `jhol ai pull` — a model store that cannot be poisoned
+
+Files are stored by SHA-256 and materialised by hard link. Two projects pulling the
+same checkpoint cost **one copy** (verified: identical inode, one store entry, 520 212
+bytes total). Branch refs are resolved once through `X-Repo-Commit`, so a manifest
+pins a commit rather than a moving name.
+
+The hazard this exposed is worth recording: project copies and store entries share an
+inode, so an in-place edit rewrites the stored bytes for every project — and my first
+version then "repaired" by re-linking the corrupted bytes. Entries are now `0444`,
+`put` verifies an existing entry before trusting it, and `materialise` refuses bytes
+that disagree with their own name. Tampering is blocked by the filesystem *and* caught
+by `jhol ai verify`.
+
+`jhol-ai` 13 tests, `jhol-core` 682, installer gate PASS.

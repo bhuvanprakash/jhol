@@ -227,6 +227,66 @@ impl HttpClient {
         self.get_with_accept(url, None)
     }
 
+    /// HEAD request, returning headers with lower-cased names.
+    pub fn head_headers(&self, url: &str) -> Result<Vec<(String, String)>, String> {
+        let _guard = self.limit.acquire();
+        let resp = self.send_with_retry(|| {
+            // `ureq` has no HEAD helper on Agent; a GET with no body read is the
+            // portable route, and the caller only needs the headers.
+            self.agent.get(url).set("Range", "bytes=0-0").call()
+        })?;
+        Ok(resp
+            .headers_names()
+            .into_iter()
+            .filter_map(|name| {
+                resp.header(&name)
+                    .map(|v| (name.to_ascii_lowercase(), v.to_string()))
+            })
+            .collect())
+    }
+
+    /// Byte range GET, for reading a header out of a multi-gigabyte artifact.
+    ///
+    /// Model weights are the one thing a package manager cannot slurp to inspect: a
+    /// 7 GB safetensors file describes its entire structure in a few kilobytes at the
+    /// front. Bounded, and a `200` carrying the whole body is rejected rather than
+    /// silently truncated — that means the server ignored the range and we already
+    /// paid for the whole file.
+    pub fn get_range(&self, url: &str, start: u64, end_inclusive: u64) -> Result<Vec<u8>, String> {
+        if end_inclusive < start {
+            return Err(format!("invalid byte range {start}-{end_inclusive}"));
+        }
+        let want = (end_inclusive - start + 1) as usize;
+        if want as u64 > MAX_RANGE_BYTES {
+            return Err(format!(
+                "refusing to fetch {want} bytes (limit {MAX_RANGE_BYTES})"
+            ));
+        }
+        let _guard = self.limit.acquire();
+        let range = format!("bytes={start}-{end_inclusive}");
+        let resp = self.send_with_retry(|| self.agent.get(url).set("Range", &range).call())?;
+        let status = resp.status();
+        let mut body = Vec::new();
+        resp.into_reader()
+            .take(MAX_RANGE_BYTES + 1)
+            .read_to_end(&mut body)
+            .map_err(|e| format!("range read: {e}"))?;
+        if status == 200 && body.len() > want {
+            return Err(format!(
+                "server ignored the byte range for {url} (200 with {} bytes)",
+                body.len()
+            ));
+        }
+        if body.len() < want {
+            return Err(format!(
+                "short range response for {url}: wanted {want} bytes, got {}",
+                body.len()
+            ));
+        }
+        body.truncate(want);
+        Ok(body)
+    }
+
     /// GET url with optional Accept header (e.g. for abbreviated packument).
     pub fn get_with_accept(&self, url: &str, accept: Option<&str>) -> Result<Vec<u8>, String> {
         let _guard = self.limit.acquire();
@@ -665,6 +725,24 @@ fn get_global() -> &'static HttpClient {
 /// GET url and return body (uses global bounded client).
 pub fn get(url: &str) -> Result<Vec<u8>, String> {
     get_global().get(url)
+}
+
+/// Upper bound on a range fetch: enough for any real artifact header, small enough
+/// that a server ignoring `Range` cannot make us buffer a checkpoint.
+pub const MAX_RANGE_BYTES: u64 = 32 * 1024 * 1024;
+
+/// HEAD a url and return its response headers (lower-cased names).
+///
+/// Used to resolve a mutable ref to an immutable one: Hugging Face returns
+/// `X-Repo-Commit` for a file request, which is how `main` becomes a commit hash
+/// that a manifest can honestly pin.
+pub fn head_headers(url: &str) -> Result<Vec<(String, String)>, String> {
+    get_global().head_headers(url)
+}
+
+/// Byte range GET through the shared pooled client.
+pub fn get_range(url: &str, start: u64, end_inclusive: u64) -> Result<Vec<u8>, String> {
+    get_global().get_range(url, start, end_inclusive)
 }
 
 /// GET url with optional Accept header (e.g. application/vnd.npm.install-v1+json for abbreviated packument).

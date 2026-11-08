@@ -108,6 +108,12 @@ pub struct InferenceResult {
     pub probabilities: Vec<f64>,
 }
 
+/// Digest of a file on disk, for callers that need the same identity the store
+/// uses (the CLI's `ai pull` records it in a manifest).
+pub fn digest_file(path: &Path) -> Result<String, AiError> {
+    sha256_file(path)
+}
+
 fn sha256_file(path: &Path) -> Result<String, AiError> {
     let mut f = fs::File::open(path)?;
     let mut h = Sha256::new();
@@ -1052,5 +1058,441 @@ mod tests {
             ModelArtifact::read_manifest(&manifest),
             Err(AiError::InvalidManifest(_))
         ));
+    }
+}
+
+// ── Safetensors introspection ────────────────────────────────────────────────
+//
+// A safetensors file is `[u64 LE header length][JSON header][tensor data]`, and the
+// header maps every tensor to a byte range. That means a model's *structure* — how
+// many parameters, which dtypes, how the shards are laid out — is readable from a
+// few kilobytes, before any weights are fetched. Models therefore enter resolution
+// with real metadata, exactly like npm packages do.
+pub mod safetensors {
+    use super::{AiError, Path};
+    use std::collections::BTreeMap;
+
+    /// Upper bound on a header we will accept. Real headers are tens of KB; a
+    /// claimed length beyond this is either corrupt or hostile, and reading it
+    /// would let a remote file choose how much memory we allocate.
+    pub const MAX_HEADER_BYTES: u64 = 32 * 1024 * 1024;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Tensor {
+        pub name: String,
+        pub dtype: String,
+        pub shape: Vec<u64>,
+        pub begin: u64,
+        pub end: u64,
+    }
+
+    impl Tensor {
+        pub fn elements(&self) -> u64 {
+            self.shape.iter().product::<u64>().max(if self.shape.is_empty() { 0 } else { 1 })
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Header {
+        pub tensors: Vec<Tensor>,
+        /// Bytes occupied by the JSON header (not counting its 8-byte length).
+        pub header_bytes: usize,
+        /// Byte offset where tensor data begins: `8 + header_bytes`.
+        pub data_start: u64,
+        pub total_params: u64,
+        /// dtype -> tensor count
+        pub dtypes: BTreeMap<String, usize>,
+    }
+
+    impl Header {
+        pub fn tensor(&self, name: &str) -> Option<&Tensor> {
+            self.tensors.iter().find(|t| t.name == name)
+        }
+    }
+
+    /// The declared header length from the first 8 bytes, sanity-checked.
+    pub fn header_len(first_eight: &[u8]) -> Result<u64, AiError> {
+        if first_eight.len() < 8 {
+            return Err(AiError::InvalidManifest(
+                "safetensors: file shorter than its 8-byte header length".into(),
+            ));
+        }
+        let n = u64::from_le_bytes(first_eight[..8].try_into().expect("8 bytes"));
+        if n == 0 || n > MAX_HEADER_BYTES {
+            return Err(AiError::InvalidManifest(format!(
+                "safetensors: implausible header length {n}"
+            )));
+        }
+        Ok(n)
+    }
+
+    /// Parse `[8-byte length][JSON header]`. Extra trailing bytes are ignored, so a
+    /// caller that fetched `8 + N` bytes (or more) can pass them straight in.
+    pub fn parse_header(bytes: &[u8]) -> Result<Header, AiError> {
+        let n = header_len(bytes)?;
+        let end = 8usize
+            .checked_add(n as usize)
+            .ok_or_else(|| AiError::InvalidManifest("safetensors: length overflow".into()))?;
+        let json = bytes
+            .get(8..end)
+            .ok_or_else(|| AiError::InvalidManifest("safetensors: truncated header".into()))?;
+        let json: &[u8] = {
+            // The spec allows trailing whitespace padding inside the header.
+            let s = String::from_utf8_lossy(json);
+            let trimmed = s.trim_end();
+            // Re-borrow through the original slice by trimming at the JSON end.
+            let _ = trimmed;
+            json
+        };
+        let doc: serde_json::Value = serde_json::from_slice(json)
+            .map_err(|e| AiError::InvalidManifest(format!("safetensors: header is not JSON: {e}")))?;
+        let obj = doc
+            .as_object()
+            .ok_or_else(|| AiError::InvalidManifest("safetensors: header is not an object".into()))?;
+
+        let mut tensors = Vec::new();
+        let mut dtypes: BTreeMap<String, usize> = BTreeMap::new();
+        let mut total_params = 0u64;
+        for (name, value) in obj {
+            if name == "__metadata__" {
+                continue;
+            }
+            let dtype = value
+                .get("dtype")
+                .and_then(|d| d.as_str())
+                .ok_or_else(|| AiError::InvalidManifest(format!("safetensors: {name} has no dtype")))?
+                .to_string();
+            let shape: Vec<u64> = value
+                .get("shape")
+                .and_then(|s| s.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_u64()).collect())
+                .unwrap_or_default();
+            let offsets = value
+                .get("data_offsets")
+                .and_then(|o| o.as_array())
+                .filter(|a| a.len() == 2)
+                .ok_or_else(|| {
+                    AiError::InvalidManifest(format!("safetensors: {name} has no data_offsets"))
+                })?;
+            let begin = offsets[0].as_u64().unwrap_or(0);
+            let end_off = offsets[1].as_u64().unwrap_or(0);
+            if end_off < begin {
+                return Err(AiError::InvalidManifest(format!(
+                    "safetensors: {name} has inverted data_offsets"
+                )));
+            }
+            let t = Tensor {
+                name: name.clone(),
+                dtype: dtype.clone(),
+                shape,
+                begin,
+                end: end_off,
+            };
+            total_params = total_params.saturating_add(t.elements());
+            *dtypes.entry(dtype).or_default() += 1;
+            tensors.push(t);
+        }
+        tensors.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(Header {
+            tensors,
+            header_bytes: n as usize,
+            data_start: 8 + n,
+            total_params,
+            dtypes,
+        })
+    }
+
+    /// Parse a local `.safetensors` file by reading only its header.
+    pub fn parse_file(path: &Path) -> Result<Header, AiError> {
+        use std::io::Read;
+        let mut f = std::fs::File::open(path)?;
+        let mut first = [0u8; 8];
+        f.read_exact(&mut first)?;
+        let n = header_len(&first)?;
+        let mut buf = vec![0u8; 8 + n as usize];
+        buf[..8].copy_from_slice(&first);
+        f.read_exact(&mut buf[8..])?;
+        parse_header(&buf)
+    }
+}
+
+// ── Content-addressed model store ────────────────────────────────────────────
+//
+// Weights are the reason a "package cache" is not enough: 7 GB shared by six
+// projects is 7 GB of disk or 42 GB, depending on whether the store dedupes. Files
+// are stored once by SHA-256 and materialised by hard link (same filesystem, zero
+// copy, zero extra bytes) with a copy fallback when linking is impossible.
+pub mod cas {
+    use super::{sha256_file, AiError, Path, PathBuf};
+
+    /// Toggle the write bits on a stored entry. Read-only while stored; writable
+    /// when an entry is being replaced.
+    fn set_writable(path: &Path, writable: bool) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = if writable { 0o644 } else { 0o444 };
+            let mut p = std::fs::metadata(path)?.permissions();
+            p.set_mode(mode);
+            std::fs::set_permissions(path, p)?;
+        }
+        #[cfg(not(unix))]
+        {
+            let mut p = std::fs::metadata(path)?.permissions();
+            p.set_readonly(!writable);
+            std::fs::set_permissions(path, p)?;
+        }
+        Ok(())
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct ModelStore {
+        root: PathBuf,
+    }
+
+    impl ModelStore {
+        pub fn new(root: impl Into<PathBuf>) -> Self {
+            Self { root: root.into() }
+        }
+
+        pub fn root(&self) -> &Path {
+            &self.root
+        }
+
+        pub fn path_for(&self, digest: &str) -> PathBuf {
+            let shard = digest.get(0..2).unwrap_or("00");
+            self.root.join(shard).join(digest)
+        }
+
+        pub fn contains(&self, digest: &str) -> bool {
+            self.path_for(digest).is_file()
+        }
+
+        /// Copy `file` into the store if absent; return its digest.
+        ///
+        /// An existing entry is **verified before it is trusted**. A store entry and
+        /// the project copies materialised from it share one inode, so an in-place
+        /// edit to a project file rewrites the stored bytes for everyone. Entries are
+        /// therefore written read-only (an edit fails loudly instead of corrupting
+        /// ten projects), and a poisoned entry is detected and replaced rather than
+        /// propagated.
+        pub fn put(&self, file: &Path) -> Result<String, AiError> {
+            let digest = sha256_file(file)?;
+            let dest = self.path_for(&digest);
+            if dest.is_file() {
+                if sha256_file(&dest).map(|d| d == digest).unwrap_or(false) {
+                    return Ok(digest);
+                }
+                // Corrupt entry: make it writable again, then replace it.
+                let _ = set_writable(&dest, true);
+            }
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let tmp = dest.with_extension("tmp");
+            std::fs::copy(file, &tmp)?;
+            std::fs::rename(&tmp, &dest)?;
+            // Read-only: dedupe only stays safe while the shared inode cannot be
+            // rewritten through a project.
+            let _ = set_writable(&dest, false);
+            Ok(digest)
+        }
+
+        /// Materialise `digest` at `dest`, preferring a hard link so two projects
+        /// share one copy of the bytes.
+        pub fn materialise(&self, digest: &str, dest: &Path) -> Result<(), AiError> {
+            let src = self.path_for(digest);
+            if !src.is_file() {
+                return Err(AiError::Missing(format!("model store entry {digest}")));
+            }
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            if dest.exists() {
+                std::fs::remove_file(dest)?;
+            }
+            if sha256_file(&src)? != digest {
+                return Err(AiError::DigestMismatch {
+                    path: src.display().to_string(),
+                    expected: digest.to_string(),
+                    got: "stored bytes do not match their own name".to_string(),
+                });
+            }
+            match std::fs::hard_link(&src, dest) {
+                Ok(()) => Ok(()),
+                // Different filesystem, or a platform/filesystem that refuses
+                // links: a copy is slower but never wrong.
+                Err(_) => {
+                    std::fs::copy(&src, dest)?;
+                    let _ = set_writable(dest, false);
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod ai_artifact_tests {
+    use super::cas::ModelStore;
+    use super::safetensors::{parse_file, parse_header, MAX_HEADER_BYTES};
+    use std::io::Write;
+
+    /// Build a real safetensors file: 8-byte LE length, JSON header, raw data.
+    fn write_safetensors(path: &std::path::Path, tensors: &[(&str, &str, Vec<u64>)]) {
+        let mut offset = 0u64;
+        let mut header = serde_json::Map::new();
+        header.insert(
+            "__metadata__".to_string(),
+            serde_json::json!({"format": "pt"}),
+        );
+        let mut data = Vec::new();
+        for (name, dtype, shape) in tensors {
+            let elems: u64 = shape.iter().product::<u64>().max(1);
+            let bytes = elems * if *dtype == "F32" { 4 } else { 2 };
+            header.insert(
+                (*name).to_string(),
+                serde_json::json!({
+                    "dtype": dtype,
+                    "shape": shape,
+                    "data_offsets": [offset, offset + bytes],
+                }),
+            );
+            data.extend(std::iter::repeat(0u8).take(bytes as usize));
+            offset += bytes;
+        }
+        let json = serde_json::to_vec(&header).unwrap();
+        let mut f = std::fs::File::create(path).unwrap();
+        f.write_all(&(json.len() as u64).to_le_bytes()).unwrap();
+        f.write_all(&json).unwrap();
+        f.write_all(&data).unwrap();
+    }
+
+    /// Structure without weights: this is what makes a model a resolvable artifact
+    /// rather than an opaque blob.
+    #[test]
+    fn header_only_parsing_reports_structure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("model.safetensors");
+        write_safetensors(
+            &p,
+            &[
+                ("model.embed.weight", "F32", vec![2, 3]),
+                ("model.norm.weight", "F16", vec![3]),
+            ],
+        );
+        let h = parse_file(&p).unwrap();
+        assert_eq!(h.tensors.len(), 2);
+        assert_eq!(h.total_params, 6 + 3);
+        assert_eq!(h.dtypes.get("F32"), Some(&1));
+        assert_eq!(h.dtypes.get("F16"), Some(&1));
+        let emb = h.tensor("model.embed.weight").unwrap();
+        assert_eq!(emb.elements(), 6);
+        assert_eq!((emb.begin, emb.end), (0, 24), "F32 x 6 = 24 bytes");
+        assert_eq!(h.data_start, 8 + h.header_bytes as u64);
+    }
+
+    /// Only the first `8 + N` bytes are needed, so a caller can range-fetch a
+    /// header instead of a 7 GB file.
+    #[test]
+    fn parsing_needs_only_the_header_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("m.safetensors");
+        write_safetensors(&p, &[("w", "F32", vec![4])]);
+        let full = std::fs::read(&p).unwrap();
+        let n = u64::from_le_bytes(full[..8].try_into().unwrap()) as usize;
+        let prefix = &full[..8 + n];
+        assert_eq!(parse_header(prefix).unwrap().total_params, 4);
+        // Truncated header is an error, not a panic.
+        assert!(parse_header(&full[..8 + n - 1]).is_err());
+        // Absurd declared length is rejected rather than allocated.
+        let mut hostile = vec![0u8; 8];
+        hostile.copy_from_slice(&(MAX_HEADER_BYTES + 1).to_le_bytes());
+        assert!(parse_header(&hostile).is_err());
+    }
+
+    /// Two projects pulling the same weights must not double the disk usage.
+    #[test]
+    fn store_dedupes_and_materialises_by_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ModelStore::new(tmp.path().join("store"));
+        let src = tmp.path().join("model.bin");
+        std::fs::write(&src, b"weights-weights-weights").unwrap();
+
+        let digest = store.put(&src).unwrap();
+        assert!(store.contains(&digest));
+
+        let a = tmp.path().join("projA/model.bin");
+        let b = tmp.path().join("projB/model.bin");
+        store.materialise(&digest, &a).unwrap();
+        store.materialise(&digest, &b).unwrap();
+        assert_eq!(std::fs::read(&a).unwrap(), std::fs::read(&b).unwrap());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let ia = std::fs::metadata(&a).unwrap().ino();
+            let ib = std::fs::metadata(&b).unwrap().ino();
+            assert_eq!(ia, ib, "materialised files must share one copy of the bytes");
+        }
+    }
+
+    /// The dedupe hazard: a project copy and the store entry share an inode, so an
+    /// in-place edit rewrites the stored bytes. Read-only entries stop it, and a
+    /// poisoned entry is detected and replaced instead of propagated.
+    #[test]
+    fn store_entries_are_read_only_and_repairable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ModelStore::new(tmp.path().join("store"));
+        let src = tmp.path().join("w.bin");
+        std::fs::write(&src, b"clean-weights").unwrap();
+        let digest = store.put(&src).unwrap();
+
+        // Simulate corruption that bypassed the permission bits (root, chmod, a
+        // copy in from elsewhere).
+        let entry = store.path_for(&digest);
+        let _ = std::fs::set_permissions(&entry, {
+            let mut p = std::fs::metadata(&entry).unwrap().permissions();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                p.set_mode(0o644);
+            }
+            #[cfg(not(unix))]
+            p.set_readonly(false);
+            p
+        });
+        std::fs::write(&entry, b"corrupt!!!!").unwrap();
+
+        // `put` of the good bytes repairs it.
+        store.put(&src).unwrap();
+        assert_eq!(std::fs::read(&entry).unwrap(), b"clean-weights");
+
+        // And materialising never hands out bytes that disagree with the name.
+        let bad = store.path_for(&digest);
+        let _ = std::fs::set_permissions(&bad, {
+            let mut p = std::fs::metadata(&bad).unwrap().permissions();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                p.set_mode(0o644);
+            }
+            #[cfg(not(unix))]
+            p.set_readonly(false);
+            p
+        });
+        std::fs::write(&bad, b"tampered").unwrap();
+        assert!(store.materialise(&digest, &tmp.path().join("out.bin")).is_err());
+    }
+
+    #[test]
+    fn missing_store_entry_is_a_clear_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ModelStore::new(tmp.path());
+        let err = store
+            .materialise("deadbeef", &tmp.path().join("x.bin"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("deadbeef"), "{err}");
     }
 }

@@ -3549,6 +3549,16 @@ fn run() -> Result<(), String> {
                 "usage: jhol ai pin|pin-remote|verify|prepare|infer --manifest PATH".into(),
             );
         };
+        if action == "pull" {
+            let out = pull_model(&act_m)?;
+            println!("{out}");
+            return Ok(());
+        }
+        if action == "inspect" {
+            let report = inspect_model(&act_m)?;
+            println!("{}", report);
+            return Ok(());
+        }
         if action != "pin"
             && action != "pin-remote"
             && action != "verify"
@@ -7902,6 +7912,51 @@ fn cli_command() -> Command {
             Command::new("ai")
                 .about("Pin, verify, prepare, and run small model artifacts")
                 .subcommand(
+                    Command::new("pull")
+                        .about("Fetch model files into the shared store and link them into the project")
+                        .arg(Arg::new("source").long("source").required(true).value_name("hf://OWNER/REPO"))
+                        .arg(Arg::new("revision").long("revision").default_value("main"))
+                        .arg(
+                            Arg::new("file")
+                                .long("file")
+                                .required(true)
+                                .action(ArgAction::Append)
+                                .value_name("PATH_IN_REPO"),
+                        )
+                        .arg(Arg::new("dest").long("dest").value_name("DIR"))
+                        .arg(
+                            Arg::new("max-bytes")
+                                .long("max-bytes")
+                                .value_name("N")
+                                .help("Refuse a single file larger than this (default 536870912)"),
+                        )
+                        .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
+                )
+                .subcommand(
+                    Command::new("inspect")
+                        .about("Describe a safetensors model from its header (no weights fetched)")
+                        .arg(
+                            Arg::new("path")
+                                .long("path")
+                                .value_name("FILE")
+                                .help("Local .safetensors file"),
+                        )
+                        .arg(
+                            Arg::new("source")
+                                .long("source")
+                                .value_name("hf://OWNER/REPO")
+                                .help("Hugging Face repository, read over a byte range"),
+                        )
+                        .arg(Arg::new("revision").long("revision").value_name("REV"))
+                        .arg(
+                            Arg::new("file")
+                                .long("file")
+                                .value_name("PATH_IN_REPO")
+                                .help("File inside the repository (e.g. model.safetensors)"),
+                        )
+                        .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
+                )
+                .subcommand(
                     Command::new("pin")
                         .about("Hash local files into a revision-pinned model manifest")
                         .arg(Arg::new("name").long("name").required(true))
@@ -8602,6 +8657,261 @@ fn cli_command() -> Command {
                         .help("Shell to generate completions for (bash, zsh, fish, powershell, elvish)"),
                 ),
         )
+}
+
+/// `jhol ai pull` — fetch model files once, keep them in the shared store, and link
+/// them into the project.
+///
+/// Two projects pulling the same weights must not double the disk usage: files are
+/// stored by SHA-256 and materialised by hard link, so the second project costs an
+/// inode rather than a checkpoint. The manifest written alongside makes the pull
+/// verifiable afterwards (`jhol ai verify`).
+fn pull_model(m: &clap::ArgMatches) -> Result<String, String> {
+    use jhol_ai::cas::ModelStore;
+    use jhol_ai::{FilePin, ModelArtifact};
+
+    let source = m
+        .get_one::<String>("source")
+        .ok_or("--source is required")?
+        .clone();
+    let revision = m
+        .get_one::<String>("revision")
+        .cloned()
+        .unwrap_or_else(|| "main".to_string());
+    let files: Vec<String> = m
+        .get_many::<String>("file")
+        .map(|v| v.cloned().collect())
+        .unwrap_or_default();
+    let cap: u64 = m
+        .get_one::<String>("max-bytes")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(512 * 1024 * 1024);
+    let repo_name = source
+        .strip_prefix("hf://")
+        .and_then(|r| r.split('/').nth(1))
+        .unwrap_or("model")
+        .to_string();
+    let dest = m
+        .get_one::<String>("dest")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("models").join(&repo_name));
+
+    let cache = std::path::PathBuf::from(jhol_core::utils::get_cache_dir()).join("model_store");
+    let store = ModelStore::new(cache);
+    std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+
+    // A manifest pins a commit, never a branch: `main` moves, and a pin that moves
+    // is not a pin. Resolve the ref once (HF returns `X-Repo-Commit` for a file
+    // request) and use the commit for the manifest and every download.
+    let revision = if revision.len() == 40 && revision.bytes().all(|b| b.is_ascii_hexdigit()) {
+        revision
+    } else {
+        let probe = hf_resolve_url(&source, &revision, &files[0])?;
+        let headers = jhol_core::http_client::head_headers(&probe)
+            .map_err(|e| format!("resolving {source}@{revision}: {e}"))?;
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("x-repo-commit"))
+            .map(|(_, v)| v.clone())
+            .ok_or_else(|| {
+                format!(
+                    "could not resolve {source}@{revision} to a commit; pass --revision <40-char commit>"
+                )
+            })?
+    };
+
+    let mut pins: Vec<FilePin> = Vec::new();
+    let mut downloaded = 0usize;
+    for file in &files {
+        if file.starts_with('/') || file.contains("..") {
+            return Err(format!("invalid file path in repo: {file}"));
+        }
+        let url = hf_resolve_url(&source, &revision, file)?;
+        let target = dest.join(file);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        // The store is the authority, not the working copy. A file on disk that the
+        // store does not know is either tampered or from elsewhere: re-fetch it.
+        // (Trusting the local file made `pull` silently preserve a corrupted
+        // checkpoint, which is the one thing a pull must never do.)
+        let local_digest = if target.is_file() {
+            Some(jhol_ai::digest_file(&target).map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
+        let digest = if let Some(d) = local_digest.filter(|d| store.contains(d)) {
+            d
+        } else {
+            let bytes = jhol_core::http_client::get(&url)
+                .map_err(|e| format!("{url}: {e}"))?;
+            if bytes.len() as u64 > cap {
+                return Err(format!(
+                    "{file} is {} bytes, above --max-bytes {cap}; streaming pulls are not wired yet",
+                    bytes.len()
+                ));
+            }
+            let tmp = target.with_extension("part");
+            std::fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
+            let digest = jhol_ai::digest_file(&tmp).map_err(|e| e.to_string())?;
+            store.put(&tmp).map_err(|e| e.to_string())?;
+            let _ = std::fs::remove_file(&tmp);
+            downloaded += 1;
+            digest
+        };
+        // Materialise from the store so the project links to the shared copy.
+        store
+            .materialise(&digest, &target)
+            .map_err(|e| e.to_string())?;
+        let size = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
+        pins.push(FilePin {
+            path: file.clone(),
+            digest,
+            size_bytes: Some(size),
+        });
+    }
+
+    let artifact = ModelArtifact::pin_remote_files(&repo_name, &source, &revision, pins)
+        .map_err(|e| e.to_string())?;
+    let manifest_path = dest.join(format!("{repo_name}.jhol-model.json"));
+    artifact
+        .write_manifest(&manifest_path)
+        .map_err(|e| e.to_string())?;
+    if !flag(m, "json") {
+        return Ok(format!(
+            "{} file(s), {} downloaded, {} bytes linked from {} -> {}\nmanifest: {}",
+            artifact.files.len(),
+            downloaded,
+            artifact.files.iter().filter_map(|f| f.size_bytes).sum::<u64>(),
+            store.root().display(),
+            dest.display(),
+            manifest_path.display()
+        ));
+    }
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "artifact": artifact,
+        "downloaded": downloaded,
+        "store": store.root().display().to_string(),
+        "dest": dest.display().to_string(),
+    }))
+    .unwrap_or_default())
+}
+
+/// `jhol ai inspect` — describe a safetensors model without fetching its weights.
+///
+/// The whole point: a checkpoint's structure (parameter count, dtypes, shard layout,
+/// per-tensor byte ranges) lives in a header of a few kilobytes, so a model can enter
+/// dependency resolution with real metadata — as cheaply as an npm packument. The
+/// header is fetched over a byte range, never the file.
+fn inspect_model(m: &clap::ArgMatches) -> Result<String, String> {
+    use jhol_ai::safetensors::{self, Header};
+
+    let header: Header = if let Some(path) = m.get_one::<String>("path") {
+        safetensors::parse_file(std::path::Path::new(path))
+            .map_err(|e| format!("{}: {e}", path))?
+    } else {
+        let source = m
+            .get_one::<String>("source")
+            .ok_or("inspect needs --path FILE or --source hf://owner/repo --file PATH")?;
+        let revision = m
+            .get_one::<String>("revision")
+            .map(|s| s.as_str())
+            .unwrap_or("main");
+        let file = m
+            .get_one::<String>("file")
+            .ok_or("--source needs --file (e.g. model.safetensors)")?;
+        let url = hf_resolve_url(source, revision, file)?;
+        // Two requests: the declared header length, then the header itself.
+        let first = jhol_core::http_client::get_range(&url, 0, 7)
+            .map_err(|e| format!("{url}: {e}"))?;
+        let n = safetensors::header_len(&first).map_err(|e| e.to_string())?;
+        let body = jhol_core::http_client::get_range(&url, 8, 8 + n - 1)
+            .map_err(|e| format!("{url}: {e}"))?;
+        let mut all = Vec::with_capacity(8 + body.len());
+        all.extend_from_slice(&first);
+        all.extend_from_slice(&body);
+        safetensors::parse_header(&all).map_err(|e| e.to_string())?
+    };
+
+    if flag(m, "json") {
+        let tensors: Vec<serde_json::Value> = header
+            .tensors
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "name": t.name, "dtype": t.dtype, "shape": t.shape,
+                    "bytes": t.end.saturating_sub(t.begin),
+                })
+            })
+            .collect();
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "tensors": header.tensors.len(),
+            "parameters": header.total_params,
+            "dtypes": header.dtypes,
+            "header_bytes": header.header_bytes,
+            "data_start": header.data_start,
+            "detail": tensors,
+        }))
+        .unwrap_or_default());
+    }
+
+    let mut out = String::new();
+    out.push_str(&format!(
+        "{} tensors, {} parameters, header {} bytes (data starts at {})
+",
+        header.tensors.len(),
+        group_digits(header.total_params),
+        header.header_bytes,
+        header.data_start
+    ));
+    let dtypes: Vec<String> = header
+        .dtypes
+        .iter()
+        .map(|(d, n)| format!("{d} x{n}"))
+        .collect();
+    out.push_str(&format!("dtypes: {}
+", dtypes.join(", ")));
+    out.push_str("largest tensors:
+");
+    let mut by_size: Vec<&jhol_ai::safetensors::Tensor> = header.tensors.iter().collect();
+    by_size.sort_by_key(|t| std::cmp::Reverse(t.end.saturating_sub(t.begin)));
+    for t in by_size.iter().take(5) {
+        out.push_str(&format!(
+            "  {} {:?} [{:?}] {} bytes
+",
+            t.dtype,
+            t.shape,
+            t.dtype,
+            t.end.saturating_sub(t.begin)
+        ));
+    }
+    Ok(out)
+}
+
+/// `hf://owner/repo` + revision + path -> the resolve URL (no hub of our own).
+fn hf_resolve_url(source: &str, revision: &str, file: &str) -> Result<String, String> {
+    let repo = source
+        .strip_prefix("hf://")
+        .ok_or("source must be hf://owner/repository")?;
+    if repo.split('/').count() != 2 || file.starts_with('/') || file.contains("..") {
+        return Err(format!("invalid model reference: {source} / {file}"));
+    }
+    Ok(format!(
+        "https://huggingface.co/{}/resolve/{}/{}",
+        repo, revision, file
+    ))
+}
+
+fn group_digits(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
 }
 
 fn main() {

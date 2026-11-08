@@ -7478,3 +7478,24 @@ After the fixes: 10/10 manifests pass all four dimensions.
 Lesson: production readiness is a property of the whole system under real inputs, not
 a list of features. Every remaining doubt I have is now expressible as one more row in
 that table.
+
+## Journal — 2026-11-07 (cont.): AI-first slice 1, and a hardlink trap
+
+Built the first two primitives of the AI-first plan: safetensors header inspection over
+HTTP byte ranges (10,760 bytes for a 520KB file, same for a 7GB one) and a
+content-addressed model store with hardlink dedupe. Two projects sharing a checkpoint
+now cost one inode.
+
+The trap: hardlinks mean project copies and the store share an inode, so an in-place
+edit corrupts the store for everyone -- and my first "repair" cheerfully re-linked the
+corrupted bytes. Fixed with three layers: read-only entries (0444), `put` verifying an
+existing entry and repairing it, and `materialise` refusing bytes that disagree with
+their own name. Verified: the tamper is blocked by the filesystem, and `ai verify`
+catches it if permissions are bypassed.
+
+Also: manifests pin a commit, never a branch. `main` is resolved through
+`X-Repo-Commit` once. A pin that moves is not a pin.
+
+Remaining from the plan is written down in docs/AI-FIRST.md rather than implied: model
+files in the project lockfile, streaming pulls, the Artifact unification, hardware
+axes, why-not for ML, env fork, attestation, replay.

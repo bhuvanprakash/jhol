@@ -103,6 +103,15 @@ written to `.npmrc` with mode 0600.
 
 ---
 
+## Models (AI-first)
+
+| command | effect |
+|---|---|
+| `jhol ai inspect --source hf://owner/repo --file model.safetensors` | describe a checkpoint from its header over a byte range (no weights fetched); `--path` for a local file, `--json` |
+| `jhol ai pull --source hf://owner/repo --file …` | fetch into the shared model store and hard-link into `models/<repo>`; writes a commit-pinned manifest; `--revision`, `--dest`, `--max-bytes` |
+| `jhol ai verify --path models/<repo> --manifest <repo>.jhol-model.json` | per-file SHA-256 verification of a pulled model |
+| `jhol ai pin`, `pin-remote`, `prepare`, `infer` | manifest authoring, resumable prepare, tiny linear inference |
+
 ## Engines and runtime
 
 `jhol install` can run scripts on JholVM with `JHOL_RUNTIME_ENGINE=jholvm`; `jhol
