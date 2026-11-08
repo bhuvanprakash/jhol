@@ -3638,6 +3638,29 @@ fn run() -> Result<(), String> {
                 )
             )
             .subcommand(
+                Command::new("verify")
+                    .about("Check that node_modules is exactly what the lockfile authorises")
+                    .arg(
+                        Arg::new("json")
+                            .long("json")
+                            .num_args(0)
+                            .help("Machine-readable output"),
+                    )
+                    .arg(
+                        Arg::new("prune")
+                            .long("prune")
+                            .num_args(0)
+                            .help("Remove packages the lockfile does not authorise"),
+                    )
+                    .arg(
+                        Arg::new("quiet")
+                            .long("quiet")
+                            .short('q')
+                            .num_args(0)
+                            .help("Only report problems (via the exit code)"),
+                    ),
+            )
+            .subcommand(
                 Command::new("why-not")
                     .about("Explain why a range of a package cannot be used, and what would allow it")
                     .arg(
@@ -5533,6 +5556,58 @@ fn run() -> Result<(), String> {
             }
         }
         return Ok(());
+    }
+
+    if let Some(("verify", sub_m)) = matches.subcommand() {
+        // A gate CI can trust: exit 0 only when the tree is exactly what the
+        // lockfile authorises. `Unverified` (no lockfile) is not a failure — there
+        // is nothing to disagree with — but it is reported, because silence there
+        // would hide a missing lockfile.
+        let state = if flag(&sub_m, "prune") {
+            // `--prune` means prune: remove every unauthorised directory even when
+            // another discrepancy (a wrong version) is reported first, then re-read
+            // the tree. The default `reconcile_tree` only prunes an extraneous-only
+            // tree, which is the right caution for an install but not for an
+            // explicit request.
+            let _ = jhol_core::tree_state::prune_extraneous(std::path::Path::new("."));
+            jhol_core::tree_state::verify_tree(std::path::Path::new("."))
+        } else {
+            jhol_core::tree_state::verify_tree(std::path::Path::new("."))
+        };
+        let json = flag(&sub_m, "json");
+        let quiet = flag(&sub_m, "quiet");
+        match &state {
+            jhol_core::tree_state::TreeState::Match => {
+                if json {
+                    println!("{{\"state\":\"match\"}}");
+                } else if !quiet {
+                    let total = jhol_core::count_installed_packages(std::path::Path::new("."));
+                    println!("OK: {} packages match the lockfile", total);
+                }
+                return Ok(());
+            }
+            jhol_core::tree_state::TreeState::Unverified { reason } => {
+                if json {
+                    println!("{{\"state\":\"unverified\",\"reason\":\"{}\"}}", reason);
+                } else if !quiet {
+                    println!("not verified: {}", reason);
+                }
+                return Ok(());
+            }
+            other => {
+                if json {
+                    let v = serde_json::json!({
+                        "state": format!("{:?}", other),
+                        "detail": other.describe(),
+                    });
+                    println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+                } else {
+                    eprintln!("NOT OK: {}", other.describe());
+                    eprintln!("  run `jhol install` to repair, or `jhol verify --prune` to remove unauthorised packages");
+                }
+                return Err("tree does not match the lockfile".to_string());
+            }
+        }
     }
 
     if let Some(("why-not", sub_m)) = matches.subcommand() {

@@ -1681,3 +1681,47 @@ solved; payload is not.
 
 `jhol-core` 671 tests, `jhol-treecheck` 12, installer gate PASS; `express`
 unchanged at 71 packages.
+
+
+## `jhol verify` — a gate CI can trust; and why the payload is not ours to speed up
+
+### `jhol verify [--prune] [--json]`
+
+Exit 0 only when `node_modules` is exactly what the lockfile authorises. Anything
+else is a failure with the specific difference named, which is what a CI gate
+needs and what "Up to date" never gave it.
+
+```
+$ jhol verify
+OK: 266 packages match the lockfile            # exit 0
+
+$ jhol verify
+NOT OK: node_modules/chalk is 9.9.9 but the lockfile pins 4.1.2   # exit 1
+  run `jhol install` to repair, or `jhol verify --prune` to remove unauthorised packages
+
+$ jhol verify --prune      # removes unauthorised dirs, then re-verifies
+$ jhol verify --json       # {"state": "Wrong {...}", "detail": "..."}
+$ jhol verify              # no lockfile: "not verified: no readable lockfile", exit 0
+```
+
+`Unverified` (no lockfile) deliberately exits 0: there is nothing to disagree
+with, but it is *reported*, because silence would hide a missing lockfile.
+
+`--prune` prunes unconditionally. The default `reconcile_tree` only prunes a tree
+whose sole problem is an unauthorised directory — the right caution for an install,
+but not for an explicit request, and the first version left the stray directory in
+place whenever a wrong version was reported first.
+
+### The payload phase is registry-bound
+
+Cold `jest` spends 19–54 s downloading 266 tarballs, and I looked for our share of
+it: download concurrency is already `(cpus x 4).clamp(32, 128)` and the HTTP
+client is a pooled `ureq::Agent`, so connections are reused. There is no thread
+count or socket pool left to add; the variance is the registry's. Reporting that
+instead of shipping a "2x faster install" claim is the honest outcome.
+
+Metadata is solved (bounded parallel prefetch, 9.8–12.3 s for the whole closure);
+payload is not ours to fix by adding parallelism.
+
+`jhol-core` 671 tests, `jhol-treecheck` 12, installer gate PASS; both `express` and
+`jest` trees verify `OK`.

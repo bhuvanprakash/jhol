@@ -7316,3 +7316,20 @@ reporting per-phase numbers instead.
 
 Lesson I keep relearning: measure the phase, not the total. The total moved 31 s
 -> 64 s between two runs of the same manifest with nothing but network changing.
+
+## Journal — 2026-11-07 (cont.): verify gate; payload is not ours to fix
+
+Added `jhol verify [--prune] [--json]`: exit 0 only when node_modules is exactly
+what the lockfile authorises, otherwise a named difference and exit 1. No lockfile
+is "not verified" and exits 0, because there is nothing to disagree with — but it
+is reported, since silence would hide a missing lockfile.
+
+Two things I got wrong and fixed by testing, not reasoning:
+- --prune left the stray directory when a wrong version was reported first
+  (reconcile_tree only prunes extraneous-only trees). --prune now prunes.
+- my first exit-code check measured `tail`, not jhol. Ran the command alone.
+
+Then the payload question: cold jest spends 19-54 s on 266 tarballs. I checked our
+share — concurrency is already (cpus x 4).clamp(32,128) and ureq::Agent pools
+connections. Nothing left to add. The variance is the registry's. Saying that is
+better than shipping a fake speedup.
