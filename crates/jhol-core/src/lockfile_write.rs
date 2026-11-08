@@ -2931,6 +2931,85 @@ pub fn resolve_full_tree_nested(
     let mut provider = RegistryProvider::new();
     let mut world: HashMap<String, serde_json::Value> = HashMap::new();
 
+    // Bounded prefetch. Fetching one package per retry cost ~270 sequential round
+    // trips and 51 s on a cold `jest`; the first attempt at parallelising it
+    // followed peers with no cap and hung. This version cannot: no peers, at most
+    // `MAX_FETCHES` packages, at most `ROUNDS` rounds, a wall-clock ceiling, and
+    // no progress means stop. Whatever is left is fetched singly by the resolve
+    // loop, which always terminates.
+    {
+        const BATCH: usize = 16;
+        const ROUNDS: usize = 4;
+        // Measured: 600 fetched 330 packuments the tree never used (12.3 s of
+        // the install). 400 covers the real closure of a large manifest.
+        const MAX_FETCHES: usize = 400;
+        const CEILING: std::time::Duration = std::time::Duration::from_secs(20);
+
+        let started = std::time::Instant::now();
+        let mut fetched_total = 0usize;
+        for _ in 0..ROUNDS {
+            if fetched_total >= MAX_FETCHES || started.elapsed() > CEILING {
+                break;
+            }
+            let missing = crate::jagr_nest::missing_packages_bounded(
+                &world,
+                &roots,
+                MAX_FETCHES - fetched_total,
+            );
+            if missing.is_empty() {
+                break;
+            }
+            let before_missing = missing.len();
+            let mut progress = 0usize;
+            for chunk in missing.chunks(BATCH) {
+                if fetched_total >= MAX_FETCHES || started.elapsed() > CEILING {
+                    break;
+                }
+                let results: Vec<(String, Option<serde_json::Value>)> =
+                    std::thread::scope(|scope| {
+                        let handles: Vec<_> = chunk
+                            .iter()
+                            .map(|name| {
+                                let name = name.clone();
+                                scope.spawn(move || {
+                                    let r = crate::registry::fetch_metadata(&name).ok();
+                                    (name, r)
+                                })
+                            })
+                            .collect();
+                        handles
+                            .into_iter()
+                            .filter_map(|h| h.join().ok())
+                            .collect()
+                    });
+                for (name, doc) in results {
+                    fetched_total += 1;
+                    if let Some(mut doc) = doc {
+                        crate::registry::prune_packument_in_place(&mut doc);
+                        world.insert(name, doc);
+                        progress += 1;
+                    }
+                }
+            }
+            if progress == 0 {
+                break; // nothing fetched: the resolver will report precisely
+            }
+            if progress >= before_missing {
+                // The whole frontier of this round was fetched; another round may
+                // reveal its own frontier.
+                continue;
+            }
+        }
+        if fetched_total > 0 && std::env::var_os("JHOL_VERBOSE").is_some() {
+            eprintln!(
+                "[jhol] prefetched {} packuments in {:.1} ms",
+                fetched_total,
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        let _ = &mut provider;
+    }
+
     let mut resolved = loop {
         match jagr_nest::resolve(&world, &roots) {
             Ok(r) => break r,

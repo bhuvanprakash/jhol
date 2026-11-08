@@ -514,6 +514,75 @@ pub fn missing_packages(
     missing.into_iter().collect()
 }
 
+/// Bounded variant of [`missing_packages`] for prefetching.
+///
+/// The first prefetch attempt followed `peerDependencies` and every published
+/// version with no cap; the frontier never closed and a cold `jest` install hung
+/// to a 600 s timeout with nothing installed. A prefetch is an optimisation, so it
+/// must be impossible for it to be unbounded:
+///
+/// * **peers are not followed** — they are advisory here and pull in packages the
+///   tree will never contain;
+/// * `limit` caps how many names one round may return;
+/// * the caller stops after `max_rounds` or when a round makes no progress.
+///
+/// Anything left over is fetched by the resolve loop one at a time, which is the
+/// correctness path and always terminates.
+pub fn missing_packages_bounded(
+    packuments: &HashMap<String, Value>,
+    roots: &HashMap<String, String>,
+    limit: usize,
+) -> Vec<String> {
+    let mut missing: BTreeSet<String> = BTreeSet::new();
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut queue: std::collections::VecDeque<&str> = std::collections::VecDeque::new();
+
+    for name in roots.keys() {
+        match packuments.get_key_value(name.as_str()) {
+            Some((k, _)) => {
+                if seen.insert(k.as_str()) {
+                    queue.push_back(k.as_str());
+                }
+            }
+            None => {
+                missing.insert(name.clone());
+                if missing.len() >= limit {
+                    return missing.into_iter().collect();
+                }
+            }
+        }
+    }
+    while let Some(name) = queue.pop_front() {
+        let Some(doc) = packuments.get(name) else {
+            continue;
+        };
+        let Some(versions) = doc.get("versions").and_then(|v| v.as_object()) else {
+            continue;
+        };
+        for info in versions.values() {
+            // Deliberately no peerDependencies: advisory, and they explode the
+            // frontier (measured: never closed on a real jest tree).
+            for section in ["dependencies", "optionalDependencies"] {
+                let Some(map) = info.get(section).and_then(|v| v.as_object()) else {
+                    continue;
+                };
+                for (dep, spec) in map {
+                    let (real, _) =
+                        expand_alias(dep, spec.as_str().unwrap_or("*"));
+                    if let Some((k, _)) = packuments.get_key_value(real.as_str()) {
+                        if seen.insert(k.as_str()) {
+                            queue.push_back(k.as_str());
+                        }
+                    } else if missing.insert(real) && missing.len() >= limit {
+                        return missing.into_iter().collect();
+                    }
+                }
+            }
+        }
+    }
+    missing.into_iter().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -667,5 +736,56 @@ mod tests {
         let roots = HashMap::from([("app".to_string(), "*".to_string())]);
         let resolved = resolve(&packuments, &roots).expect("optional gap is not fatal");
         assert_eq!(resolved.instances.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod bounded_frontier_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn world(edges: usize) -> HashMap<String, Value> {
+        let mut w = HashMap::new();
+        let mut deps = serde_json::Map::new();
+        for i in 0..edges {
+            deps.insert(format!("dep{i}"), json!("^1"));
+        }
+        w.insert(
+            "root".to_string(),
+            json!({ "name": "root", "versions": { "1.0.0": { "dependencies": deps } } }),
+        );
+        w
+    }
+
+    /// The cap is a hard ceiling, not a hint: an optimisation that can enumerate
+    /// an arbitrary graph is the bug that hung a cold install.
+    #[test]
+    fn limit_is_respected_exactly() {
+        let w = world(50);
+        let roots = HashMap::from([("root".to_string(), "*".to_string())]);
+        let missing = missing_packages_bounded(&w, &roots, 10);
+        assert_eq!(missing.len(), 10, "{:?}", missing);
+        assert!(missing.iter().all(|m| m.starts_with("dep")));
+    }
+
+    #[test]
+    fn unknown_root_is_reported_and_capped() {
+        let w = HashMap::new();
+        let roots = HashMap::from([("nope".to_string(), "*".to_string())]);
+        assert_eq!(missing_packages_bounded(&w, &roots, 5), vec!["nope"]);
+    }
+
+    /// Peers must not be followed: they are advisory and were what made the
+    /// frontier unclosable.
+    #[test]
+    fn peer_dependencies_are_not_followed() {
+        let w: HashMap<String, Value> = HashMap::from([(
+            "root".to_string(),
+            json!({ "name": "root", "versions": { "1.0.0": {
+                "dependencies": {},
+                "peerDependencies": { "host": "^1" } } } }),
+        )]);
+        let roots = HashMap::from([("root".to_string(), "*".to_string())]);
+        assert!(missing_packages_bounded(&w, &roots, 100).is_empty());
     }
 }

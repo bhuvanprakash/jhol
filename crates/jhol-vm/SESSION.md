@@ -2090,3 +2090,19 @@ conflict analysis.
 
 No clause DB, no nogoods — the bitmap representation is already the explanation
 language, which is why this costs milliseconds and runs offline from the cache.
+
+## Journal — 2026-11-07 (cont.): the prefetch, done boundedly this time
+
+Second attempt at parallel metadata fetch, this time bounded by construction: no
+peers, hard name cap, capped rounds, 20 s ceiling, and sequential fallback for
+whatever is left. Three tests pin the bound, because the first attempt hung a cold
+install for 600 s by having no bound at all.
+
+Measured phases on cold jest: prefetch 400 packuments in 9.8-12.3 s (sequentially
+that was ~200 ms each), tarball downloads 19-54 s, materialisation from the store
+379 ms. So metadata is solved and the install is now payload-bound, with a 3x
+network variance that makes any single "installed in X s" claim meaningless. I am
+reporting per-phase numbers instead.
+
+Lesson I keep relearning: measure the phase, not the total. The total moved 31 s
+-> 64 s between two runs of the same manifest with nothing but network changing.

@@ -1645,3 +1645,39 @@ Runs offline from the cached packuments through the self-healing index
 ranges come from the lockfile; only version lists come from metadata.
 
 `jhol-core` 668 tests (3 new), `jhol-treecheck` 12, installer gate PASS.
+
+
+## Bounded parallel metadata prefetch — and what the numbers actually say
+
+The previous attempt at parallelising metadata fetch hung a cold install to a
+600 s timeout with nothing installed. The cause was the frontier: it followed
+`peerDependencies` and *every* published version, so it never closed.
+
+`missing_packages_bounded` cannot do that. Peers are not followed (advisory, and
+they pull in packages the tree never contains), the caller passes a hard name
+limit, rounds are capped, and there is a 20 s wall-clock ceiling. Whatever is left
+is fetched one at a time by the resolve loop, which always terminates. Three tests
+pin the bound (exact cap, unknown root, peers not followed).
+
+Phases, measured on a cold `jest@29.7.0` install:
+
+| phase | time |
+|---|---|
+| metadata prefetch (400 packuments, 16 at a time) | **9.8–12.3 s** |
+| tarball downloads (266 packages) | **19–54 s (network-variable)** |
+| materialise an existing tree from the store | **379 ms** |
+
+So the prefetch does what it claims — ~200 ms per fetch sequentially becomes
+under 25 ms effective — while total install time is now dominated by **tarball
+downloads**, which vary by a factor of three between runs on the same manifest.
+Reporting a single "install got faster" number would be a lie, so the phases are
+reported instead.
+
+Cap tuned from 600 to 400 names: 600 fetched 330 packuments the tree never used
+and cost 12.3 s; 400 covers the real closure of this manifest.
+
+Next item, now unambiguously identified: parallel tarball download. Metadata is
+solved; payload is not.
+
+`jhol-core` 671 tests, `jhol-treecheck` 12, installer gate PASS; `express`
+unchanged at 71 packages.
