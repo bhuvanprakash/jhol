@@ -7200,7 +7200,16 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                 })
                 .cloned()
                 .collect();
-            if !dropped.is_empty() || expansion_conflict.is_some() {
+            // A dated install must go through the resolver that honours history.
+            // Two shortcuts would otherwise bypass it: the flat expansion (newest
+            // satisfying, no dates) and the single-pass layout, which reuses the
+            // flat selection. Either turns `--as-of` into "as of today" — the
+            // worst failure mode for a reproducibility feature.
+            let as_of_requested = std::env::var("JHOL_AS_OF").is_ok();
+            if as_of_requested {
+                std::env::set_var("JHOL_NEST_RESOLVER", "1");
+            }
+            if !dropped.is_empty() || expansion_conflict.is_some() || as_of_requested {
                 if !options.quiet {
                     match &expansion_conflict {
                         Some((parent, dep, range, version)) => crate::utils::log(&format!(
@@ -7238,7 +7247,7 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                             .map(|(_, v)| (base_name(s).to_string(), v.to_string()))
                     })
                     .collect();
-                let fast_layout = if single_pass_enabled && dropped.is_empty() {
+                let fast_layout = if single_pass_enabled && dropped.is_empty() && !as_of_requested {
                     lockfile::read_package_json_deps(pj)
                         .and_then(|d| nested_layout_from_flat_state(&d, &flat_selected))
                 } else {
@@ -7302,6 +7311,17 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                             Err("disabled".to_string())
                         };
                         if attempt.is_err() {
+                            // A dated install must not fall back: installing
+                            // today's tree while claiming a past date is the one
+                            // outcome a reproducibility feature must never
+                            // produce. Fail with the reason instead.
+                            if as_of_requested {
+                                return Err(crate::error_handling::utils::application_error(
+                                    "resolve_as_of",
+                                    Some("as_of_unavailable"),
+                                    attempt.as_ref().err().map(|e| e.as_str()).unwrap_or("unknown"),
+                                ));
+                            }
                             if nested_first && !options.quiet {
                                 crate::utils::log(&format!(
                                     "nested resolver: {}; falling back to the flat resolver",

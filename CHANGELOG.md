@@ -1725,3 +1725,53 @@ payload is not ours to fix by adding parallelism.
 
 `jhol-core` 671 tests, `jhol-treecheck` 12, installer gate PASS; both `express` and
 `jest` trees verify `OK`.
+
+
+## `--as-of <date>`: history as an input — and the metadata gap that blocks it
+
+Resolving "as of" a date is now a first-class resolver capability:
+`jagr_nest::resolve_with_cutoff(packuments, roots, cutoff)` admits only versions
+published at or before the cutoff. Reproducible historical trees are the point,
+and the whole feature is one comparison on a date the packument already carries.
+
+Two hazards were closed rather than papered over:
+
+* **Fail-safe by construction.** A version with no publish date cannot be shown to
+  have existed before the cutoff, so it is *excluded* — never assumed old enough.
+  When a package has no dates at all the resolver reports
+  `NestFailure::MissingDates` instead of guessing.
+* **No silent fallback.** The flat expansion picks the newest satisfying version
+  and never reads dates, and the single-pass layout reuses those picks. Both would
+  have turned `--as-of` into "as of today" — the worst possible outcome for a
+  reproducibility feature. A dated install now routes through the history-aware
+  resolver, and if that resolver cannot honour the date the install **fails with
+  the reason** rather than installing today's tree.
+
+```
+$ jhol install --as-of 2020-06-01
+Error: --as-of cannot be honoured for express: the metadata in use has no publish
+dates. Dated resolution needs full packuments; the abbreviated form served from
+the cache omits `time`.        # exit 1, nothing installed
+```
+
+### The blocking gap, measured
+
+The cache stores **abbreviated** packuments (`application/vnd.npm.install-v1+json`):
+scanned 39 cached documents, **0** carried `time`, and none carried per-version
+`license`. `registry::fetch_metadata_full` exists to request the full document, but
+the packument cache is keyed by package identity rather than by representation, so
+the abbreviated body is served back for the full request. Until that cache
+distinguishes representations (or dated installs bypass it), `--as-of` cannot
+succeed end to end — and it says so instead of lying.
+
+Same gap blocks license/CVE policy masks, which need per-version `license` and
+advisory data that abbreviation omits.
+
+### Also fixed: a flaky test suite
+
+Two `jhol-treecheck` tests set and cleared `JHOL_PRUNE_EXTRANEOUS`, and cargo runs
+tests in parallel — the suite failed intermittently depending on interleaving. They
+now hold a lock. A flaky gate is worse than no gate.
+
+`jhol-core` 673 tests, `jhol-treecheck` 12 (three consecutive clean runs),
+installer gate PASS.

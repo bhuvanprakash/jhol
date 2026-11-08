@@ -2648,6 +2648,12 @@ fn run() -> Result<(), String> {
                         .help("Fail when a package's engines.node excludes this runtime"),
                 )
                 .arg(
+                    Arg::new("as-of")
+                        .long("as-of")
+                        .value_name("DATE")
+                        .help("Resolve as of a date (YYYY-MM-DD or RFC3339): only versions published by then are eligible"),
+                )
+                .arg(
                     Arg::new("global")
                         .short('g')
                         .long("global")
@@ -6507,6 +6513,11 @@ fn run() -> Result<(), String> {
 
     match matches.subcommand() {
         Some(("install", sub_m)) => {
+            // History as an input: the resolver reads this, so it is set before
+            // any lane can act on the manifest.
+            if let Some(as_of) = sub_m.get_one::<String>("as-of") {
+                std::env::set_var("JHOL_AS_OF", as_of);
+            }
             // --omit / --prod / --include-dev, composed with NODE_ENV.
             // Resolved once here; both the sequential and parallel workspace
             // paths and the direct-install closure read the same value.

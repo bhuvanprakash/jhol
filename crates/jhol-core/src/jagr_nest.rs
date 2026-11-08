@@ -68,6 +68,11 @@ pub enum NestFailure {
     Unsatisfiable,
     /// A guard fired (instance or step cap).
     Bounded,
+    /// A cutoff was requested but the metadata carries no publish dates, so no
+    /// version can be shown to have existed then. Reported instead of silently
+    /// resolving to today, which is the one outcome a reproducibility feature
+    /// must never produce.
+    MissingDates,
 }
 
 /// A requirement that could not be satisfied.
@@ -105,6 +110,12 @@ impl NestConflict {
             ),
             NestFailure::Bounded => format!(
                 "resolution on {} (required by {}) exceeded the instance or step budget",
+                self.package, self.required_by
+            ),
+            NestFailure::MissingDates => format!(
+                "--as-of cannot be honoured for {} (required by {}): the metadata in use has no \
+                 publish dates. Dated resolution needs full packuments; the abbreviated form \
+                 served from the cache omits `time`.",
                 self.package, self.required_by
             ),
         }
@@ -189,6 +200,31 @@ fn expand_alias(name: &str, spec: &str) -> (String, String) {
     }
 }
 
+/// Newest published version satisfying `compiled`, at or before `cutoff`.
+fn newest_matching(
+    versions_desc: &[String],
+    published: &HashMap<&str, i64>,
+    compiled: &crate::registry::CompiledSpec,
+    cutoff: Option<i64>,
+) -> Option<String> {
+    versions_desc
+        .iter()
+        .find(|v| {
+            let ok = semver::Version::parse(v)
+                .map(|p| compiled.matches(&p))
+                .unwrap_or(false);
+            if !ok {
+                return false;
+            }
+            match cutoff {
+                None => true,
+                // No date means we cannot prove it existed then; exclude.
+                Some(t) => published.get(v.as_str()).map(|p| *p <= t).unwrap_or(false),
+            }
+        })
+        .cloned()
+}
+
 fn version_key(v: &str) -> (u64, u64, u64, String) {
     match semver::Version::parse(v) {
         Ok(p) => (
@@ -210,6 +246,22 @@ pub fn resolve(
     packuments: &HashMap<String, Value>,
     roots: &HashMap<String, String>,
 ) -> Result<NestedResolution, NestConflict> {
+    resolve_with_cutoff(packuments, roots, None)
+}
+
+/// Resolve as of a point in time: only versions published at or before `cutoff`
+/// (a unix timestamp) are eligible.
+///
+/// Reproducible historical trees are the point. The fail-safe rule: a packument
+/// without publish dates (the abbreviated form) cannot prove a version existed
+/// before the cutoff, so that version is *excluded* rather than assumed old
+/// enough. A caller wanting `--as-of` must supply full packuments, and gets a
+/// conflict naming the reason if it did not.
+pub fn resolve_with_cutoff(
+    packuments: &HashMap<String, Value>,
+    roots: &HashMap<String, String>,
+    cutoff: Option<i64>,
+) -> Result<NestedResolution, NestConflict> {
     const MAX_INSTANCES: usize = 20_000;
     const MAX_STEPS: usize = 200_000;
 
@@ -218,6 +270,8 @@ pub fn resolve(
     // that is fatal, we report it as a conflict with an empty published list.
     struct Meta<'a> {
         versions: Vec<String>,
+        /// Publish time per version, when the packument is a full one.
+        published: HashMap<&'a str, i64>,
         deps: HashMap<&'a str, Vec<(&'a str, &'a str, bool)>>,
         peers: HashMap<&'a str, Vec<(&'a str, &'a str)>>,
     }
@@ -261,10 +315,25 @@ pub fn resolve(
                 );
             }
         }
+        let mut published: HashMap<&str, i64> = HashMap::new();
+        if let Some(times) = doc.get("time").and_then(|t| t.as_object()) {
+            for (ver, at) in times {
+                if let Some(ts) = at
+                    .as_str()
+                    .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+                    .map(|dt| dt.timestamp())
+                {
+                    if let Some((k, _)) = versions.get_key_value(ver.as_str()) {
+                        published.insert(k.as_str(), ts);
+                    }
+                }
+            }
+        }
         meta.insert(
             name.as_str(),
             Meta {
                 versions: sorted.into_iter().map(|(_, k)| k).collect(),
+                published,
                 deps,
                 peers,
             },
@@ -336,13 +405,24 @@ pub fn resolve(
         let idx = match existing {
             Some(idx) => idx,
             None => {
-                // Newest published version that satisfies the requirement.
-                let chosen = meta.versions.iter().find(|v| {
-                    semver::Version::parse(v)
-                        .map(|p| compiled.matches(&p))
-                        .unwrap_or(false)
-                });
-                let Some(chosen) = chosen.cloned() else {
+                // Newest published version that satisfies the requirement and,
+                // when a cutoff is set, existed then.
+                let chosen = newest_matching(
+                    &meta.versions,
+                    &meta.published,
+                    &compiled,
+                    cutoff,
+                );
+                let Some(chosen) = chosen else {
+                    if cutoff.is_some() && meta.published.is_empty() {
+                        return Err(NestConflict {
+                            failure: NestFailure::MissingDates,
+                            package: target,
+                            spec,
+                            required_by: dependent,
+                            available: meta.versions.iter().take(6).cloned().collect(),
+                        });
+                    }
                     let mut available: Vec<String> = meta.versions.iter().take(6).cloned().collect();
                     available.sort_by(|a, b| version_key(b).cmp(&version_key(a)));
                     return Err(NestConflict {
@@ -787,5 +867,67 @@ mod bounded_frontier_tests {
         )]);
         let roots = HashMap::from([("root".to_string(), "*".to_string())]);
         assert!(missing_packages_bounded(&w, &roots, 100).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod as_of_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn world() -> HashMap<String, Value> {
+        // Three releases with publish dates; the newest is 2.0.0.
+        HashMap::from([(
+            "app".to_string(),
+            json!({
+                "name": "app",
+                "versions": {
+                    "1.0.0": { "version": "1.0.0" },
+                    "1.5.0": { "version": "1.5.0" },
+                    "2.0.0": { "version": "2.0.0" }
+                },
+                "time": {
+                    "1.0.0": "2023-01-01T00:00:00.000Z",
+                    "1.5.0": "2023-06-01T00:00:00.000Z",
+                    "2.0.0": "2024-06-01T00:00:00.000Z"
+                }
+            }),
+        )])
+    }
+
+    fn roots() -> HashMap<String, String> {
+        HashMap::from([("app".to_string(), "*".to_string())])
+    }
+
+    fn ts(iso: &str) -> i64 {
+        chrono::DateTime::parse_from_rfc3339(iso).unwrap().timestamp()
+    }
+
+    #[test]
+    fn cutoff_excludes_versions_published_after_it() {
+        let w = world();
+        let r = resolve_with_cutoff(&w, &roots(), Some(ts("2023-07-01T00:00:00Z"))).unwrap();
+        assert_eq!(r.instances[0].version, "1.5.0");
+        let r = resolve_with_cutoff(&w, &roots(), Some(ts("2023-02-01T00:00:00Z"))).unwrap();
+        assert_eq!(r.instances[0].version, "1.0.0");
+        let r = resolve_with_cutoff(&w, &roots(), Some(ts("2025-01-01T00:00:00Z"))).unwrap();
+        assert_eq!(r.instances[0].version, "2.0.0");
+    }
+
+    /// The fail-safe rule: without publish dates a version cannot be proven to
+    /// have existed before the cutoff, so it is excluded — abbreviating the
+    /// decision would silently produce a tree that is not reproducible.
+    #[test]
+    fn versions_without_dates_are_excluded_under_a_cutoff() {
+        let w: HashMap<String, Value> = HashMap::from([(
+            "app".to_string(),
+            json!({ "name": "app", "versions": { "1.0.0": { "version": "1.0.0" } } }),
+        )]);
+        let err = resolve_with_cutoff(&w, &roots(), Some(0)).unwrap_err();
+        assert_eq!(err.package, "app");
+        assert_eq!(err.failure, NestFailure::MissingDates);
+        assert!(err.describe().contains("no publish dates"), "{}", err.describe());
+        // Without a cutoff the same world resolves.
+        assert!(resolve(&w, &roots()).is_ok());
     }
 }

@@ -7333,3 +7333,24 @@ Then the payload question: cold jest spends 19-54 s on 266 tarballs. I checked o
 share — concurrency is already (cpus x 4).clamp(32,128) and ureq::Agent pools
 connections. Nothing left to add. The variance is the registry's. Saying that is
 better than shipping a fake speedup.
+
+## Journal — 2026-11-07 (cont.): --as-of, two hazards closed, one gap named
+
+Implemented the *resolver* half of dated resolution: only versions published at or
+before the cutoff are eligible, a missing date excludes the version (never assumes
+it is old enough), and a package with no dates reports MissingDates.
+
+Then closed the two ways it could have gone quietly wrong: the flat expansion and
+the single-pass layout both reuse "newest satisfying" and would have turned
+--as-of into as-of-today. A dated install now routes through the history-aware
+resolver and FAILS with the reason if it cannot honour the date. Verified: exit 1,
+zero packages installed, no fallback.
+
+The gap that blocks it end to end: the packument cache stores abbreviated
+documents (0 of 39 sampled had `time`), and it is keyed by package identity rather
+than representation, so fetch_metadata_full gets the abbreviated body back. That is
+a cache-format change, named in the changelog as the next item, not something to
+fudge with a date filter that silently does nothing.
+
+Also fixed a genuinely flaky jhol-treecheck suite: two tests mutated the same env
+var and cargo runs tests in parallel. Serialised with a lock; three clean runs.

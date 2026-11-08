@@ -2372,7 +2372,20 @@ pub fn meta_has_satisfying_version(meta: &serde_json::Value, constraints: &[Stri
         .any(|v| constraints.iter().any(|c| version_satisfies(c, v)))
 }
 
-/// True if the packument contains the exact given version.
+/// Fetch the **full** packument, including the fields the abbreviated format
+/// omits: `time` (per-version publish dates) and per-version `license`.
+///
+/// The cache deliberately stores abbreviated documents — they are several times
+/// smaller and carry everything an install needs. Historical resolution
+/// (`--as-of`) and policy masks need facts that only the full document has, so
+/// those paths ask for it explicitly and pay for it only when asked.
+pub fn fetch_metadata_full(package: &str) -> Result<serde_json::Value, String> {
+    let identity = RegistryIdentity::for_package(package);
+    let bytes = fetch_packument_with_etag(package, false, &identity)?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("full packument for {package}: {e}"))
+}
+
+/// True if the packument contains the exact given version./// True if the packument contains the exact given version.
 pub fn meta_contains_version(meta: &serde_json::Value, version: &str) -> bool {
     meta.get("versions")
         .and_then(|v| v.as_object())

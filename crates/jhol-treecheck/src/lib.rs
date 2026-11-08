@@ -356,6 +356,15 @@ pub fn prune_extraneous(project_dir: &Path) -> std::io::Result<usize> {
 }
 
 #[cfg(test)]
+/// Tests that mutate process environment variables must not run concurrently:
+/// `JHOL_PRUNE_EXTRANEOUS` gates pruning, and two tests setting and clearing it in
+/// parallel made the suite flaky (each occasionally saw the other's value).
+fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
@@ -487,6 +496,7 @@ mod tests {
         pkg(d, "node_modules/evil-leftover", "6.6.6");
         assert!(!verify_tree(d).is_match());
         // Pruning is opt-in: a lockfile can be an incomplete record.
+        let _guard = env_lock();
         std::env::set_var("JHOL_PRUNE_EXTRANEOUS", "1");
         let reconciled = reconcile_tree(d);
         std::env::remove_var("JHOL_PRUNE_EXTRANEOUS");
@@ -611,6 +621,7 @@ mod completeness_tests {
             }
         );
         // Pruning is opt-in (see reconcile_tree): a lockfile can be wrong.
+        let _guard = env_lock();
         std::env::set_var("JHOL_PRUNE_EXTRANEOUS", "1");
         let reconciled = reconcile_tree(d);
         std::env::remove_var("JHOL_PRUNE_EXTRANEOUS");

@@ -2928,6 +2928,32 @@ pub fn resolve_full_tree_nested(
     // Fetch-and-retry: the nested resolver reports which package it needs, this
     // loop provides it. That is how a resolver should fail — with a request, not
     // a shrug — and it keeps the resolver independent of the transport.
+    // `--as-of`: history as a first-class input. Only versions published at or
+    // before the cutoff are eligible, which makes any past tree reproducible from
+    // the current manifest. Honouring it needs publish dates, which the cached
+    // abbreviated packuments do not carry, so this path fetches full documents —
+    // paid only when the user asks for history.
+    let as_of: Option<i64> = std::env::var("JHOL_AS_OF").ok().and_then(|raw| {
+        chrono::DateTime::parse_from_rfc3339(&raw)
+            .ok()
+            .map(|d| d.timestamp())
+            .or_else(|| {
+                chrono::NaiveDate::parse_from_str(&raw, "%Y-%m-%d")
+                    .ok()
+                    .and_then(|d| d.and_hms_opt(23, 59, 59))
+                    .map(|dt| dt.and_utc().timestamp())
+            })
+    });
+    // One fetch function for both paths, so history and today never disagree
+    // about which document they are reading.
+    let fetch_one = move |name: &str| -> Result<serde_json::Value, String> {
+        if as_of.is_some() {
+            crate::registry::fetch_metadata_full(name)
+        } else {
+            crate::registry::fetch_metadata(name)
+        }
+    };
+
     let mut provider = RegistryProvider::new();
     let mut world: HashMap<String, serde_json::Value> = HashMap::new();
 
@@ -2971,8 +2997,9 @@ pub fn resolve_full_tree_nested(
                             .iter()
                             .map(|name| {
                                 let name = name.clone();
+                                let fetch_one = fetch_one;
                                 scope.spawn(move || {
-                                    let r = crate::registry::fetch_metadata(&name).ok();
+                                    let r = fetch_one(&name).ok();
                                     (name, r)
                                 })
                             })
@@ -3011,7 +3038,7 @@ pub fn resolve_full_tree_nested(
     }
 
     let mut resolved = loop {
-        match jagr_nest::resolve(&world, &roots) {
+        match jagr_nest::resolve_with_cutoff(&world, &roots, as_of) {
             Ok(r) => break r,
             Err(e) if e.needs_fetch() => {
                 if world.contains_key(&e.package) {
@@ -3021,7 +3048,7 @@ pub fn resolve_full_tree_nested(
                         e.describe()
                     ));
                 }
-                let meta = provider.metadata(&e.package)?.clone();
+                let meta = fetch_one(&e.package)?;
                 let mut meta = meta;
                 crate::registry::prune_packument_in_place(&mut meta);
                 world.insert(e.package, meta);
