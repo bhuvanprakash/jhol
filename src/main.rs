@@ -1982,137 +1982,6 @@ exec "$(dirname "$0")/jhol-bin" "$@"
     Ok(())
 }
 
-/// Build the CLI command tree (used for completion generation).
-fn build_completions_cli() -> Command {
-    Command::new("jhol")
-        .version(env!("CARGO_PKG_VERSION"))
-        .author("Bhuvan Prakash <bhuvanstark6@gmail.com>")
-        .about("Fast, offline-friendly package manager — cache first, Bun/npm backend")
-        .subcommand(Command::new("install").about("Install packages"))
-        .subcommand(Command::new("ci").about("Clean, deterministic install"))
-        .subcommand(Command::new("add").about("Add packages to dependencies"))
-        .subcommand(Command::new("remove").about("Remove packages"))
-        .subcommand(Command::new("uninstall").about("Remove a package"))
-        .subcommand(Command::new("update").about("Update packages"))
-        .subcommand(Command::new("doctor").about("Check and fix outdated dependencies"))
-        .subcommand(Command::new("audit").about("Check for known vulnerabilities"))
-        .subcommand(Command::new("run").about("Run a script from package.json or a JS/TS file"))
-        .subcommand(Command::new("eval").about("Evaluate JavaScript/TypeScript code inline"))
-        .subcommand(Command::new("exec").about("Run a binary from node_modules/.bin"))
-        .subcommand(Command::new("build").about("Bundle JS/TS/CSS for browser, Node.js, or Jhol"))
-        .subcommand(
-            Command::new("fmt")
-                .about("Format files in place (native Rust; JS/TS/JSON; Prettier-compatible)"),
-        )
-        .subcommand(Command::new("why").about("Explain why a package is installed"))
-        .subcommand(Command::new("outdated").about("Show outdated dependencies"))
-        .subcommand(Command::new("init").about("Initialize a new package.json"))
-        .subcommand(Command::new("link").about("Link a local package directory"))
-        .subcommand(Command::new("unlink").about("Remove a linked package"))
-        .subcommand(
-            Command::new("approve-scripts")
-                .about("Grant content-addressed consent for a package's install scripts")
-                .arg(
-                    Arg::new("packages")
-                        .num_args(0..)
-                        .value_name("PACKAGE")
-                        .help("Package names; omit with --all for every package with scripts"),
-                )
-                .arg(
-                    Arg::new("all")
-                        .long("all")
-                        .num_args(0)
-                        .help("Approve every package that currently ships install scripts"),
-                ),
-        )
-        .subcommand(
-            Command::new("revoke-scripts")
-                .about("Revoke script consent for packages")
-                .arg(
-                    Arg::new("packages")
-                        .num_args(1..)
-                        .required(true)
-                        .value_name("PACKAGE")
-                        .help("Package names to revoke (as name or name@version)"),
-                ),
-        )
-        .subcommand(Command::new("prefetch").about("Download lockfile dependencies into cache"))
-        .subcommand(Command::new("cache").about("Manage local package cache"))
-        .subcommand(Command::new("import-lock").about("Import/convert lockfile formats"))
-        .subcommand(Command::new("sbom").about("Generate Software Bill of Materials"))
-        .subcommand(Command::new("jagr").about("Run the JAGR three-layer resolver analysis"))
-        .subcommand(Command::new("audit-jagr").about("Save / load / diff JAGR analysis reports"))
-        .subcommand(
-            Command::new("jagr-impact").about("Simulate upgrading a package and report impact"),
-        )
-        .subcommand(Command::new("cdn").about("Print esm.sh URL for a package"))
-        .subcommand(
-            Command::new("plan")
-                .about("Read-only project plan (polyglot adapters; no side effects)"),
-        )
-        .subcommand(Command::new("diff").about("Compare two execution receipts (JSON)"))
-        .subcommand(
-            Command::new("sync")
-                .about("Write jhol.project.lock; --apply runs approved native ecosystem adapters")
-                .arg(Arg::new("apply").long("apply").action(ArgAction::SetTrue))
-                .arg(Arg::new("path").long("path"))
-                .arg(Arg::new("json").long("json").action(ArgAction::SetTrue))
-                .arg(
-                    Arg::new("offline")
-                        .long("offline")
-                        .action(ArgAction::SetTrue),
-                )
-                .arg(
-                    Arg::new("allow-build-scripts")
-                        .long("allow-build-scripts")
-                        .action(ArgAction::SetTrue),
-                ),
-        )
-        .subcommand(Command::new("snapshot").about("Create/list/show project snapshots"))
-        .subcommand(Command::new("restore").about("Restore from snapshot (--plan or --apply)"))
-        .subcommand(
-            Command::new("db").about("Migration plan on disk + optional DATABASE_URL TCP probe"),
-        )
-        .subcommand(
-            Command::new("ai").about("Pin, verify, and prepare revision-pinned model files"),
-        )
-        .subcommand(Command::new("dev").about("Service boot order; optional --probe / --spawn"))
-        .subcommand(Command::new("gui").about("Open the jhol Terminal GUI"))
-        .subcommand(
-            Command::new("daemon")
-                .about("Run persistent install daemon")
-                .arg(Arg::new("serve").long("serve").action(ArgAction::SetTrue))
-                .arg(Arg::new("stop").long("stop").action(ArgAction::SetTrue)),
-        )
-        .subcommand(Command::new("global-install").about("Install jhol binary to PATH"))
-        .subcommand(
-            Command::new("mcp")
-                .about("Run Model Context Protocol (MCP) server for AI coding agents"),
-        )
-        .subcommand(
-            Command::new("merge-lock").about(
-                "Resolve 3-way Git merge conflicts in package-lock.json using JAGR-Infinite",
-            ),
-        )
-        .subcommand(
-            Command::new("bisect-deps")
-                .about("Automated dependency bisection to isolate breaking package upgrades"),
-        )
-        .subcommand(
-            Command::new("git-hook")
-                .about("Manage Git hooks for automatic sub-8ms dependency synchronization"),
-        )
-        .subcommand(
-            Command::new("completions")
-                .about("Generate shell completion scripts")
-                .arg(
-                    Arg::new("shell")
-                        .required(true)
-                        .value_parser(["bash", "zsh", "fish", "powershell", "elvish"])
-                        .help("Shell to generate completions for"),
-                ),
-        )
-}
 
 /// A complete, valid `jhol.toml` for `jhol dev` (schema 1).
 const DEV_CONFIG_EXAMPLE: &str = r#"schema = 1
@@ -2503,1584 +2372,7 @@ fn run() -> Result<(), String> {
             .unwrap_or_default()
     }
 
-    let backend_arg = Arg::new("backend")
-        .long("backend")
-        .value_parser(["bun", "npm"])
-        .help("Package manager backend (default: bun if available, else npm)");
-
-    let matches = Command::new("jhol")
-        .version(env!("CARGO_PKG_VERSION"))
-        .author("Bhuvan Prakash <bhuvanstark6@gmail.com>")
-        .about("Fast, offline-friendly package manager — cache first, Bun/npm backend")
-        .after_help(
-            "Examples:\n  jhol install lodash\n  jhol install react react-dom\n  jhol install\n  jhol doctor --fix\n  jhol cache list",
-        )
-        .subcommand(
-            Command::new("install")
-                .about("Install packages (from args or package.json)")
-                .arg(
-                    Arg::new("package")
-                        .required(false)
-                        .num_args(0..)
-                        .help("Package(s) to install; omit to install from package.json"),
-                )
-                .arg(
-                    Arg::new("save")
-                        .long("save")
-                        .action(ArgAction::SetTrue)
-                        .help("Save installed packages to dependencies (default when packages specified)"),
-                )
-                .arg(
-                    Arg::new("no-save")
-                        .long("no-save")
-                        .action(ArgAction::SetTrue)
-                        .help("Do not save installed packages to package.json"),
-                )
-                .arg(
-                    Arg::new("save-dev")
-                        .short('D')
-                        .long("save-dev")
-                        .action(ArgAction::SetTrue)
-                        .help("Save added packages to devDependencies"),
-                )
-                .arg(
-                    Arg::new("save-peer")
-                        .long("save-peer")
-                        .action(ArgAction::SetTrue)
-                        .help("Save added packages to peerDependencies"),
-                )
-                .arg(
-                    Arg::new("save-optional")
-                        .short('O')
-                        .long("save-optional")
-                        .action(ArgAction::SetTrue)
-                        .help("Save added packages to optionalDependencies"),
-                )
-                .arg(
-                    Arg::new("save-exact")
-                        .short('E')
-                        .long("save-exact")
-                        .action(ArgAction::SetTrue)
-                        .help("Save the exact installed version instead of a range"),
-                )
-                .arg(
-                    Arg::new("no-cache")
-                        .long("no-cache")
-                        .action(ArgAction::SetTrue)
-                        .help("Ignore cache and fetch from registry"),
-                )
-                .arg(
-                    Arg::new("quiet")
-                        .short('q')
-                        .long("quiet")
-                        .action(ArgAction::SetTrue)
-                        .help("Minimal output; show spinner when busy"),
-                )
-                .arg(backend_arg.clone())
-                .arg(
-                    Arg::new("lockfile-only")
-                        .long("lockfile-only")
-                        .action(ArgAction::SetTrue)
-                        .help("Only update lockfile, do not install to node_modules"),
-                )
-                .arg(
-                    Arg::new("offline")
-                        .long("offline")
-                        .action(ArgAction::SetTrue)
-                        .help("Only use cache; fail if any package is missing (or set JHOL_OFFLINE=1)"),
-                )
-                .arg(
-                    Arg::new("frozen")
-                        .long("frozen-lockfile")
-                        .visible_alias("frozen")
-                        .action(ArgAction::SetTrue)
-                        .help("Require lockfile and fail if out of sync with package.json"),
-                )
-                .arg(
-                    Arg::new("all-workspaces")
-                        .long("all-workspaces")
-                        .action(ArgAction::SetTrue)
-                        .help("Run in all workspace packages (from package.json workspaces)"),
-                )
-                .arg(
-                    Arg::new("filter")
-                        .long("filter")
-                        .short('F')
-                        .value_name("PATTERN")
-                        .action(ArgAction::Append)
-                        .help("Restrict a workspace run to packages matching NAME or @scope/* (repeatable)"),
-                )
-                .arg(
-                    Arg::new("json")
-                        .long("json")
-                        .action(ArgAction::SetTrue)
-                        .help("Output machine-readable JSON result"),
-                )
-                .arg(
-                    Arg::new("native-only")
-                        .long("native-only")
-                        .action(ArgAction::SetTrue)
-                        .help("Never use Bun/npm; fail if native install fails (default)"),
-                )
-                .arg(
-                    Arg::new("omit")
-                        .long("omit")
-                        .value_name("CLASS[,...]")
-                        .help("Leave out dependency classes: dev, optional, peer"),
-                )
-                .arg(
-                    Arg::new("prod")
-                        .long("prod")
-                        .alias("production")
-                        .action(ArgAction::SetTrue)
-                        .help("Shorthand for --omit=dev (runtime dependencies only)"),
-                )
-                .arg(
-                    Arg::new("include-dev")
-                        .long("include-dev")
-                        .action(ArgAction::SetTrue)
-                        .help("Install devDependencies even when NODE_ENV=production"),
-                )
-                .arg(
-                    Arg::new("engine-strict")
-                        .long("engine-strict")
-                        .action(ArgAction::SetTrue)
-                        .help("Fail when a package's engines.node excludes this runtime"),
-                )
-                .arg(
-                    Arg::new("as-of")
-                        .long("as-of")
-                        .value_name("DATE")
-                        .help("Resolve as of a date (YYYY-MM-DD or RFC3339): only versions published by then are eligible"),
-                )
-                .arg(
-                    Arg::new("allow-license")
-                        .long("allow-license")
-                        .value_name("LIST")
-                        .help("Only resolve versions under these licenses (comma separated, e.g. MIT,Apache-2.0)"),
-                )
-                .arg(
-                    Arg::new("license-allow-unknown")
-                        .long("license-allow-unknown")
-                        .action(ArgAction::SetTrue)
-                        .help("With --allow-license, also allow versions that declare no license"),
-                )
-                .arg(
-                    Arg::new("global")
-                        .short('g')
-                        .long("global")
-                        .action(ArgAction::SetTrue)
-                        .help("Install machine-wide into the jhol global prefix, shimming bin entries"),
-                )
-                .arg(
-                    Arg::new("fallback-backend")
-                        .long("fallback-backend")
-                        .action(ArgAction::SetTrue)
-                        .help("On failure, fall back to Bun/npm for install"),
-                )
-                .arg(
-                    Arg::new("no-scripts")
-                        .long("no-scripts")
-                        .action(ArgAction::SetTrue)
-                        .help("Do not run lifecycle scripts in fallback backend installs (default true)"),
-                )
-                .arg(
-                    Arg::new("scripts")
-                        .long("scripts")
-                        .action(ArgAction::SetTrue)
-                        .help("Allow lifecycle scripts in fallback backend installs"),
-                )
-                .arg(
-                    // Documented (AGENTS.md) and supported by the core
-                    // (`InstallOptions.script_allowlist`, `JHOL_SCRIPT_ALLOWLIST`),
-                    // but there was no CLI flag — so a user had no way to opt a
-                    // specific package into lifecycle scripts for one install, only
-                    // the env var or `.jholrc`. Scripts stay off by default; this is
-                    // the per-invocation escape hatch.
-                    Arg::new("script-allowlist")
-                        .long("script-allowlist")
-                        .value_name("PKG[,PKG...]")
-                        .action(ArgAction::Append)
-                        .help("Run lifecycle scripts for these packages (comma-separated; repeatable). Scripts stay opt-in."),
-                )
-                .arg(
-                    Arg::new("resolver")
-                        .long("resolver")
-                        .value_parser(["pubgrub-v2", "pubgrub", "jagr", "jagr3", "jagr-infinite", "legacy"])
-                        .help("Resolver name, kept as a compatibility alias: every value routes to JAGR-Infinite, the only primary resolver (a non-default value logs a note). If JAGR-Infinite fails, a PubGrub-named rescue runs only for manifests with <=25 direct dependencies"),
-                )
-                .arg(
-                    Arg::new("strict-peer-deps")
-                        .long("strict-peer-deps")
-                        .action(ArgAction::SetTrue)
-                        .help("Fail install when root peer dependency constraints conflict"),
-                )
-                .arg(
-                    Arg::new("daemon")
-                        .long("daemon")
-                        .action(ArgAction::SetTrue)
-                        .help("Send install request to running jhol daemon (Unix)"),
-                )
-                .arg(
-                    Arg::new("fetch-timeout")
-                        .long("fetch-timeout")
-                        .value_parser(clap::value_parser!(u64))
-                        .help("Timeout in seconds for individual package fetch operations"),
-                )
-                .arg(
-                    Arg::new("resolve-timeout")
-                        .long("resolve-timeout")
-                        .value_parser(clap::value_parser!(u64))
-                        .help("Timeout in seconds for dependency resolution"),
-                )
-                .arg(
-                    Arg::new("install-timeout")
-                        .long("install-timeout")
-                        .value_parser(clap::value_parser!(u64))
-                        .help("Timeout in seconds for the entire install operation"),
-                )
-                .arg(
-                    Arg::new("prefer")
-                        .long("prefer")
-                        .value_parser(["minimal", "optimize", "latest"])
-                        .help("Prefer minimal versions (minimal), optimal deduplication (optimize), or latest (default)"),
-                ),
-        )
-        .subcommand(
-            Command::new("ci")
-                .about("Clean, deterministic install (npm ci-style): requires lockfile")
-                .arg(
-                    Arg::new("offline")
-                        .long("offline")
-                        .action(ArgAction::SetTrue)
-                        .help("Only use cache; fail if any package is missing"),
-                )
-                .arg(
-                    Arg::new("all-workspaces")
-                        .long("all-workspaces")
-                        .action(ArgAction::SetTrue)
-                        .help("Run in all workspace packages"),
-                )
-                .arg(
-                    Arg::new("filter")
-                        .long("filter")
-                        .short('F')
-                        .value_name("PATTERN")
-                        .action(ArgAction::Append)
-                        .help("Restrict a workspace run to packages matching NAME or @scope/* (repeatable)"),
-                )
-                .arg(
-                    Arg::new("json")
-                        .long("json")
-                        .action(ArgAction::SetTrue)
-                        .help("Output machine-readable JSON result"),
-                )
-                .arg(
-                    Arg::new("jagr-check")
-                        .long("jagr-check")
-                        .action(ArgAction::SetTrue)
-                        .help("After ci succeeds, run JAGR three-layer analysis on the manifest to confirm satisfiability"),
-                )
-                .arg(backend_arg.clone())
-                .arg(
-                    Arg::new("scripts")
-                        .long("scripts")
-                        .action(ArgAction::SetTrue)
-                        .help("Run lifecycle scripts for allowlisted packages (off by default)"),
-                )
-                .arg(
-                    Arg::new("no-scripts")
-                        .long("no-scripts")
-                        .action(ArgAction::SetTrue)
-                        .help("Never run lifecycle scripts (the default)"),
-                )
-                .arg(
-                    Arg::new("script-allowlist")
-                        .long("script-allowlist")
-                        .value_name("PKG[,PKG...]")
-                        .action(ArgAction::Append)
-                        .help("Allow lifecycle scripts for these packages (repeatable, comma-separated)"),
-                )
-                .arg(
-                    Arg::new("strict-peer-deps")
-                        .long("strict-peer-deps")
-                        .action(ArgAction::SetTrue)
-                        .help("Fail on a peer-dependency conflict instead of warning"),
-                ),
-        )
-        .subcommand(
-            Command::new("doctor")
-                .about("Check and fix outdated dependencies")
-                .arg(
-                    Arg::new("fix")
-                        .long("fix")
-                        .action(ArgAction::SetTrue)
-                        .help("Update outdated packages"),
-                )
-                .arg(
-                    Arg::new("explain")
-                        .long("explain")
-                        .action(ArgAction::SetTrue)
-                        .help("Explain lockfile/health/fallback diagnostics for this project"),
-                )
-                .arg(
-                    Arg::new("jagr")
-                        .long("jagr")
-                        .action(ArgAction::SetTrue)
-                        .help("Run JAGR three-layer resolver health check on this project"),
-                )
-                .arg(
-                    Arg::new("quiet")
-                        .short('q')
-                        .long("quiet")
-                        .action(ArgAction::SetTrue)
-                        .help("Minimal output"),
-                )
-                .arg(backend_arg.clone())
-                .arg(
-                    Arg::new("all-workspaces")
-                        .long("all-workspaces")
-                        .action(ArgAction::SetTrue)
-                        .help("Run in all workspace packages"),
-                )
-                .arg(
-                    Arg::new("json")
-                        .long("json")
-                        .action(ArgAction::SetTrue)
-                        .help("Output machine-readable JSON"),
-                ),
-        )
-        .subcommand(
-            Command::new("import-lock")
-                .about("Import/convert lockfile formats (bun.lock, yarn.lock, pnpm-lock.yaml -> package-lock.json)")
-                .arg(
-                    Arg::new("from")
-                        .long("from")
-                        .value_parser(["auto", "bun", "npm", "yarn", "pnpm"])
-                        .default_value("auto")
-                        .help("Source lockfile format (auto, bun, npm, yarn, pnpm)"),
-                ),
-        )
-        .subcommand(
-            Command::new("global-install")
-                .about("Install jhol binary to PATH (e.g. /usr/local/bin)"),
-        )
-        .subcommand(
-            Command::new("daemon")
-                .about("Run persistent install daemon (Unix)")
-                .arg(
-                    Arg::new("serve")
-                        .long("serve")
-                        .action(ArgAction::SetTrue)
-                        .help("Run daemon server loop"),
-                )
-                .arg(
-                    Arg::new("stop")
-                        .long("stop")
-                        .action(ArgAction::SetTrue)
-                        .help("Stop the daemon after accepted requests finish"),
-                ),
-        )
-        .subcommand(
-            Command::new("cache")
-                .about("Manage local package cache")
-                .subcommand(Command::new("list").about("List cached packages"))
-                .subcommand(Command::new("size").about("Show cache size and tarball count"))
-                .subcommand(
-                    Command::new("prune")
-                        .about("Remove unreferenced tarballs; optionally keep only N most recent")
-                        .arg(
-                            Arg::new("keep")
-                                .long("keep")
-                                .value_parser(clap::value_parser!(usize))
-                                .help("Keep only N most recently used tarballs"),
-                        ),
-                )
-                .subcommand(
-                    Command::new("gc")
-                        .about("Sweep store tarballs not referenced by any given lockfile")
-                        .arg(
-                            Arg::new("from")
-                                .long("from")
-                                .num_args(1..)
-                                .value_name("LOCKFILE")
-                                .help("Lockfiles that mark reachability (default: ./package-lock.json)"),
-                        )
-                        .arg(
-                            Arg::new("dry-run")
-                                .long("dry-run")
-                                .num_args(0)
-                                .help("Report what would be freed without deleting"),
-                        ),
-                )
-                .subcommand(
-                    Command::new("export")
-                        .about("Export project deps from cache to directory (for offline)")
-                        .arg(Arg::new("dir").required(true).help("Output directory")),
-                )
-                .subcommand(
-                    Command::new("import")
-                        .about("Import tarballs from directory into cache")
-                        .arg(Arg::new("dir").required(true).help("Directory from jhol cache export")),
-                )
-                .subcommand(Command::new("clean").about("Remove all cached tarballs"))
-                .subcommand(
-                    Command::new("telemetry").about("Show native fallback telemetry summary"),
-                )
-                .subcommand(
-                    Command::new("key")
-                        .about("Print lockfile hash for CI cache key (same lockfile => same key)"),
-                )
-                .subcommand(
-                    Command::new("mirror")
-                        .about("Show JMR resolution mirror stats (entries, coverage, hits)")
-                        .subcommand(Command::new("stats").about("Show mirror statistics"))
-                        .subcommand(Command::new("prune").about("Remove expired entries from mirror"))
-                        .subcommand(Command::new("clear").about("Clear all mirror entries"))
-                        .subcommand(Command::new("lookup")
-                            .about("Look up a package in the mirror")
-                            .arg(Arg::new("package").required(true).help("Package name to look up (@scope/pkg@^range)"))
-                        ),
-                ),
-        )
-        .subcommand(
-            Command::new("audit")
-                .about("Check for known vulnerabilities")
-                .arg(
-                    Arg::new("fix")
-                        .long("fix")
-                        .action(ArgAction::SetTrue)
-                        .help("Apply fixes where possible"),
-                )
-                .arg(
-                    Arg::new("quiet")
-                        .short('q')
-                        .long("quiet")
-                        .action(ArgAction::SetTrue)
-                        .help("Minimal output"),
-                )
-                .arg(backend_arg.clone())
-                .arg(
-                    Arg::new("all-workspaces")
-                        .long("all-workspaces")
-                        .action(ArgAction::SetTrue)
-                        .help("Run in all workspace packages"),
-                )
-                .arg(
-                    Arg::new("json")
-                        .long("json")
-                        .action(ArgAction::SetTrue)
-                        .help("Output raw audit JSON"),
-                )
-                .arg(
-                    Arg::new("gate")
-                        .long("gate")
-                        .action(ArgAction::SetTrue)
-                        .help("Fail with non-zero exit if vulnerabilities are found (CI gate)"),
-                ),
-        )
-        .subcommand(
-            Command::new("prefetch")
-                .about("Download lockfile dependencies into cache (no node_modules). Use before install --offline.")
-                .arg(
-                    Arg::new("quiet")
-                        .short('q')
-                        .long("quiet")
-                        .action(ArgAction::SetTrue)
-                        .help("Minimal output"),
-                ),
-        )
-        .subcommand(
-            Command::new("run")
-                .about("Run a script from package.json or a JS/TS file with Jhol runtime")
-                .arg(
-                    Arg::new("script")
-                        .required(true)
-                        .help("Script name from package.json, or JS/TS file path"),
-                )
-                .arg(
-                    Arg::new("file")
-                        .long("file")
-                        .short('f')
-                        .action(ArgAction::SetTrue)
-                        .help("Treat argument as a JS/TS file path (run with Jhol runtime)"),
-                )
-                .arg(
-                    Arg::new("watch")
-                        .long("watch")
-                        .short('w')
-                        .action(ArgAction::SetTrue)
-                        .help("Watch mode: restart on file changes"),
-                )
-                .arg(
-                    Arg::new("engine")
-                        .long("engine")
-                        .default_value("auto")
-                        .value_parser(["auto", "quickjs", "js-engine"])
-                        .help("Select script engine"),
-                )
-                .arg(
-                    Arg::new("all-workspaces")
-                        .long("all-workspaces")
-                        .action(ArgAction::SetTrue)
-                        .help("Run in all workspace packages"),
-                ),
-        )
-        .subcommand(
-            Command::new("eval")
-                .about("Evaluate JavaScript/TypeScript code inline")
-                .arg(
-                    Arg::new("code")
-                        .required(true)
-                        .help("JavaScript/TypeScript code to evaluate"),
-                )
-                .arg(
-                    Arg::new("type")
-                        .long("type")
-                        .value_parser(["js", "ts", "jsx", "tsx"])
-                        .default_value("js")
-                        .help("File type for inline evaluation"),
-                )
-                .arg(
-                    Arg::new("print")
-                        .long("print")
-                        .short('p')
-                        .action(ArgAction::SetTrue)
-                        .help("Print the value of the final expression (like node -p)"),
-                ),
-        )
-        .subcommand(
-            Command::new("build")
-                .about("Bundle JavaScript/TypeScript/CSS for browser, Node.js, or Jhol")
-                .arg(
-                    Arg::new("entry")
-                        .required(true)
-                        .num_args(1..)
-                        .help("Entry file(s) to bundle"),
-                )
-                .arg(
-                    Arg::new("outdir")
-                        .long("outdir")
-                        .short('o')
-                        .default_value("dist")
-                        .help("Output directory"),
-                )
-                .arg(
-                    Arg::new("format")
-                        .long("format")
-                        .value_parser(["esm", "cjs", "iife"])
-                        .default_value("esm")
-                        .help("Output format"),
-                )
-                .arg(
-                    Arg::new("target")
-                        .long("target")
-                        .value_parser(["browser", "node", "jhol"])
-                        .default_value("browser")
-                        .help("Target platform"),
-                )
-                .arg(
-                    Arg::new("minify")
-                        .long("minify")
-                        .short('m')
-                        .action(ArgAction::SetTrue)
-                        .help("Minify output"),
-                )
-                .arg(
-                    Arg::new("watch")
-                        .long("watch")
-                        .short('w')
-                        .action(ArgAction::SetTrue)
-                        .help("Watch mode: rebuild on file changes"),
-                )
-                .arg(
-                    Arg::new("sourcemap")
-                        .long("sourcemap")
-                        .value_parser(["none", "inline", "external", "both"])
-                        .default_value("none")
-                        .help("Source map generation"),
-                )
-                .arg(
-                    Arg::new("external")
-                        .long("external")
-                        .num_args(0..)
-                        .help("Modules to mark as external"),
-                )
-                .arg(
-                    Arg::new("tree-shake")
-                        .long("tree-shake")
-                        .action(ArgAction::SetTrue)
-                        .help("Enable tree shaking"),
-                )
-                .arg(
-                    Arg::new("code-splitting")
-                        .long("code-splitting")
-                        .action(ArgAction::SetTrue)
-                        .help("Enable code splitting"),
-                ),
-        )
-        .subcommand(
-            Command::new("fmt")
-                .about("Format files in place (native Rust, cache-first; JS/TS/JSON/CSS + rustfmt/gofmt/ruff)")
-                .arg(Arg::new("path").num_args(0..).help("Files or directories to format"))
-                .arg(Arg::new("check").long("check").action(ArgAction::SetTrue).help("Check, write nothing (exit 1 if changes needed)"))
-                .arg(Arg::new("list-different").long("list-different").action(ArgAction::SetTrue).help("Like --check, print only file names"))
-                .arg(Arg::new("stdin-filepath").long("stdin-filepath").help("Format stdin as this file path and print"))
-                .arg(Arg::new("init").long("init").action(ArgAction::SetTrue).help("Write .prettierrc.json defaults"))
-                .arg(Arg::new("no-cache").long("no-cache").action(ArgAction::SetTrue).help("Bypass the format cache"))
-                .arg(Arg::new("print-width").long("print-width").help("Wrap width (default 80)"))
-                .arg(Arg::new("tab-width").long("tab-width").help("Spaces per indent level (default 2)"))
-                .arg(Arg::new("use-tabs").long("use-tabs").action(ArgAction::SetTrue).help("Indent with tabs"))
-                .arg(Arg::new("no-semi").long("no-semi").action(ArgAction::SetTrue).help("Omit semicolons where possible"))
-                .arg(Arg::new("single-quote").long("single-quote").action(ArgAction::SetTrue).help("Use single quotes"))
-                .arg(Arg::new("trailing-comma").long("trailing-comma").value_parser(["all", "es5", "none"]).help("Trailing commas (default all)"))
-        )
-        .subcommand(
-            Command::new("exec")
-                .visible_alias("x")
-                .about("Run a binary from node_modules/.bin (no npx)")
-                .arg(
-                    Arg::new("binary")
-                        .required(true)
-                        .help("Binary name (e.g. eslint, tsc)"),
-                )
-                .arg(
-                    Arg::new("args")
-                        .num_args(0..)
-                        // Everything after the binary name belongs to that binary:
-                        // without these, jhol parsed the flags itself and
-                        // `jhol exec tsc --version` failed with "unexpected argument".
-                        .allow_hyphen_values(true)
-                        .trailing_var_arg(true)
-                        .help("Arguments to pass to the binary (flags included)"),
-                ),
-        )
-        .subcommand(
-            Command::new("cdn")
-                .about("Print esm.sh URL for a package (optional: fetch to file)")
-                .arg(
-                    Arg::new("package")
-                        .required(true)
-                        .help("Package spec (e.g. lodash@4 or lodash)"),
-                )
-                .arg(
-                    Arg::new("output")
-                        .short('o')
-                        .long("output")
-                        .help("Fetch ESM bundle to this file"),
-                ),
-        )
-        .subcommand(
-            Command::new("plan")
-                .about("Inspect manifests and print a read-only environment/task plan (no installs)")
-                .arg(
-                    Arg::new("json")
-                        .long("json")
-                        .action(ArgAction::SetTrue)
-                        .help("Machine-readable JSON output"),
-                )
-                .arg(
-                    Arg::new("path")
-                        .long("path")
-                        .help("Project root (default: current directory)"),
-                ),
-        )
-        .subcommand(
-            Command::new("diff")
-                .about("Compare project state with a snapshot (default: latest), or two receipt JSON files")
-                .arg(
-                    Arg::new("before")
-                        .required(false)
-                        .help("Snapshot id, or an earlier receipt JSON path"),
-                )
-                .arg(
-                    Arg::new("after")
-                        .required(false)
-                        .help("Later receipt JSON path (two-receipt mode)"),
-                )
-                .arg(
-                    Arg::new("path")
-                        .long("path")
-                        .help("Project root (default: current directory)"),
-                )
-                .arg(
-                    Arg::new("exit-code")
-                        .long("exit-code")
-                        .action(ArgAction::SetTrue)
-                        .help("Exit 1 when `jhol sync --apply` is needed (for CI)"),
-                )
-                .arg(
-                    Arg::new("json")
-                        .long("json")
-                        .action(ArgAction::SetTrue)
-                        .help("Emit DiffReport JSON"),
-                ),
-        )
-        .subcommand(
-            Command::new("sync")
-                .about("Record native lock digests; optionally apply native ecosystem adapters")
-                .arg(
-                    Arg::new("path")
-                        .long("path")
-                        .help("Project root (default: current directory)"),
-                )
-                .arg(
-                    Arg::new("apply")
-                        .long("apply")
-                        .action(ArgAction::SetTrue)
-                        .help("Also run jhol install when package.json present (needs LocalPackageInstall)"),
-                )
-                .arg(
-                    Arg::new("json")
-                        .long("json")
-                        .action(ArgAction::SetTrue)
-                        .help("Machine-readable JSON"),
-                )
-                .arg(
-                    Arg::new("offline")
-                        .long("offline")
-                        .action(ArgAction::SetTrue)
-                        .help("Forbid network fetches in every adapter"),
-                )
-                .arg(
-                    Arg::new("allow-build-scripts")
-                        .long("allow-build-scripts")
-                        .action(ArgAction::SetTrue)
-                        .help("Approve build backends, Cargo build scripts, and procedural macros"),
-                ),
-        )
-        .subcommand(
-            Command::new("snapshot")
-                .about("Create, list, or show portable project snapshots")
-                .arg(
-                    Arg::new("action")
-                        .required(true)
-                        .value_parser(["create", "list", "show"])
-                        .help("create | list | show"),
-                )
-                .arg(Arg::new("id").help("Snapshot id (for show)"))
-                .arg(
-                    Arg::new("path")
-                        .long("path")
-                        .help("Project root (default: current directory)"),
-                )
-                .arg(
-                    Arg::new("json")
-                        .long("json")
-                        .action(ArgAction::SetTrue)
-                        .help("JSON output"),
-                ),
-        )
-        .subcommand(
-            Command::new("restore")
-                .about("Restore jhol.project.lock from a snapshot (never auto-restores DBs)")
-                .arg(Arg::new("id").required(true).help("Snapshot id"))
-                .arg(
-                    Arg::new("plan")
-                        .long("plan")
-                        .action(ArgAction::SetTrue)
-                        .help("Show restore plan only"),
-                )
-                .arg(
-                    Arg::new("apply")
-                        .long("apply")
-                        .action(ArgAction::SetTrue)
-                        .help("Write jhol.project.lock from snapshot"),
-                )
-                .arg(
-                    Arg::new("path")
-                        .long("path")
-                        .help("Project root (default: current directory)"),
-                )
-                .arg(
-                    Arg::new("json")
-                        .long("json")
-                        .action(ArgAction::SetTrue)
-                        .help("JSON output"),
-                )
-                .arg(
-                    Arg::new("databases")
-                        .long("databases")
-                        .action(ArgAction::SetTrue)
-                        .help("Request DB restore (always refused — fail closed)"),
-                ),
-        )
-        .subcommand(
-            Command::new("db")
-                .about("Migration plan on disk + optional DATABASE_URL TCP probe")
-                .subcommand(
-                    Command::new("plan")
-                        .about("Hash migrations/*.sql on disk (no live DB)")
-                        .arg(
-                            Arg::new("migrations")
-                                .long("migrations")
-                                .default_value("migrations")
-                                .help("Migrations directory relative to project"),
-                        )
-                        .arg(
-                            Arg::new("path")
-                                .long("path")
-                                .help("Project root"),
-                        )
-                        .arg(
-                            Arg::new("json")
-                                .long("json")
-                                .action(ArgAction::SetTrue),
-                        ),
-                )
-                .subcommand(
-                    Command::new("probe")
-                        .about("Optional TCP probe of DATABASE_URL (no SQL, no migrate)")
-                        .arg(
-                            Arg::new("timeout-ms")
-                                .long("timeout-ms")
-                                .default_value("500")
-                                .help("Connect timeout in milliseconds"),
-                        )
-                        .arg(
-                            Arg::new("json")
-                                .long("json")
-                                .action(ArgAction::SetTrue),
-                        ),
-                ),
-        )
-        .subcommand(
-            Command::new("dev")
-                .about("Plan declared services; optional --probe / --spawn")
-                .arg(
-                    Arg::new("path")
-                        .long("path")
-                        .help("Project root"),
-                )
-                .arg(
-                    Arg::new("json")
-                        .long("json")
-                        .action(ArgAction::SetTrue),
-                )
-                .arg(
-                    Arg::new("probe")
-                        .long("probe")
-                        .action(ArgAction::SetTrue)
-                        .help("TCP-probe ready_tcp endpoints (still does not spawn processes)"),
-                )
-                .arg(
-                    Arg::new("spawn")
-                        .long("spawn")
-                        .action(ArgAction::SetTrue)
-                        .help("Spawn services declared in jhol.toml, then hold and clean up"),
-                )
-                .arg(
-                    Arg::new("hold-secs")
-                        .long("hold-secs")
-                        .default_value("1")
-                        .help("Seconds to hold spawned services before cleanup"),
-                ),
-        )
-        .subcommand(
-            Command::new("ai")
-                .about("Pin, verify, prepare, and run small model artifacts")
-                .subcommand(
-                    Command::new("pin")
-                        .about("Hash local files into a revision-pinned model manifest")
-                        .arg(Arg::new("name").long("name").required(true))
-                        .arg(Arg::new("source").long("source").required(true))
-                        .arg(Arg::new("revision").long("revision").required(true))
-                        .arg(
-                            Arg::new("file")
-                                .long("file")
-                                .required(true)
-                                .action(ArgAction::Append),
-                        )
-                        .arg(
-                            Arg::new("manifest")
-                                .long("manifest")
-                                .default_value("models/demo.jhol-model.json"),
-                        )
-                        .arg(Arg::new("path").long("path").help("Project root"))
-                        .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
-                )
-                .subcommand(
-                    Command::new("pin-remote")
-                        .about("Record trusted SHA-256 and size pins before any download")
-                        .arg(Arg::new("name").long("name").required(true))
-                        .arg(Arg::new("source").long("source").required(true))
-                        .arg(Arg::new("revision").long("revision").required(true))
-                        .arg(
-                            Arg::new("file")
-                                .long("file")
-                                .required(true)
-                                .action(ArgAction::Append),
-                        )
-                        .arg(
-                            Arg::new("digest")
-                                .long("digest")
-                                .required(true)
-                                .action(ArgAction::Append),
-                        )
-                        .arg(
-                            Arg::new("size-bytes")
-                                .long("size-bytes")
-                                .required(true)
-                                .action(ArgAction::Append),
-                        )
-                        .arg(
-                            Arg::new("manifest")
-                                .long("manifest")
-                                .default_value("models/demo.jhol-model.json"),
-                        )
-                        .arg(Arg::new("path").long("path").help("Project root"))
-                        .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
-                )
-                .subcommand(
-                    Command::new("verify")
-                        .about("Fail closed if pinned files do not match digests")
-                        .arg(
-                            Arg::new("manifest")
-                                .long("manifest")
-                                .default_value("models/demo.jhol-model.json"),
-                        )
-                        .arg(Arg::new("path").long("path").help("Project root"))
-                        .arg(
-                            Arg::new("json")
-                                .long("json")
-                                .action(ArgAction::SetTrue),
-                        ),
-                )
-                .subcommand(
-                    Command::new("prepare")
-                        .about("Verify cached files or fetch explicitly approved missing files")
-                        .arg(
-                            Arg::new("manifest")
-                                .long("manifest")
-                                .default_value("models/demo.jhol-model.json"),
-                        )
-                        .arg(Arg::new("path").long("path").help("Project root"))
-                        .arg(
-                            Arg::new("allow-network")
-                                .long("allow-network")
-                                .action(ArgAction::SetTrue)
-                                .help("Allow HTTPS model downloads from the pinned source"),
-                        )
-                        .arg(
-                            Arg::new("max-bytes")
-                                .long("max-bytes")
-                                .default_value("10737418240")
-                                .help("Maximum total bytes to fetch (default 10 GiB)"),
-                        )
-                        .arg(
-                            Arg::new("json")
-                                .long("json")
-                                .action(ArgAction::SetTrue),
-                        ),
-                )
-                .subcommand(
-                    Command::new("infer")
-                        .about("Run a pinned linear classifier on Jhol's bounded CPU runtime")
-                        .arg(
-                            Arg::new("manifest")
-                                .long("manifest")
-                                .default_value("models/demo.jhol-model.json"),
-                        )
-                        .arg(
-                            Arg::new("config")
-                                .long("config")
-                                .required(true)
-                                .help("Pinned jhol.linear-classifier.v1 config file"),
-                        )
-                        .arg(
-                            Arg::new("input")
-                                .long("input")
-                                .required(true)
-                                .help("Comma-separated numeric feature vector"),
-                        )
-                        .arg(Arg::new("path").long("path").help("Project root"))
-                        .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
-                ),
-        )
-        .subcommand(
-            Command::new("uninstall")
-                .about("Remove a package (optionally from package.json)")
-                .arg(Arg::new("package").required(true).help("Package name to remove"))
-                .arg(
-                    Arg::new("save")
-                        .long("save")
-                        .action(ArgAction::SetTrue)
-                        .hide(true)
-                        .help("Kept for compatibility; removal persists by default"),
-                )
-                .arg(
-                    Arg::new("no-save")
-                        .long("no-save")
-                        .action(ArgAction::SetTrue)
-                        .help("Leave package.json untouched"),
-                ),
-        )
-        .subcommand(
-            Command::new("update")
-                .about("Update packages to latest and refresh lockfile")
-                .arg(
-                    Arg::new("package")
-                        .required(false)
-                        .num_args(0..)
-                        .help("Package(s) to update; omit for full lockfile refresh"),
-                )
-                .arg(
-                    Arg::new("save")
-                        .long("save")
-                        .action(ArgAction::SetTrue)
-                        .help("Write updated versions back to package.json"),
-                ),
-        )
-        .subcommand(
-            Command::new("why")
-                .about("Explain why a package is installed (dependency path)")
-                .arg(Arg::new("package").required(true).help("Package name"))
-                .arg(
-                    Arg::new("jagr")
-                        .long("jagr")
-                        .action(ArgAction::SetTrue)
-                        .help("Use JAGR three-layer analysis to produce a richer explanation (Tropical + Sheaf Cohomology + Max-SMT)"),
-                )
-                .arg(
-                    Arg::new("manifest")
-                        .long("manifest")
-                        .short('m')
-                        .value_name("PATH")
-                        .default_value("package.json")
-                        .help("Path to the package.json to analyze (used with --jagr)"),
-                ),
-        )
-        .subcommand(
-            Command::new("outdated")
-                .about("Show outdated dependencies with current, wanted, and latest versions")
-                .arg(
-                    Arg::new("quiet")
-                        .short('q')
-                        .long("quiet")
-                        .action(ArgAction::SetTrue)
-                        .help("Minimal output"),
-                )
-                .arg(
-                    Arg::new("all-workspaces")
-                        .long("all-workspaces")
-                        .action(ArgAction::SetTrue)
-                        .help("Run in all workspace packages"),
-                )
-                .arg(
-                    Arg::new("jagr")
-                        .long("jagr")
-                        .action(ArgAction::SetTrue)
-                        .help("After listing outdated packages, also report JAGR topological impact (which upgrades would break SNF or raise β₁)"),
-                ),
-        )
-        .subcommand(
-            Command::new("init")
-                .about("Initialize a new package.json in the current directory")
-                .arg(
-                    Arg::new("yes")
-                        .short('y')
-                        .long("yes")
-                        .action(ArgAction::SetTrue)
-                        .help("Accept defaults without prompting"),
-                )
-                .arg(
-                    Arg::new("private")
-                        .long("private")
-                        .action(ArgAction::SetTrue)
-                        .help("Mark package as private (not for publishing)"),
-                ),
-        )
-        .subcommand(
-            Command::new("add")
-                .about("Alias for install: add packages to dependencies")
-                .arg(
-                    Arg::new("package")
-                        .required(false)
-                        .num_args(0..)
-                        .help("Package(s) to add"),
-                )
-                .arg(
-                    Arg::new("quiet")
-                        .short('q')
-                        .long("quiet")
-                        .action(ArgAction::SetTrue)
-                        .help("Minimal output"),
-                ),
-        )
-        .subcommand(
-            Command::new("remove")
-                .about("Alias for uninstall: remove packages from dependencies")
-                .arg(Arg::new("package").required(true).help("Package name(s) to remove"))
-                .arg(
-                    Arg::new("save")
-                        .long("save")
-                        .action(ArgAction::SetTrue)
-                        .hide(true)
-                        .help("Kept for compatibility; removal persists by default"),
-                )
-                .arg(
-                    Arg::new("no-save")
-                        .long("no-save")
-                        .action(ArgAction::SetTrue)
-                        .help("Leave package.json untouched"),
-                ),
-        )
-        .subcommand(
-            Command::new("link")
-                .about("Link a local package directory into node_modules")
-                .arg(
-                    Arg::new("package")
-                        .required(false)
-                        .help("Package directory to link (default: current directory)"),
-                ),
-        )
-        .subcommand(
-            Command::new("unlink")
-                .about("Remove a linked package")
-                .arg(Arg::new("package").required(true).help("Package name to unlink")),
-        )
-        .subcommand(
-            Command::new("approve-scripts")
-                .about("Grant content-addressed consent for install scripts")
-                .arg(
-                    Arg::new("packages")
-                        .num_args(0..)
-                        .value_name("PACKAGE")
-                        .help("Package names; omit with --all for every package with scripts"),
-                )
-                .arg(
-                    Arg::new("all")
-                        .long("all")
-                        .num_args(0)
-                        .help("Approve every package that currently ships install scripts"),
-                )
-            )
-            .subcommand(
-                Command::new("verify")
-                    .about("Check that node_modules is exactly what the lockfile authorises")
-                    .arg(
-                        Arg::new("json")
-                            .long("json")
-                            .num_args(0)
-                            .help("Machine-readable output"),
-                    )
-                    .arg(
-                        Arg::new("prune")
-                            .long("prune")
-                            .num_args(0)
-                            .help("Remove packages the lockfile does not authorise"),
-                    )
-                    .arg(
-                        Arg::new("quiet")
-                            .long("quiet")
-                            .short('q')
-                            .num_args(0)
-                            .help("Only report problems (via the exit code)"),
-                    ),
-            )
-            .subcommand(
-                Command::new("why-not")
-                    .about("Explain why a range of a package cannot be used, and what would allow it")
-                    .arg(
-                        Arg::new("spec")
-                            .required(true)
-                            .value_name("PACKAGE@RANGE")
-                            .help("Package and range, e.g. chalk@^4"),
-                    ),
-            )
-            .subcommand(
-                Command::new("revoke-scripts")
-                    .about("Revoke script consent for packages")
-                    .arg(
-                        Arg::new("packages")
-                            .num_args(1..)
-                            .required(true)
-                            .value_name("PACKAGE")
-                            .help("Package names to revoke (name or name@version)"),
-                    )
-            )
-            .subcommand(
-                Command::new("global")
-                    .about("Manage globally installed packages")
-                    .subcommand(Command::new("list").about("List globally installed packages"))
-                    .subcommand(Command::new("path").about("Print the global prefix"))
-                    .subcommand(
-                        Command::new("remove")
-                            .about("Remove a globally installed package")
-                            .arg(Arg::new("package").required(true)),
-                    ),
-            )
-            .subcommand(
-                Command::new("login")
-                    .about("Store a registry auth token in .npmrc (0600)")
-                    .arg(
-                        Arg::new("registry")
-                            .long("registry")
-                            .help("Registry URL (default: effective registry)"),
-                    )
-                    .arg(
-                        Arg::new("token")
-                            .long("token")
-                            .required(true)
-                            .help("Auth token to store"),
-                    )
-                    .arg(
-                        Arg::new("global")
-                            .long("global")
-                            .num_args(0)
-                            .help("Write ~/.npmrc instead of the project .npmrc"),
-                    ),
-            )
-            .subcommand(
-                Command::new("publish")
-                    .about("Publish the package in this directory to the registry")
-                    .arg(Arg::new("dir").default_value(".").help("Package directory"))
-                    .arg(
-                        Arg::new("dry-run")
-                            .long("dry-run")
-                            .num_args(0)
-                            .help("Build the full request without sending it"),
-                    )
-                    .arg(
-                        Arg::new("registry")
-                            .long("registry")
-                            .help("Override the registry URL"),
-                    ),
-            )
-            .subcommand(
-                Command::new("dedupe")
-                    .about("Report packages installed at more than one version")
-                    .arg(Arg::new("json").long("json").num_args(0)
-                        .help("Machine-readable output")),
-            )
-            .subcommand(
-                Command::new("patch")
-                    .about("Persist local edits to a dependency (extract, edit, commit)")
-                    .arg(
-                        Arg::new("package")
-                            .num_args(0..=1)
-                            .value_name("PACKAGE")
-                            .help("Package to patch; omit with --list"),
-                    )
-                    .arg(Arg::new("commit").long("commit").num_args(0)
-                        .help("Store the edits made in the extracted copy"))
-                    .arg(Arg::new("list").long("list").num_args(0)
-                        .help("Show recorded patches"))
-                    .arg(Arg::new("rollback").long("rollback").num_args(0)
-                        .help("Forget a package's patch")),
-            )
-            .subcommand(
-                Command::new("view")
-                    .about("Inspect a package's registry metadata (versions, deps, integrity)")
-                    .arg(Arg::new("package").required(true).help("name or name@version")),
-            )
-            .subcommand(
-                Command::new("search")
-                    .about("Search the registry")
-                    .arg(Arg::new("term").required(true).help("Search terms"))
-                    .arg(
-                        Arg::new("limit")
-                            .long("limit")
-                            .value_parser(clap::value_parser!(usize))
-                            .default_value("20")
-                            .help("Max results"),
-                    ),
-            )
-            .subcommand(
-                Command::new("pack")
-                    .about("Build a deterministic, reproducible package tarball")
-                    .arg(Arg::new("dir").default_value(".").help("Package directory")),
-            )
-.subcommand(
-            Command::new("sbom")
-                .about("Generate Software Bill of Materials")
-                .arg(
-                    Arg::new("format")
-                        .long("format")
-                        .value_parser(["cyclonedx", "simple"])
-                        .default_value("cyclonedx")
-                        .help("SBOM format"),
-                )
-                .arg(
-                    Arg::new("output")
-                        .short('o')
-                        .long("output")
-                        .help("Write to file (default: stdout)"),
-                ),
-        )
-        .subcommand(
-            Command::new("jagr")
-                .about("Run the JAGR three-layer resolver analysis on the current project's package.json (Tropical + Sheaf Cohomology + Core-Guided MaxSAT)")
-                .arg(
-                    Arg::new("show-config")
-                        .long("show-config")
-                        .action(ArgAction::SetTrue)
-                        .help("Print the merged JAGR config (.jholrc + env vars) and exit"),
-                )
-                .arg(
-                    Arg::new("manifest")
-                        .long("manifest")
-                        .short('m')
-                        .value_name("PATH")
-                        .default_value("package.json")
-                        .help("Path to the package.json manifest to analyze"),
-                )
-                .arg(
-                    Arg::new("json")
-                        .long("json")
-                        .action(ArgAction::SetTrue)
-                        .help("Output the full JagrAnalysisReport as JSON"),
-                )
-                .arg(
-                    Arg::new("quiet")
-                        .short('q')
-                        .long("quiet")
-                        .action(ArgAction::SetTrue)
-                        .help("Minimal output (strategy + selection only)"),
-                )
-                .arg(
-                    Arg::new("all-workspaces")
-                        .short('w')
-                        .long("all-workspaces")
-                        .action(ArgAction::SetTrue)
-                        .help("Run the JAGR analysis in all workspace packages"),
-                )
-                .arg(
-                    Arg::new("skip-layer2")
-                        .long("skip-layer2")
-                        .action(ArgAction::SetTrue)
-                        .help("Skip Layer 2 (sheaf cohomology) and go directly to Layer 1"),
-                )
-                .arg(
-                    Arg::new("skip-layer3")
-                        .long("skip-layer3")
-                        .action(ArgAction::SetTrue)
-                        .help("Skip Layer 3 (tropical PTIME filter)"),
-                )
-                .arg(
-                    Arg::new("run-all-layers")
-                        .long("run-all-layers")
-                        .action(ArgAction::SetTrue)
-                        .help("Run all three layers even if an earlier layer already produced a definite answer (useful for benchmarking)"),
-                )
-                .arg(
-                    Arg::new("graph")
-                        .long("graph")
-                        .value_parser(["dot", "mermaid"])
-                        .help("Output the derivation/conflict graph in the given format (dot or mermaid)"),
-                )
-                .arg(
-                    Arg::new("lockfile-only")
-                        .long("lockfile-only")
-                        .action(ArgAction::SetTrue)
-                        .help("Resolve and write the lockfile, but don't install any packages (mirrors `jhol install --lockfile-only`)"),
-                )
-                .arg(
-                    Arg::new("explain-each")
-                        .long("explain-each")
-                        .action(ArgAction::SetTrue)
-                        .help("Show a per-package explanation chain (which layer picked each version and why)"),
-                )
-                .arg(
-                    Arg::new("compare-resolvers")
-                        .long("compare-resolvers")
-                        .action(ArgAction::SetTrue)
-                        .help("Run JAGR and the legacy resolvers (pubgrub, sat) on the same manifest and print a side-by-side time/selection comparison"),
-                )
-                .arg(
-                    Arg::new("upgrade-plan")
-                        .long("upgrade-plan")
-                        .action(ArgAction::SetTrue)
-                        .help("For each declared dep, run JAGR before/after a candidate version change and report topological impact (β₁, SNF, risk class)"),
-                )
-                .arg(
-                    Arg::new("dry-run-upgrade")
-                        .long("dry-run-upgrade")
-                        .value_name("PKG@VERSION")
-                        .action(ArgAction::Set)
-                        .help("Simulate upgrading PKG to VERSION and report JAGR topological impact (no manifest is modified)"),
-                )
-                .arg(
-                    Arg::new("output")
-                        .short('o')
-                        .long("output")
-                        .help("Write the analysis output to a file (default: stdout)"),
-                ),
-        )
-        .subcommand(
-            Command::new("audit-jagr")
-                .about("Save / load / diff JAGR analysis reports for reproducibility and audit trails")
-                .arg(
-                    Arg::new("save")
-                        .long("save")
-                        .value_name("PATH")
-                        .help("Run JAGR on the current manifest and save the report to PATH as JSON"),
-                )
-                .arg(
-                    Arg::new("load")
-                        .long("load")
-                        .value_name("PATH")
-                        .help("Load a JAGR report from PATH and print a summary"),
-                )
-                .arg(
-                    Arg::new("diff")
-                        .long("diff")
-                        .value_name("OLD,NEW")
-                        .help("Compare two JAGR audit JSON files (comma-separated paths) and print the diff"),
-                )
-                .arg(
-                    Arg::new("manifest")
-                        .long("manifest")
-                        .short('m')
-                        .value_name("PATH")
-                        .default_value("package.json")
-                        .help("Path to the package.json manifest to analyze (used with --save)"),
-                ),
-        )
-        .subcommand(
-            Command::new("betti-history")
-                .about("Show the persistent Betti-number history of JAGR analyses for this project (set JHOL_BETTI_HISTORY=1 to record)")
-                .arg(
-                    Arg::new("file")
-                        .long("file")
-                        .value_name("PATH")
-                        .default_value(".jagr_betti_history.jsonl")
-                        .help("Path to the Betti history JSONL file"),
-                )
-                .arg(
-                    Arg::new("last")
-                        .long("last")
-                        .value_name("N")
-                        .help("Show only the last N entries (e.g. --last 5)"),
-                ),
-        )
-        .subcommand(
-            Command::new("jagr-impact")
-                .about("Simulate upgrading a single package and report the JAGR topological impact (β₁, SNF, risk class). No manifest is modified.")
-                .arg(
-                    Arg::new("manifest")
-                        .short('m')
-                        .long("manifest")
-                        .value_name("PATH")
-                        .default_value("package.json")
-                        .help("Path to the package.json manifest"),
-                )
-                .arg(
-                    Arg::new("package")
-                        .long("package")
-                        .short('p')
-                        .value_name("PKG")
-                        .required_unless_present("target")
-                        .help("Package name to simulate upgrading"),
-                )
-                .arg(
-                    Arg::new("version")
-                        .long("version")
-                        .short('v')
-                        .value_name("VER")
-                        .required_unless_present("target")
-                        .help("Target version to simulate"),
-                )
-                .arg(
-                    Arg::new("target")
-                        .long("target")
-                        .value_name("PKG@VERSION")
-                        .help("Single-value form: PKG@VERSION (e.g. left-pad@1.3.0)"),
-                )
-                .arg(
-                    Arg::new("json")
-                        .long("json")
-                        .action(ArgAction::SetTrue)
-                        .help("Output as JSON"),
-                ),
-        )
-        .subcommand(
-            Command::new("gui")
-                .about("Open the jhol Terminal GUI — browse packages, view recent installs, navigate with arrow keys")
-                .long_about(
-                    "Launches the jhol Terminal GUI (TUI). \
-                     The classic CLI is still available — this is purely additive.\n\n\
-                     Keyboard shortcuts inside the GUI:\n  \
-                     ↑↓ / j k   navigate\n  \
-                     Tab / 1 2 3  switch panels\n  \
-                     r / F5      refresh\n  \
-                     q / Esc     quit\n  \
-                     ?           help"
-                ),
-        )
-        .subcommand(
-            Command::new("mcp")
-                .about("Run Model Context Protocol (MCP) server for AI coding agents (stdio)")
-                .arg(
-                    Arg::new("stdio")
-                        .long("stdio")
-                        .action(ArgAction::SetTrue)
-                        .help("Run MCP server over standard I/O (default)"),
-                ),
-        )
-        .subcommand(
-            Command::new("merge-lock")
-                .about("Resolve 3-way Git merge conflicts in package-lock.json using JAGR-Infinite")
-                .arg(
-                    Arg::new("base")
-                        .long("base")
-                        .value_name("FILE")
-                        .default_value("package-lock.json")
-                        .help("Common ancestor lockfile path"),
-                )
-                .arg(
-                    Arg::new("ours")
-                        .long("ours")
-                        .value_name("FILE")
-                        .default_value("package-lock.json")
-                        .help("Current branch (HEAD) lockfile path"),
-                )
-                .arg(
-                    Arg::new("theirs")
-                        .long("theirs")
-                        .value_name("FILE")
-                        .default_value("package-lock.json")
-                        .help("Incoming branch (MERGE_HEAD) lockfile path"),
-                )
-                .arg(
-                    Arg::new("output")
-                        .short('o')
-                        .long("output")
-                        .value_name("FILE")
-                        .default_value("package-lock.json")
-                        .help("Output merged lockfile path"),
-                ),
-        )
-        .subcommand(
-            Command::new("bisect-deps")
-                .about("Automated dependency bisection to isolate breaking package upgrades")
-                .arg(
-                    Arg::new("test")
-                        .long("test")
-                        .value_name("CMD")
-                        .required(true)
-                        .help("Test command to execute for verifying build health (e.g. 'npm test')"),
-                ),
-        )
-        .subcommand(
-            Command::new("git-hook")
-                .about("Manage Git hooks for automatic sub-8ms dependency synchronization")
-                .subcommand(
-                    Command::new("install")
-                        .about("Install post-checkout and post-merge hooks in .git/hooks/"),
-                ),
-        )
-        .subcommand(
-            Command::new("completions")
-                .about("Generate shell completion scripts")
-                .arg(
-                    Arg::new("shell")
-                        .required(true)
-                        .value_parser(["bash", "zsh", "fish", "powershell", "elvish"])
-                        .help("Shell to generate completions for (bash, zsh, fish, powershell, elvish)"),
-                ),
-        )
-        .get_matches();
+    let matches = cli_command().get_matches();
 
     // global-install (no cache needed)
     if let Some(("global-install", _)) = matches.subcommand() {
@@ -4104,7 +2396,7 @@ fn run() -> Result<(), String> {
             .map(|s| s.as_str())
             .unwrap_or("bash");
         // Build a fresh copy of the CLI for completions generation
-        let mut cmd = build_completions_cli();
+        let mut cmd = cli_command();
         let mut stdout = std::io::stdout();
         match shell {
             "bash" => {
@@ -8718,6 +7010,1589 @@ fn refine_star_specs(packages: &[&str]) {
             let _ = fs::write(path, format!("{}\n", pretty));
         }
     }
+}
+
+/// The one CLI definition. Dispatch and shell-completion generation both use it,
+/// so a flag cannot be declared for `--help` and missing from parsing (or the
+/// reverse) — a drift that cost five separate fixes, including a 100 % `ci` crash.
+fn cli_command() -> Command {
+    let backend_arg = Arg::new("backend")
+        .long("backend")
+        .value_parser(["bun", "npm"])
+        .help("Package manager backend (default: bun if available, else npm)");
+
+    Command::new("jhol")
+        .version(env!("CARGO_PKG_VERSION"))
+        .author("Bhuvan Prakash <bhuvanstark6@gmail.com>")
+        .about("Fast, offline-friendly package manager — cache first, Bun/npm backend")
+        .after_help(
+            "Examples:\n  jhol install lodash\n  jhol install react react-dom\n  jhol install\n  jhol doctor --fix\n  jhol cache list",
+        )
+        .subcommand(
+            Command::new("install")
+                .about("Install packages (from args or package.json)")
+                .arg(
+                    Arg::new("package")
+                        .required(false)
+                        .num_args(0..)
+                        .help("Package(s) to install; omit to install from package.json"),
+                )
+                .arg(
+                    Arg::new("save")
+                        .long("save")
+                        .action(ArgAction::SetTrue)
+                        .help("Save installed packages to dependencies (default when packages specified)"),
+                )
+                .arg(
+                    Arg::new("no-save")
+                        .long("no-save")
+                        .action(ArgAction::SetTrue)
+                        .help("Do not save installed packages to package.json"),
+                )
+                .arg(
+                    Arg::new("save-dev")
+                        .short('D')
+                        .long("save-dev")
+                        .action(ArgAction::SetTrue)
+                        .help("Save added packages to devDependencies"),
+                )
+                .arg(
+                    Arg::new("save-peer")
+                        .long("save-peer")
+                        .action(ArgAction::SetTrue)
+                        .help("Save added packages to peerDependencies"),
+                )
+                .arg(
+                    Arg::new("save-optional")
+                        .short('O')
+                        .long("save-optional")
+                        .action(ArgAction::SetTrue)
+                        .help("Save added packages to optionalDependencies"),
+                )
+                .arg(
+                    Arg::new("save-exact")
+                        .short('E')
+                        .long("save-exact")
+                        .action(ArgAction::SetTrue)
+                        .help("Save the exact installed version instead of a range"),
+                )
+                .arg(
+                    Arg::new("no-cache")
+                        .long("no-cache")
+                        .action(ArgAction::SetTrue)
+                        .help("Ignore cache and fetch from registry"),
+                )
+                .arg(
+                    Arg::new("quiet")
+                        .short('q')
+                        .long("quiet")
+                        .action(ArgAction::SetTrue)
+                        .help("Minimal output; show spinner when busy"),
+                )
+                .arg(backend_arg.clone())
+                .arg(
+                    Arg::new("lockfile-only")
+                        .long("lockfile-only")
+                        .action(ArgAction::SetTrue)
+                        .help("Only update lockfile, do not install to node_modules"),
+                )
+                .arg(
+                    Arg::new("offline")
+                        .long("offline")
+                        .action(ArgAction::SetTrue)
+                        .help("Only use cache; fail if any package is missing (or set JHOL_OFFLINE=1)"),
+                )
+                .arg(
+                    Arg::new("frozen")
+                        .long("frozen-lockfile")
+                        .visible_alias("frozen")
+                        .action(ArgAction::SetTrue)
+                        .help("Require lockfile and fail if out of sync with package.json"),
+                )
+                .arg(
+                    Arg::new("all-workspaces")
+                        .long("all-workspaces")
+                        .action(ArgAction::SetTrue)
+                        .help("Run in all workspace packages (from package.json workspaces)"),
+                )
+                .arg(
+                    Arg::new("filter")
+                        .long("filter")
+                        .short('F')
+                        .value_name("PATTERN")
+                        .action(ArgAction::Append)
+                        .help("Restrict a workspace run to packages matching NAME or @scope/* (repeatable)"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("Output machine-readable JSON result"),
+                )
+                .arg(
+                    Arg::new("native-only")
+                        .long("native-only")
+                        .action(ArgAction::SetTrue)
+                        .help("Never use Bun/npm; fail if native install fails (default)"),
+                )
+                .arg(
+                    Arg::new("omit")
+                        .long("omit")
+                        .value_name("CLASS[,...]")
+                        .help("Leave out dependency classes: dev, optional, peer"),
+                )
+                .arg(
+                    Arg::new("prod")
+                        .long("prod")
+                        .alias("production")
+                        .action(ArgAction::SetTrue)
+                        .help("Shorthand for --omit=dev (runtime dependencies only)"),
+                )
+                .arg(
+                    Arg::new("include-dev")
+                        .long("include-dev")
+                        .action(ArgAction::SetTrue)
+                        .help("Install devDependencies even when NODE_ENV=production"),
+                )
+                .arg(
+                    Arg::new("engine-strict")
+                        .long("engine-strict")
+                        .action(ArgAction::SetTrue)
+                        .help("Fail when a package's engines.node excludes this runtime"),
+                )
+                .arg(
+                    Arg::new("as-of")
+                        .long("as-of")
+                        .value_name("DATE")
+                        .help("Resolve as of a date (YYYY-MM-DD or RFC3339): only versions published by then are eligible"),
+                )
+                .arg(
+                    Arg::new("allow-license")
+                        .long("allow-license")
+                        .value_name("LIST")
+                        .help("Only resolve versions under these licenses (comma separated, e.g. MIT,Apache-2.0)"),
+                )
+                .arg(
+                    Arg::new("license-allow-unknown")
+                        .long("license-allow-unknown")
+                        .action(ArgAction::SetTrue)
+                        .help("With --allow-license, also allow versions that declare no license"),
+                )
+                .arg(
+                    Arg::new("global")
+                        .short('g')
+                        .long("global")
+                        .action(ArgAction::SetTrue)
+                        .help("Install machine-wide into the jhol global prefix, shimming bin entries"),
+                )
+                .arg(
+                    Arg::new("fallback-backend")
+                        .long("fallback-backend")
+                        .action(ArgAction::SetTrue)
+                        .help("On failure, fall back to Bun/npm for install"),
+                )
+                .arg(
+                    Arg::new("no-scripts")
+                        .long("no-scripts")
+                        .action(ArgAction::SetTrue)
+                        .help("Do not run lifecycle scripts in fallback backend installs (default true)"),
+                )
+                .arg(
+                    Arg::new("scripts")
+                        .long("scripts")
+                        .action(ArgAction::SetTrue)
+                        .help("Allow lifecycle scripts in fallback backend installs"),
+                )
+                .arg(
+                    // Documented (AGENTS.md) and supported by the core
+                    // (`InstallOptions.script_allowlist`, `JHOL_SCRIPT_ALLOWLIST`),
+                    // but there was no CLI flag — so a user had no way to opt a
+                    // specific package into lifecycle scripts for one install, only
+                    // the env var or `.jholrc`. Scripts stay off by default; this is
+                    // the per-invocation escape hatch.
+                    Arg::new("script-allowlist")
+                        .long("script-allowlist")
+                        .value_name("PKG[,PKG...]")
+                        .action(ArgAction::Append)
+                        .help("Run lifecycle scripts for these packages (comma-separated; repeatable). Scripts stay opt-in."),
+                )
+                .arg(
+                    Arg::new("resolver")
+                        .long("resolver")
+                        .value_parser(["pubgrub-v2", "pubgrub", "jagr", "jagr3", "jagr-infinite", "legacy"])
+                        .help("Resolver name, kept as a compatibility alias: every value routes to JAGR-Infinite, the only primary resolver (a non-default value logs a note). If JAGR-Infinite fails, a PubGrub-named rescue runs only for manifests with <=25 direct dependencies"),
+                )
+                .arg(
+                    Arg::new("strict-peer-deps")
+                        .long("strict-peer-deps")
+                        .action(ArgAction::SetTrue)
+                        .help("Fail install when root peer dependency constraints conflict"),
+                )
+                .arg(
+                    Arg::new("daemon")
+                        .long("daemon")
+                        .action(ArgAction::SetTrue)
+                        .help("Send install request to running jhol daemon (Unix)"),
+                )
+                .arg(
+                    Arg::new("fetch-timeout")
+                        .long("fetch-timeout")
+                        .value_parser(clap::value_parser!(u64))
+                        .help("Timeout in seconds for individual package fetch operations"),
+                )
+                .arg(
+                    Arg::new("resolve-timeout")
+                        .long("resolve-timeout")
+                        .value_parser(clap::value_parser!(u64))
+                        .help("Timeout in seconds for dependency resolution"),
+                )
+                .arg(
+                    Arg::new("install-timeout")
+                        .long("install-timeout")
+                        .value_parser(clap::value_parser!(u64))
+                        .help("Timeout in seconds for the entire install operation"),
+                )
+                .arg(
+                    Arg::new("prefer")
+                        .long("prefer")
+                        .value_parser(["minimal", "optimize", "latest"])
+                        .help("Prefer minimal versions (minimal), optimal deduplication (optimize), or latest (default)"),
+                ),
+        )
+        .subcommand(
+            Command::new("ci")
+                .about("Clean, deterministic install (npm ci-style): requires lockfile")
+                .arg(
+                    Arg::new("offline")
+                        .long("offline")
+                        .action(ArgAction::SetTrue)
+                        .help("Only use cache; fail if any package is missing"),
+                )
+                .arg(
+                    Arg::new("all-workspaces")
+                        .long("all-workspaces")
+                        .action(ArgAction::SetTrue)
+                        .help("Run in all workspace packages"),
+                )
+                .arg(
+                    Arg::new("filter")
+                        .long("filter")
+                        .short('F')
+                        .value_name("PATTERN")
+                        .action(ArgAction::Append)
+                        .help("Restrict a workspace run to packages matching NAME or @scope/* (repeatable)"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("Output machine-readable JSON result"),
+                )
+                .arg(
+                    Arg::new("jagr-check")
+                        .long("jagr-check")
+                        .action(ArgAction::SetTrue)
+                        .help("After ci succeeds, run JAGR three-layer analysis on the manifest to confirm satisfiability"),
+                )
+                .arg(backend_arg.clone())
+                .arg(
+                    Arg::new("scripts")
+                        .long("scripts")
+                        .action(ArgAction::SetTrue)
+                        .help("Run lifecycle scripts for allowlisted packages (off by default)"),
+                )
+                .arg(
+                    Arg::new("no-scripts")
+                        .long("no-scripts")
+                        .action(ArgAction::SetTrue)
+                        .help("Never run lifecycle scripts (the default)"),
+                )
+                .arg(
+                    Arg::new("script-allowlist")
+                        .long("script-allowlist")
+                        .value_name("PKG[,PKG...]")
+                        .action(ArgAction::Append)
+                        .help("Allow lifecycle scripts for these packages (repeatable, comma-separated)"),
+                )
+                .arg(
+                    Arg::new("strict-peer-deps")
+                        .long("strict-peer-deps")
+                        .action(ArgAction::SetTrue)
+                        .help("Fail on a peer-dependency conflict instead of warning"),
+                ),
+        )
+        .subcommand(
+            Command::new("doctor")
+                .about("Check and fix outdated dependencies")
+                .arg(
+                    Arg::new("fix")
+                        .long("fix")
+                        .action(ArgAction::SetTrue)
+                        .help("Update outdated packages"),
+                )
+                .arg(
+                    Arg::new("explain")
+                        .long("explain")
+                        .action(ArgAction::SetTrue)
+                        .help("Explain lockfile/health/fallback diagnostics for this project"),
+                )
+                .arg(
+                    Arg::new("jagr")
+                        .long("jagr")
+                        .action(ArgAction::SetTrue)
+                        .help("Run JAGR three-layer resolver health check on this project"),
+                )
+                .arg(
+                    Arg::new("quiet")
+                        .short('q')
+                        .long("quiet")
+                        .action(ArgAction::SetTrue)
+                        .help("Minimal output"),
+                )
+                .arg(backend_arg.clone())
+                .arg(
+                    Arg::new("all-workspaces")
+                        .long("all-workspaces")
+                        .action(ArgAction::SetTrue)
+                        .help("Run in all workspace packages"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("Output machine-readable JSON"),
+                ),
+        )
+        .subcommand(
+            Command::new("import-lock")
+                .about("Import/convert lockfile formats (bun.lock, yarn.lock, pnpm-lock.yaml -> package-lock.json)")
+                .arg(
+                    Arg::new("from")
+                        .long("from")
+                        .value_parser(["auto", "bun", "npm", "yarn", "pnpm"])
+                        .default_value("auto")
+                        .help("Source lockfile format (auto, bun, npm, yarn, pnpm)"),
+                ),
+        )
+        .subcommand(
+            Command::new("global-install")
+                .about("Install jhol binary to PATH (e.g. /usr/local/bin)"),
+        )
+        .subcommand(
+            Command::new("daemon")
+                .about("Run persistent install daemon (Unix)")
+                .arg(
+                    Arg::new("serve")
+                        .long("serve")
+                        .action(ArgAction::SetTrue)
+                        .help("Run daemon server loop"),
+                )
+                .arg(
+                    Arg::new("stop")
+                        .long("stop")
+                        .action(ArgAction::SetTrue)
+                        .help("Stop the daemon after accepted requests finish"),
+                ),
+        )
+        .subcommand(
+            Command::new("cache")
+                .about("Manage local package cache")
+                .subcommand(Command::new("list").about("List cached packages"))
+                .subcommand(Command::new("size").about("Show cache size and tarball count"))
+                .subcommand(
+                    Command::new("prune")
+                        .about("Remove unreferenced tarballs; optionally keep only N most recent")
+                        .arg(
+                            Arg::new("keep")
+                                .long("keep")
+                                .value_parser(clap::value_parser!(usize))
+                                .help("Keep only N most recently used tarballs"),
+                        ),
+                )
+                .subcommand(
+                    Command::new("gc")
+                        .about("Sweep store tarballs not referenced by any given lockfile")
+                        .arg(
+                            Arg::new("from")
+                                .long("from")
+                                .num_args(1..)
+                                .value_name("LOCKFILE")
+                                .help("Lockfiles that mark reachability (default: ./package-lock.json)"),
+                        )
+                        .arg(
+                            Arg::new("dry-run")
+                                .long("dry-run")
+                                .num_args(0)
+                                .help("Report what would be freed without deleting"),
+                        ),
+                )
+                .subcommand(
+                    Command::new("export")
+                        .about("Export project deps from cache to directory (for offline)")
+                        .arg(Arg::new("dir").required(true).help("Output directory")),
+                )
+                .subcommand(
+                    Command::new("import")
+                        .about("Import tarballs from directory into cache")
+                        .arg(Arg::new("dir").required(true).help("Directory from jhol cache export")),
+                )
+                .subcommand(Command::new("clean").about("Remove all cached tarballs"))
+                .subcommand(
+                    Command::new("telemetry").about("Show native fallback telemetry summary"),
+                )
+                .subcommand(
+                    Command::new("key")
+                        .about("Print lockfile hash for CI cache key (same lockfile => same key)"),
+                )
+                .subcommand(
+                    Command::new("mirror")
+                        .about("Show JMR resolution mirror stats (entries, coverage, hits)")
+                        .subcommand(Command::new("stats").about("Show mirror statistics"))
+                        .subcommand(Command::new("prune").about("Remove expired entries from mirror"))
+                        .subcommand(Command::new("clear").about("Clear all mirror entries"))
+                        .subcommand(Command::new("lookup")
+                            .about("Look up a package in the mirror")
+                            .arg(Arg::new("package").required(true).help("Package name to look up (@scope/pkg@^range)"))
+                        ),
+                ),
+        )
+        .subcommand(
+            Command::new("audit")
+                .about("Check for known vulnerabilities")
+                .arg(
+                    Arg::new("fix")
+                        .long("fix")
+                        .action(ArgAction::SetTrue)
+                        .help("Apply fixes where possible"),
+                )
+                .arg(
+                    Arg::new("quiet")
+                        .short('q')
+                        .long("quiet")
+                        .action(ArgAction::SetTrue)
+                        .help("Minimal output"),
+                )
+                .arg(backend_arg.clone())
+                .arg(
+                    Arg::new("all-workspaces")
+                        .long("all-workspaces")
+                        .action(ArgAction::SetTrue)
+                        .help("Run in all workspace packages"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("Output raw audit JSON"),
+                )
+                .arg(
+                    Arg::new("gate")
+                        .long("gate")
+                        .action(ArgAction::SetTrue)
+                        .help("Fail with non-zero exit if vulnerabilities are found (CI gate)"),
+                ),
+        )
+        .subcommand(
+            Command::new("prefetch")
+                .about("Download lockfile dependencies into cache (no node_modules). Use before install --offline.")
+                .arg(
+                    Arg::new("quiet")
+                        .short('q')
+                        .long("quiet")
+                        .action(ArgAction::SetTrue)
+                        .help("Minimal output"),
+                ),
+        )
+        .subcommand(
+            Command::new("run")
+                .about("Run a script from package.json or a JS/TS file with Jhol runtime")
+                .arg(
+                    Arg::new("script")
+                        .required(true)
+                        .help("Script name from package.json, or JS/TS file path"),
+                )
+                .arg(
+                    Arg::new("file")
+                        .long("file")
+                        .short('f')
+                        .action(ArgAction::SetTrue)
+                        .help("Treat argument as a JS/TS file path (run with Jhol runtime)"),
+                )
+                .arg(
+                    Arg::new("watch")
+                        .long("watch")
+                        .short('w')
+                        .action(ArgAction::SetTrue)
+                        .help("Watch mode: restart on file changes"),
+                )
+                .arg(
+                    Arg::new("engine")
+                        .long("engine")
+                        .default_value("auto")
+                        .value_parser(["auto", "quickjs", "js-engine"])
+                        .help("Select script engine"),
+                )
+                .arg(
+                    Arg::new("all-workspaces")
+                        .long("all-workspaces")
+                        .action(ArgAction::SetTrue)
+                        .help("Run in all workspace packages"),
+                ),
+        )
+        .subcommand(
+            Command::new("eval")
+                .about("Evaluate JavaScript/TypeScript code inline")
+                .arg(
+                    Arg::new("code")
+                        .required(true)
+                        .help("JavaScript/TypeScript code to evaluate"),
+                )
+                .arg(
+                    Arg::new("type")
+                        .long("type")
+                        .value_parser(["js", "ts", "jsx", "tsx"])
+                        .default_value("js")
+                        .help("File type for inline evaluation"),
+                )
+                .arg(
+                    Arg::new("print")
+                        .long("print")
+                        .short('p')
+                        .action(ArgAction::SetTrue)
+                        .help("Print the value of the final expression (like node -p)"),
+                ),
+        )
+        .subcommand(
+            Command::new("build")
+                .about("Bundle JavaScript/TypeScript/CSS for browser, Node.js, or Jhol")
+                .arg(
+                    Arg::new("entry")
+                        .required(true)
+                        .num_args(1..)
+                        .help("Entry file(s) to bundle"),
+                )
+                .arg(
+                    Arg::new("outdir")
+                        .long("outdir")
+                        .short('o')
+                        .default_value("dist")
+                        .help("Output directory"),
+                )
+                .arg(
+                    Arg::new("format")
+                        .long("format")
+                        .value_parser(["esm", "cjs", "iife"])
+                        .default_value("esm")
+                        .help("Output format"),
+                )
+                .arg(
+                    Arg::new("target")
+                        .long("target")
+                        .value_parser(["browser", "node", "jhol"])
+                        .default_value("browser")
+                        .help("Target platform"),
+                )
+                .arg(
+                    Arg::new("minify")
+                        .long("minify")
+                        .short('m')
+                        .action(ArgAction::SetTrue)
+                        .help("Minify output"),
+                )
+                .arg(
+                    Arg::new("watch")
+                        .long("watch")
+                        .short('w')
+                        .action(ArgAction::SetTrue)
+                        .help("Watch mode: rebuild on file changes"),
+                )
+                .arg(
+                    Arg::new("sourcemap")
+                        .long("sourcemap")
+                        .value_parser(["none", "inline", "external", "both"])
+                        .default_value("none")
+                        .help("Source map generation"),
+                )
+                .arg(
+                    Arg::new("external")
+                        .long("external")
+                        .num_args(0..)
+                        .help("Modules to mark as external"),
+                )
+                .arg(
+                    Arg::new("tree-shake")
+                        .long("tree-shake")
+                        .action(ArgAction::SetTrue)
+                        .help("Enable tree shaking"),
+                )
+                .arg(
+                    Arg::new("code-splitting")
+                        .long("code-splitting")
+                        .action(ArgAction::SetTrue)
+                        .help("Enable code splitting"),
+                ),
+        )
+        .subcommand(
+            Command::new("fmt")
+                .about("Format files in place (native Rust, cache-first; JS/TS/JSON/CSS + rustfmt/gofmt/ruff)")
+                .arg(Arg::new("path").num_args(0..).help("Files or directories to format"))
+                .arg(Arg::new("check").long("check").action(ArgAction::SetTrue).help("Check, write nothing (exit 1 if changes needed)"))
+                .arg(Arg::new("list-different").long("list-different").action(ArgAction::SetTrue).help("Like --check, print only file names"))
+                .arg(Arg::new("stdin-filepath").long("stdin-filepath").help("Format stdin as this file path and print"))
+                .arg(Arg::new("init").long("init").action(ArgAction::SetTrue).help("Write .prettierrc.json defaults"))
+                .arg(Arg::new("no-cache").long("no-cache").action(ArgAction::SetTrue).help("Bypass the format cache"))
+                .arg(Arg::new("print-width").long("print-width").help("Wrap width (default 80)"))
+                .arg(Arg::new("tab-width").long("tab-width").help("Spaces per indent level (default 2)"))
+                .arg(Arg::new("use-tabs").long("use-tabs").action(ArgAction::SetTrue).help("Indent with tabs"))
+                .arg(Arg::new("no-semi").long("no-semi").action(ArgAction::SetTrue).help("Omit semicolons where possible"))
+                .arg(Arg::new("single-quote").long("single-quote").action(ArgAction::SetTrue).help("Use single quotes"))
+                .arg(Arg::new("trailing-comma").long("trailing-comma").value_parser(["all", "es5", "none"]).help("Trailing commas (default all)"))
+        )
+        .subcommand(
+            Command::new("exec")
+                .visible_alias("x")
+                .about("Run a binary from node_modules/.bin (no npx)")
+                .arg(
+                    Arg::new("binary")
+                        .required(true)
+                        .help("Binary name (e.g. eslint, tsc)"),
+                )
+                .arg(
+                    Arg::new("args")
+                        .num_args(0..)
+                        // Everything after the binary name belongs to that binary:
+                        // without these, jhol parsed the flags itself and
+                        // `jhol exec tsc --version` failed with "unexpected argument".
+                        .allow_hyphen_values(true)
+                        .trailing_var_arg(true)
+                        .help("Arguments to pass to the binary (flags included)"),
+                ),
+        )
+        .subcommand(
+            Command::new("cdn")
+                .about("Print esm.sh URL for a package (optional: fetch to file)")
+                .arg(
+                    Arg::new("package")
+                        .required(true)
+                        .help("Package spec (e.g. lodash@4 or lodash)"),
+                )
+                .arg(
+                    Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .help("Fetch ESM bundle to this file"),
+                ),
+        )
+        .subcommand(
+            Command::new("plan")
+                .about("Inspect manifests and print a read-only environment/task plan (no installs)")
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("Machine-readable JSON output"),
+                )
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .help("Project root (default: current directory)"),
+                ),
+        )
+        .subcommand(
+            Command::new("diff")
+                .about("Compare project state with a snapshot (default: latest), or two receipt JSON files")
+                .arg(
+                    Arg::new("before")
+                        .required(false)
+                        .help("Snapshot id, or an earlier receipt JSON path"),
+                )
+                .arg(
+                    Arg::new("after")
+                        .required(false)
+                        .help("Later receipt JSON path (two-receipt mode)"),
+                )
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .help("Project root (default: current directory)"),
+                )
+                .arg(
+                    Arg::new("exit-code")
+                        .long("exit-code")
+                        .action(ArgAction::SetTrue)
+                        .help("Exit 1 when `jhol sync --apply` is needed (for CI)"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("Emit DiffReport JSON"),
+                ),
+        )
+        .subcommand(
+            Command::new("sync")
+                .about("Record native lock digests; optionally apply native ecosystem adapters")
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .help("Project root (default: current directory)"),
+                )
+                .arg(
+                    Arg::new("apply")
+                        .long("apply")
+                        .action(ArgAction::SetTrue)
+                        .help("Also run jhol install when package.json present (needs LocalPackageInstall)"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("Machine-readable JSON"),
+                )
+                .arg(
+                    Arg::new("offline")
+                        .long("offline")
+                        .action(ArgAction::SetTrue)
+                        .help("Forbid network fetches in every adapter"),
+                )
+                .arg(
+                    Arg::new("allow-build-scripts")
+                        .long("allow-build-scripts")
+                        .action(ArgAction::SetTrue)
+                        .help("Approve build backends, Cargo build scripts, and procedural macros"),
+                ),
+        )
+        .subcommand(
+            Command::new("snapshot")
+                .about("Create, list, or show portable project snapshots")
+                .arg(
+                    Arg::new("action")
+                        .required(true)
+                        .value_parser(["create", "list", "show"])
+                        .help("create | list | show"),
+                )
+                .arg(Arg::new("id").help("Snapshot id (for show)"))
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .help("Project root (default: current directory)"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("JSON output"),
+                ),
+        )
+        .subcommand(
+            Command::new("restore")
+                .about("Restore jhol.project.lock from a snapshot (never auto-restores DBs)")
+                .arg(Arg::new("id").required(true).help("Snapshot id"))
+                .arg(
+                    Arg::new("plan")
+                        .long("plan")
+                        .action(ArgAction::SetTrue)
+                        .help("Show restore plan only"),
+                )
+                .arg(
+                    Arg::new("apply")
+                        .long("apply")
+                        .action(ArgAction::SetTrue)
+                        .help("Write jhol.project.lock from snapshot"),
+                )
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .help("Project root (default: current directory)"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("JSON output"),
+                )
+                .arg(
+                    Arg::new("databases")
+                        .long("databases")
+                        .action(ArgAction::SetTrue)
+                        .help("Request DB restore (always refused — fail closed)"),
+                ),
+        )
+        .subcommand(
+            Command::new("db")
+                .about("Migration plan on disk + optional DATABASE_URL TCP probe")
+                .subcommand(
+                    Command::new("plan")
+                        .about("Hash migrations/*.sql on disk (no live DB)")
+                        .arg(
+                            Arg::new("migrations")
+                                .long("migrations")
+                                .default_value("migrations")
+                                .help("Migrations directory relative to project"),
+                        )
+                        .arg(
+                            Arg::new("path")
+                                .long("path")
+                                .help("Project root"),
+                        )
+                        .arg(
+                            Arg::new("json")
+                                .long("json")
+                                .action(ArgAction::SetTrue),
+                        ),
+                )
+                .subcommand(
+                    Command::new("probe")
+                        .about("Optional TCP probe of DATABASE_URL (no SQL, no migrate)")
+                        .arg(
+                            Arg::new("timeout-ms")
+                                .long("timeout-ms")
+                                .default_value("500")
+                                .help("Connect timeout in milliseconds"),
+                        )
+                        .arg(
+                            Arg::new("json")
+                                .long("json")
+                                .action(ArgAction::SetTrue),
+                        ),
+                ),
+        )
+        .subcommand(
+            Command::new("dev")
+                .about("Plan declared services; optional --probe / --spawn")
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .help("Project root"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("probe")
+                        .long("probe")
+                        .action(ArgAction::SetTrue)
+                        .help("TCP-probe ready_tcp endpoints (still does not spawn processes)"),
+                )
+                .arg(
+                    Arg::new("spawn")
+                        .long("spawn")
+                        .action(ArgAction::SetTrue)
+                        .help("Spawn services declared in jhol.toml, then hold and clean up"),
+                )
+                .arg(
+                    Arg::new("hold-secs")
+                        .long("hold-secs")
+                        .default_value("1")
+                        .help("Seconds to hold spawned services before cleanup"),
+                ),
+        )
+        .subcommand(
+            Command::new("ai")
+                .about("Pin, verify, prepare, and run small model artifacts")
+                .subcommand(
+                    Command::new("pin")
+                        .about("Hash local files into a revision-pinned model manifest")
+                        .arg(Arg::new("name").long("name").required(true))
+                        .arg(Arg::new("source").long("source").required(true))
+                        .arg(Arg::new("revision").long("revision").required(true))
+                        .arg(
+                            Arg::new("file")
+                                .long("file")
+                                .required(true)
+                                .action(ArgAction::Append),
+                        )
+                        .arg(
+                            Arg::new("manifest")
+                                .long("manifest")
+                                .default_value("models/demo.jhol-model.json"),
+                        )
+                        .arg(Arg::new("path").long("path").help("Project root"))
+                        .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
+                )
+                .subcommand(
+                    Command::new("pin-remote")
+                        .about("Record trusted SHA-256 and size pins before any download")
+                        .arg(Arg::new("name").long("name").required(true))
+                        .arg(Arg::new("source").long("source").required(true))
+                        .arg(Arg::new("revision").long("revision").required(true))
+                        .arg(
+                            Arg::new("file")
+                                .long("file")
+                                .required(true)
+                                .action(ArgAction::Append),
+                        )
+                        .arg(
+                            Arg::new("digest")
+                                .long("digest")
+                                .required(true)
+                                .action(ArgAction::Append),
+                        )
+                        .arg(
+                            Arg::new("size-bytes")
+                                .long("size-bytes")
+                                .required(true)
+                                .action(ArgAction::Append),
+                        )
+                        .arg(
+                            Arg::new("manifest")
+                                .long("manifest")
+                                .default_value("models/demo.jhol-model.json"),
+                        )
+                        .arg(Arg::new("path").long("path").help("Project root"))
+                        .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
+                )
+                .subcommand(
+                    Command::new("verify")
+                        .about("Fail closed if pinned files do not match digests")
+                        .arg(
+                            Arg::new("manifest")
+                                .long("manifest")
+                                .default_value("models/demo.jhol-model.json"),
+                        )
+                        .arg(Arg::new("path").long("path").help("Project root"))
+                        .arg(
+                            Arg::new("json")
+                                .long("json")
+                                .action(ArgAction::SetTrue),
+                        ),
+                )
+                .subcommand(
+                    Command::new("prepare")
+                        .about("Verify cached files or fetch explicitly approved missing files")
+                        .arg(
+                            Arg::new("manifest")
+                                .long("manifest")
+                                .default_value("models/demo.jhol-model.json"),
+                        )
+                        .arg(Arg::new("path").long("path").help("Project root"))
+                        .arg(
+                            Arg::new("allow-network")
+                                .long("allow-network")
+                                .action(ArgAction::SetTrue)
+                                .help("Allow HTTPS model downloads from the pinned source"),
+                        )
+                        .arg(
+                            Arg::new("max-bytes")
+                                .long("max-bytes")
+                                .default_value("10737418240")
+                                .help("Maximum total bytes to fetch (default 10 GiB)"),
+                        )
+                        .arg(
+                            Arg::new("json")
+                                .long("json")
+                                .action(ArgAction::SetTrue),
+                        ),
+                )
+                .subcommand(
+                    Command::new("infer")
+                        .about("Run a pinned linear classifier on Jhol's bounded CPU runtime")
+                        .arg(
+                            Arg::new("manifest")
+                                .long("manifest")
+                                .default_value("models/demo.jhol-model.json"),
+                        )
+                        .arg(
+                            Arg::new("config")
+                                .long("config")
+                                .required(true)
+                                .help("Pinned jhol.linear-classifier.v1 config file"),
+                        )
+                        .arg(
+                            Arg::new("input")
+                                .long("input")
+                                .required(true)
+                                .help("Comma-separated numeric feature vector"),
+                        )
+                        .arg(Arg::new("path").long("path").help("Project root"))
+                        .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
+                ),
+        )
+        .subcommand(
+            Command::new("uninstall")
+                .about("Remove a package (optionally from package.json)")
+                .arg(Arg::new("package").required(true).help("Package name to remove"))
+                .arg(
+                    Arg::new("save")
+                        .long("save")
+                        .action(ArgAction::SetTrue)
+                        .hide(true)
+                        .help("Kept for compatibility; removal persists by default"),
+                )
+                .arg(
+                    Arg::new("no-save")
+                        .long("no-save")
+                        .action(ArgAction::SetTrue)
+                        .help("Leave package.json untouched"),
+                ),
+        )
+        .subcommand(
+            Command::new("update")
+                .about("Update packages to latest and refresh lockfile")
+                .arg(
+                    Arg::new("package")
+                        .required(false)
+                        .num_args(0..)
+                        .help("Package(s) to update; omit for full lockfile refresh"),
+                )
+                .arg(
+                    Arg::new("save")
+                        .long("save")
+                        .action(ArgAction::SetTrue)
+                        .help("Write updated versions back to package.json"),
+                ),
+        )
+        .subcommand(
+            Command::new("why")
+                .about("Explain why a package is installed (dependency path)")
+                .arg(Arg::new("package").required(true).help("Package name"))
+                .arg(
+                    Arg::new("jagr")
+                        .long("jagr")
+                        .action(ArgAction::SetTrue)
+                        .help("Use JAGR three-layer analysis to produce a richer explanation (Tropical + Sheaf Cohomology + Max-SMT)"),
+                )
+                .arg(
+                    Arg::new("manifest")
+                        .long("manifest")
+                        .short('m')
+                        .value_name("PATH")
+                        .default_value("package.json")
+                        .help("Path to the package.json to analyze (used with --jagr)"),
+                ),
+        )
+        .subcommand(
+            Command::new("outdated")
+                .about("Show outdated dependencies with current, wanted, and latest versions")
+                .arg(
+                    Arg::new("quiet")
+                        .short('q')
+                        .long("quiet")
+                        .action(ArgAction::SetTrue)
+                        .help("Minimal output"),
+                )
+                .arg(
+                    Arg::new("all-workspaces")
+                        .long("all-workspaces")
+                        .action(ArgAction::SetTrue)
+                        .help("Run in all workspace packages"),
+                )
+                .arg(
+                    Arg::new("jagr")
+                        .long("jagr")
+                        .action(ArgAction::SetTrue)
+                        .help("After listing outdated packages, also report JAGR topological impact (which upgrades would break SNF or raise β₁)"),
+                ),
+        )
+        .subcommand(
+            Command::new("init")
+                .about("Initialize a new package.json in the current directory")
+                .arg(
+                    Arg::new("yes")
+                        .short('y')
+                        .long("yes")
+                        .action(ArgAction::SetTrue)
+                        .help("Accept defaults without prompting"),
+                )
+                .arg(
+                    Arg::new("private")
+                        .long("private")
+                        .action(ArgAction::SetTrue)
+                        .help("Mark package as private (not for publishing)"),
+                ),
+        )
+        .subcommand(
+            Command::new("add")
+                .about("Alias for install: add packages to dependencies")
+                .arg(
+                    Arg::new("package")
+                        .required(false)
+                        .num_args(0..)
+                        .help("Package(s) to add"),
+                )
+                .arg(
+                    Arg::new("quiet")
+                        .short('q')
+                        .long("quiet")
+                        .action(ArgAction::SetTrue)
+                        .help("Minimal output"),
+                ),
+        )
+        .subcommand(
+            Command::new("remove")
+                .about("Alias for uninstall: remove packages from dependencies")
+                .arg(Arg::new("package").required(true).help("Package name(s) to remove"))
+                .arg(
+                    Arg::new("save")
+                        .long("save")
+                        .action(ArgAction::SetTrue)
+                        .hide(true)
+                        .help("Kept for compatibility; removal persists by default"),
+                )
+                .arg(
+                    Arg::new("no-save")
+                        .long("no-save")
+                        .action(ArgAction::SetTrue)
+                        .help("Leave package.json untouched"),
+                ),
+        )
+        .subcommand(
+            Command::new("link")
+                .about("Link a local package directory into node_modules")
+                .arg(
+                    Arg::new("package")
+                        .required(false)
+                        .help("Package directory to link (default: current directory)"),
+                ),
+        )
+        .subcommand(
+            Command::new("unlink")
+                .about("Remove a linked package")
+                .arg(Arg::new("package").required(true).help("Package name to unlink")),
+        )
+        .subcommand(
+            Command::new("approve-scripts")
+                .about("Grant content-addressed consent for install scripts")
+                .arg(
+                    Arg::new("packages")
+                        .num_args(0..)
+                        .value_name("PACKAGE")
+                        .help("Package names; omit with --all for every package with scripts"),
+                )
+                .arg(
+                    Arg::new("all")
+                        .long("all")
+                        .num_args(0)
+                        .help("Approve every package that currently ships install scripts"),
+                )
+            )
+            .subcommand(
+                Command::new("verify")
+                    .about("Check that node_modules is exactly what the lockfile authorises")
+                    .arg(
+                        Arg::new("json")
+                            .long("json")
+                            .num_args(0)
+                            .help("Machine-readable output"),
+                    )
+                    .arg(
+                        Arg::new("prune")
+                            .long("prune")
+                            .num_args(0)
+                            .help("Remove packages the lockfile does not authorise"),
+                    )
+                    .arg(
+                        Arg::new("quiet")
+                            .long("quiet")
+                            .short('q')
+                            .num_args(0)
+                            .help("Only report problems (via the exit code)"),
+                    ),
+            )
+            .subcommand(
+                Command::new("why-not")
+                    .about("Explain why a range of a package cannot be used, and what would allow it")
+                    .arg(
+                        Arg::new("spec")
+                            .required(true)
+                            .value_name("PACKAGE@RANGE")
+                            .help("Package and range, e.g. chalk@^4"),
+                    ),
+            )
+            .subcommand(
+                Command::new("revoke-scripts")
+                    .about("Revoke script consent for packages")
+                    .arg(
+                        Arg::new("packages")
+                            .num_args(1..)
+                            .required(true)
+                            .value_name("PACKAGE")
+                            .help("Package names to revoke (name or name@version)"),
+                    )
+            )
+            .subcommand(
+                Command::new("global")
+                    .about("Manage globally installed packages")
+                    .subcommand(Command::new("list").about("List globally installed packages"))
+                    .subcommand(Command::new("path").about("Print the global prefix"))
+                    .subcommand(
+                        Command::new("remove")
+                            .about("Remove a globally installed package")
+                            .arg(Arg::new("package").required(true)),
+                    ),
+            )
+            .subcommand(
+                Command::new("login")
+                    .about("Store a registry auth token in .npmrc (0600)")
+                    .arg(
+                        Arg::new("registry")
+                            .long("registry")
+                            .help("Registry URL (default: effective registry)"),
+                    )
+                    .arg(
+                        Arg::new("token")
+                            .long("token")
+                            .required(true)
+                            .help("Auth token to store"),
+                    )
+                    .arg(
+                        Arg::new("global")
+                            .long("global")
+                            .num_args(0)
+                            .help("Write ~/.npmrc instead of the project .npmrc"),
+                    ),
+            )
+            .subcommand(
+                Command::new("publish")
+                    .about("Publish the package in this directory to the registry")
+                    .arg(Arg::new("dir").default_value(".").help("Package directory"))
+                    .arg(
+                        Arg::new("dry-run")
+                            .long("dry-run")
+                            .num_args(0)
+                            .help("Build the full request without sending it"),
+                    )
+                    .arg(
+                        Arg::new("registry")
+                            .long("registry")
+                            .help("Override the registry URL"),
+                    ),
+            )
+            .subcommand(
+                Command::new("dedupe")
+                    .about("Report packages installed at more than one version")
+                    .arg(Arg::new("json").long("json").num_args(0)
+                        .help("Machine-readable output")),
+            )
+            .subcommand(
+                Command::new("patch")
+                    .about("Persist local edits to a dependency (extract, edit, commit)")
+                    .arg(
+                        Arg::new("package")
+                            .num_args(0..=1)
+                            .value_name("PACKAGE")
+                            .help("Package to patch; omit with --list"),
+                    )
+                    .arg(Arg::new("commit").long("commit").num_args(0)
+                        .help("Store the edits made in the extracted copy"))
+                    .arg(Arg::new("list").long("list").num_args(0)
+                        .help("Show recorded patches"))
+                    .arg(Arg::new("rollback").long("rollback").num_args(0)
+                        .help("Forget a package's patch")),
+            )
+            .subcommand(
+                Command::new("view")
+                    .about("Inspect a package's registry metadata (versions, deps, integrity)")
+                    .arg(Arg::new("package").required(true).help("name or name@version")),
+            )
+            .subcommand(
+                Command::new("search")
+                    .about("Search the registry")
+                    .arg(Arg::new("term").required(true).help("Search terms"))
+                    .arg(
+                        Arg::new("limit")
+                            .long("limit")
+                            .value_parser(clap::value_parser!(usize))
+                            .default_value("20")
+                            .help("Max results"),
+                    ),
+            )
+            .subcommand(
+                Command::new("pack")
+                    .about("Build a deterministic, reproducible package tarball")
+                    .arg(Arg::new("dir").default_value(".").help("Package directory")),
+            )
+.subcommand(
+            Command::new("sbom")
+                .about("Generate Software Bill of Materials")
+                .arg(
+                    Arg::new("format")
+                        .long("format")
+                        .value_parser(["cyclonedx", "simple"])
+                        .default_value("cyclonedx")
+                        .help("SBOM format"),
+                )
+                .arg(
+                    Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .help("Write to file (default: stdout)"),
+                ),
+        )
+        .subcommand(
+            Command::new("jagr")
+                .about("Run the JAGR three-layer resolver analysis on the current project's package.json (Tropical + Sheaf Cohomology + Core-Guided MaxSAT)")
+                .arg(
+                    Arg::new("show-config")
+                        .long("show-config")
+                        .action(ArgAction::SetTrue)
+                        .help("Print the merged JAGR config (.jholrc + env vars) and exit"),
+                )
+                .arg(
+                    Arg::new("manifest")
+                        .long("manifest")
+                        .short('m')
+                        .value_name("PATH")
+                        .default_value("package.json")
+                        .help("Path to the package.json manifest to analyze"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("Output the full JagrAnalysisReport as JSON"),
+                )
+                .arg(
+                    Arg::new("quiet")
+                        .short('q')
+                        .long("quiet")
+                        .action(ArgAction::SetTrue)
+                        .help("Minimal output (strategy + selection only)"),
+                )
+                .arg(
+                    Arg::new("all-workspaces")
+                        .short('w')
+                        .long("all-workspaces")
+                        .action(ArgAction::SetTrue)
+                        .help("Run the JAGR analysis in all workspace packages"),
+                )
+                .arg(
+                    Arg::new("skip-layer2")
+                        .long("skip-layer2")
+                        .action(ArgAction::SetTrue)
+                        .help("Skip Layer 2 (sheaf cohomology) and go directly to Layer 1"),
+                )
+                .arg(
+                    Arg::new("skip-layer3")
+                        .long("skip-layer3")
+                        .action(ArgAction::SetTrue)
+                        .help("Skip Layer 3 (tropical PTIME filter)"),
+                )
+                .arg(
+                    Arg::new("run-all-layers")
+                        .long("run-all-layers")
+                        .action(ArgAction::SetTrue)
+                        .help("Run all three layers even if an earlier layer already produced a definite answer (useful for benchmarking)"),
+                )
+                .arg(
+                    Arg::new("graph")
+                        .long("graph")
+                        .value_parser(["dot", "mermaid"])
+                        .help("Output the derivation/conflict graph in the given format (dot or mermaid)"),
+                )
+                .arg(
+                    Arg::new("lockfile-only")
+                        .long("lockfile-only")
+                        .action(ArgAction::SetTrue)
+                        .help("Resolve and write the lockfile, but don't install any packages (mirrors `jhol install --lockfile-only`)"),
+                )
+                .arg(
+                    Arg::new("explain-each")
+                        .long("explain-each")
+                        .action(ArgAction::SetTrue)
+                        .help("Show a per-package explanation chain (which layer picked each version and why)"),
+                )
+                .arg(
+                    Arg::new("compare-resolvers")
+                        .long("compare-resolvers")
+                        .action(ArgAction::SetTrue)
+                        .help("Run JAGR and the legacy resolvers (pubgrub, sat) on the same manifest and print a side-by-side time/selection comparison"),
+                )
+                .arg(
+                    Arg::new("upgrade-plan")
+                        .long("upgrade-plan")
+                        .action(ArgAction::SetTrue)
+                        .help("For each declared dep, run JAGR before/after a candidate version change and report topological impact (β₁, SNF, risk class)"),
+                )
+                .arg(
+                    Arg::new("dry-run-upgrade")
+                        .long("dry-run-upgrade")
+                        .value_name("PKG@VERSION")
+                        .action(ArgAction::Set)
+                        .help("Simulate upgrading PKG to VERSION and report JAGR topological impact (no manifest is modified)"),
+                )
+                .arg(
+                    Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .help("Write the analysis output to a file (default: stdout)"),
+                ),
+        )
+        .subcommand(
+            Command::new("audit-jagr")
+                .about("Save / load / diff JAGR analysis reports for reproducibility and audit trails")
+                .arg(
+                    Arg::new("save")
+                        .long("save")
+                        .value_name("PATH")
+                        .help("Run JAGR on the current manifest and save the report to PATH as JSON"),
+                )
+                .arg(
+                    Arg::new("load")
+                        .long("load")
+                        .value_name("PATH")
+                        .help("Load a JAGR report from PATH and print a summary"),
+                )
+                .arg(
+                    Arg::new("diff")
+                        .long("diff")
+                        .value_name("OLD,NEW")
+                        .help("Compare two JAGR audit JSON files (comma-separated paths) and print the diff"),
+                )
+                .arg(
+                    Arg::new("manifest")
+                        .long("manifest")
+                        .short('m')
+                        .value_name("PATH")
+                        .default_value("package.json")
+                        .help("Path to the package.json manifest to analyze (used with --save)"),
+                ),
+        )
+        .subcommand(
+            Command::new("betti-history")
+                .about("Show the persistent Betti-number history of JAGR analyses for this project (set JHOL_BETTI_HISTORY=1 to record)")
+                .arg(
+                    Arg::new("file")
+                        .long("file")
+                        .value_name("PATH")
+                        .default_value(".jagr_betti_history.jsonl")
+                        .help("Path to the Betti history JSONL file"),
+                )
+                .arg(
+                    Arg::new("last")
+                        .long("last")
+                        .value_name("N")
+                        .help("Show only the last N entries (e.g. --last 5)"),
+                ),
+        )
+        .subcommand(
+            Command::new("jagr-impact")
+                .about("Simulate upgrading a single package and report the JAGR topological impact (β₁, SNF, risk class). No manifest is modified.")
+                .arg(
+                    Arg::new("manifest")
+                        .short('m')
+                        .long("manifest")
+                        .value_name("PATH")
+                        .default_value("package.json")
+                        .help("Path to the package.json manifest"),
+                )
+                .arg(
+                    Arg::new("package")
+                        .long("package")
+                        .short('p')
+                        .value_name("PKG")
+                        .required_unless_present("target")
+                        .help("Package name to simulate upgrading"),
+                )
+                .arg(
+                    Arg::new("version")
+                        .long("version")
+                        .short('v')
+                        .value_name("VER")
+                        .required_unless_present("target")
+                        .help("Target version to simulate"),
+                )
+                .arg(
+                    Arg::new("target")
+                        .long("target")
+                        .value_name("PKG@VERSION")
+                        .help("Single-value form: PKG@VERSION (e.g. left-pad@1.3.0)"),
+                )
+                .arg(
+                    Arg::new("json")
+                        .long("json")
+                        .action(ArgAction::SetTrue)
+                        .help("Output as JSON"),
+                ),
+        )
+        .subcommand(
+            Command::new("gui")
+                .about("Open the jhol Terminal GUI — browse packages, view recent installs, navigate with arrow keys")
+                .long_about(
+                    "Launches the jhol Terminal GUI (TUI). \
+                     The classic CLI is still available — this is purely additive.\n\n\
+                     Keyboard shortcuts inside the GUI:\n  \
+                     ↑↓ / j k   navigate\n  \
+                     Tab / 1 2 3  switch panels\n  \
+                     r / F5      refresh\n  \
+                     q / Esc     quit\n  \
+                     ?           help"
+                ),
+        )
+        .subcommand(
+            Command::new("mcp")
+                .about("Run Model Context Protocol (MCP) server for AI coding agents (stdio)")
+                .arg(
+                    Arg::new("stdio")
+                        .long("stdio")
+                        .action(ArgAction::SetTrue)
+                        .help("Run MCP server over standard I/O (default)"),
+                ),
+        )
+        .subcommand(
+            Command::new("merge-lock")
+                .about("Resolve 3-way Git merge conflicts in package-lock.json using JAGR-Infinite")
+                .arg(
+                    Arg::new("base")
+                        .long("base")
+                        .value_name("FILE")
+                        .default_value("package-lock.json")
+                        .help("Common ancestor lockfile path"),
+                )
+                .arg(
+                    Arg::new("ours")
+                        .long("ours")
+                        .value_name("FILE")
+                        .default_value("package-lock.json")
+                        .help("Current branch (HEAD) lockfile path"),
+                )
+                .arg(
+                    Arg::new("theirs")
+                        .long("theirs")
+                        .value_name("FILE")
+                        .default_value("package-lock.json")
+                        .help("Incoming branch (MERGE_HEAD) lockfile path"),
+                )
+                .arg(
+                    Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .value_name("FILE")
+                        .default_value("package-lock.json")
+                        .help("Output merged lockfile path"),
+                ),
+        )
+        .subcommand(
+            Command::new("bisect-deps")
+                .about("Automated dependency bisection to isolate breaking package upgrades")
+                .arg(
+                    Arg::new("test")
+                        .long("test")
+                        .value_name("CMD")
+                        .required(true)
+                        .help("Test command to execute for verifying build health (e.g. 'npm test')"),
+                ),
+        )
+        .subcommand(
+            Command::new("git-hook")
+                .about("Manage Git hooks for automatic sub-8ms dependency synchronization")
+                .subcommand(
+                    Command::new("install")
+                        .about("Install post-checkout and post-merge hooks in .git/hooks/"),
+                ),
+        )
+        .subcommand(
+            Command::new("completions")
+                .about("Generate shell completion scripts")
+                .arg(
+                    Arg::new("shell")
+                        .required(true)
+                        .value_parser(["bash", "zsh", "fish", "powershell", "elvish"])
+                        .help("Shell to generate completions for (bash, zsh, fish, powershell, elvish)"),
+                ),
+        )
 }
 
 fn main() {

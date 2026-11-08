@@ -1920,3 +1920,36 @@ Written to be *checkable*: guarantees carry commands, numbers carry the harness 
 produced them, limits are stated rather than omitted, and defects record the rule
 instead of the anecdote. Nothing here claims a result the repository cannot
 reproduce.
+
+
+## One CLI definition: the dual clap builder is gone
+
+`src/main.rs` held two command trees: the live chain inside `main` and
+`build_completions_cli()`, which existed only for shell completions and had drifted
+— its subcommand list was stale, so `jhol completions` described a CLI that no
+longer existed. Every flag added to the live tree was invisible to it, and flags
+added to it were silently ignored by parsing. Five fixes in this project trace to
+that drift, including a 100 % `ci` crash from reading an undeclared flag.
+
+The live chain is now `fn cli_command() -> Command`, used by both:
+
+```rust
+let matches = cli_command().get_matches();      // dispatch
+let mut cmd = cli_command();                    // completions
+```
+
+Verified:
+
+| check | result |
+|---|---|
+| `Command::new("jhol")` definitions in `src/main.rs` | **1** (was 2) |
+| `jhol completions bash` mentions `verify` | 20 |
+| … mentions `why-not` / `--as-of` / `--allow-license` | 4 / 2 / 2 |
+| `jhol ci` (previously a 100 % panic) | works |
+| `jhol install --as-of … --allow-license …` parses | yes |
+
+The generated completion script grew to 3,914 lines because it now describes the
+real CLI. `flag(&m, name)` remains as defence in depth: an undeclared flag reads as
+*off* rather than panicking.
+
+`jhol-core` 678 tests, `jhol-treecheck` 12, installer gate PASS.

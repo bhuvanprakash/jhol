@@ -138,10 +138,9 @@ intersection and the rework it depends on).
 
 1. **Payload time.** 19–54 s of a cold install is tarball transfer from the
    registry. Measured as not addressable by more concurrency.
-2. **One clap builder, not two.** `src/main.rs` has a dead builder beside the live
-   one; five fixes in this project trace back to a flag landing in the wrong one
-   (including a 100 % `ci` crash). The panic class is fixed (`flag()` treats an
-   undeclared flag as off), the *silently ignored flag* class is not.
+2. ~~**Two clap builders.**~~ **Resolved**: one `cli_command()` serves both parsing
+   and completion generation, so a flag cannot exist in one tree and not the other.
+   `flag()` still treats an undeclared flag as off, as defence in depth.
 3. **`--as-of` needs full packuments.** 21–24 s against 0.5 s undated. Correctness
    first; the fetch path is the obvious target for the next round.
 4. **Peers are advisory.** Recorded, reported under `JHOL_STRICT_PEER_DEPS`, not

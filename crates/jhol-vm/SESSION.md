@@ -2210,3 +2210,21 @@ I also wrote down the limits plainly (no Promise/microtasks, no BigInt, Symbol i
 string-backed, no TDZ, regex subset, advisory peers, simple hoisting, 179 env knobs).
 A system that documents its gaps is more trustworthy than one that only documents its
 features.
+
+## Journal — 2026-11-07 (cont.): the second clap builder is gone
+
+Extracted the live chain into `fn cli_command() -> Command` and deleted
+`build_completions_cli()`. One definition now serves dispatch and completions. The
+stale tree existed purely for shell completion and had drifted so far that
+`jhol completions` described a CLI that no longer existed; it cost five fixes,
+including a 100 % `ci` crash.
+
+Mechanical work with one real trap: the extracted body still began `let matches =`
+and so returned `()` — the compiler caught it immediately, which is what the gates
+are for. After the fix: 1 builder definition, completions now mention verify (20),
+why-not (4), --as-of (2), --allow-license (2), ci works, 678 tests green.
+
+Kept `flag(&m, name)` as defence in depth: undeclared reads are off, not a panic.
+Documented the landmine as resolved rather than deleting the entry — the reason it
+existed is still true, and the next person to think "just a second command tree for
+X" should read it.

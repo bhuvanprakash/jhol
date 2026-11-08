@@ -105,9 +105,9 @@ Rules that came from being wrong:
 
 ## Landmines (each cost real time)
 
-1. **Two clap builders** in `src/main.rs`: flags must go in the live one inside
-   `main`. A flag added to the dead one is silently ignored — five fixes trace to
-   this.
+1. ~~**Two clap builders**~~ — **resolved**: one `cli_command()`, used by dispatch
+   and by completion generation. It cost five fixes (including a 100 % `ci` crash)
+   before it was worth doing; do not reintroduce a second tree for a "small" reason.
 2. **Daemon staleness**: it holds verdicts across binary upgrades.
 3. **A `timeout`-killed build leaves the old binary.**
 4. **`$!` inside a multi-line bash block** resolves oddly; capture PIDs in a subshell
