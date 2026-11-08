@@ -39,6 +39,7 @@ pub mod lockfile;
 pub mod lockfile_write;
 pub mod materialize;
 pub mod mcp;
+pub mod model_lock;
 pub mod offline_cache;
 pub mod optimized_download;
 pub mod omit;

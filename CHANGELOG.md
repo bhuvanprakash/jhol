@@ -2050,3 +2050,40 @@ that disagree with their own name. Tampering is blocked by the filesystem *and* 
 by `jhol ai verify`.
 
 `jhol-ai` 13 tests, `jhol-core` 682, installer gate PASS.
+
+
+## AI-first slice 2: models under `jhol verify`, streaming pulls with resume
+
+### One command for packages and weights
+
+`jhol ai pull` writes `.jhol/models.lock.json` (commit, per-file SHA-256, size) and
+`jhol verify` checks it alongside the tree:
+
+```
+OK: models match the lock (no package lockfile)
+
+NOT OK: tiny-random-bert: models/.../model.safetensors is 2f892aa16f8e but the lock pins 965f02b6a7e5
+  run `jhol ai pull ...` to restore the pinned model files      # exit 1
+```
+
+`package-lock.json` stays npm's file, so a project remains installable by npm while
+jhol holds it to a stronger standard. A project whose only pinned artifacts are models
+verifies too (`TreeState::Unverified` + a matching model lock used to print "not
+verified", which was wrong).
+
+### Streaming downloads with resume
+
+One pass: stream to disk, hash while writing, resume by range. A 7 GB checkpoint never
+enters memory. Proven end to end:
+
+```
+pull --max-bytes 100000   -> error, partial bytes: 98304
+pull                      -> 520,212 bytes (resumed via Range/206), digest verifies
+verify                    -> OK
+```
+
+A server that ignores the range (200 instead of 206) restarts the file rather than
+appending a duplicate — a checkpoint that hashes wrong with no explanation is the worst
+possible outcome of a "resume".
+
+`jhol-core` 684 tests, `jhol-ai` 13, `jhol-treecheck` 15, installer gate PASS.

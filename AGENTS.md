@@ -7499,3 +7499,18 @@ Also: manifests pin a commit, never a branch. `main` is resolved through
 Remaining from the plan is written down in docs/AI-FIRST.md rather than implied: model
 files in the project lockfile, streaming pulls, the Artifact unification, hardware
 axes, why-not for ML, env fork, attestation, replay.
+
+## Journal — 2026-11-07 (cont.): models in verify; resume proven not assumed
+
+Slice 2: model pins now live in .jhol/models.lock.json and `jhol verify` checks them
+with the tree, so one command answers for packages and weights. A project whose only
+artifacts are models verifies properly now -- it used to print "not verified" because
+the tree verifier had no lockfile to compare, which was honest but useless.
+
+Streaming pulls landed, and I proved resume rather than assuming it: interrupted at
+98,304 bytes with --max-bytes, re-ran, and the file completed to 520,212 bytes with a
+digest that verifies. The code also restarts rather than appends when a server ignores
+the Range header, because a checkpoint that hashes wrong with no explanation is worse
+than a slow download.
+
+Numbers: jhol-core 684, jhol-ai 13, jhol-treecheck 15, installer gate PASS.

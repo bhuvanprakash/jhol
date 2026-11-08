@@ -61,12 +61,51 @@ version had none of that, and a "repair" happily re-linked corrupted bytes.
 Manifests pin a **commit**, never a branch: `main` is resolved once through
 `X-Repo-Commit` and recorded, because a pin that moves is not a pin.
 
+### Models under `jhol verify` — one command, packages *and* weights
+
+`jhol ai pull` now writes `.jhol/models.lock.json` (commit + per-file SHA-256 + size),
+and `jhol verify` checks it together with the tree:
+
+```
+$ jhol verify
+OK: models match the lock (no package lockfile)
+
+$ # after editing a checkpoint in place
+$ jhol verify ; echo $?
+NOT OK: tiny-random-bert: models/.../model.safetensors is 2f892aa16f8e but the lock pins 965f02b6a7e5
+  run `jhol ai pull ...` to restore the pinned model files
+1
+```
+
+`package-lock.json` stays npm's file; the model lock lives beside it in `.jhol/`, so a
+project is still installable by npm while jhol holds it to a stronger standard. The
+verifier's shape is deliberately the same as the tree verifier: compare disk with what
+the lock authorises, name the difference, exit non-zero.
+
+### Streaming pulls with resume
+
+Downloads stream to disk with hashing in one pass — a 7 GB checkpoint never enters
+memory — and resume by range. Proven end to end rather than asserted:
+
+```
+$ jhol ai pull … --max-bytes 100000     # interrupted
+  partial bytes: 98304
+$ jhol ai pull …                        # resumed via Range/206
+1 file(s), 1 downloaded, 520212 bytes
+$ jhol verify
+OK: models match the lock
+```
+
+A server that ignores the range (`200` instead of `206`) restarts the file rather than
+appending a duplicate: a silently corrupted checkpoint that hashes wrong is the worst
+possible outcome of a "resume".
+
 ## Next slices, in order
 
 | slice | what it adds | acceptance |
 |---|---|---|
-| P1b | models in the project lockfile (not only a side manifest) | `jhol verify` covers npm + model files in one command |
-| P1c | streaming + resumable pulls (current cap: one file ≤ `--max-bytes`, buffered) | interrupt at 60 %, resume, digest still matches |
+| ~~P1b~~ | models in the project lockfile | **done** — `jhol verify` covers npm + model files |
+| ~~P1c~~ | streaming + resumable pulls | **done** — interrupted at 98,304 B, resumed, digest verifies |
 | P0 | one `Artifact` shape across npm, wheels, models | chart/verify tests unchanged, one verifier entry point |
 | P3 | hardware/ABI axes in resolution (wheel tags + device detection) | 3 hardware profiles resolve differently and each verifies |
 | P4 | `why-not --axis`: the minimal fix for a CUDA/torch/xformers conflict | one-line fix for the canonical ML conflict |

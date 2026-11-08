@@ -227,6 +227,28 @@ impl HttpClient {
         self.get_with_accept(url, None)
     }
 
+    /// Streaming GET, optionally resuming from a byte offset.
+    pub fn get_stream(
+        &self,
+        url: &str,
+        resume_from: Option<u64>,
+    ) -> Result<StreamBody, String> {
+        let _guard = self.limit.acquire();
+        let resp = match resume_from {
+            Some(off) => self.send_with_retry(|| {
+                self.agent
+                    .get(url)
+                    .set("Range", &format!("bytes={off}-"))
+                    .call()
+            })?,
+            None => self.send_with_retry(|| self.agent.get(url).call())?,
+        };
+        Ok(StreamBody {
+            status: resp.status(),
+            reader: Box::new(resp.into_reader()),
+        })
+    }
+
     /// HEAD request, returning headers with lower-cased names.
     pub fn head_headers(&self, url: &str) -> Result<Vec<(String, String)>, String> {
         let _guard = self.limit.acquire();
@@ -730,6 +752,97 @@ pub fn get(url: &str) -> Result<Vec<u8>, String> {
 /// Upper bound on a range fetch: enough for any real artifact header, small enough
 /// that a server ignoring `Range` cannot make us buffer a checkpoint.
 pub const MAX_RANGE_BYTES: u64 = 32 * 1024 * 1024;
+
+/// A streaming response body.
+pub struct StreamBody {
+    pub status: u16,
+    pub reader: Box<dyn std::io::Read + Send>,
+}
+
+/// Open a GET (optionally resuming from a byte offset) and hand back a reader.
+///
+/// Model weights are the case a package manager cannot buffer: a 7 GB checkpoint
+/// fetched into memory is a crash waiting for a smaller machine. Everything that
+/// downloads large artifacts goes through this.
+pub fn get_stream(url: &str, resume_from: Option<u64>) -> Result<StreamBody, String> {
+    get_global().get_stream(url, resume_from)
+}
+
+/// Download to `dest`, resuming a partial file and hashing as it goes.
+///
+/// Returns `(bytes_written, sha256_hex)` for the *whole* file, including the part
+/// that was already on disk. A partial file is only resumed when the server answers
+/// `206`; a `200` means it ignored the range, so the file is restarted rather than
+/// silently corrupted (that exact mistake produces a checkpoint that hashes wrong
+/// and no explanation).
+pub fn download_to_path(
+    url: &str,
+    dest: &std::path::Path,
+    max_bytes: u64,
+) -> Result<(u64, String), String> {
+    use sha2::{Digest, Sha256};
+
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    let existing = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
+    let mut hasher = Sha256::new();
+    let mut have = 0u64;
+    if existing > 0 {
+        let mut f = std::fs::File::open(dest).map_err(|e| format!("resume open: {e}"))?;
+        let mut buf = vec![0u8; 1 << 20];
+        loop {
+            use std::io::Read;
+            let n = f.read(&mut buf).map_err(|e| format!("resume read: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+            have += n as u64;
+        }
+    }
+
+    let resume = if have > 0 { Some(have) } else { None };
+    let mut body = get_stream(url, resume)?;
+    let mut append = false;
+    if have > 0 {
+        if body.status == 206 {
+            append = true;
+        } else {
+            // Server ignored the range: start over rather than append a duplicate.
+            hasher = Sha256::new();
+            have = 0;
+        }
+    }
+
+    let mut out = if append {
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(dest)
+            .map_err(|e| format!("append open: {e}"))?
+    } else {
+        std::fs::File::create(dest).map_err(|e| format!("create: {e}"))?
+    };
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        use std::io::{Read, Write};
+        let n = body.reader.read(&mut buf).map_err(|e| format!("read: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        if have + n as u64 > max_bytes {
+            return Err(format!(
+                "download exceeds the {} byte limit; raise --max-bytes",
+                max_bytes
+            ));
+        }
+        out.write_all(&buf[..n]).map_err(|e| format!("write: {e}"))?;
+        hasher.update(&buf[..n]);
+        have += n as u64;
+    }
+    out.flush().map_err(|e| format!("flush: {e}"))?;
+    Ok((have, format!("{:x}", hasher.finalize())))
+}
 
 /// HEAD a url and return its response headers (lower-cased names).
 ///

@@ -3894,19 +3894,58 @@ fn run() -> Result<(), String> {
         } else {
             jhol_core::tree_state::verify_tree(std::path::Path::new("."))
         };
+        // Models are part of the environment proof. When a model lock exists, one
+        // command answers for packages *and* weights — that is the whole point of
+        // treating models as artifacts.
+        let model_state = jhol_core::model_lock::ModelLock::load(std::path::Path::new("."))
+            .map(|lock| lock.verify(std::path::Path::new(".")))
+            .unwrap_or(jhol_core::model_lock::ModelState::NoLock);
         let json = flag(&sub_m, "json");
         let quiet = flag(&sub_m, "quiet");
+        if !model_state.is_match()
+            && !matches!(model_state, jhol_core::model_lock::ModelState::NoLock)
+        {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "tree": format!("{:?}", state),
+                        "models": model_state.describe(),
+                    }))
+                    .unwrap_or_default()
+                );
+            } else {
+                eprintln!("NOT OK: {}", model_state.describe());
+                eprintln!("  run `jhol ai pull ...` to restore the pinned model files");
+            }
+            return Err("a pinned model file does not match the lock".to_string());
+        }
         match &state {
             jhol_core::tree_state::TreeState::Match => {
                 if json {
                     println!("{{\"state\":\"match\"}}");
                 } else if !quiet {
                     let total = jhol_core::count_installed_packages(std::path::Path::new("."));
-                    println!("OK: {} packages match the lockfile", total);
+                    let models = match &model_state {
+                        jhol_core::model_lock::ModelState::Match => " + models",
+                        _ => "",
+                    };
+                    println!("OK: {} packages{} match the lockfile", total, models);
                 }
                 return Ok(());
             }
             jhol_core::tree_state::TreeState::Unverified { reason } => {
+                // Models can be the only pinned artifacts in a project (a manifest
+                // with no npm dependencies). Saying "not verified" while the model
+                // lock was checked and matched would be wrong.
+                if model_state.is_match() {
+                    if json {
+                        println!("{{\"state\":\"models_only\"}}");
+                    } else if !quiet {
+                        println!("OK: models match the lock (no package lockfile)");
+                    }
+                    return Ok(());
+                }
                 if json {
                     println!("{{\"state\":\"unverified\",\"reason\":\"{}\"}}", reason);
                 } else if !quiet {
@@ -8659,6 +8698,33 @@ fn cli_command() -> Command {
         )
 }
 
+/// Project-relative directory for the lock (`models/<repo>`), so the lock does not
+/// depend on where the project lives.
+fn cache_relative_dir(dest: &std::path::Path) -> String {
+    let rel = dest.strip_prefix(std::path::Path::new(".")).unwrap_or(dest);
+    rel.to_string_lossy().replace('\\', "/")
+}
+
+/// One model-lock entry from the pins a pull just materialised.
+fn artifact_lock_entries(
+    dir: &str,
+    pins: &[jhol_ai::FilePin],
+) -> jhol_core::model_lock::ModelEntry {
+    jhol_core::model_lock::ModelEntry {
+        source: String::new(),
+        revision: String::new(),
+        dir: dir.to_string(),
+        files: pins
+            .iter()
+            .map(|p| jhol_core::model_lock::ModelFile {
+                path: p.path.clone(),
+                sha256: p.digest.clone(),
+                size: p.size_bytes.unwrap_or(0),
+            })
+            .collect(),
+    }
+}
+
 /// `jhol ai pull` — fetch model files once, keep them in the shared store, and link
 /// them into the project.
 ///
@@ -8743,17 +8809,12 @@ fn pull_model(m: &clap::ArgMatches) -> Result<String, String> {
         let digest = if let Some(d) = local_digest.filter(|d| store.contains(d)) {
             d
         } else {
-            let bytes = jhol_core::http_client::get(&url)
-                .map_err(|e| format!("{url}: {e}"))?;
-            if bytes.len() as u64 > cap {
-                return Err(format!(
-                    "{file} is {} bytes, above --max-bytes {cap}; streaming pulls are not wired yet",
-                    bytes.len()
-                ));
-            }
+            // Streamed to disk with resume and hashing in one pass: a 7 GB
+            // checkpoint must never be buffered in memory, and an interrupted pull
+            // must continue rather than start over.
             let tmp = target.with_extension("part");
-            std::fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
-            let digest = jhol_ai::digest_file(&tmp).map_err(|e| e.to_string())?;
+            let (_bytes, digest) = jhol_core::http_client::download_to_path(&url, &tmp, cap)
+                .map_err(|e| format!("{url}: {e}"))?;
             store.put(&tmp).map_err(|e| e.to_string())?;
             let _ = std::fs::remove_file(&tmp);
             downloaded += 1;
@@ -8770,6 +8831,13 @@ fn pull_model(m: &clap::ArgMatches) -> Result<String, String> {
             size_bytes: Some(size),
         });
     }
+
+    let cached = artifact_lock_entries(&cache_relative_dir(&dest), &pins);
+    let mut lock = jhol_core::model_lock::ModelLock::load(std::path::Path::new("."))
+        .unwrap_or_default();
+    lock.insert(&repo_name, cached);
+    lock.save(std::path::Path::new("."))
+        .map_err(|e| format!("model lock: {e}"))?;
 
     let artifact = ModelArtifact::pin_remote_files(&repo_name, &source, &revision, pins)
         .map_err(|e| e.to_string())?;
