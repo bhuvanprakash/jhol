@@ -423,6 +423,7 @@ impl Compiler {
             ctx,
             FnCtx::ClassMethod | FnCtx::Ctor | FnCtx::DerivedCtor | FnCtx::Script
         ) || has_directive;
+        fs.proto.is_script = matches!(ctx, FnCtx::Script);
         fs.proto.is_generator = f.is_generator;
         // Every function starts with a scope, arrows included. An arrow has no own
         // `this`/`new_target` (both are lexical, resolved as upvalues) so it gets an

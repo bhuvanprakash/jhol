@@ -167,7 +167,28 @@ path, which is why the bug survived a 44-pair corpus. Every function now starts 
 scope; arrows get an empty one because their `this`/`new_target` are lexical.
 Test: `arrow_bodies_can_declare_bindings`.
 
-## 9. Strict-mode assignment to an undeclared name — deliberately not next
+## 9. ~~Strict-mode assignment to an undeclared name~~ — **fixed**
+
+`x = 1` where `x` is unresolvable now throws in strict code:
+
+```
+Cannot access ... → ReferenceError: x is not defined
+```
+
+The prerequisite turned out to be exactly what the earlier note predicted: the frame had
+strictness but not *context*, so `FnProto` gained `is_script`. `Op::DefGlobal` (where an
+unresolved assignment actually lands — the first attempt checked `Op::SetGlobal`, which
+the compiler does not emit for this) now refuses when the frame is strict **and** not the
+script **and** the name is absent from the global object.
+
+Script-level code stays sloppy, because node runs `-e` scripts that way; class bodies and
+`"use strict"` functions throw. Assigning to a name that exists on `globalThis` is still
+allowed in strict code.
+
+Tests: `strict_assignment_tests` (five: strict function, class method, sloppy function,
+script level, existing global) and corpus pair `46-strict-assignment`.
+
+## 9b. The note that led here (kept for the record)
 
 `x = 1` where `x` is unresolvable must throw `ReferenceError` in strict code. The VM has
 per-function strictness (`proto.is_strict`), so the check itself is a few lines in
@@ -184,7 +205,7 @@ kind alongside its strictness; then the check is trivial and the acceptance test
 
 | gap | note |
 |---|---|
-| undeclared global assignment does not raise `ReferenceError` | strictness exists per function; the frame must also record whether it is the script entry (see §9) |
+| ~~undeclared global assignment does not raise `ReferenceError`~~ | **fixed** — §9 |
 | per-property enumerable/writable flags are not modelled | one adversarial fixture is an expected failure for this |
 | interpreter fallback is ~26× slower on impure loops with captured counters | JIT region rejects some real loops (`GetProp` on a non-virtual slot) |
 | `jhol eval -p` with statements | see §1; expressions work on every engine |

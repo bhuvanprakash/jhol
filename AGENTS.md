@@ -7667,3 +7667,20 @@ story incorrectly.
 
 Left documented: dynamic TDZ needs the per-frame init bitmap; the arrow body lexical
 closure case still resolves as a global before declaration.
+
+## Journal — 2026-11-07 (cont.): strict assignment, and the opcode that wasn't there
+
+Closed the strict-assignment gap. The prerequisite I predicted was the prerequisite: the
+frame knew strictness but not context, so FnProto gained is_script.
+
+First attempt went into Op::SetGlobal and nothing threw. The compiler emits
+Op::DefGlobal for an unresolved assignment; SetGlobal is used elsewhere. Zero-output
+probes nearly fooled me into "it compiles so it must be right" -- five probes with
+console.log showed all five cases behaving wrongly (no throw anywhere).
+
+After moving the check: strict function throws with the name, class method throws, sloppy
+function still creates a global, script level stays sloppy (node-compatible -- the whole
+point), and assigning an existing globalThis name in strict code is still allowed.
+
+Lesson repeated: a probe without output is not evidence. `$J eval 'x'` discards the value;
+I had to add console.log before the five cases meant anything.

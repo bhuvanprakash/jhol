@@ -1994,3 +1994,62 @@ mod tdz_and_scope_tests {
         assert_eq!(run(r#"(() => { var v = 7; return v })()"#), 7.0);
     }
 }
+
+#[cfg(test)]
+mod strict_assignment_tests {
+    use crate::vm::Engine;
+
+    fn run(src: &str) -> String {
+        let mut e = Engine::new();
+        e.ensure_started();
+        let v = e.eval_source(src, "<strict-test>").expect("program must run");
+        format!("{:?}", v)
+    }
+
+    /// Strict code may not create a global by assignment, and the message names it.
+    #[test]
+    fn strict_functions_throw_on_undeclared_assignment() {
+        let out = run(
+            r#"(function(){ "use strict"; try { undeclared_zzz = 1; return "no throw" }
+                catch (e) { return e.message } })()"#,
+        );
+        assert!(out.contains("undeclared_zzz is not defined"), "{out}");
+    }
+
+    /// Class bodies are always strict, even without a directive.
+    #[test]
+    fn class_methods_are_strict() {
+        let out = run(
+            r#"class C { m(){ try { undeclared_qqq = 1; return "no throw" }
+                        catch (e) { return e.message } } }
+               new C().m()"#,
+        );
+        assert!(out.contains("undeclared_qqq is not defined"), "{out}");
+    }
+
+    /// Sloppy code keeps the old behaviour: the assignment creates a global.
+    #[test]
+    fn sloppy_functions_still_create_globals() {
+        let out = run(r#"(function(){ sloppy_one = 41; return sloppy_one + 1 })()"#);
+        assert!(out.contains("42"), "{out}");
+    }
+
+    /// The script itself is not strict: node runs `-e` scripts as sloppy code, and a
+    /// package manager that made them strict would diverge on one-liners.
+    #[test]
+    fn scripts_stay_sloppy() {
+        let out = run(r#"script_level_name = 7; script_level_name"#);
+        assert!(out.contains("7"), "{out}");
+    }
+
+    /// Assigning to a name that *does* exist on the global object is fine in strict
+    /// code: the reference resolves.
+    #[test]
+    fn existing_globals_are_writable_in_strict_code() {
+        let out = run(
+            r#"globalThis.existing_www = 1;
+               (function(){ "use strict"; existing_www = 2; return existing_www })()"#,
+        );
+        assert!(out.contains("2"), "{out}");
+    }
+}

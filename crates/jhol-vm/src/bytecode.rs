@@ -402,6 +402,11 @@ pub struct FnProto {
     pub nested: Vec<u32>,
     pub is_arrow: bool,
     pub is_strict: bool,
+    /// True for the entry script (top-level code), false for anything inside a
+    /// function. Strictness alone cannot answer this, and the two questions are
+    /// different: a strict *function* must reject assignment to an undeclared name,
+    /// while a script must not — node runs `-e` scripts as sloppy code.
+    pub is_script: bool,
     pub is_generator: bool,
     /// Number of upvalue slots whose cells come from locals of this frame.
     pub local_cells: Vec<u32>,
@@ -448,6 +453,7 @@ impl FnProto {
             nested: Vec::new(),
             is_arrow: false,
             is_strict: false,
+            is_script: false,
             is_generator: false,
             local_cells: Vec::new(),
             upval_desc: Vec::new(),

@@ -2436,3 +2436,32 @@ make `jhol eval 'x = 1'` throw where `node -e 'x = 1'` does not. Fix the frame's
 first, then the check is trivial.
 
 `jhol-vm` 119 unit tests, corpus 45/45, engine gate PASS.
+
+
+## Engine: strict code may no longer create globals by assignment
+
+`x = 1` on an unresolvable name now throws where it should:
+
+```
+(function(){ "use strict"; undeclared_zzz = 1 })()
+-> ReferenceError: undeclared_zzz is not defined
+```
+
+The prerequisite was exactly what the earlier note predicted: the frame recorded
+strictness but not *context*. `FnProto` gained `is_script`, and the check landed in
+`Op::DefGlobal` — the first attempt put it in `Op::SetGlobal`, which the compiler never
+emits for an unresolved assignment, so nothing threw and the probes all looked "fine".
+
+Behaviour, matched to node rather than to intuition:
+
+| context | assignment to an undeclared name |
+|---|---|
+| `"use strict"` function | **throws**, naming the binding |
+| class method (strict by definition) | **throws** |
+| sloppy function | creates the global (unchanged) |
+| script level (`jhol eval`, `-e`-style) | creates the global — node runs scripts sloppy |
+| existing `globalThis` name, strict code | allowed (the reference resolves) |
+
+Five unit tests (`strict_assignment_tests`) and corpus pair `46-strict-assignment`.
+
+`jhol-vm` 124 tests, corpus 46/46, engine gate PASS, installer gate PASS.

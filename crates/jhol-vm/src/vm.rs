@@ -3318,14 +3318,55 @@ impl Vm {
                         let k = unsafe { &*consts_ptr.add(a as usize) }.clone();
                         let sym = self.const_sym(&k);
                         let v = self.ld(reg_base, b);
-                        self.set_prop(Value::from_ptr(self.globals), PropKey::Sym(sym), v)?;
+                        let g = Value::from_ptr(self.globals);
+                        // Strict code may not create a global by assignment. Two
+                        // separate questions decide it: is this frame strict, and is
+                        // it the *script*? A strict function must throw; a script must
+                        // not, because node runs `-e` scripts as sloppy code.
+                        let (strict, is_script) = self
+                            .frames
+                            .last()
+                            .map(|f| unsafe { ((*f.proto).is_strict, (*f.proto).is_script) })
+                            .unwrap_or((false, true));
+                        if strict && !is_script && !self.has_prop(g, PropKey::Sym(sym)) {
+                            let name = match self.const_value(&k) {
+                                Ok(value) => self.to_string(value).unwrap_or_default(),
+                                Err(_) => String::new(),
+                            };
+                            return Err(crate::errors::reference_error(&format!(
+                                "{} is not defined",
+                                name
+                            )));
+                        }
+                        self.set_prop(g, PropKey::Sym(sym), v)?;
                         next!()
                     }
                     Op::DefGlobal => {
                         let k = unsafe { &*consts_ptr.add(a as usize) }.clone();
                         let sym = self.const_sym(&k);
                         let v = self.ld(reg_base, b);
-                        self.define_prop(Value::from_ptr(self.globals), PropKey::Sym(sym), v);
+                        let g = Value::from_ptr(self.globals);
+                        // An unresolved assignment lands here. Strict code may not
+                        // create a global by assignment, and the two questions are
+                        // separate: is this frame strict, and is it the *script*? A
+                        // strict function must throw; a script must not, because node
+                        // runs `-e` scripts as sloppy code.
+                        let (strict, is_script) = self
+                            .frames
+                            .last()
+                            .map(|f| unsafe { ((*f.proto).is_strict, (*f.proto).is_script) })
+                            .unwrap_or((false, true));
+                        if strict && !is_script && !self.has_prop(g, PropKey::Sym(sym)) {
+                            let name = match self.const_value(&k) {
+                                Ok(value) => self.to_string(value).unwrap_or_default(),
+                                Err(_) => String::new(),
+                            };
+                            return Err(crate::errors::reference_error(&format!(
+                                "{} is not defined",
+                                name
+                            )));
+                        }
+                        self.define_prop(g, PropKey::Sym(sym), v);
                         next!()
                     }
                     Op::GetProp => {
