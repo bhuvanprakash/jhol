@@ -2174,6 +2174,18 @@ impl Compiler {
                 self.assign_to(e, src)?;
             }
             Target::Array(items) => {
+                // Destructuring follows the iterator protocol, so a Set, Map entry
+                // list, generator or string binds its elements instead of nothing.
+                // `__jhol_iter_to_array` returns a real array unchanged, so the
+                // common `const [a, b] = arr` still costs no allocation.
+                let src = if items.is_empty() {
+                    src
+                } else {
+                    let converted = self.emit_native("__jhol_iter_to_array", &[src]);
+                    let holder = self.alloc_temp();
+                    self.emit(Op::Move, holder, converted, 0);
+                    holder
+                };
                 for (i, item) in items.iter().enumerate() {
                     let item = match item {
                         Some(i) => i,

@@ -219,23 +219,24 @@ allowed in strict code.
 Tests: `strict_assignment_tests` (five: strict function, class method, sloppy function,
 script level, existing global) and corpus pair `46-strict-assignment`.
 
-## 8b. Array destructuring does not use the iterator protocol
+## 8b. ~~Array destructuring does not use the iterator protocol~~ — **fixed**
 
-**Today:** `const [x, y] = new Set([3, 4])` yields `undefined, undefined`; node yields `3, 4`.
-Array patterns index the value instead of iterating it, so any non-array iterable (Set, Map,
-generator, `arguments`-like) destructures to nothing.
+**Was:** `const [x, y] = new Set([3, 4])` bound `undefined, undefined`; node binds `3, 4`.
+Array patterns indexed the right-hand side instead of iterating it, so every non-array
+iterable destructured to nothing.
 
-**What it needs:** the bind path for `Target::Array` should materialise the right-hand side
-through the iterator when it is not statically an array — the spread machinery already does
-this (`__jhol_push_all` drains an iterable into an array), so the fix is to reuse that op in
-the *binding* path, not to build a second iteration implementation.
+**Now:** the bind path materialises through the iterator protocol first, reusing the spread
+machinery (`__jhol_push_all` already drained iterables) via one new native,
+`__jhol_iter_to_array`. That helper **returns a real array unchanged**, so the common
+`const [a, b] = arr` path still allocates nothing.
 
-**Acceptance:** destructuring from a Set, a Map entry array, a generator and a string all
-match node; destructuring an array stays unchanged and allocation-free (the current path
-must still be taken when the right-hand side is a literal array).
+Verified against node for: Set, Map entry list, generator, string, rest-from-Set, defaults,
+empty array, plain array, and parameter destructuring. Corpus pair
+`49-array-destructuring` (the fixture itself was corrected twice — node yields the *entry
+array* for a Map, which is not what I assumed).
 
-Found by the well-known-symbol migration: the same sweep that proved `[...set]` correct
-showed `[a, b] = set` wrong, because they use different paths.
+Found while migrating well-known symbols: the same sweep that proved `[...set]` correct
+showed `[a, b] = set` wrong, because the two used different paths. They now share one.
 
 ## 9b. The note that led here (kept for the record)
 

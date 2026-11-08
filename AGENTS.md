@@ -7722,3 +7722,15 @@ the end of a long session -- same rule as eval: no structural change without its
 Also: my .expected fixture was wrong (a|1 vs a,1 for Array.from(Map).join("|")). The engine
 was right and the corpus said so -- which is exactly why the corpus compares to node instead
 of to my memory.
+
+## Journal — 2026-11-07 (cont.): destructuring via the iterator; fixtures lie, node does not
+
+Closed 8b: array patterns now materialise through the iterator protocol, reusing the spread
+machinery via __jhol_iter_to_array, which returns a real array unchanged so the common case
+still allocates nothing. Set, Map entries, generator, string, rest, defaults, params -- all
+match node.
+
+I got the expected fixture wrong twice in the same file: a|1 vs a,1, then assuming
+destructuring a Map yields key and value when it yields the entry array. Both times node was
+right and the corpus said so. That is the argument for comparing to node rather than to
+anything I believe.

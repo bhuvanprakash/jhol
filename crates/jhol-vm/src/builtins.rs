@@ -577,6 +577,7 @@ pub fn install(vm: &mut Vm) {
 
     gcd(vm, "__jhol_push", n_h_push);
     gcd(vm, "__jhol_push_all", n_h_push_all);
+    gcd(vm, "__jhol_iter_to_array", n_iter_to_array);
     gcd(vm, "__jhol_apply", n_h_apply);
     gcd(vm, "__jhol_apply_new", n_h_apply_new);
     gcd(vm, "__jhol_tonum", n_h_tonum);
@@ -4110,6 +4111,27 @@ native!(n_h_push, |vm, _this, args| {
     }
     Ok(arr)
 });
+/// Materialise a value for array *destructuring*: an array comes back as itself (no
+/// allocation on the common `const [a, b] = arr` path), anything else is drained
+/// through the iterator protocol exactly as spread does.
+///
+/// Array patterns used to index the right-hand side directly, so
+/// `const [x, y] = new Set([3, 4])` bound `undefined, undefined` while node bound
+/// `3, 4`. The machinery already existed for spread; this reuses it instead of
+/// writing a second iteration implementation.
+native!(n_iter_to_array, |vm, _this, args| {
+    let v = arg(args, 0);
+    if v.is_array() {
+        return Ok(v);
+    }
+    let arr = vm.new_array();
+    let vals = collect_iterable(vm, v)?;
+    for item in vals {
+        unsafe { arr.as_array_mut() }.push(item);
+    }
+    Ok(arr)
+});
+
 native!(n_h_push_all, |vm, _this, args| {
     let arr = arg(args, 0);
     let src = arg(args, 1);

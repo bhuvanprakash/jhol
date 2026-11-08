@@ -2531,3 +2531,35 @@ rather write it with its acceptance test than bolt it on at the end of a session
 
 Corpus pair `48-wellknown-symbols`. `jhol-vm` 124 tests, corpus 48/48, engine gate PASS,
 installer gate PASS.
+
+
+## Engine: array destructuring follows the iterator protocol
+
+`const [x, y] = new Set([3, 4])` bound `undefined, undefined`; node binds `3, 4`. Array
+patterns indexed the right-hand side instead of iterating it, so every non-array iterable
+(Set, Map entries, generator, string) destructured to nothing.
+
+The bind path now materialises through the iterator via one native,
+`__jhol_iter_to_array`, which reuses the existing spread machinery and **returns a real
+array unchanged** — so the common `const [a, b] = arr` still costs no allocation.
+
+Verified against node:
+
+| pattern | result |
+|---|---|
+| `const [x, y] = new Set([3,4])` | `3 4` |
+| `const [a, b] = new Map([["k",1]])` | `["k",1] undefined` (the entry array — node agrees) |
+| `const [p, q] = generator()` | `1 2` |
+| `const [c, d] = "ab"` | `a b` |
+| `const [h, ...t] = new Set([1,2,3])` | `1 2,3` |
+| `function f([a, b])` called with a Set | `9` |
+
+Corpus pair `49-array-destructuring`. `jhol-vm` 124 tests, corpus 49/49, engine gate PASS,
+installer gate PASS.
+
+### Note on the fixtures
+
+I wrote the expected output wrong **twice** while adding this pair — first `a|1` instead of
+`a,1`, then assuming `const [a, b] = map` yields the key and value rather than the entry
+array. Both times node was right and the corpus caught it. The corpus compares to node, not
+to my memory, which is the only reason those mistakes cost minutes instead of shipping.
