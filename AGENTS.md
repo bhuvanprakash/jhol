@@ -7390,3 +7390,16 @@ per-version license, so the feature saw "unlicensed" everywhere until
 prune_packument_in_place_keeping retained it. Third time this session that a
 feature was broken by our own pruning. The rule I keep writing down: when data
 "looks missing", check what upstream deleted before blaming the source.
+
+## Journal — 2026-11-07 (cont.): the last fingerprint predicate
+
+`lockfile_fingerprint_matches()` was the final place that could say "up to date"
+without asking the tree. Rather than gate its call sites one by one (the pattern
+that took four attempts earlier), I put the verdict inside the function: every
+caller now inherits it.
+
+Verified end to end on the 266-package jest tree: tampered chalk 9.9.9 is restored
+to 4.1.2, verify exits 0, warm install 18 ms.
+
+Note for myself: 18 ms vs the 9-10 ms I remembered is tree size (266 vs 71
+packages), not a regression. I nearly wrote it up as one.

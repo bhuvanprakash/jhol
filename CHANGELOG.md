@@ -1859,3 +1859,34 @@ No competitor does this at resolution time: an audit tells you your installed tr
 is unacceptable; this builds one that is acceptable.
 
 `jhol-core` 678 tests, `jhol-treecheck` 12, installer gate PASS.
+
+
+## One freshness authority, applied at the source
+
+`lockfile_fingerprint_matches()` was the last predicate that could authorise
+skipping an install without looking at the tree:
+
+```rust
+prepared_tree_is_valid(cwd) && can_skip_install_for_dir(cwd)   // before
+… && tree_state::verify_tree(cwd).is_match()                    // after
+```
+
+The first two are hints — they prove nothing changed *around* the tree, never that
+the tree is what the lockfile authorises. Putting the verdict at the source means
+every caller inherits the authority instead of re-deriving it, which is the
+property this project kept needing to re-apply lane by lane.
+
+Verified on a 266-package `jest` tree:
+
+```
+tamper node_modules/chalk -> 9.9.9
+jhol install             -> Repaired (266 packages in node_modules)
+node_modules/chalk       -> 4.1.2          (restored from the lockfile)
+jhol verify              -> OK, exit 0
+warm install             -> 18 ms
+```
+
+18 ms is the honest cost of checking the tree instead of trusting a timestamp (the
+earlier 9–10 ms figure was a 71-package tree, not a faster path).
+
+`jhol-core` 678 tests, `jhol-treecheck` 12, installer gate PASS.

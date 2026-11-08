@@ -149,11 +149,20 @@ pub use workspaces::list_workspace_roots;
 pub use prefetch::prefetch_from_lockfile;
 pub use utils::{log, set_output_silenced};
 
-/// Check whether the current project proof and recorded filesystem state still match.
+/// Check whether the current project is installed and current.
+///
+/// The proof and the recorded filesystem state are *hints*: they can prove nothing
+/// changed around the tree, never that the tree is what the lockfile authorises. A
+/// package.json edited inside a package and a directory the lockfile never
+/// mentioned both satisfied them, which is how a tampered tree could be reported
+/// as up to date. The verdict now comes from the tree itself, so every caller of
+/// this function inherits the authority instead of re-deriving it — the property
+/// this project keeps needing and keeps having to re-apply per lane.
 pub fn lockfile_fingerprint_matches() -> bool {
     let cwd = std::path::Path::new(".");
     crate::instant_lock_proof::prepared_tree_is_valid(cwd)
         && crate::daemon_cache::can_skip_install_for_dir(cwd)
+        && crate::tree_state::verify_tree(cwd).is_match()
 }
 
 /// Check whether an installable lockfile exists.
