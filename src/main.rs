@@ -2860,10 +2860,21 @@ fn run() -> Result<(), String> {
                     );
                 }
             };
-            format!(
-                "console.log(eval({}));",
-                serde_json::to_string(&transpiled).unwrap_or_else(|_| "\"\"".to_string())
-            )
+            // `console.log(eval(src))` is what `node -p` does, and it needs a global
+            // `eval`. JholVM has none — its `run_module` clears the stack and frames,
+            // so `eval` there needs a reentrant entry point rather than a ten-line
+            // builtin (see docs/ENGINE-GAPS.md). Wrapping the source in parentheses
+            // gives the same result for an expression, which is what `-p` documents,
+            // and keeps the `eval` form for engines that have it.
+            let engine = std::env::var("JHOL_RUNTIME_ENGINE").unwrap_or_default();
+            if engine.eq_ignore_ascii_case("jholvm") || engine.eq_ignore_ascii_case("vm") {
+                format!("console.log(({}));", transpiled)
+            } else {
+                format!(
+                    "console.log(eval({}));",
+                    serde_json::to_string(&transpiled).unwrap_or_else(|_| "\"\"".to_string())
+                )
+            }
         } else {
             code.clone()
         };

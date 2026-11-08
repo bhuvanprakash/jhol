@@ -167,6 +167,19 @@ pub fn handle_mcp_request(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                         }
                     },
                     {
+                        "name": "jhol_plan_model",
+                        "description": "Quote the cost of pulling model files before doing it: sizes from the Hub, and an estimated duration. Returns the plan, not the download.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "source": { "type": "string", "description": "hf://owner/repo" },
+                                "file": { "type": "array", "items": { "type": "string" } },
+                                "revision": { "type": "string" }
+                            },
+                            "required": ["source", "file"]
+                        }
+                    },
+                    {
                         "name": "jhol_plan_python",
                         "description": "Resolve a Python package (with its transitive wheel graph) for this machine without installing: returns the chosen artifact per package, what was skipped by environment markers, and the axes used.",
                         "inputSchema": {
@@ -437,6 +450,50 @@ fn execute_tool(name: &str, args: &Value) -> Value {
                 }),
             }
         }
+        "jhol_plan_model" => {
+            let source = args.get("source").and_then(|v| v.as_str()).unwrap_or("");
+            let files: Vec<String> = args
+                .get("file")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+            let revision = args.get("revision").and_then(|v| v.as_str()).unwrap_or("main");
+            let Some(repo) = source.strip_prefix("hf://") else {
+                return json!({"content": [{"type": "text", "text": "source must be hf://owner/repo"}]});
+            };
+            let mut total = 0u64;
+            let mut rows = Vec::new();
+            for file in &files {
+                let url = format!("https://huggingface.co/{repo}/resolve/{revision}/{file}");
+                // Size from the Hub's own headers: a HEAD costs a round trip, no bytes.
+                match crate::http_client::head_headers(&url) {
+                    Ok(headers) => {
+                        let size = headers
+                            .iter()
+                            .find(|(k, _)| k == "x-linked-size" || k == "content-length")
+                            .and_then(|(_, v)| v.parse::<u64>().ok())
+                            .unwrap_or(0);
+                        total += size;
+                        rows.push(json!({"file": file, "bytes": size, "known": size > 0}));
+                    }
+                    Err(e) => rows.push(json!({"file": file, "error": e})),
+                }
+            }
+            let seconds = total.div_ceil(crate::pyinstall::THROUGHPUT_BYTES_PER_SEC.max(1));
+            json!({
+                "content": [{
+                    "type": "text",
+                    "text": serde_json::to_string_pretty(&json!({
+                        "source": source,
+                        "revision": revision,
+                        "files": rows,
+                        "total_bytes": total,
+                        "estimated_seconds": seconds,
+                        "note": "sizes come from the Hub; files already linked into the shared store are not re-downloaded",
+                    })).unwrap_or_default()
+                }]
+            })
+        }
         "jhol_plan_python" => {
             let package = args.get("package").and_then(|v| v.as_str()).unwrap_or("");
             let version = args.get("version").and_then(|v| v.as_str());
@@ -451,6 +508,26 @@ fn execute_tool(name: &str, args: &Value) -> Value {
             let mut provider = crate::pyresolve::PyPIProvider::new();
             match crate::pyresolve::resolve(&mut provider, &roots, &host, &Default::default()) {
                 Ok(resolved) => {
+                    // Quote the cost: an agent should never start a large pull blind.
+                    let mut artifacts: std::collections::BTreeMap<
+                        String,
+                        crate::pyresolve::ArtifactFile,
+                    > = std::collections::BTreeMap::new();
+                    for (name, (version, chosen)) in &resolved.packages {
+                        let Some(chosen) = chosen else { continue };
+                        if let Ok(meta) = crate::pyresolve::Provider::release(
+                            &mut provider,
+                            name,
+                            Some(version),
+                        ) {
+                            if let Some(a) = meta.artifacts.iter().find(|a| &a.filename == chosen) {
+                                artifacts.insert(a.filename.clone(), a.clone());
+                            }
+                        }
+                    }
+                    let store =
+                        std::path::PathBuf::from(crate::utils::get_cache_dir()).join("py_store");
+                    let cost = crate::pyinstall::plan_cost(&resolved, &artifacts, &store);
                     let packages: Vec<serde_json::Value> = resolved
                         .packages
                         .iter()
@@ -465,6 +542,8 @@ fn execute_tool(name: &str, args: &Value) -> Value {
                                 "axes": host.summary(),
                                 "packages": packages,
                                 "skipped_by_marker": resolved.skipped,
+                                "cost": cost,
+                                "cost_summary": cost.summary(),
                             })).unwrap_or_default()
                         }]
                     })

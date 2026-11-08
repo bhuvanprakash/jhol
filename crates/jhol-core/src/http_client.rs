@@ -252,11 +252,9 @@ impl HttpClient {
     /// HEAD request, returning headers with lower-cased names.
     pub fn head_headers(&self, url: &str) -> Result<Vec<(String, String)>, String> {
         let _guard = self.limit.acquire();
-        let resp = self.send_with_retry(|| {
-            // `ureq` has no HEAD helper on Agent; a GET with no body read is the
-            // portable route, and the caller only needs the headers.
-            self.agent.get(url).set("Range", "bytes=0-0").call()
-        })?;
+        // A real HEAD: a ranged GET reports the range's length (1 byte), which made a
+        // cost estimate claim a 500 KB model was 1 byte.
+        let resp = self.send_with_retry(|| self.agent.request("HEAD", url).call())?;
         Ok(resp
             .headers_names()
             .into_iter()

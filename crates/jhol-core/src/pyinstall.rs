@@ -241,6 +241,70 @@ where
     Ok(lock)
 }
 
+/// What a plan would cost before it runs.
+///
+/// An agent should never start a multi-gigabyte pull blind: the resolver already knows
+/// which artifacts it chose, and the store already knows which of them are present. The
+/// estimate is deliberately conservative and honest about being an estimate — it quotes
+/// bytes exactly, and time from a measured throughput constant rather than pretending to
+/// predict a network.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub struct CostEstimate {
+    pub packages: usize,
+    pub total_bytes: u64,
+    /// Bytes that would have to be downloaded (artifacts not in the store).
+    pub missing_bytes: u64,
+    pub cached_packages: Vec<String>,
+    pub missing_packages: Vec<String>,
+    /// Rough seconds for the missing bytes, at `THROUGHPUT_BYTES_PER_SEC`.
+    pub estimated_seconds: u64,
+}
+
+/// Conservative download throughput used for estimates: ~40 Mbit/s. Deliberately low so
+/// the quote errs towards "slower than reality" rather than the reverse.
+pub const THROUGHPUT_BYTES_PER_SEC: u64 = 5 * 1024 * 1024;
+
+impl CostEstimate {
+    pub fn summary(&self) -> String {
+        format!(
+            "{} package(s): {:.1} MB total, {:.1} MB to download ({} cached), ~{} s",
+            self.packages,
+            self.total_bytes as f64 / 1_048_576.0,
+            self.missing_bytes as f64 / 1_048_576.0,
+            self.cached_packages.len(),
+            self.estimated_seconds
+        )
+    }
+}
+
+/// Estimate the cost of installing `resolved`, given the artifact metadata and store.
+pub fn plan_cost(
+    resolved: &Resolved,
+    artifacts: &BTreeMap<String, ArtifactFile>,
+    store: &Path,
+) -> CostEstimate {
+    let mut est = CostEstimate {
+        packages: resolved.packages.len(),
+        ..Default::default()
+    };
+    for (name, (_version, chosen)) in &resolved.packages {
+        let Some(artifact) = chosen.as_ref().and_then(|c| artifacts.get(c)) else {
+            continue;
+        };
+        est.total_bytes += artifact.size;
+        if artifact.sha256.is_empty() || !store.join(&artifact.sha256).is_file() {
+            est.missing_bytes += artifact.size;
+            est.missing_packages.push(name.clone());
+        } else {
+            est.cached_packages.push(name.clone());
+        }
+    }
+    est.estimated_seconds = est.missing_bytes.div_ceil(THROUGHPUT_BYTES_PER_SEC.max(1));
+    est.cached_packages.sort();
+    est.missing_packages.sort();
+    est
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,6 +404,40 @@ mod tests {
         let files = extract_wheel(&wheel, &dest).unwrap();
         assert!(files.contains_key("p/__init__.py"));
         assert!(!files.keys().any(|k| k.contains(".data/")));
+    }
+
+    #[test]
+    fn cost_estimate_splits_cached_from_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(store.join("aaaa"), b"cached").unwrap();
+        let artifacts = BTreeMap::from([
+            (
+                "a.whl".to_string(),
+                ArtifactFile { filename: "a.whl".into(), url: String::new(), sha256: "aaaa".into(), size: 1_000_000 },
+            ),
+            (
+                "b.whl".to_string(),
+                ArtifactFile { filename: "b.whl".into(), url: String::new(), sha256: "bbbb".into(), size: 3_000_000 },
+            ),
+        ]);
+        let resolved = Resolved {
+            packages: BTreeMap::from([
+                ("a".to_string(), ("1.0.0".to_string(), Some("a.whl".to_string()))),
+                ("b".to_string(), ("1.0.0".to_string(), Some("b.whl".to_string()))),
+            ]),
+            skipped: Vec::new(),
+        };
+        let est = plan_cost(&resolved, &artifacts, &store);
+        assert_eq!(est.packages, 2);
+        assert_eq!(est.total_bytes, 4_000_000);
+        assert_eq!(est.missing_bytes, 3_000_000, "only the uncached artifact downloads");
+        assert_eq!(est.cached_packages, vec!["a"]);
+        assert_eq!(est.missing_packages, vec!["b"]);
+        assert!(est.estimated_seconds >= 1);
+        assert!(est.summary().contains("to download"), "{}", est.summary());
+        assert!(est.summary().contains("2.9 MB"), "{}", est.summary());
     }
 
     #[test]

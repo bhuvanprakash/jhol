@@ -2394,3 +2394,24 @@ retries briefly. Five consecutive full-suite runs green (712 tests).
 Remaining from the plan: MCP responses quoting cost (bytes/time) before an agent commits,
 and the engine's known gaps (Promise/BigInt/TDZ). Both are stated in the CHANGELOG status
 block, which is now the first thing anyone reads.
+
+## Journal — 2026-11-07 (cont.): costing plans; and refusing to half-build eval
+
+Agents can now price a plan: plan_python quotes total/to-download bytes and an estimate
+from the store, plan_model quotes a Hub pull from HEAD headers. The size lookup needed a
+real HEAD -- my ranged-GET version reported the range's 1 byte and claimed a 520 KB model
+was 1 byte.
+
+Then a user-visible bug: `jhol eval -p` failed on JholVM for every input, because -p wraps
+in console.log(eval(...)) and JholVM has no global eval. Fixed for expressions (wrap
+instead of evaluate) and documented the gap.
+
+I did NOT write a fake eval. Reading run_module showed self.stack.clear(), frames.clear(),
+handlers.clear() -- the VM is not reentrant, so a native eval would destroy the caller's
+stack mid-loop. A correct one needs save/restore plus GC rooting of the result, and direct
+-eval scope semantics are a second problem. That is a deliberate multi-day change with an
+acceptance test, so it went into docs/ENGINE-GAPS.md with seven siblings rather than into
+this commit half-done.
+
+The register itself is the deliverable: eight gaps, each verified by running the engine
+today, each with the mechanism and the acceptance test written down first.

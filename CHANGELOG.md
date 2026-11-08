@@ -2310,3 +2310,40 @@ on drop", not "visible immediately", so it now retries briefly. Five consecutive
 runs of the whole suite (712 tests).
 
 `jhol-core` 712 tests, `jhol-ai` 13, `jhol-treecheck` 15, installer gate PASS.
+
+
+## MCP cost estimates, and an honest engine-gap register
+
+### Agents can price a plan before committing
+
+`jhol_plan_python` now quotes cost — total bytes, bytes that would actually download
+(cache-aware, using the store), and an estimated duration at a deliberately conservative
+throughput — and `jhol_plan_model` quotes a Hugging Face pull from HEAD headers:
+
+```
+jhol_plan_python {package: requests}   -> 5 package(s): 0.5 MB total, 0.5 MB to download (0 cached), ~1 s
+jhol_plan_model  {source: hf://…, file: [model.safetensors, config.json]}
+                                       -> 520,760 bytes, ~1 s
+```
+
+The estimate quotes bytes exactly and time from a stated constant; it does not pretend to
+predict a network. Finding the size needed a real `HEAD` — my first version used a ranged
+GET, which reports the *range's* length and made a 520 KB model claim to be 1 byte.
+
+### `jhol eval -p` was broken on JholVM
+
+`-p` wraps the source in `console.log(eval(...))`, and JholVM has no global `eval`, so
+every `-p` invocation on that engine failed with `TypeError: undefined is not a function`.
+Expressions now work on every engine (the source is wrapped instead of evaluated), and the
+underlying gap is documented rather than papered over.
+
+### `docs/ENGINE-GAPS.md`
+
+Eight measured gaps with the mechanism each fix needs and its acceptance test: `eval`
+(the VM is not reentrant — `run_module` clears stack, frames and handlers, so a correct
+`eval` needs save/restore and GC rooting), `Promise`/microtasks, `BigInt` (NaN-boxing tag),
+`Symbol` as a real primitive, TDZ (per-frame init bitmap + `CheckInit`), `arguments`, the
+regex subset, and assorted strict-mode gaps. Every one was verified by running the engine
+today, not by reading the source.
+
+`jhol-core` 713 tests, `jhol-ai` 13, `jhol-treecheck` 15, installer gate PASS.
