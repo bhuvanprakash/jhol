@@ -2347,3 +2347,39 @@ regex subset, and assorted strict-mode gaps. Every one was verified by running t
 today, not by reading the source.
 
 `jhol-core` 713 tests, `jhol-ai` 13, `jhol-treecheck` 15, installer gate PASS.
+
+
+## `eval` attempted for real, then reverted — and why that is the useful outcome
+
+The engine-gap register said "a correct `eval` needs save/restore plus GC rooting". I
+tried it: swap `stack`/`frames`/`handlers`, run the nested module, restore, retain the
+result. It compiles, and it aborts on the first trivial input:
+
+```
+thread panicked: unsafe precondition violated:
+slice::get_unchecked_mut requires that the index is within the slice
+```
+
+inside the register accessors, whose comment states the invariant this breaks:
+
+> *Bounds are a compile-time invariant: every frame resizes the stack to its `nslots` on
+> entry, so the index is always in range.*
+
+**The stack is not storage, it is a layout.** Frames hold `reg_base`/`stack_base` indices
+into it, and the dispatch loop relies on that layout holding for the whole run. Swapping
+the vector underneath a live loop cannot preserve it. A correct `eval` needs one of:
+
+* a **separate** stack (and base offsets) for the nested run, or
+* an explicit stack pointer threaded through `ld`/`st` so a nested run cannot violate the
+  layout.
+
+Both are structural changes with their own acceptance tests. Reverted rather than shipped:
+an engine that aborts on `eval("1+1")` is worse than one that reports the gap, and a UB
+check firing on a two-character program is not something to leave behind.
+
+Everything else stays green: `jhol-vm` 116 tests, engine gate PASS, and the documented
+interim behaviour (`jhol eval -p` wraps the expression instead of calling `eval`) still
+works on all three engines.
+
+`docs/ENGINE-GAPS.md` now records the attempt as evidence, so the next person starts from
+"the stack layout is the obstacle", not from "add a builtin".

@@ -7625,3 +7625,23 @@ this commit half-done.
 
 The register itself is the deliverable: eight gaps, each verified by running the engine
 today, each with the mechanism and the acceptance test written down first.
+
+## Journal — 2026-11-07 (cont.): eval, attempted and reverted on principle
+
+I implemented reentrant eval: swap stack/frames/handlers, run the nested module, restore,
+retain the result. It compiled and aborted on eval("1+1") with a get_unchecked_mut
+precondition violation inside ld()/st().
+
+The cause is worth writing down: the stack is not storage, it is a layout. Frames hold
+reg_base/stack_base indices into it and the dispatch loop assumes every frame resized it
+to nslots on entry. A vector swap underneath a live loop cannot preserve that. The real
+fix is a separate stack for nested runs or an explicit stack pointer threaded through the
+accessors -- both structural.
+
+Reverted. An engine that aborts on a two-character program is worse than one that reports
+the gap, and I will not leave a UB check firing behind me. The engine gate is green (116
+tests) and the documented interim behaviour still works.
+
+The register now carries the attempt as evidence, which is more useful than the original
+"needs save/restore" sentence: the next attempt starts from the layout invariant, not from
+the builtin.

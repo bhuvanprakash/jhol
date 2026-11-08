@@ -35,8 +35,31 @@ the interpreter loop would destroy the caller's stack, frames and exception hand
 `eval`, so `node -p`-style expression printing works on this engine. Statements with
 `-p` produce a syntax error naming the wrapper, which is honest about the gap.
 
+**Attempted and reverted (evidence for the real fix).** Saving `stack`, `frames` and
+`handlers`, running the nested module and restoring them aborts on the first trivial
+`eval("1 + 1")` with a `slice::get_unchecked_mut` precondition violation inside the
+register accessors:
+
+```rust
+fn ld(&self, base: usize, r: u32) -> Value {
+    // "Bounds are a compile-time invariant: every frame resizes the stack to its
+    //  nslots on entry, so the index is always in range."
+    unsafe { *self.stack.get_unchecked(base + r as usize) }
+}
+```
+
+That invariant is the reason a naive swap is unsafe: the stack is not just storage, it is
+a layout the dispatch loop relies on, and the frames' `reg_base`/`stack_base` are indices
+into it. A correct fix must either (a) run the nested module on a **separate** stack with
+its own base offsets, or (b) thread an explicit stack pointer through the accessors so a
+nested run cannot violate the layout. Both are structural; neither is a builtin-sized
+change. Reverted rather than shipped: an engine that aborts on `eval("1+1")` is worse than
+one that says it does not support eval.
+
 **Acceptance for the fix:** `eval("1+1") === 2`, `eval("{ let x = 1; x }") === 1`, a
-throwing eval leaves the caller's `try/catch` working, and the corpus stays green.
+throwing eval leaves the caller's `try/catch` working, a nested eval inside a running
+function leaves its locals intact, and the corpus plus JIT/interpreter agreement stay
+green.
 
 ---
 
