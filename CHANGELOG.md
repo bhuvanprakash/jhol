@@ -1606,3 +1606,42 @@ identical domains.
 
 `jhol-core` 665 tests (7 ignored, each with its reason), `jhol-treecheck` 12,
 installer gate PASS; `jest` warm `Up to date`, `express` 71 packages.
+
+
+## `jhol why-not <pkg>@<range>` — minimal unsat core, offline
+
+"Resolution failed" is the least useful sentence a package manager can say. The
+reason a range is unavailable always has the same shape: the versions that satisfy
+the request are exactly the ones some dependents forbid. Because versions are
+matched by predicate, that question is a **set intersection**, and the smallest
+set of requirements whose intersection is empty is found by shrinking greedily —
+drop a requirement, and if the intersection is still empty, it was never needed.
+No clause database, no nogoods: the representation already is the solver's
+explanation language.
+
+```
+$ jhol why-not chalk@^3
+no published version of chalk satisfies ^3 together with the installed tree.
+  the only versions matching it are: 3.0.0
+  and these requirements forbid every one of them:
+    jest-watcher@29.7.0 needs chalk ^4.0.0
+  relaxing any one of them (or the request) would allow a version to be chosen.
+```
+
+Three outcomes, three answers, and the tool never confuses them:
+
+| situation | answer |
+|---|---|
+| the range is already installed | `chalk@^4 is already installed … 4.3.0 at node_modules/chalk` |
+| published but forbidden | the **minimal core**, one requirement where one suffices |
+| nothing published in that range | says so, and names the newest published version |
+
+The middle case is the whole point: on a real `jest` tree, `chalk@^3` is blocked by
+**one** dependent, not by the thirty that mention `chalk`. A core that names the
+whole tree is a log, not an explanation.
+
+Runs offline from the cached packuments through the self-healing index
+(`load_cache_dir`), so it costs milliseconds and works on a plane. Attribution and
+ranges come from the lockfile; only version lists come from metadata.
+
+`jhol-core` 668 tests (3 new), `jhol-treecheck` 12, installer gate PASS.

@@ -3638,6 +3638,16 @@ fn run() -> Result<(), String> {
                 )
             )
             .subcommand(
+                Command::new("why-not")
+                    .about("Explain why a range of a package cannot be used, and what would allow it")
+                    .arg(
+                        Arg::new("spec")
+                            .required(true)
+                            .value_name("PACKAGE@RANGE")
+                            .help("Package and range, e.g. chalk@^4"),
+                    ),
+            )
+            .subcommand(
                 Command::new("revoke-scripts")
                     .about("Revoke script consent for packages")
                     .arg(
@@ -5520,6 +5530,38 @@ fn run() -> Result<(), String> {
                     println!();
                     print!("{}", report.render());
                 }
+            }
+        }
+        return Ok(());
+    }
+
+    if let Some(("why-not", sub_m)) = matches.subcommand() {
+        let raw = sub_m
+            .get_one::<String>("spec")
+            .map(|s| s.as_str())
+            .unwrap_or_default();
+        let (package, range) = match raw.rsplit_once('@') {
+            Some((name, r)) if !name.is_empty() => (name.to_string(), r.to_string()),
+            _ => (raw.to_string(), "*".to_string()),
+        };
+        let range = if range.trim().is_empty() {
+            "*".to_string()
+        } else {
+            range
+        };
+        let cache = std::path::PathBuf::from(jhol_core::utils::get_cache_dir()).join("packuments");
+        match jhol_core::why_not::explain(
+            &cache,
+            std::path::Path::new("."),
+            &package,
+            &range,
+        ) {
+            Some(report) => print!("{}", report.render()),
+            None => {
+                return Err(format!(
+                    "no cached metadata for {}; run `jhol install {}` once so its versions are known",
+                    package, package
+                ))
             }
         }
         return Ok(());

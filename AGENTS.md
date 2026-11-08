@@ -7284,3 +7284,19 @@ identical domains.
 
 Both are the kind of thing that makes a resolver liked rather than fast: an answer
 to "why is this here" that costs nothing, and determinism you can test.
+
+## Journal — 2026-11-07 (cont.): why-not, and the core that names one thing
+
+`jhol why-not pkg@range` now answers with the *minimal* set of requirements that
+forbids the range. Greedy shrink over set intersections: drop a requirement, if
+the intersection is still empty it was never needed. On a real jest tree, chalk@^3
+is blocked by one dependent (jest-watcher needs ^4), not by the thirty that mention
+chalk — a core that lists the whole tree is a log, not an explanation.
+
+The first version answered "you cannot use ansi-styles@^4" when 4.3.0 was
+installed and in use. Caught by trying it on a real tree, not by the tests. Now an
+already-installed range is answered as installed, with its path, before any
+conflict analysis.
+
+No clause DB, no nogoods — the bitmap representation is already the explanation
+language, which is why this costs milliseconds and runs offline from the cache.
