@@ -63,20 +63,47 @@ green.
 
 ---
 
-## 2. No `Promise` / microtask loop
+## 2. No `Promise` / microtask loop — **the next body of work, with a plan**
 
-**Today:** `Promise` is undefined; `await`-heavy code cannot run.
+**Today:** `Promise` is undefined; `async function` is rejected at compile time with a clear
+message ("JholVM has no Promise/microtask support"), which is the honest behaviour chosen
+earlier. Libraries that feature-detect `typeof Promise` will therefore take a synchronous
+path rather than fail in a confusing way.
 
-**What it needs:** a job queue on the VM, `Promise` with thenable assimilation, and
-`queueMicrotask` ordering rules (microtasks drain after each macrotask, before timers).
-The timer wheel already exists, so the missing piece is the microtask queue and its drain
-points — plus the compiler's `await` lowering if it is not already emitting a suspension
-point (it is not).
+**What exists to build on** (established by reading the code, not guessed):
 
-**Acceptance:** `await` in an async function resolves in order with `queueMicrotask`,
-unhandled rejections surface on exit, and the existing timer tests are unaffected.
+* `Engine::run_event_loop` (`vm.rs`) already drains `setTimeout` callbacks in deadline
+  order, sleeping until the next deadline. That is the one place a **microtask drain** must
+  hook: after every timer callback, and before sleeping.
+* `Vm` already has a reentrancy-free place to run a queued callable: `Vm::call` from the
+  event loop, outside any live frame.
+* Native functions are `fn(&mut Vm, this, args)` — no captured environment — but
+  `JFunction` carries `bound_this` and `bound: Vec<Value>`. A `resolve`/`reject` pair can
+  therefore be two natives bound to the promise object, with `this` supplying the state
+  handle. That is the cheapest closure mechanism the engine has, and it is already used by
+  `Function.prototype.bind`.
+* `Engine::eval_source` returns after `run_module`; the microtask drain must also run once
+  there, so `Promise.resolve().then(f)` executes before the process exits.
 
----
+**The work, in order, each with its acceptance test:**
+
+1. **Microtask queue + `queueMicrotask`.** Queue of `(callable, args)`; drain after the entry
+   script and after every timer callback. Test: `queueMicrotask` runs after the current
+   script, before any `setTimeout(0)`.
+2. **Promise core.** States, `then`/`catch`/`finally`, thenable assimilation, `Promise.resolve`/
+   `reject`, unhandled-rejection reporting on exit. Test: a chain of `.then` callbacks
+   observes node's exact ordering against a mixed queue of timers and microtasks.
+3. **Combinators.** `all`, `allSettled`, `race`, `any`, in node's order.
+4. **`async`/`await` lowering.** The compiler currently rejects async functions; `await`
+   needs suspension points. The generator machinery (`resume`, `#gen` slot) is the model:
+   an async function compiles to a machine that yields at each `await` and is resumed by the
+   microtask loop when the awaited promise settles. This is the largest part and depends on
+   1–3 being solid.
+
+**Why it is not already shipped:** a half-built `Promise` is worse than an absent one —
+libraries feature-detect it and would then take an async path that hangs or resolves in the
+wrong order. The ordering guarantees are the whole value, and they need the drain points
+above to be right before anything is claimed.
 
 ## 3. `BigInt` is absent
 

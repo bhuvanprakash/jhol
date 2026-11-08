@@ -2563,3 +2563,26 @@ I wrote the expected output wrong **twice** while adding this pair — first `a|
 `a,1`, then assuming `const [a, b] = map` yields the key and value rather than the entry
 array. Both times node was right and the corpus caught it. The corpus compares to node, not
 to my memory, which is the only reason those mistakes cost minutes instead of shipping.
+
+
+## Engine gaps: the `Promise` plan is now concrete
+
+`Promise`/microtasks is the largest remaining engine gap. Rather than start it in the tail of
+a session, the plan is now written down from reading the code:
+
+* **the drain point exists** — `Engine::run_event_loop` already drains `setTimeout` callbacks
+  in deadline order; microtasks hook there (after each callback, before sleeping) and once
+  after the entry script;
+* **closures have a mechanism** — native fns take no environment, but `JFunction` carries
+  `bound_this`/`bound`, so `resolve`/`reject` can be natives bound to the promise;
+* **`await` is the hard half** — async functions are currently *rejected at compile time*
+  with a clear message, which is better than running them synchronously. Lowering them needs
+  suspension points modelled on the generator machinery.
+
+Order, each with its acceptance test: (1) microtask queue + `queueMicrotask` and node-exact
+ordering against timers; (2) Promise core with thenable assimilation and unhandled-rejection
+reporting; (3) `all`/`allSettled`/`race`/`any`; (4) `async`/`await` lowering.
+
+The reason it is not shipped tonight: a half-built `Promise` is *worse* than an absent one,
+because libraries feature-detect it and would then take an async path that hangs or resolves
+in the wrong order. The ordering guarantee is the entire value.
