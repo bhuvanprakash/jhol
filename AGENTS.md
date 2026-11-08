@@ -7514,3 +7514,25 @@ the Range header, because a checkpoint that hashes wrong with no explanation is 
 than a slow download.
 
 Numbers: jhol-core 684, jhol-ai 13, jhol-treecheck 15, installer gate PASS.
+
+## Journal — 2026-11-07 (cont.): axes, and five rules I got wrong first
+
+Built the hardware/ABI axis layer and shipped it as two commands: `jhol axes` (what this
+machine is) and `jhol wheels pkg@ver` (what runs here, with a reason per rejection).
+Real result: torch@2.4.1 has 20 artifacts, exactly 1 fits macOS arm64 at python 3.12, and
+each of the other 19 says why.
+
+Five rules I got wrong before the tests agreed, all in one afternoon:
+1. manylinux_2_17_x86_64 split on the first underscore -> arch "17_x86_64".
+2. manylinux2014 is glibc 2.17, a legacy spelling I had not handled.
+3. aarch64 vs arm64 -- string equality rejected every Linux wheel on this Mac.
+4. cp312-none-... is version-specific; "abi: none" means no ABI dependency, not any
+   interpreter. torch's macOS wheels are exactly this shape.
+5. A Linux wheel on macOS should be reported as a platform mismatch, not "needs glibc".
+
+Every one of those would have been a user-visible lie ("no wheels available") with a
+plausible-looking reason attached. TDD on the compat rules was the only thing that kept
+it honest.
+
+Scope: decision support, not yet a wheel dependency graph. That needs the provider
+unification and a wheel resolver -- next slice.

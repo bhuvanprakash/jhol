@@ -2087,3 +2087,40 @@ appending a duplicate — a checkpoint that hashes wrong with no explanation is 
 possible outcome of a "resume".
 
 `jhol-core` 684 tests, `jhol-ai` 13, `jhol-treecheck` 15, installer gate PASS.
+
+
+## AI-first slice 3: hardware/ABI axes, and compatibility with reasons
+
+`crates/jhol-core/src/axes.rs` + `pypi.rs`, surfaced as `jhol axes` and
+`jhol wheels <pkg>[@<ver>]`.
+
+```
+$ jhol axes
+macos arm64 · libc unknown · no cuda
+
+$ jhol wheels torch@2.4.1 --python 3.12
+torch@2.4.1 — 20 file(s), 1 compatible with macos arm64 · python 3.12 · no cuda
+  ok        torch-2.4.1-cp312-none-macosx_11_0_arm64.whl
+  (19 rejected, each with its own reason: abi cp310 != 3.12, platform win_amd64, …)
+```
+
+Five rules had to be right, and every one was found by a failing test rather than by
+reading a spec:
+
+| rule | the mistake it prevents |
+|---|---|
+| `manylinux_2_17_x86_64` = glibc ≥ 2.17 **and** arch | splitting on the first underscore gives arch `17_x86_64` |
+| `manylinux2014` means glibc 2.17 | legacy spelling still published |
+| `aarch64` ≡ `arm64` | string equality rejects every Linux wheel on an M-series Mac |
+| `cp312-none-…` is version-specific | `abi: none` is not "any interpreter" (torch's macOS wheels) |
+| `cp39-abi3-…` is forward-compatible | stable ABI from 3.9 runs on 3.13 |
+
+Detection is honest about absence: no `nvidia-smi` means "no cuda", never an error;
+`libc unknown` is printed rather than guessed.
+
+**Scope, stated:** this is decision support. Axes are not yet fed into a wheel
+*dependency graph* — that requires the provider unification (P0) and a wheel resolver,
+which is the next slice. What exists answers the question that currently costs hours:
+*can this machine run this release, and if not, exactly why not.*
+
+`jhol-core` 691 tests, `jhol-ai` 13, `jhol-treecheck` 15, installer gate PASS.

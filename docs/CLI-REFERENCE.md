@@ -103,6 +103,13 @@ written to `.npmrc` with mode 0600.
 
 ---
 
+## Hardware axes and wheels
+
+| command | effect |
+|---|---|
+| `jhol axes` | what jhol thinks this machine is: os, arch, libc, python, driver, sm, GPU memory (`--json`) |
+| `jhol wheels <pkg>[@<ver>]` | every published artifact of a PyPI release classified against this host, with a reason for each rejection; exits non-zero if nothing fits (`--python`, `--json`) |
+
 ## Models (AI-first)
 
 | command | effect |

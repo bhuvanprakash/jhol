@@ -3,6 +3,7 @@
 
 pub mod adversarial_install;
 pub mod audit;
+pub mod axes;
 pub mod backend;
 pub mod bin_links;
 pub mod binary_cache;
@@ -55,6 +56,7 @@ pub mod progress;
 pub mod project_lock;
 pub mod pubgrub;
 pub mod publish;
+pub mod pypi;
 pub mod registry;
 pub mod registry_query;
 pub mod resolution_mirror;

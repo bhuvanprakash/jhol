@@ -3878,6 +3878,87 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    if let Some(("axes", sub_m)) = matches.subcommand() {
+        let mut host = jhol_core::axes::HostAxes::detect();
+        if let Some(py) = sub_m.get_one::<String>("python") {
+            host.python = Some(py.clone());
+        }
+        if flag(&sub_m, "json") {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "os": host.os,
+                    "arch": host.arch,
+                    "libc": host.libc.to_string(),
+                    "python": host.python,
+                    "cuda_driver": host.cuda_driver,
+                    "sm": host.sm,
+                    "gpu_mem_mb": host.gpu_mem_mb,
+                }))
+                .unwrap_or_default()
+            );
+        } else {
+            println!("{}", host.summary());
+        }
+        return Ok(());
+    }
+
+    if let Some(("wheels", sub_m)) = matches.subcommand() {
+        let raw = sub_m
+            .get_one::<String>("spec")
+            .map(|s| s.as_str())
+            .unwrap_or_default();
+        let (pkg, version) = match raw.rsplit_once('@') {
+            Some((p, v)) if !p.is_empty() && !v.is_empty() => (p.to_string(), Some(v.to_string())),
+            _ => (raw.to_string(), None),
+        };
+        let mut host = jhol_core::axes::HostAxes::detect();
+        if let Some(py) = sub_m.get_one::<String>("python") {
+            host.python = Some(py.clone());
+        }
+        let release = jhol_core::pypi::fetch_release(&pkg, version.as_deref())
+            .map_err(|e| format!("pypi: {e}"))?;
+        let verdicts = jhol_core::pypi::classify(&release, &host);
+        let compatible: Vec<_> = verdicts.iter().filter(|v| v.reason.is_none()).collect();
+        if flag(&sub_m, "json") {
+            let body: Vec<serde_json::Value> = verdicts
+                .iter()
+                .map(|v| serde_json::json!({
+                    "file": v.filename, "size": v.size, "reason": v.reason,
+                }))
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
+        } else {
+            println!(
+                "{}@{} — {} file(s), {} compatible with {}",
+                release.package,
+                release.version,
+                verdicts.len(),
+                compatible.len(),
+                host.summary()
+            );
+            for v in verdicts.iter().filter(|v| v.reason.is_none()).take(5) {
+                println!("  ok        {}", v.filename);
+            }
+            if compatible.is_empty() {
+                for v in verdicts.iter().take(6) {
+                    println!(
+                        "  no        {}  ({})",
+                        v.filename,
+                        v.reason.as_deref().unwrap_or("")
+                    );
+                }
+            }
+        }
+        if compatible.is_empty() {
+            return Err(format!(
+                "no published artifact of {}@{} runs on this machine",
+                release.package, release.version
+            ));
+        }
+        return Ok(());
+    }
+
     if let Some(("verify", sub_m)) = matches.subcommand() {
         // A gate CI can trust: exit 0 only when the tree is exactly what the
         // lockfile authorises. `Unverified` (no lockfile) is not a failure — there
@@ -8270,6 +8351,34 @@ fn cli_command() -> Command {
                         .num_args(0)
                         .help("Approve every package that currently ships install scripts"),
                 )
+            )
+            .subcommand(
+                Command::new("axes")
+                    .about("Show the hardware/ABI axes jhol uses for compatibility decisions")
+                    .arg(Arg::new("json").long("json").action(ArgAction::SetTrue))
+                    .arg(
+                        Arg::new("python")
+                            .long("python")
+                            .value_name("X.Y")
+                            .help("Assume this Python version instead of the detected one"),
+                    ),
+            )
+            .subcommand(
+                Command::new("wheels")
+                    .about("Which wheels of a PyPI release would run on this machine, and why not")
+                    .arg(
+                        Arg::new("spec")
+                            .required(true)
+                            .value_name("PACKAGE[@VERSION]")
+                            .help("e.g. torch@2.4.1 (version optional)"),
+                    )
+                    .arg(
+                        Arg::new("python")
+                            .long("python")
+                            .value_name("X.Y")
+                            .help("Assume this Python version"),
+                    )
+                    .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
             )
             .subcommand(
                 Command::new("verify")

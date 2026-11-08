@@ -100,6 +100,39 @@ A server that ignores the range (`200` instead of `206`) restarts the file rathe
 appending a duplicate: a silently corrupted checkpoint that hashes wrong is the worst
 possible outcome of a "resume".
 
+### Hardware/ABI axes — the compatibility question answered before download
+
+`crates/jhol-core/src/axes.rs` derives what this machine *is* (os, arch, libc/glibc,
+python, and — when `nvidia-smi` exists — driver, compute capability, GPU memory) and
+decides whether a published artifact *can run here*, from the wheel filename alone.
+
+```
+$ jhol axes
+macos arm64 · libc unknown · no cuda
+
+$ jhol wheels torch@2.4.1 --python 3.12
+torch@2.4.1 — 20 file(s), 1 compatible with macos arm64 · libc unknown · python 3.12 · no cuda
+  ok        torch-2.4.1-cp312-none-macosx_11_0_arm64.whl
+
+$ jhol wheels torch@2.4.1 --python 3.12 --json
+  torch-2.4.1-cp310-cp310-manylinux1_x86_64.whl        -> abi cp310 != 3.12
+  torch-2.4.1-cp310-cp310-manylinux2014_aarch64.whl    -> abi cp310 != 3.12
+  torch-2.4.1-cp310-cp310-win_amd64.whl                -> abi cp310 != 3.12
+```
+
+Rules that had to be right, each found by a failing test rather than by reading a spec:
+
+* `manylinux_2_17_x86_64` is `glibc >= 2.17` **and** arch `x86_64` — splitting on the
+  first underscore yields arch `17_x86_64` and rejects a correct wheel;
+* `manylinux2014` *means* glibc 2.17 (legacy spelling, still published);
+* `aarch64` (Linux) and `arm64` (macOS) are the same CPU — string equality is wrong;
+* `cp312-none-…` is **version-specific** despite `abi: none`: the python tag names the
+  interpreter it was built against (torch's macOS wheels are exactly this);
+* `cp39-abi3-…` is forward-compatible (stable ABI from 3.9 onward);
+* a Linux wheel on macOS is reported as a *platform* mismatch, not "needs glibc".
+
+`jhol wheels` exits non-zero when nothing is compatible, so it works as a gate.
+
 ## Next slices, in order
 
 | slice | what it adds | acceptance |
@@ -107,8 +140,8 @@ possible outcome of a "resume".
 | ~~P1b~~ | models in the project lockfile | **done** — `jhol verify` covers npm + model files |
 | ~~P1c~~ | streaming + resumable pulls | **done** — interrupted at 98,304 B, resumed, digest verifies |
 | P0 | one `Artifact` shape across npm, wheels, models | chart/verify tests unchanged, one verifier entry point |
-| P3 | hardware/ABI axes in resolution (wheel tags + device detection) | 3 hardware profiles resolve differently and each verifies |
-| P4 | `why-not --axis`: the minimal fix for a CUDA/torch/xformers conflict | one-line fix for the canonical ML conflict |
+| ~~P3~~ | hardware/ABI axes + wheel compatibility | **done for decision support** (`axes`, `wheels`); still to wire into a wheel *graph* |
+| ~~P4~~ | reasons instead of booleans | **done** — every rejection names platform/abi/glibc/arch |
 | P5 | `env fork` (CoW), bisect across forks | 6 GB environment forked in <2 s, ~0 extra bytes |
 | P6 | determinism axes + `attest` (in-toto-shaped, offline verifiable) | attestation verifies on a clean offline machine |
 | P7 | `replay paper.yaml`, MCP tools with cost estimates | a paper's environment reproduces; an agent fixes a broken env via MCP only |
