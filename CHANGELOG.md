@@ -1890,3 +1890,15 @@ warm install             -> 18 ms
 earlier 9–10 ms figure was a 71-package tree, not a faster path).
 
 `jhol-core` 678 tests, `jhol-treecheck` 12, installer gate PASS.
+
+
+## `docs/PRODUCTION-READINESS.md`: every guarantee with the command that checks it
+
+Seven guarantees, each with the command that proves it and the failure it replaced:
+tree-vs-lockfile truth, install convergence, concurrent-install serialisation,
+determinism, multi-major resolution, self-explaining failures, and history/policy as
+resolution inputs. Plus the measured numbers table, the gates, and six known gaps
+stated rather than implied.
+
+Written because "production ready" is a claim, and a claim without a command beside
+it is marketing.
