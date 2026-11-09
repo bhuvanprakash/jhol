@@ -3108,7 +3108,9 @@ pub fn resolve_full_tree_nested(
     let mut audit_rounds = 0usize;
 
     let t_resolve = std::time::Instant::now();
+    let mut solve_calls = 0usize;
     let mut resolved = loop {
+        solve_calls += 1;
         match jagr_nest::resolve_with_options(&world, &roots, &options) {
             Ok(r) => break r,
             Err(e) if e.needs_fetch() => {
@@ -3119,18 +3121,57 @@ pub fn resolve_full_tree_nested(
                         e.describe()
                     ));
                 }
-                let mut meta = fetch_one(&e.package)?;
-                // One prune, keeping the fields this path needs. The previous
-                // version pruned twice — the second call used the install-only key
-                // set and dropped `time` again, which made `--as-of` fail on any
-                // package fetched through this branch.
-                let keep: &[&str] = if needs_full {
-                    &["time", "license"]
-                } else {
-                    &[]
-                };
-                crate::registry::prune_packument_in_place_keeping(&mut meta, keep);
-                world.insert(e.package, meta);
+                // A resolve pass can only discover one missing name, and each pass
+                // re-narrows the whole chart: one add took **24 solves** fetching a
+                // single package per pass. Fetch the current frontier instead — the
+                // same bounded helper the prefetch uses, now that it follows the
+                // newest release and stays within a few percent of the tree size —
+                // so two or three passes finish the job.
+                let mut names =
+                    crate::jagr_nest::missing_packages_bounded(&world, &roots, 48);
+                if !names.iter().any(|n| n == &e.package) {
+                    names.insert(0, e.package.clone());
+                }
+                const BATCH: usize = 16;
+                for chunk in names.chunks(BATCH) {
+                    let fetched: Vec<(String, Option<serde_json::Value>)> =
+                        std::thread::scope(|scope| {
+                            let handles: Vec<_> = chunk
+                                .iter()
+                                .map(|name| {
+                                    let name = name.clone();
+                                    let fetch_one = fetch_one;
+                                    scope.spawn(move || {
+                                        let doc = fetch_one(&name).ok();
+                                        (name, doc)
+                                    })
+                                })
+                                .collect();
+                            handles
+                                .into_iter()
+                                .filter_map(|h| h.join().ok())
+                                .collect()
+                        });
+                    for (name, doc) in fetched {
+                        let Some(mut meta) = doc else {
+                            continue;
+                        };
+                        // One prune, keeping the fields this path needs. The previous
+                        // version pruned twice — the second call used the install-only
+                        // key set and dropped `time` again, which made `--as-of` fail on
+                        // any package fetched through this branch.
+                        let keep: &[&str] = if needs_full {
+                            &["time", "license"]
+                        } else {
+                            &[]
+                        };
+                        crate::registry::prune_packument_in_place_keeping(&mut meta, keep);
+                        world.insert(name, meta);
+                    }
+                }
+                if !world.contains_key(&e.package) {
+                    return Err(e.describe());
+                }
             }
             Err(e) => return Err(e.describe()),
         }
@@ -3247,10 +3288,11 @@ pub fn resolve_full_tree_nested(
 
     if std::env::var_os("JHOL_PROFILE_INSTALL").is_some() {
         eprintln!(
-            "[jhol-profile] stage=nest_solve delta_ms={} world={} instances={}",
+            "[jhol-profile] stage=nest_solve delta_ms={} world={} instances={} solves={}",
             t_resolve.elapsed().as_millis(),
             world.len(),
-            resolved.instances.len()
+            resolved.instances.len(),
+            solve_calls
         );
     }
     let t_paths = std::time::Instant::now();

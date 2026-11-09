@@ -3111,3 +3111,28 @@ made it *worse* (286 documents, 7.1 s) because the over-approximating frontier k
 supplying names the tree did not need.
 
 `jhol-core` 723 tests, installer gate PASS.
+
+## Install: fetch the frontier per resolve pass, not one package
+
+The fetch-and-retry loop fetched a single package per resolve pass and re-resolved
+everything. A one-package add took **24 solve passes** — 3.4 s of a 5.1 s install — each
+re-narrowing a 75-package chart.
+
+It now fetches the current frontier with the same bounded helper the prefetch uses, in
+parallel batches:
+
+| add `lodash` to a 71-package tree | before | after |
+|---|---:|---:|
+| solve passes | 24 | **10** |
+| `nest_solve` | 3425 ms | **443–705 ms** |
+| total | 5.09 s | **1.16–2.16 s** |
+
+The ten remaining passes are the honest ones: a package whose *older* release declares a
+dependency the newest dropped is not in the frontier, so it is discovered a layer at a time.
+
+Next lever, recorded: `resolve_with_options` rebuilds its per-package view on every call, so
+ten passes rebuild the same 75 views ten times. That wants a resolver object owning the
+cache for the loop's lifetime.
+
+Verified: 73-package tree verifies clean, 83-package three-dependency manifest installs in
+612 ms and verifies clean, `jhol-core` 723 tests, installer gate PASS.

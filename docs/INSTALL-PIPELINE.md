@@ -273,3 +273,28 @@ helped small adds but would have made a large cold install fetch the remainder o
 at a time; adding a resolve attempt after each 48-name slice made it worse (286 documents,
 7.1 s) because the over-approximating frontier kept feeding names the tree did not need.
 Fixing the frontier fixed both.
+
+## One missing name per resolve pass
+
+The fetch-and-retry loop exists because the resolver reports a missing package instead of
+failing, which is the right contract — but it fetched **one** package per pass and then
+re-resolved everything. Measured on a one-package add: **24 solve passes**, 3.4 s of the
+5.1 s install, each pass re-narrowing a 75-package chart.
+
+It now fetches the current frontier (the same bounded helper the prefetch uses) in parallel
+batches, so a pass adds everything the resolver can currently name. Ten passes remain, and
+they are the interesting ones: a package whose *older* release declares a dependency the
+newest release dropped is not in the frontier, so it is discovered one layer at a time.
+That is correct behaviour, not waste.
+
+| add `lodash` to a 71-package tree | before | after |
+|---|---:|---:|
+| solve passes | 24 | **10** |
+| `nest_solve` | 3425 ms | **443–705 ms** |
+| total | 5.09 s | **1.16–2.16 s** |
+
+What is left is per-solve cost, not solve count: `resolve_with_options` builds its
+per-package view (sorted versions, per-version dependency maps) fresh on every call, so ten
+passes rebuild the same 75 views ten times. The lever is a resolver object that owns that
+cache for the duration of a fetch-and-retry loop — a structural change, and the next
+measurable target here.
