@@ -1005,6 +1005,12 @@ native!(n_is_enumerable, |vm, this, args| {
 native!(n_gen_self, |_vm, this, _args| Ok(this));
 native!(n_gen_next, |vm, this, args| vm.resume(this, arg(args, 0)));
 
+/// `Generator.prototype.throw(value)`.
+native!(n_gen_throw, |vm, this, args| {
+    let v = arg(args, 0);
+    vm.resume_throw(this, v)
+});
+
 // ---------------------------------------------------------------------------
 // Object
 // ---------------------------------------------------------------------------

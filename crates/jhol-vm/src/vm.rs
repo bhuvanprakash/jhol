@@ -3999,10 +3999,21 @@ impl Vm {
                             Some(g) => g,
                             None => return Err(type_error("yield outside a generator")),
                         };
+                        // Take the handlers that belong to this frame with us:
+                        // they must be live again when the body resumes, or a
+                        // `try` around the yield silently stops catching.
+                        let saved: Vec<(usize, usize)> = self
+                            .handlers
+                            .iter()
+                            .filter(|h| h.frame_idx == fi)
+                            .map(|h| (h.catch_ip, h.slot - reg_base))
+                            .collect();
+                        self.handlers.retain(|h| h.frame_idx != fi);
                         let gs = self.gens[gen].as_mut().unwrap();
                         gs.started = true;
                         gs.ip = ip + 1;
                         gs.resume_slot = Some(a);
+                        gs.saved_handlers = saved;
                         gs.regs = self.stack[reg_base..reg_base + gs.proto.nslots].to_vec();
                         let f = self.frames.pop().unwrap();
                         // No truncate: the window is reused by the next call,
@@ -4577,6 +4588,12 @@ pub struct GenState {
     started: bool,
     done: bool,
     this_val: Value,
+    /// Handlers live at the suspension point, as `(catch_ip, slot offset)`.
+    /// Without them `try { yield } catch` lost the handler across the pause and
+    /// the throw escaped the generator.
+    saved_handlers: Vec<(usize, usize)>,
+    /// A value `.throw(e)` wants raised when the body resumes.
+    pending_throw: Option<Value>,
     /// Register the paused `yield` wrote its value into. On the next `next(v)`
     /// that slot receives `v`, which is how `const x = yield 1` resumes with a
     /// sent value. `None` until the generator actually suspends at a yield.
@@ -4663,6 +4680,8 @@ impl Vm {
             started: false,
             done: false,
             this_val: this,
+            saved_handlers: Vec::new(),
+            pending_throw: None,
             resume_slot: None,
         };
         let idx = if let Some(index) = self.free_gens.pop() {
@@ -4682,6 +4701,9 @@ impl Vm {
         let nsym = arena::active().intern_sym("next");
         let nf = self.new_function_native("next", crate::builtins::n_gen_next, 0);
         self.define_prop(obj, PropKey::Sym(nsym), nf);
+        let tsym = arena::active().intern_sym("throw");
+        let tf = self.new_function_native("throw", crate::builtins::n_gen_throw, 1);
+        self.define_prop(obj, PropKey::Sym(tsym), tf);
         let isym = arena::active().intern_sym(ITER_SYM);
         let it = self.new_function_native(
             crate::builtins::ITER_SYM_KEY,
@@ -4690,6 +4712,16 @@ impl Vm {
         );
         self.define_prop(obj, PropKey::Sym(isym), it);
         obj
+    }
+
+    /// `Generator.prototype.throw(e)`: resume by raising `e` inside the body.
+    pub fn resume_throw(&mut self, gen: Value, thrown: Value) -> VmResult<Value> {
+        if let Some(&idx) = self.gen_owners.get(&gen.bits()) {
+            if let Some(gs) = self.gens[idx].as_mut() {
+                gs.pending_throw = Some(thrown);
+            }
+        }
+        self.resume(gen, Value::UNDEFINED)
     }
 
     pub fn resume(&mut self, gen: Value, sent: Value) -> VmResult<Value> {
@@ -4749,6 +4781,47 @@ impl Vm {
             builders: Vec::new(),
             _scratch: 0,
         });
+        // Handlers suspended with the body become live again, rebased onto the
+        // window this resume allocated.
+        let saved: Vec<(usize, usize)> = self.gens[idx]
+            .as_mut()
+            .unwrap()
+            .saved_handlers
+            .drain(..)
+            .collect();
+        for (catch_ip, slot_off) in saved {
+            self.handlers.push(Handler {
+                frame_idx: reg_depth,
+                catch_ip,
+                slot: reg_base + slot_off,
+            });
+        }
+        // `.throw(e)`: raise it at the suspension point. If the body catches it,
+        // execution continues; if not, the generator is done and the throw
+        // belongs to the caller.
+        if let Some(pending) = self.gens[idx].as_mut().unwrap().pending_throw.take() {
+            // Only a handler *inside the generator* may catch a `.throw()` here.
+            // The caller's `try` sits below this frame; consuming it inside the
+            // resume would unwind frames the yielding code still owns and then
+            // return as if the generator had finished. Let it escape instead and
+            // the ordinary throw path catches it at the call site.
+            let local_handler = self
+                .handlers
+                .last()
+                .is_some_and(|h| h.frame_idx == reg_depth);
+            let handled = local_handler
+                && self.handle_exception(crate::errors::Thrown::new(pending).into());
+            if !handled {
+                self.frames.pop();
+                self.stack.truncate(reg_base);
+                self.invalidate_frame_cache();
+                if let Some(gs) = self.gens[idx].as_mut() {
+                    gs.done = true;
+                    gs.saved_handlers.clear();
+                }
+                return Err(crate::errors::Thrown::new(pending).into());
+            }
+        }
         self.invalidate_frame_cache();
         let v = self.run_until(reg_depth)?;
         // `v` is the yielded value, or the generator's `return` value once it

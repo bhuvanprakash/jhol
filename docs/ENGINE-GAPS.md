@@ -125,15 +125,25 @@ generator (body → `is_generator`), `await e` compiles to `yield e`, and the ca
 drives the generator — each yielded value is subscribed with `then(resume, reject)`,
 the final return resolves the promise, a throw rejects it.
 
-Two things are missing before that is honest work rather than a demo:
+Two pieces were missing, and **both are now in**:
 
-1. **`Generator.prototype.throw`.** Needed for `try { await x } catch (e)` and for
-   rejecting a resumed await. The generator object exposes `next` only.
-2. **`try`/`catch` across a suspension point.** Our handler table is per-frame and
-   unwound on throw; resuming a generator has to restore it at the yield point.
+1. **`Generator.prototype.throw`** — resumes the body by raising the value at the
+   suspension point. If a handler inside the body catches it, execution continues;
+   if not, the generator is done and the throw escapes to the caller. It must *not*
+   be caught by the caller's own `try` during the resume — that unwound frames the
+   yielding code still owned. The rule is: only a handler belonging to the
+   generator's own frame may catch a `.throw()`.
+2. **`try`/`catch` across a suspension point** — the handler table entries belonging
+   to the generator's frame are captured at `yield` as `(catch_ip, slot offset)` and
+   pushed back, rebased onto the new register window, on resume. Without this the
+   `try` silently stopped catching after the first pause.
 
-Until both land, `async` stays a compile-time `SyntaxError` naming the gap, which is
-better than an engine that silently drops an exception inside an async body.
+Corpus pair `53-generator-throw` pins all of it: `next(v)` delivery, a caught
+`.throw`, and an escaping `.throw` caught at the call site.
+
+What remains before `async`/`await` can be enabled: the compiler lowering (async body
+compiles with `is_generator`, `await e` → `yield e`) and the driver that subscribes to
+each yielded value and resolves the promise. The machinery it needs now exists.
 
 ## 3. `BigInt` is absent
 

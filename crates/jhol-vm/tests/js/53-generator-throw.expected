@@ -1,0 +1,6 @@
+first 1
+got 41
+second {"value":42,"done":true}
+caught boom
+throw-result recovered true
+escaped esc

@@ -2794,3 +2794,24 @@ unreadable), and `builtins::to_str` is crate-visible so the reason can be render
 
 Tests: `unhandled_rejection_fails_the_program`, `handled_rejection_is_not_reported`.
 `jhol-vm` 126 tests, corpus 52/52, engine gate PASS.
+
+## Engine: `Generator.prototype.throw` and handlers that survive a suspension
+
+Two gaps that blocked `async`/`await`:
+
+**`try`/`catch` across `yield` was broken.** The handler table entry lived in the
+frame window that a suspension discarded, so a `try` around a `yield` stopped catching
+after the first pause. Handlers belonging to the generator's frame are now captured at
+the yield as `(catch_ip, slot offset)` and re-pushed, rebased, on resume.
+
+**`Generator.prototype.throw` did not exist.** It now resumes by raising the value at
+the suspension point. A handler inside the body catches it; with no such handler the
+generator is done and the throw escapes to the caller.
+
+The subtle part: a `.throw()` must not be caught by the *caller's* `try` during the
+resume. Doing so truncated frames the yielding code still owned and returned as if the
+generator had finished. Only a handler of the generator's own frame may catch it.
+
+Corpus pair `53-generator-throw` compares with node: `next(v)` delivery, a caught
+`.throw`, and an escaping `.throw` caught at the call site. Corpus 53/53, engine gate
+PASS.
