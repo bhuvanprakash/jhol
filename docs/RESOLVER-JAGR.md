@@ -481,6 +481,29 @@ Effect on real data:
 
 `jhol-core` 720 tests, 6 ignored (was 7 — this obligation is live).
 
+### Peers are checked where they are installed
+
+The nested resolver recorded every peer requirement — `NestedResolution::peers` — and
+then nothing compared it with the versions actually chosen. Root-level peer conflicts
+were caught by a separate validator, and the flat resolver had its own check, so a
+transitive peer requirement on the instance-resolved path (`--as-of`, policy installs)
+went unreported.
+
+`peer_violations` now judges the recorded requirements against the chosen versions:
+
+```
+$ jhol install --as-of 2024-06-01          # react 17 + react-dom 18 in the manifest
+warning: 1 peer requirement(s) unsatisfied:
+  react-dom@18.2.0 wants react@^18.2.0, installed 17.0.2
+```
+
+Default stays npm's: a warning, because npm installs the tree and warns, and making it
+fatal by default turns working trees into failures. `JHOL_STRICT_PEER_DEPS=1` /
+`--strict-peer-deps` refuses instead. An **absent** peer is not a violation — nothing
+declared it as a dependency, so there is no version to judge — and a satisfied peer is
+silent; both are pinned by tests, because getting either wrong would fail trees that
+install fine.
+
 ## 5. Policy and history as inputs
 
 ### `--as-of <date>` — `resolve_with_options(.. cutoff)`

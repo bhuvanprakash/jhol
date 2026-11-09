@@ -2914,6 +2914,45 @@ mod pubgrub_fallback_tests {
 /// takes the top of `node_modules` (ties: highest version); every other instance
 /// is nested under the dependent that requires it. That is hoisting, expressed as
 /// the smallest rule that produces a working tree.
+/// Peer requirements that the installed tree does not satisfy.
+///
+/// `peers` is `(dependent, peer, spec)` as the resolver recorded it, and the answer is
+/// judged against the versions actually chosen — not against the manifest, which is how
+/// a peer conflict used to disappear on the instance-resolved path.
+pub(crate) fn peer_violations(
+    instances: &[crate::jagr_nest::Instance],
+    peers: &[(String, String, String)],
+) -> Vec<String> {
+    let mut violations = Vec::new();
+    for (dependent, peer, spec) in peers {
+        let installed: Vec<&str> = instances
+            .iter()
+            .filter(|i| &i.package == peer || &i.installed_as == peer)
+            .map(|i| i.version.as_str())
+            .collect();
+        if installed.is_empty() {
+            // An absent peer is optional here: nothing declared it as a dependency,
+            // so there is no version to judge.
+            continue;
+        }
+        let compiled = crate::registry::compile_spec(spec);
+        let satisfied = installed.iter().any(|v| {
+            semver::Version::parse(v)
+                .map(|p| compiled.matches(&p))
+                .unwrap_or(false)
+        });
+        if !satisfied {
+            violations.push(format!(
+                "{dependent} wants {peer}@{spec}, installed {}",
+                installed.join(", ")
+            ));
+        }
+    }
+    violations.sort();
+    violations.dedup();
+    violations
+}
+
 pub fn resolve_full_tree_nested(
     package_json_path: &Path,
 ) -> Result<HashMap<String, ResolvedPackage>, String> {
@@ -3273,6 +3312,30 @@ pub fn resolve_full_tree_nested(
         }
     }
 
+    // Peer dependencies, on the path that actually installs.
+    //
+    // They were recorded (`NestedResolution::peers`) and then never checked here, so
+    // `--strict-peer-deps` was honoured only by the root validator and the flat
+    // resolver. A peer requirement is satisfied when the *installed* version matches;
+    // npm warns by default and fails in strict mode.
+    let violations = peer_violations(&resolved.instances, &resolved.peers);
+    if !violations.is_empty() {
+        let strict = std::env::var("JHOL_STRICT_PEER_DEPS")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if strict {
+            return Err(format!(
+                "peer dependency conflicts: {}",
+                violations.join("; ")
+            ));
+        }
+        crate::utils::log(&format!(
+            "warning: {} peer requirement(s) unsatisfied: {}",
+            violations.len(),
+            violations.join("; ")
+        ));
+    }
+
     let mut out: HashMap<String, ResolvedPackage> = HashMap::new();
     for inst in &resolved.instances {
         let key = (inst.package.clone(), inst.version.clone());
@@ -3302,4 +3365,55 @@ pub fn resolve_full_tree_nested(
     }
     let _ = &mut resolved;
     Ok(out)
+}
+
+#[cfg(test)]
+mod peer_tests {
+    use super::*;
+    use crate::jagr_nest::Instance;
+
+    fn inst(package: &str, version: &str) -> Instance {
+        Instance {
+            package: package.to_string(),
+            installed_as: package.to_string(),
+            version: version.to_string(),
+            required_by: Vec::new(),
+        }
+    }
+
+    /// A peer conflict must be judged against what was installed. This is the check
+    /// that was missing on the instance-resolved path: the requirement was recorded
+    /// and never compared with the chosen version.
+    #[test]
+    fn peer_violations_flags_a_mismatch() {
+        let instances = vec![inst("react", "17.0.2"), inst("react-dom", "18.2.0")];
+        let peers = vec![(
+            "react-dom@18.2.0".to_string(),
+            "react".to_string(),
+            "^18.2.0".to_string(),
+        )];
+        let got = peer_violations(&instances, &peers);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert!(got[0].contains("17.0.2"), "{got:?}");
+    }
+
+    /// A satisfied peer, and a peer that is simply not installed, are both quiet:
+    /// treating an absent peer as a violation would fail trees npm installs happily.
+    #[test]
+    fn satisfied_and_absent_peers_are_quiet() {
+        let instances = vec![inst("react", "18.2.0"), inst("react-dom", "18.2.0")];
+        let ok = vec![(
+            "react-dom@18.2.0".to_string(),
+            "react".to_string(),
+            "^18.2.0".to_string(),
+        )];
+        assert!(peer_violations(&instances, &ok).is_empty());
+
+        let absent = vec![(
+            "some-lib@1.0.0".to_string(),
+            "not-installed".to_string(),
+            "^1.0.0".to_string(),
+        )];
+        assert!(peer_violations(&instances, &absent).is_empty());
+    }
 }

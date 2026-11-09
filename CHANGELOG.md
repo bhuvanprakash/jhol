@@ -3028,3 +3028,24 @@ an `all-features` job running the same command.
 Also recorded in `OPERATIONS.md`: `--all-features` needs room. The first attempt died
 with `No space left on device` because `target/debug` had reached 7.6 GB; freeing it and
 stale `/tmp` fixtures took free space from 194 MB to 7.5 GB.
+
+## Resolver: peer requirements are checked on the instance-resolved path
+
+The nested resolver recorded every peer requirement and then never compared it with the
+versions it chose. Root-level conflicts were caught by a separate validator and the flat
+resolver had its own check, so a peer requirement on the instance-resolved path
+(`--as-of`, policy installs) was reported by nothing:
+
+```
+$ jhol install --as-of 2024-06-01        # react 17 with react-dom 18
+warning: 1 peer requirement(s) unsatisfied:
+  react-dom@18.2.0 wants react@^18.2.0, installed 17.0.2
+```
+
+`peer_violations` is a pure function over instances and recorded peers, so it is tested
+directly: a mismatch is reported, a satisfied peer is silent, and an **absent** peer is
+not a violation (nothing declared it as a dependency). Default stays npm's warning;
+`JHOL_STRICT_PEER_DEPS=1` / `--strict-peer-deps` refuses.
+
+`jhol-core` 723 tests, installer gate PASS, and a satisfied-peer strict install adds 5
+packages cleanly.

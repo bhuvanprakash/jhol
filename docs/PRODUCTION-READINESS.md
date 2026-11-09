@@ -212,9 +212,11 @@ longer observed, so the remaining reason is packages a developer added by hand.
    so it could not support a conclusion. **Method: interleave, medians of ≥5, report
    the spread.**
 
-4. **Peers are advisory.** Recorded, reported under `JHOL_STRICT_PEER_DEPS`, not
-   binding — npm installs and warns, and making them binding turns working trees
-   into failures.
+4. **Peers warn by default, fail in strict mode.** They were recorded and never
+   compared with the chosen versions on the instance-resolved path (`--as-of`, policy
+   installs); that check now exists (`peer_violations`). Advisory by default is npm's
+   behaviour — binding by default turns working trees into failures — and
+   `JHOL_STRICT_PEER_DEPS=1` / `--strict-peer-deps` refuses instead.
 5. **Hoisting is a simple rule.** Most-demanded instance wins the top level, ties to
    the highest version. Deterministic, not tuned.
 6. **~180 `JHOL_*` knobs.** Classified in `ENV-AUDIT.md`: 24 diagnostics, ~40
