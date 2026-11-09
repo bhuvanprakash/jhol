@@ -202,3 +202,28 @@ ask for.**
 
 Express, 71 packages, warm cache, `node_modules` wiped: 49 ms and 38 ms across two
 runs, and `jhol verify` reports the tree matches the lockfile.
+
+## A version document is a projection, not a new fact
+
+Adding one dependency to a six-package tree made **seven** requests to
+`/<pkg>/<version>`, ~350 ms each, sequentially — for packages whose packuments were
+already on disk. `fetch_manifest` went straight to the network for every selector.
+
+A `/<pkg>/<version>` document is a projection of the packument we stored, so it is
+now answered from the cached packument when one exists (`latest` resolved through
+`dist-tags`), and the network is used only for a package never seen before.
+
+Two related fixes in the same measurement loop:
+
+* **duplicate URLs in one process.** The same package was fetched twice in a single
+  install (2 × 540 ms for a 2.5 KB document). `http_client::get` now memoises bodies
+  for 30 s — bounded by age, by body size (4 MB) and by entry count (512), so it
+  cannot become a stale cache or an unbounded one.
+* **speculative prefetch is opt-in** (see above): 367–453 ms of a 50 ms install.
+
+| adding `lodash@4.17.21` to a warm six-package tree | wall time | network |
+|---|---:|---:|
+| before | 3.13 s | 7 requests |
+| after | **0.77 s** | **0** |
+
+`jhol verify` reports 7 packages matching the lockfile.

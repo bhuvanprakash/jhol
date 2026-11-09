@@ -706,6 +706,24 @@ fn fetch_manifest_with_identity(
         path.trim_start_matches('/'),
         selector.trim_start_matches('/')
     );
+    // A version document is a projection of the packument: answer it from cache
+    // when we have one, instead of paying a round trip per package on every
+    // incremental install. `latest` is a dist-tag, not a version.
+    if let Some(doc) = crate::origin::cached_packument_value(package, identity) {
+        let version = if selector == "latest" {
+            doc.get("dist-tags")
+                .and_then(|t| t.get("latest"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        } else {
+            Some(selector.to_string())
+        };
+        if let Some(version) = version {
+            if let Some(entry) = doc.get("versions").and_then(|v| v.get(&version)) {
+                return Ok(entry.clone());
+            }
+        }
+    }
     // Route through http_client (shared Agent) instead of raw ureq::get().
     let body = crate::http_client::get_bytes_with_bearer(&url, identity.token.as_deref())?;
     serde_json::from_slice(&body).map_err(|e| e.to_string())

@@ -460,6 +460,41 @@ pub(crate) fn write_packument_cache_with_identity(
     Ok(())
 }
 
+/// A packument this process already has on disk, parsed.
+///
+/// `/<pkg>/<version>` is a projection of the packument we stored, so asking the
+/// registry for it again costs a round trip per package on every incremental
+/// install: adding one dependency to a six-package tree made seven ~350 ms
+/// requests for documents already in the cache. Reading the projection locally is
+/// the same answer, from the same bytes, without the network.
+pub(crate) fn cached_packument_value(
+    package: &str,
+    identity: &crate::registry::RegistryIdentity,
+) -> Option<serde_json::Value> {
+    // Abbreviated first (smaller and written by every fetch), then the full form.
+    for abbreviated in [true, false] {
+        let path = packument_path_with_identity(package, abbreviated, identity);
+        let Ok(raw) = std::fs::read(&path) else {
+            continue;
+        };
+        // Format: `<etag>	<encoding>\n<payload>`.
+        let Some(newline) = raw.iter().position(|b| *b == b'\n') else {
+            continue;
+        };
+        let header = &raw[..newline];
+        let payload = &raw[newline + 1..];
+        let body = if header.ends_with(b"gzip") {
+            gunzip_bytes(payload)
+        } else {
+            payload.to_vec()
+        };
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body) {
+            return Some(value);
+        }
+    }
+    None
+}
+
 /// Pure mirror of a serialized packument cache file into each durable
 /// root (`<root>/packuments/<filename>`).  Split out so it can be
 /// tested without touching the environment or the real login-home

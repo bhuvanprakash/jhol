@@ -2736,3 +2736,22 @@ restores the old behaviour; the predictor still powers `jhol prefetch`.
 
 Express, 71 packages, warm cache: 38–49 ms and `verify` clean.
 `jhol-core` 719 tests, installer gate PASS.
+
+## Install: a version document is answered from cache, and one process fetches a URL once
+
+Adding one dependency to a warm six-package tree made seven requests to
+`/<pkg>/<version>`, ~350 ms each and sequential, for packages whose packuments were
+already stored. A version document is a projection of the packument, so
+`fetch_manifest` now answers from the cached packument (`latest` via `dist-tags`)
+and only touches the network for a package never seen before.
+
+Also: the same URL was fetched twice in one install (2 × 540 ms for 2.5 KB).
+`http_client::get` memoises response bodies for 30 s, bounded by age, size (4 MB)
+and entry count (512), so it cannot turn into a stale or unbounded cache.
+
+| adding `lodash@4.17.21` to a warm six-package tree | wall time | network |
+|---|---:|---:|
+| before | 3.13 s | 7 requests |
+| after | **0.77 s** | **0** |
+
+`jhol verify` clean. `jhol-core` 719 tests, installer gate PASS.

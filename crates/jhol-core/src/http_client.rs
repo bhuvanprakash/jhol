@@ -223,8 +223,17 @@ impl HttpClient {
     }
 
     /// GET url and return body bytes.
+    ///
+    /// A repeat of the same URL within one process is served from the memo above
+    /// instead of the network: an install re-asking for a package it already
+    /// fetched paid a second round trip for identical bytes.
     pub fn get(&self, url: &str) -> Result<Vec<u8>, String> {
-        self.get_with_accept(url, None)
+        if let Some(body) = memo_get(url) {
+            return Ok(body);
+        }
+        let body = self.get_with_accept(url, None)?;
+        memo_put(url, &body);
+        Ok(body)
     }
 
     /// Streaming GET, optionally resuming from a byte offset.
@@ -736,6 +745,54 @@ fn reader_rejects_short_eof_before_consumer_success() {
         body.read_to_end(&mut bytes).unwrap_err().kind(),
         std::io::ErrorKind::UnexpectedEof
     );
+}
+
+/// Responses this process already has, keyed by URL.
+///
+/// One install resolved the same package twice and paid two 540 ms round trips for
+/// a 2.5 KB document. A command's own work is sequential and its metadata does not
+/// change mid-run, so remembering a body for a few seconds removes the duplicate
+/// without pretending to be a cache.
+///
+/// Bounded three ways: entries expire after `FRESH_FOR`, bodies larger than
+/// `MAX_CACHED_BODY` are never stored, and the map is capped so a large install
+/// cannot grow it without limit. A miss costs exactly what it cost before.
+const FRESH_FOR: std::time::Duration = std::time::Duration::from_secs(30);
+const MAX_CACHED_BODY: usize = 4 * 1024 * 1024;
+const MAX_CACHED_URLS: usize = 512;
+
+fn response_memo() -> &'static std::sync::Mutex<
+    std::collections::HashMap<String, (std::time::Instant, Vec<u8>)>,
+> {
+    static MEMO: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, Vec<u8>)>>,
+    > = std::sync::OnceLock::new();
+    MEMO.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn memo_get(url: &str) -> Option<Vec<u8>> {
+    let guard = response_memo().lock().ok()?;
+    let (at, body) = guard.get(url)?;
+    if at.elapsed() > FRESH_FOR {
+        return None;
+    }
+    Some(body.clone())
+}
+
+fn memo_put(url: &str, body: &[u8]) {
+    if body.len() > MAX_CACHED_BODY {
+        return;
+    }
+    let Ok(mut guard) = response_memo().lock() else {
+        return;
+    };
+    if guard.len() >= MAX_CACHED_URLS {
+        guard.retain(|_, (at, _)| at.elapsed() <= FRESH_FOR);
+        if guard.len() >= MAX_CACHED_URLS {
+            return; // still full: not worth evicting a live entry
+        }
+    }
+    guard.insert(url.to_string(), (std::time::Instant::now(), body.to_vec()));
 }
 
 fn get_global() -> &'static HttpClient {
