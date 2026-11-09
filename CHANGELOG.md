@@ -3136,3 +3136,15 @@ cache for the loop's lifetime.
 
 Verified: 73-package tree verifies clean, 83-package three-dependency manifest installs in
 612 ms and verifies clean, `jhol-core` 723 tests, installer gate PASS.
+
+## Reverted: layer-by-layer fetching in the retry branch, and a correction to the numbers
+
+Fetching the frontier again after each insert — so newly visible dependencies load in the
+same pass — left the solve count at **10**. The ten packages are needed by *older* releases,
+and the frontier follows the newest release only, so no amount of re-asking finds them.
+Reverted rather than kept as dead weight.
+
+The same measurement run also corrected the record: the identical binary measured
+`nest_solve` at **143 ms per solve** in one session and **20 ms per solve** in another, with
+an add of `lodash` falling from 1.16–2.16 s to **0.484 s** with no code change. Machine
+state dominates this path, so the ranges are the claim and any single reading is not.

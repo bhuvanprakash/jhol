@@ -298,3 +298,19 @@ per-package view (sorted versions, per-version dependency maps) fresh on every c
 passes rebuild the same 75 views ten times. The lever is a resolver object that owns that
 cache for the duration of a fetch-and-retry loop — a structural change, and the next
 measurable target here.
+
+### Two corrections to the numbers above
+
+**Machine state dominates this path.** The identical binary measured `nest_solve` at
+**143 ms per solve** in one session and **20 ms per solve** in another: the add fell from
+1.16–2.16 s to **0.484 s** with no code change. Any single reading here is worthless
+without repeats; the medians above are the useful part and the ranges are honest.
+
+**A layer loop in the retry branch did not help and was reverted.** Fetching the frontier
+again after inserting documents — so that each newly visible dependency is loaded in the
+same pass — left the solve count at **10**. The reason is now clear: those ten packages
+are needed by *older* releases, and the frontier follows the newest release only, so it
+cannot name them no matter how often it is asked. Anything that fixes it must either walk
+all versions (196 documents, ~4.7 s of parsing — worse than the ten solves) or cache the
+resolver's per-package view, which is the lever named above.
+
