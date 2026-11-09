@@ -93,10 +93,17 @@ mechanism `Function.prototype.bind` uses; no new object kind was needed.
    inline moved every later `.then` one microtask earlier than node. Fixed by queueing the
    assimilation.
 
+**Combinators shipped** (`all`, `allSettled`, `race`) plus `finally`, on the same queue:
+one machine with different settle rules, one pair of handlers, mode selects the rule.
+Corpus pair `51-promise-combinators` compares ordering and results line for line with node,
+including a `race` against a timer and `finally` on both paths.
+
 **Still open:** `async`/`await` (rejected at compile time with a clear message),
-`Promise.all` / `allSettled` / `race` / `any`, `finally`, and unhandled-rejection reporting
-on exit. Those are additive on top of this queue; the hard part — correct ordering — is done
-and pinned.
+`Promise.any` (needs `AggregateError`), unhandled-rejection reporting on exit,
+`finally` waiting for a promise returned by its callback, and property enumerability —
+`Error.message` is an own enumerable property here, so `JSON.stringify(new Error("x"))`
+prints `{"message":"x"}` where node prints `{}`. The enumerability debt is the same one
+noted in `builtins.rs`: there are no per-property enumerable flags.
 
 ## 3. `BigInt` is absent
 

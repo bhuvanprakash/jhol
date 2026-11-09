@@ -2755,3 +2755,23 @@ and entry count (512), so it cannot turn into a stale or unbounded cache.
 | after | **0.77 s** | **0** |
 
 `jhol verify` clean. `jhol-core` 719 tests, installer gate PASS.
+
+## Engine: Promise combinators and `finally`
+
+`Promise.all`, `Promise.allSettled`, `Promise.race` and `Promise.prototype.finally`
+were undefined. They now run on the existing microtask queue.
+
+The three combinators are one machine with different settle rules — same shared
+state, same pair of handlers, a mode picks the rule — so the counting logic exists
+once instead of three times. `finally` is two bound natives that call the callback
+and then pass the original outcome through, which keeps rejection semantics right:
+a `finally` on a rejected promise still rejects downstream.
+
+Corpus pair `51-promise-combinators` compares with node line for line: sync ordering,
+`all` with a thrown member, `allSettled` statuses, `race` against a `setTimeout`, and
+`finally` on both the fulfilment and rejection paths. Corpus is 51/51.
+
+Still open, named: `Promise.any` (needs `AggregateError`), unhandled-rejection
+reporting, `finally` awaiting a returned promise, and property enumerability —
+`JSON.stringify(new Error("x"))` prints `{"message":"x"}` where node prints `{}`,
+because there are no per-property enumerable flags yet.

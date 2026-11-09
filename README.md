@@ -304,7 +304,7 @@ In CI, `jhol cache key` is the cache key. `jhol ci` skips resolution and packume
 The JS engine inside `jhol run` beats Bun on **all 11** engine benchmarks in
 a simultaneous same-seconds A/B: **suite 390 ms vs 552 ms (1.42x ahead)**,
 with wins up to 2.7x (`gc_stress`). Correctness is pinned byte-for-byte
-against node: **50/50 corpus** (JIT on and off), **124/124 unit tests**, both
+against node: **51/51 corpus** (JIT on and off), **124/124 unit tests**, both
 quality gates PASS. `Promise` and a microtask queue landed most recently, and
 their ordering is compared line for line with node — sync logs, `.then`
 chains, a throw inside `then`, `queueMicrotask`, `setTimeout(0)` and a

@@ -473,8 +473,12 @@ pub fn install(vm: &mut Vm) {
     vm.set_prop(promise_ctor, proto_key, promise_proto).unwrap();
     method(vm, promise_proto, "then", n_promise_then);
     method(vm, promise_proto, "catch", n_promise_catch);
+    method(vm, promise_proto, "finally", n_promise_finally);
     set_fn(vm, promise_ctor, "resolve", n_promise_resolve_static);
     set_fn(vm, promise_ctor, "reject", n_promise_reject_static);
+    set_fn(vm, promise_ctor, "all", n_promise_all);
+    set_fn(vm, promise_ctor, "allSettled", n_promise_all_settled);
+    set_fn(vm, promise_ctor, "race", n_promise_race);
     globals_def(vm, "Promise", promise_ctor);
     gcd(vm, "queueMicrotask", n_queue_microtask);
 
@@ -5864,6 +5868,187 @@ native!(n_promise_assimilate, |vm, _this, args| {
         }
         Err(e) => Err(e),
     }
+});
+
+// ── Promise combinators ────────────────────────────────────────────────
+//
+// All of them are one machine with different settle rules: shared
+// implementation, one pair of handlers, mode selects the rule. Handler args are
+// the bound tail `[state, index]` followed by the settled value.
+
+const MODE_ALL: i64 = 0;
+const MODE_ALL_SETTLED: i64 = 1;
+const MODE_RACE: i64 = 2;
+
+fn length_of(vm: &mut Vm, value: Value) -> usize {
+    if !value.is_object() && !value.is_array() {
+        return 0;
+    }
+    let k = key(vm, "length");
+    match vm.get_prop(value, k) {
+        Ok(len) => len.as_i64().max(0) as usize,
+        Err(_) => 0,
+    }
+}
+
+/// `Promise.resolve(value)` without going through the JS function object.
+fn to_promise(vm: &mut Vm, value: Value) -> VmResult<Value> {
+    if value.is_object() {
+        let k = promise_hidden_key(vm, "state");
+        if matches!(vm.get_prop(value, k), Ok(state) if !state.is_undefined()) {
+            return Ok(value);
+        }
+    }
+    let p = new_pending_promise(vm);
+    resolve_with(vm, p, value)?;
+    Ok(p)
+}
+
+fn combine(vm: &mut Vm, input: Value, mode: i64) -> VmResult<Value> {
+    let out = new_pending_promise(vm);
+    let count = length_of(vm, input);
+    if count == 0 {
+        let empty = vm.new_array();
+        settle(vm, out, 1, empty)?;
+        return Ok(out);
+    }
+    let state = vm.new_object();
+    let results_init = vm.new_array();
+    set_hidden(vm, state, "results", results_init);
+    set_hidden(vm, state, "remaining", Value::from_i64(count as i64));
+    set_hidden(vm, state, "out", out);
+    set_hidden(vm, state, "done", Value::from_i64(0));
+    set_hidden(vm, state, "mode", Value::from_i64(mode));
+
+    for index in 0..count {
+        let item = vm.get_index(input, Value::from_i64(index as i64))?;
+        let p = to_promise(vm, item)?;
+        let on_ok = vm.new_function_native("combine", n_combine_ok, 1);
+        let on_err = vm.new_function_native("combine", n_combine_err, 1);
+        let bound = vec![state, Value::from_i64(index as i64)];
+        let bf = bind_native(vm, on_ok, Value::UNDEFINED, bound.clone());
+        let br = bind_native(vm, on_err, Value::UNDEFINED, bound);
+        let k = key(vm, "then");
+        let then = vm.get_prop(p, k)?;
+        if then.is_function() {
+            vm.call_direct_args(then, p, &[bf, br])?;
+        }
+    }
+    Ok(out)
+}
+
+native!(n_combine_ok, |vm, _this, args| {
+    let state = arg(args, 0);
+    let index = arg(args, 1).as_i64();
+    let value = arg(args, 2);
+    if get_hidden(vm, state, "done").as_i64() != 0 {
+        return Ok(Value::UNDEFINED);
+    }
+    let mode = get_hidden(vm, state, "mode").as_i64();
+    let out = get_hidden(vm, state, "out");
+    if mode == MODE_RACE {
+        set_hidden(vm, state, "done", Value::from_i64(1));
+        settle(vm, out, 1, value)?;
+        return Ok(Value::UNDEFINED);
+    }
+    let results = get_hidden(vm, state, "results");
+    if mode == MODE_ALL_SETTLED {
+        // A visible record: users read `.status` and `.value`.
+        let record = vm.new_object();
+        let status = vm.new_string("fulfilled");
+        let status_key = key(vm, "status");
+        vm.set_prop(record, status_key, status)?;
+        let value_key = key(vm, "value");
+        vm.set_prop(record, value_key, value)?;
+        vm.set_index(results, Value::from_i64(index), record)?;
+    } else {
+        vm.set_index(results, Value::from_i64(index), value)?;
+    }
+    let remaining = get_hidden(vm, state, "remaining").as_i64() - 1;
+    set_hidden(vm, state, "remaining", Value::from_i64(remaining));
+    if remaining == 0 {
+        set_hidden(vm, state, "done", Value::from_i64(1));
+        settle(vm, out, 1, results)?;
+    }
+    Ok(Value::UNDEFINED)
+});
+
+native!(n_combine_err, |vm, _this, args| {
+    let state = arg(args, 0);
+    let index = arg(args, 1).as_i64();
+    let reason = arg(args, 2);
+    if get_hidden(vm, state, "done").as_i64() != 0 {
+        return Ok(Value::UNDEFINED);
+    }
+    let mode = get_hidden(vm, state, "mode").as_i64();
+    let out = get_hidden(vm, state, "out");
+    if mode == MODE_ALL || mode == MODE_RACE {
+        set_hidden(vm, state, "done", Value::from_i64(1));
+        settle(vm, out, 2, reason)?;
+        return Ok(Value::UNDEFINED);
+    }
+    let results = get_hidden(vm, state, "results");
+    if mode == MODE_ALL_SETTLED {
+        let record = vm.new_object();
+        let status = vm.new_string("rejected");
+        let status_key = key(vm, "status");
+        vm.set_prop(record, status_key, status)?;
+        let reason_key = key(vm, "reason");
+        vm.set_prop(record, reason_key, reason)?;
+        vm.set_index(results, Value::from_i64(index), record)?;
+    }
+    let remaining = get_hidden(vm, state, "remaining").as_i64() - 1;
+    set_hidden(vm, state, "remaining", Value::from_i64(remaining));
+    if remaining == 0 {
+        set_hidden(vm, state, "done", Value::from_i64(1));
+        if mode == MODE_ALL_SETTLED {
+            settle(vm, out, 1, results)?;
+        } else {
+            settle(vm, out, 2, results)?;
+        }
+    }
+    Ok(Value::UNDEFINED)
+});
+
+native!(n_promise_all, |vm, _this, args| combine(vm, arg(args, 0), MODE_ALL));
+native!(n_promise_all_settled, |vm, _this, args| {
+    combine(vm, arg(args, 0), MODE_ALL_SETTLED)
+});
+native!(n_promise_race, |vm, _this, args| combine(vm, arg(args, 0), MODE_RACE));
+
+native!(n_promise_finally, |vm, this, args| {
+    let cb = arg(args, 0);
+    let out = new_pending_promise(vm);
+    let on_ok = vm.new_function_native("finally", n_finally_ok, 1);
+    let on_err = vm.new_function_native("finally", n_finally_err, 1);
+    let bf = bind_native(vm, on_ok, Value::UNDEFINED, vec![cb, out]);
+    let br = bind_native(vm, on_err, Value::UNDEFINED, vec![cb, out]);
+    let k = key(vm, "then");
+    let then = vm.get_prop(this, k)?;
+    vm.call_direct_args(then, this, &[bf, br])?;
+    Ok(out)
+});
+
+native!(n_finally_ok, |vm, _this, args| {
+    let cb = arg(args, 0);
+    let out = arg(args, 1);
+    let value = arg(args, 2);
+    if cb.is_function() {
+        let _ = vm.call_direct_args(cb, Value::UNDEFINED, &[]);
+    }
+    resolve_with(vm, out, value)?;
+    Ok(Value::UNDEFINED)
+});
+
+native!(n_finally_err, |vm, _this, args| {
+    let cb = arg(args, 0);
+    let out = arg(args, 1);
+    let reason = arg(args, 2);
+    if cb.is_function() {
+        let _ = vm.call_direct_args(cb, Value::UNDEFINED, &[]);
+    }
+    settle(vm, out, 2, reason)?;
+    Ok(Value::UNDEFINED)
 });
 
 native!(n_promise_then, |vm, this, args| {

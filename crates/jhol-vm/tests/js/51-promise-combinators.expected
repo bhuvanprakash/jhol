@@ -1,0 +1,9 @@
+sync
+fin
+fin2
+all 1,2,3
+all-rej x
+settled fulfilled,rejected 1
+race fast
+after-fin 5
+caught z
