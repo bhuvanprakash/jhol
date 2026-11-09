@@ -115,51 +115,53 @@ generic `uncaught exception`, which is what made the report readable.
 prints `{"message":"x"}` where node prints `{}`. The enumerability debt is the same one
 noted in `builtins.rs`: there are no per-property enumerable flags.
 
-### `async`/`await` — the plan, and why it was not started today
+### `async`/`await` — shipped, by lowering onto generators
 
-The pieces that exist: `Op::Yield`, `FnProto::is_generator`, corpus pair 31 exercising
-generators, and a correct microtask queue with the whole Promise surface.
+`async` functions work. An async body compiles exactly like a generator, `await e`
+compiles to `yield e`, and the call site returns a promise driven by a runner in Rust.
 
-The lowering that fits this engine: an `async` function compiles exactly like a
-generator (body → `is_generator`), `await e` compiles to `yield e`, and the call site
-drives the generator — each yielded value is subscribed with `then(resume, reject)`,
-the final return resolves the promise, a throw rejects it.
+```
+$ jhol run async.js                # vs node: identical, line for line
+start 1
+sync
+after-await 2
+caught bad
+rejected nope
+result 4
+g handled
+```
 
-Two pieces were missing, and **both are now in**:
+**Why suspension rather than callbacks.** Nothing is transpiled. The engine already
+suspends and resumes frames for generators, so `await` reuses that machinery: the
+value is yielded, the runner subscribes with `then`, and the settled value is written
+back into the suspension slot. Loops, `try`/`catch`, class methods, async arrows and
+`Promise.all` composition all work because they are ordinary constructs around a
+suspend point (corpus pair `54-async-await`).
 
-1. **`Generator.prototype.throw`** — resumes the body by raising the value at the
-   suspension point. If a handler inside the body catches it, execution continues;
-   if not, the generator is done and the throw escapes to the caller. It must *not*
-   be caught by the caller's own `try` during the resume — that unwound frames the
-   yielding code still owned. The rule is: only a handler belonging to the
-   generator's own frame may catch a `.throw()`.
-2. **`try`/`catch` across a suspension point** — the handler table entries belonging
-   to the generator's frame are captured at `yield` as `(catch_ip, slot offset)` and
-   pushed back, rebased onto the new register window, on resume. Without this the
-   `try` silently stopped catching after the first pause.
+**Two defects found while building it, both worth recording:**
 
-Corpus pair `53-generator-throw` pins all of it: `next(v)` delivery, a caught
-`.throw`, and an escaping `.throw` caught at the call site.
+1. *The body observed its awaited expression twice.* `unary()` evaluates its operand
+   into a temp **before** dispatching on the operator; the `Await` arm evaluated it
+   again. One `Promise.reject` became two rejected promises, one of which had no
+   handler and failed the run. Fix: suspend on the temp the compiler already made,
+   then move the resumed value into the destination — one evaluation.
+2. *The first resume was queued instead of run.* An async body runs synchronously up
+   to its first `await`; queueing it put the opening statements one microtask late and
+   reordered logs against the caller.
 
-What remains before `async`/`await` can be enabled: the compiler lowering and the
-driver. **Both were written and reverted**, and the reason is recorded here because it
-is the useful part:
+**Cost, measured** (20 000 awaits, same machine, node vs JholVM):
 
-* the lowering worked — `async` compiled with `is_generator`, `await e` → `yield e`,
-  a Rust driver resumed the body from each settled value, and the observable behaviour
-  matched node for `await`, `try { await rejected } catch`, and a throwing async body
-  caught by `.catch`;
-* one defect blocked it: a single `Promise.reject` inside an async body was observed
-  **twice** as a rejection with the same reason (two distinct promises, one cleared
-  when the driver attached its handler, one left over), which then failed the run as
-  an unhandled rejection. Two notes and one clear, reproduced with
-  `JHOL_DEBUG_REJ=1` instrumentation before anything was committed;
-* shipping that would have replaced a loud "not supported" with an engine that fails
-  correct programs. Reverted, and the diagnostic sequence is above for whoever picks
-  it up.
+| workload | node | JholVM | |
+|---|---:|---:|---|
+| sequential `await Promise.resolve(1)` ×20k | 3–4 ms | **27 ms** | ~7× |
+| `Promise.all` over 20k values | 7–8 ms | **62–65 ms** | ~8× |
 
-So `async` still refuses at compile time — but only now because of one identified
-double-settle, not because the machinery is missing.
+The first version was 80 ms / 134 ms. Two changes took it down: awaiting an already
+settled promise now queues **one microtask** instead of a `then` subscription (which
+allocated a derived promise, a handler array, a job and two bound functions), and the
+resume natives are created once per VM instead of once per await. Still several times
+node's cost, and the remaining gap is allocation per await rather than interpreter
+speed — recorded rather than hidden.
 
 ## 3. `BigInt` is absent
 

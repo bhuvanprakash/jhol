@@ -424,7 +424,11 @@ impl Compiler {
             FnCtx::ClassMethod | FnCtx::Ctor | FnCtx::DerivedCtor | FnCtx::Script
         ) || has_directive;
         fs.proto.is_script = matches!(ctx, FnCtx::Script);
-        fs.proto.is_generator = f.is_generator;
+        // `async` rides the generator machinery: the body compiles as a generator,
+        // `await e` becomes `yield e`, and the call site drives it. Nothing is
+        // transpiled to callbacks — suspension is the engine's own.
+        fs.proto.is_generator = f.is_generator || f.is_async;
+        fs.proto.is_async = f.is_async;
         // Every function starts with a scope, arrows included. An arrow has no own
         // `this`/`new_target` (both are lexical, resolved as upvalues) so it gets an
         // empty one — but it must exist: `declare_pattern` assumes a scope is present,
@@ -493,15 +497,6 @@ impl Compiler {
 
     /// Compile a nested function and return its index in the module's proto list.
     fn compile_fn(&mut self, f: &Func, ctx: FnCtx, name: Option<String>) -> Result<u32, String> {
-        // There is no Promise or microtask queue in this runtime, so an async
-        // function cannot be modelled correctly. Failing here is better than
-        // running it synchronously and pretending it returned a promise.
-        if f.is_async {
-            return Err(
-                "SyntaxError: async functions are not supported: JholVM has no Promise/microtask support"
-                    .into(),
-            );
-        }
         self.push_fn(f, ctx, name);
         let base: u32 = if f.is_arrow { 0 } else { 2 };
         // Reserve one slot per parameter, in order.
@@ -3474,10 +3469,16 @@ impl Compiler {
                 self.emit(Op::LoadUndefined, dst, 0, 0);
             }
             UnOp::Await => {
-                return Err(
-                    "SyntaxError: await is not supported: JholVM has no Promise/microtask support"
-                        .into(),
-                );
+                if !self.states.last().map(|f| f.is_async).unwrap_or(false) {
+                    return Err("SyntaxError: await outside an async function".into());
+                }
+                // `unary()` already evaluated the operand into `t`. Suspending on
+                // it and then moving the resumed value into `dst` is one
+                // evaluation; evaluating `inner` again here made the body observe
+                // its own awaited expression twice (two rejected promises for one
+                // `Promise.reject`).
+                self.emit(Op::Yield, t, 0, 0);
+                self.emit(Op::Move, dst, t, 0);
             }
             UnOp::Delete => {
                 if let Expr::Member { obj, key, .. } = inner {

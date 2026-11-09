@@ -408,6 +408,9 @@ pub struct FnProto {
     /// while a script must not — node runs `-e` scripts as sloppy code.
     pub is_script: bool,
     pub is_generator: bool,
+    /// An `async function`: compiled like a generator (`await e` is `yield e`) and
+    /// driven on call by a runner that resolves the returned promise.
+    pub is_async: bool,
     /// Number of upvalue slots whose cells come from locals of this frame.
     pub local_cells: Vec<u32>,
     /// `(from_local, index)` per upvalue: `from_local` means "cell #index of the
@@ -455,6 +458,7 @@ impl FnProto {
             is_strict: false,
             is_script: false,
             is_generator: false,
+            is_async: false,
             local_cells: Vec::new(),
             upval_desc: Vec::new(),
             hoisted_vars: 0,

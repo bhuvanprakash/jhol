@@ -1814,19 +1814,26 @@ fn primitive_proto_getter_uses_wrapper_prototypes() {
     assert_eq!(got, "true,true,true,true,true,true");
 }
 
+/// `async` is lowered onto the generator machinery, so this pins the *shape* of
+/// what a call returns; semantics (ordering, catch, loops, methods) are pinned by
+/// corpus pair `54-async-await`, which is compared to node line by line.
 #[test]
-fn async_and_await_fail_loudly_instead_of_running_wrong() {
+fn async_call_returns_a_promise() {
     in_thread(|| {
-        let e = eval("async function f() {}\nf").unwrap_err();
-        assert!(
-            e.to_string().contains("async functions are not supported"),
-            "{e}"
+        let got = eval_str(
+            "const p = (async () => 1)();\
+             `${p instanceof Promise},${typeof p.then},${typeof (async (x) => x)}`",
         );
-        let e = eval("async function f() { return await 1; }\nf").unwrap_err();
-        assert!(
-            e.to_string().contains("async functions are not supported"),
-            "{e}"
-        );
+        assert_eq!(got, "true,function,function");
+    });
+}
+
+/// `await` outside an async function is a syntax error, not a silent no-op.
+#[test]
+fn await_outside_async_is_a_syntax_error() {
+    in_thread(|| {
+        let e = eval("await 1").unwrap_err();
+        assert!(e.to_string().contains("await outside"), "{e}");
     });
 }
 

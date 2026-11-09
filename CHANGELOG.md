@@ -2833,3 +2833,33 @@ Replacing a loud "async is not supported" with an engine that fails correct prog
 the wrong trade. The diagnostic sequence is in `ENGINE-GAPS.md`; the prerequisite
 machinery (generator `throw`, handlers across a suspension) is committed and pinned by
 corpus pair 53.
+
+## Engine: `async`/`await` works, lowered onto generators
+
+`async` was a compile-time `SyntaxError`. It now compiles exactly like a generator
+(`await e` → `yield e`) and the call site returns a promise driven by a runner in Rust,
+resuming the body from each settled value. Nothing is transpiled to callbacks: the
+engine's own suspension is the mechanism.
+
+Verified against node line for line: plain `await`, sequential awaits in a loop,
+`try { await rejected } catch`, a throwing body caught by `.catch`, async arrows,
+class methods, `await` of a non-promise, a `TypeError` from `await null.x`, and
+`Promise.all` composition. Corpus pair `54-async-await`.
+
+Two defects found while building it:
+
+* the body observed its awaited expression **twice**: `unary()` evaluates the operand
+  into a temp before dispatching, and the await arm evaluated it again. One
+  `Promise.reject` became two rejected promises, one unhandled, which failed a correct
+  program. This is what the earlier attempt was reverted over — the diagnosis is now
+  the fix.
+* the first resume was queued rather than run, putting statements before the first
+  `await` one microtask late.
+
+Cost, 20 000 awaits: node 3–4 ms, JholVM **27 ms**; `Promise.all` over 20 000 values:
+node 7–8 ms, JholVM **62–65 ms**. The first version was 80 / 134 ms; awaiting a settled
+promise now queues one microtask instead of a `then` subscription, and the resume
+natives are created once per VM. Remaining gap is allocation per await, and it is
+documented rather than hidden.
+
+`jhol-vm` 127 tests, corpus 54/54, engine gate PASS.

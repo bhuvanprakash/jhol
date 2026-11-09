@@ -1,0 +1,6 @@
+seq 3
+arrow 42
+method m
+plain 7
+type TypeError
+all 3,2

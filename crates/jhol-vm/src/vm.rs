@@ -111,6 +111,12 @@ pub struct Vm {
     /// macrotask. Promise callbacks and `queueMicrotask` both land here, which is
     /// what makes their ordering match node instead of depending on call depth.
     microtasks: std::collections::VecDeque<(Value, Vec<Value>)>,
+    /// The stateless native that performs one async resume, created once and
+    /// rooted. Allocating it per `await` was a third of the cost of an await.
+    async_step_fn: Option<Value>,
+    /// The stateless combinator handlers, created once and rooted. `Promise.all`
+    /// over N values used to allocate 2N of them.
+    combine_fns: Option<(Value, Value)>,
     /// Rejected promises nobody attached a rejection handler to, in the order
     /// they rejected. Node reports these at exit and exits non-zero; being
     /// silent turned a failed async operation into a successful-looking run.
@@ -4306,6 +4312,34 @@ impl Vm {
         self.microtasks.push_back((callable, args));
     }
 
+    /// The shared async-resume native, created on first use.
+    pub(crate) fn async_step_function(&mut self) -> Value {
+        if let Some(f) = self.async_step_fn {
+            return f;
+        }
+        let f = self.new_function_native(
+            "async-step",
+            crate::builtins::n_async_step,
+            0,
+        );
+        self.async_step_fn = Some(f);
+        self.roots.push(f);
+        f
+    }
+
+    /// The shared `(onFulfilled, onRejected)` pair used by the combinators.
+    pub(crate) fn combine_functions(&mut self) -> (Value, Value) {
+        if let Some((ok, er)) = self.combine_fns {
+            return (ok, er);
+        }
+        let ok = self.new_function_native("combine", crate::builtins::n_combine_ok, 1);
+        let er = self.new_function_native("combine", crate::builtins::n_combine_err, 1);
+        self.combine_fns = Some((ok, er));
+        self.roots.push(ok);
+        self.roots.push(er);
+        (ok, er)
+    }
+
     /// Record a rejected promise that has no rejection handler yet.
     pub fn note_unhandled_rejection(&mut self, promise: Value, reason: Value) {
         let bits = promise.bits();
@@ -4532,6 +4566,8 @@ impl Vm {
             handlers: Vec::new(),
             microtasks: std::collections::VecDeque::new(),
             unhandled_rejections: Vec::new(),
+            async_step_fn: None,
+            combine_fns: None,
             globals: std::ptr::null_mut(),
             module_dirs: Vec::new(),
             protos: Vec::new(),
@@ -4658,7 +4694,11 @@ impl Vm {
         for i in 0..copy {
             regs[param_base + i] = self.stack[arg_base + i];
         }
-        let obj = self.new_generator_object(callee, regs, this);
+        let mut obj = self.new_generator_object(callee, regs, this);
+        if proto.is_async {
+            // The caller gets a promise; the generator is an implementation detail.
+            obj = crate::builtins::start_async(self, obj)?;
+        }
         match ret {
             Some((cb, d)) => self.st(cb, d, obj),
             None => self.native_result = obj,
@@ -4716,28 +4756,44 @@ impl Vm {
 
     /// `Generator.prototype.throw(e)`: resume by raising `e` inside the body.
     pub fn resume_throw(&mut self, gen: Value, thrown: Value) -> VmResult<Value> {
-        if let Some(&idx) = self.gen_owners.get(&gen.bits()) {
-            if let Some(gs) = self.gens[idx].as_mut() {
-                gs.pending_throw = Some(thrown);
-            }
-        }
-        self.resume(gen, Value::UNDEFINED)
-    }
-
-    pub fn resume(&mut self, gen: Value, sent: Value) -> VmResult<Value> {
-        let scope = self.arena().root_scope(&[gen, sent]);
-        let result = self.resume_inner(gen, sent);
+        let scope = self.arena().root_scope(&[gen, thrown]);
+        let result = match self.resume_parts(gen, thrown, true) {
+            Ok((value, done)) => self.gen_result(gen, value, done),
+            Err(e) => Err(e),
+        };
         drop(scope);
         self.retain_outcome(&result);
         result
     }
 
-    fn resume_inner(&mut self, gen: Value, sent: Value) -> VmResult<Value> {
+    pub fn resume(&mut self, gen: Value, sent: Value) -> VmResult<Value> {
+        let scope = self.arena().root_scope(&[gen, sent]);
+        let result = match self.resume_parts(gen, sent, false) {
+            Ok((value, done)) => self.gen_result(gen, value, done),
+            Err(e) => Err(e),
+        };
+        drop(scope);
+        self.retain_outcome(&result);
+        result
+    }
+
+    /// Resume and report `(value, done)` without building the result object; the
+    /// async driver needs the pair, not a JS object to read back.
+    pub fn resume_parts(&mut self, gen: Value, sent: Value, throwing: bool) -> VmResult<(Value, bool)> {
+        self.resume_inner(gen, sent, throwing)
+    }
+
+    fn resume_inner(&mut self, gen: Value, sent: Value, throwing: bool) -> VmResult<(Value, bool)> {
         let Some(&idx) = self.gen_owners.get(&gen.bits()) else {
             return Err(type_error("not a generator"));
         };
         if self.gens[idx].as_ref().unwrap().done {
-            return self.gen_result(gen, Value::UNDEFINED, true);
+            return Ok((Value::UNDEFINED, true));
+        }
+        if throwing {
+            if let Some(gs) = self.gens[idx].as_mut() {
+                gs.pending_throw = Some(sent);
+            }
         }
         let proto = self.gens[idx].as_ref().unwrap().proto.clone();
         let nslots = proto.nslots;
@@ -4826,7 +4882,7 @@ impl Vm {
         let v = self.run_until(reg_depth)?;
         // `v` is the yielded value, or the generator's `return` value once it
         // completes; both belong in the result object.
-        self.gen_result(gen, v, self.gens[idx].as_ref().unwrap().done)
+        Ok((v, self.gens[idx].as_ref().unwrap().done))
     }
 
     fn gen_result(&mut self, gen: Value, value: Value, done: bool) -> VmResult<Value> {

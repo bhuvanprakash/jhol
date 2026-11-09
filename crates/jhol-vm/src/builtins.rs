@@ -1003,6 +1003,104 @@ native!(n_is_enumerable, |vm, this, args| {
     Ok(Value::from_bool(false))
 });
 native!(n_gen_self, |_vm, this, _args| Ok(this));
+// ── async functions ────────────────────────────────────────────────────
+//
+// An `async` function compiles as a generator (`await e` is `yield e`) and this
+// runner drives it: the body runs synchronously to its first await, each yielded
+// value is subscribed with `then`, the settled value goes back into the suspension
+// slot, a returned value resolves the promise and a throw rejects it. Deferral
+// ordering therefore comes from the microtask queue, not from the runner.
+
+pub(crate) fn start_async(vm: &mut Vm, gen: Value) -> VmResult<Value> {
+    let promise = new_pending_promise(vm);
+    // Synchronously, up to the first `await`: queueing this put the opening
+    // statements a microtask late and reordered logs against the caller.
+    let parts = vm.resume_parts(gen, Value::UNDEFINED, false);
+    async_settle(vm, gen, promise, parts)?;
+    Ok(promise)
+}
+
+fn async_settle(
+    vm: &mut Vm,
+    gen: Value,
+    promise: Value,
+    parts: VmResult<(Value, bool)>,
+) -> VmResult<Value> {
+    let (value, done) = match parts {
+        Ok(parts) => parts,
+        Err(crate::errors::VmError::Exception(thrown)) => {
+            settle(vm, promise, 2, thrown.value)?;
+            return Ok(Value::UNDEFINED);
+        }
+        Err(e) => return Err(e),
+    };
+    if done {
+        resolve_with(vm, promise, value)?;
+        return Ok(Value::UNDEFINED);
+    }
+    // Fast path: awaiting an **already settled** promise needs one microtask, not
+    // a `then` subscription (which allocates a derived promise, a handler array, a
+    // job and two bound functions). The deferral is preserved — `await` always
+    // yields at least one turn — so ordering is unchanged while the allocation per
+    // await drops from seven objects to one.
+    if value.is_object() {
+        let state_key = promise_hidden_key(vm, "state");
+        if let Ok(state) = vm.get_prop(value, state_key) {
+            let state = state.as_i64();
+            if state == 1 || state == 2 {
+                let settled = get_hidden(vm, value, "value");
+                // A microtask already carries an argument vector, so the resume
+                // needs no bound-function wrapper at all.
+                let step = vm.async_step_function();
+                vm.queue_microtask(
+                    step,
+                    vec![gen, promise, settled, Value::from_i64(state)],
+                );
+                return Ok(Value::UNDEFINED);
+            }
+        }
+    }
+    // `to_promise` wraps a plain value, so `await 1` still defers one microtask.
+    let awaited = to_promise(vm, value)?;
+    let ok = vm.new_function_native("async-ok", n_async_ok, 1);
+    let er = vm.new_function_native("async-err", n_async_err, 1);
+    let bf = bind_native(vm, ok, Value::UNDEFINED, vec![gen, promise]);
+    let br = bind_native(vm, er, Value::UNDEFINED, vec![gen, promise]);
+    let then_key = key(vm, "then");
+    let then = vm.get_prop(awaited, then_key)?;
+    vm.call_direct_args(then, awaited, &[bf, br])?;
+    Ok(Value::UNDEFINED)
+}
+
+native!(n_async_step, |vm, _this, args| {
+    let gen = arg(args, 0);
+    let promise = arg(args, 1);
+    let settled = arg(args, 2);
+    let state = arg(args, 3).as_i64();
+    let parts = if state == 2 {
+        vm.resume_parts(gen, settled, true)
+    } else {
+        vm.resume_parts(gen, settled, false)
+    };
+    async_settle(vm, gen, promise, parts)
+});
+
+native!(n_async_ok, |vm, _this, args| {
+    let gen = arg(args, 0);
+    let promise = arg(args, 1);
+    let sent = arg(args, 2);
+    let parts = vm.resume_parts(gen, sent, false);
+    async_settle(vm, gen, promise, parts)
+});
+
+native!(n_async_err, |vm, _this, args| {
+    let gen = arg(args, 0);
+    let promise = arg(args, 1);
+    let reason = arg(args, 2);
+    let parts = vm.resume_parts(gen, reason, true);
+    async_settle(vm, gen, promise, parts)
+});
+
 native!(n_gen_next, |vm, this, args| vm.resume(this, arg(args, 0)));
 
 /// `Generator.prototype.throw(value)`.
@@ -5948,8 +6046,7 @@ fn combine(vm: &mut Vm, input: Value, mode: i64) -> VmResult<Value> {
     for index in 0..count {
         let item = vm.get_index(input, Value::from_i64(index as i64))?;
         let p = to_promise(vm, item)?;
-        let on_ok = vm.new_function_native("combine", n_combine_ok, 1);
-        let on_err = vm.new_function_native("combine", n_combine_err, 1);
+        let (on_ok, on_err) = vm.combine_functions();
         let bound = vec![state, Value::from_i64(index as i64)];
         let bf = bind_native(vm, on_ok, Value::UNDEFINED, bound.clone());
         let br = bind_native(vm, on_err, Value::UNDEFINED, bound);
