@@ -141,9 +141,25 @@ Two pieces were missing, and **both are now in**:
 Corpus pair `53-generator-throw` pins all of it: `next(v)` delivery, a caught
 `.throw`, and an escaping `.throw` caught at the call site.
 
-What remains before `async`/`await` can be enabled: the compiler lowering (async body
-compiles with `is_generator`, `await e` → `yield e`) and the driver that subscribes to
-each yielded value and resolves the promise. The machinery it needs now exists.
+What remains before `async`/`await` can be enabled: the compiler lowering and the
+driver. **Both were written and reverted**, and the reason is recorded here because it
+is the useful part:
+
+* the lowering worked — `async` compiled with `is_generator`, `await e` → `yield e`,
+  a Rust driver resumed the body from each settled value, and the observable behaviour
+  matched node for `await`, `try { await rejected } catch`, and a throwing async body
+  caught by `.catch`;
+* one defect blocked it: a single `Promise.reject` inside an async body was observed
+  **twice** as a rejection with the same reason (two distinct promises, one cleared
+  when the driver attached its handler, one left over), which then failed the run as
+  an unhandled rejection. Two notes and one clear, reproduced with
+  `JHOL_DEBUG_REJ=1` instrumentation before anything was committed;
+* shipping that would have replaced a loud "not supported" with an engine that fails
+  correct programs. Reverted, and the diagnostic sequence is above for whoever picks
+  it up.
+
+So `async` still refuses at compile time — but only now because of one identified
+double-settle, not because the machinery is missing.
 
 ## 3. `BigInt` is absent
 

@@ -2815,3 +2815,21 @@ generator had finished. Only a handler of the generator's own frame may catch it
 Corpus pair `53-generator-throw` compares with node: `next(v)` delivery, a caught
 `.throw`, and an escaping `.throw` caught at the call site. Corpus 53/53, engine gate
 PASS.
+
+## Reverted: the async/await lowering (one identified defect, not shipped)
+
+With `Generator.prototype.throw` and suspension-safe handlers in place, the lowering
+was written: `async` compiled as a generator, `await e` as `yield e`, and a driver that
+resumed the body from each settled value. It behaved correctly against node for
+`await`, `try { await rejected } catch (e)`, and a throwing body caught by `.catch`.
+
+It was **reverted before committing** because of one reproduced defect: a single
+`Promise.reject` inside an async body appeared **twice** as a rejection with the same
+reason — two distinct promises, one cleared when the driver attached its handler, one
+left over, which then failed an otherwise correct run as an unhandled rejection. Two
+notes and one clear, found with `JHOL_DEBUG_REJ=1` instrumentation.
+
+Replacing a loud "async is not supported" with an engine that fails correct programs is
+the wrong trade. The diagnostic sequence is in `ENGINE-GAPS.md`; the prerequisite
+machinery (generator `throw`, handlers across a suspension) is committed and pinned by
+corpus pair 53.
