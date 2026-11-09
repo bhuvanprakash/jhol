@@ -1,8 +1,8 @@
 <h1 align="center">JHOL</h1>
 
 <p align="center">
-  <strong>A Rust package manager with a content-addressed store.</strong><br/>
-  npm-compatible &nbsp;·&nbsp; offline-first &nbsp;·&nbsp; deterministic installs
+  <strong>One graph and one lockfile for npm packages, Python wheels and model weights.</strong><br/>
+  npm-compatible &nbsp;·&nbsp; offline-first &nbsp;·&nbsp; verified &nbsp;·&nbsp; deterministic
 </p>
 
 <p align="center">
@@ -23,7 +23,6 @@
   <a href="#commands"><strong>Commands</strong></a>
 </p>
 
-Warm installs relink from the store. Cold installs spend their time on the registry, and the numbers below say so. macOS arm64 is the platform that has actually been run.
 
 ```sh
 cargo install jhol
@@ -36,7 +35,15 @@ jhol install
 | Content-addressed store | A package is unpacked once, then linked |
 | `--offline` | Install from the store when the network is gone |
 | `--frozen` / `jhol ci` | The locked tree, reproduced |
-| `--fallback-backend` | Hand a hard edge case to Bun or npm |
+| `jhol verify` | Exit 0 only when the tree **is** what the lockfile authorises |
+| `--as-of`, `--allow-license`, `--exclude-vuln` | History, licences and CVEs are resolution inputs, not audits |
+| `jhol ai`, `jhol py` | Model weights and Python wheels through the same graph |
+| `jhol attest`, `jhol replay` | A deterministic proof, and a spec that reproduces it |
+
+**The property that matters:** a fast path may save work, it may not decide truth. One
+freshness authority (`jhol-treecheck`) answers `Match · Missing · Wrong · Extraneous ·
+Unverified` before any install lane and after every one, so a hand-edited package, an
+unauthorised directory and a deleted file are all the same question.
 
 ---
 
@@ -50,6 +57,23 @@ Interleaved runs, fresh cache and fresh `HOME` for each tool, and every run had 
 | Cold, 20 deps, ~70 packages | 2931 ms | 2793 ms | Split 2–2 |
 | Warm re-install, 74 packages | **8–9 ms** | ~6 ms | Store links, no re-download |
 | Daemon cold install | **239 ms** | — | Was 30,206 ms before the accept-loop fix |
+
+Real npm projects, isolated cache and fresh `HOME` per tool, interleaved:
+
+| Project | jhol | Bun | |
+|---|---:|---:|---|
+| express@4 — 71 packages | **646 ms** | 1417 ms | 2.2× ahead |
+| webpack@5 — 57 packages | **1974 ms** | 4738 ms | 2.4× ahead |
+| eslint@9 — 87 packages | **1652 ms** | 1732 ms | parity |
+| jest@29 — 266 packages | **4961 ms** | 33082 ms | 6.7× ahead |
+| express@4, `node_modules` wiped | 50–69 ms | 21–22 ms | **2.5× behind** |
+| jest tree, nothing to do | **18 ms** | — | verify, then stop |
+
+Bun is faster warm and the cause is measured, not guessed: jhol rebuilds 68 directories
+while Bun clones from cache. Resolution is not the cost — a 275-package chart assembles in
+**11.4 ms** and 344 cached packuments load in **15.2 ms** via a binary index (both were
+141.6 ms and 426 ms before they were profiled). Payload transfer is network-bound: the same
+jest manifest has taken 19 s and 54 s within one hour.
 
 A cold run is bytes over about 10.5 MB/s, plus round trips times dependency depth, plus about 50 ms of local work. jhol sends about 1.1 requests per package. The rest is the registry. A nearer mirror is the lever that moves it: `JHOL_REGISTRY=https://<your-mirror>/`.
 
@@ -66,11 +90,16 @@ HTTP/3 (the registry sends no `Alt-Svc`), parallel chunked download (0.94–0.96
 
 | Piece | Role |
 |---|---|
-| JAGR-infinite | Resolver. Partitions the graph, isolates structural conflicts, and glues local solutions when the obstruction vanishes |
+| JAGR-∞ | Resolver. Version bits in base-aware bitmaps, a propagated fixpoint, most-constrained-first search, and per-edge masks |
+| Instance resolution | A requirement creates an instance; only incompatible ranges get a second. 249 packages need 270 |
 | JAGR-S store v3 | Content-addressed artifacts. SIMD probes, co-clustered disk order, lock-free mmap slices |
-| Instance-aware linking | A nested version conflict becomes a real directory for the version that dependent asked for |
 | One spec grammar | `file:`, `link:`, `workspace:`, `npm:`, git, and `optional` classified once and honoured everywhere |
 | Zero-parse fast paths | Capsule, expansion cache, store index, and a daemon that keeps the hot path warm |
+| `jhol-treecheck` | The one freshness authority: what the lockfile authorises vs what is on disk |
+| Policy as input | `--as-of`, `--allow-license`, `--exclude-vuln` are masks, so a refused version is never fetched |
+| Explainability | `jhol why` (offline attribution) and `why-not` (the minimal unsat core) |
+| AI artifacts | Safetensors headers read in 10 KB, wheels filtered by ABI, both under `jhol verify` |
+| Proofs | `attest` produces the verifier's own verdict; `replay` re-runs the commands |
 
 Native state lives in `.jhol/state/`. The native lock is `.jhol.lock`. `node_modules` and `package-lock.json` are compatibility renders of that graph.
 
@@ -150,6 +179,32 @@ Quiet output is `-q`. Machine-readable output is `--json` on install, doctor, au
 | Audit and attempt fixes | `jhol audit --fix` |
 | Fail CI on vulnerabilities | `jhol audit --gate` |
 | Write an SBOM | `jhol sbom -o sbom.json` |
+| Prove the tree matches the lockfile | `jhol verify` (exit 0 only when it does) |
+| Delete what the lockfile never authorised | `jhol verify --prune` |
+| Deterministic proof, and re-check it | `jhol attest` · `jhol attest --verify` |
+| Reproduce a published result | `jhol replay <spec.json> --execute` |
+
+### Explain and choose
+
+| Goal | Command |
+|---|---|
+| Why is this version here? | `jhol why <pkg>` — copies, ranges, nearest declaring ancestor |
+| Why can this range not install? | `jhol why-not <pkg>@<range>` — minimal unsat core, offline |
+| Install the tree as it stood on a date | `jhol install --as-of 2023-06-01` |
+| Allow only some licences | `jhol install --allow-license MIT,BSD-3-Clause` |
+| Never select a vulnerable release | `jhol install --exclude-vuln` |
+
+### Models, wheels, environments
+
+| Goal | Command |
+|---|---|
+| Describe a checkpoint without downloading it | `jhol ai inspect` (10,760 bytes, any size) |
+| Pull weights into the content store | `jhol ai pull` — SHA-256, hardlinked, resumable |
+| Which wheel fits this machine? | `jhol wheels torch@2.4.1 --python 3.12` |
+| Resolve a Python graph | `jhol pysolve torch@2.4.1` |
+| Install wheels, verified per file | `jhol py install requests` |
+| Detect the axes every decision uses | `jhol axes` |
+| Fork a tree for an experiment | `jhol env fork exp1` — copy-on-write, ~0 bytes |
 
 ### Agent tools
 
@@ -230,6 +285,14 @@ In CI, `jhol cache key` is the cache key. `jhol ci` skips resolution and packume
 | [Instance model](./docs/plans/e145-instance-model.md) | Nested versions |
 | [Innovation log](./docs/internal/INNOVATION_LOG.md) | What was kept, and what was measured and dropped |
 | [How We Won](./HOW-WE-WON.md) | 11/11 vs Bun: standings, method, caught bugs |
+| [Technical report](./docs/REPORT-2026-11-07.md) | The current session end to end, with every measurement |
+| [Resolver](./docs/RESOLVER-JAGR.md) | Bitmaps, bases, masks, instances, index, policy, obligations |
+| [Install pipeline](./docs/INSTALL-PIPELINE.md) | argv to tree, lane by lane, with failure modes |
+| [CLI reference](./docs/CLI-REFERENCE.md) | Every command, flag, exit code and env var |
+| [Engine](./docs/ENGINE-JHOLVM.md) · [gaps](./docs/ENGINE-GAPS.md) | Lexer to JIT; each remaining gap and its acceptance test |
+| [AI-first](./docs/AI-FIRST.md) | Models, wheels, axes, forks, attestation, replay |
+| [Defect log](./docs/DEFECT-LOG.md) | Thirteen defects: symptom, cause, the rule each produced |
+| [Operations](./docs/OPERATIONS.md) · [env audit](./docs/ENV-AUDIT.md) | Gates and landmines; 180 `JHOL_*` variables classified |
 | [Changelog](./CHANGELOG.md) | Releases |
 
 ---
@@ -241,9 +304,12 @@ In CI, `jhol cache key` is the cache key. `jhol ci` skips resolution and packume
 The JS engine inside `jhol run` beats Bun on **all 11** engine benchmarks in
 a simultaneous same-seconds A/B: **suite 390 ms vs 552 ms (1.42x ahead)**,
 with wins up to 2.7x (`gc_stress`). Correctness is pinned byte-for-byte
-against node: 44/44 corpus (JIT on and off), 86/86 unit tests, both quality
-gates PASS. The full record — method, per-fix measurements, the bugs the
-gate caught, and the honest open items — is
+against node: **50/50 corpus** (JIT on and off), **124/124 unit tests**, both
+quality gates PASS. `Promise` and a microtask queue landed most recently, and
+their ordering is compared line for line with node — sync logs, `.then`
+chains, a throw inside `then`, `queueMicrotask`, `setTimeout(0)` and a
+thenable all interleave identically. The full record — method, per-fix
+measurements, the bugs the gate caught, and the honest open items — is
 **[HOW-WE-WON.md](./HOW-WE-WON.md)**.
 
 ```sh
@@ -294,10 +360,16 @@ python3 scripts/bench/guardrails.py collect \
 ## Before you rely on it
 
 npm lockfiles are verified, including nested versions, integrity, `ci`, `--frozen`, and `--offline`.
+Ten real manifests — express, vite, esbuild, jest, next, eslint, webpack, prisma,
+typescript, rollup — pass install, verify, idempotent re-install and `ci`+verify.
 
 - Linux and Windows have not been run on this machine.
-- Some complex peer graphs can still differ from npm. A failed resolve can fall back to another resolver.
+- Some complex peer graphs can still differ from npm; peers are advisory by default.
 - The flat expander and the JAGR law layer are still two code paths.
+- **Warm installs are ~2.5× behind Bun** — materialisation, not resolution. Measured, cause known, not yet fixed.
+- **Engine gaps, named:** no `async`/`await` (rejected at compile time with a clear message), no `BigInt`, no `Promise.all/race/finally`, no regex lookaround, no `eval`. `Promise`, microtasks, symbols, TDZ and destructuring are done and pinned to node.
+- Python install has no console-script rewriting and no uninstall; `pysolve` is resolution only.
+- Pruning is opt-in (`JHOL_PRUNE_EXTRANEOUS=1`) because a lockfile can be an incomplete record.
 
 - [ ] `jhol audit` is clean
 - [ ] CI uses `jhol ci` or `--frozen`
