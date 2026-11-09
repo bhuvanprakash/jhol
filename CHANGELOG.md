@@ -3070,3 +3070,19 @@ contract as `cargo --locked` and `npm ci`. Plain `install` still repairs, which 
 is for.
 
 `jhol-core` 723 tests, installer gate PASS.
+
+## Configuration: the first knob is retired (`JHOL_NEST_RESOLVER`)
+
+`ENV-AUDIT.md` classified 180 `JHOL_*` variables and retired none, with the rule that
+retiring means deleting the variable — not renaming it. The first one is gone.
+
+`JHOL_NEST_RESOLVER=0` switched back to the flat resolver. That resolver cannot represent
+a tree with two majors of the same package, its output is exactly what the fallback exists
+for, and an escape hatch to a strictly weaker resolver is a way to be surprised rather
+than a way to be safe. The instance resolver is now the only first attempt; the flat
+resolver remains its automatic fallback on error.
+
+Verified afterwards: normal install (71 packages, `verify` clean), dated install (58
+packages), and `JHOL_NEST_RESOLVER=0` now has no effect. `ENV-AUDIT.md` gained a
+"Retired" section naming what is queued behind work rather than judgement
+(`JHOL_SINGLE_PASS`, the `JHOL_NO_*` accelerator switches).

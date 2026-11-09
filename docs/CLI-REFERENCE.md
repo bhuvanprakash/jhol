@@ -157,7 +157,7 @@ that contradicts the filesystem.
 | `JHOL_DOWNLOAD_CONCURRENCY` | download parallelism (default `(cpus×4).clamp(32,128)`) |
 | `JHOL_PRUNE_EXTRANEOUS=1` | allow pruning unauthorised directories |
 | `JHOL_AS_OF`, `JHOL_ALLOW_LICENSE`, `JHOL_LICENSE_ALLOW_UNKNOWN` | set by the corresponding flags |
-| `JHOL_NEST_RESOLVER=0` | use the previous nested resolver |
+| ~~`JHOL_NEST_RESOLVER=0`~~ | retired: the instance resolver is the only first attempt |
 | `JHOL_STRICT_PEER_DEPS=1` | peer mismatches become failures |
 | `JAGR_SEARCH_BUDGET` | resolver step cap |
 | `JHOL_VERBOSE=1` | diagnostics on stderr |

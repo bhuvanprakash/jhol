@@ -31,7 +31,7 @@ removing the flag — not renaming it.
 |---|---|---|
 | `JHOL_PRUNE_EXTRANEOUS` | pruning was unsafe while the lockfile could be incomplete | lockfile writer records everything it materialises (see `DEFECT-LOG.md` §5), then pruning becomes the default and `jhol verify --prune` stays as the explicit form |
 | `JHOL_SINGLE_PASS` | the single-pass layout was a fix for a 273–445 s path | once the instance resolver handles every conflict case, the flat/single-pass path goes away with it |
-| `JHOL_NEST_RESOLVER` | the instance resolver was opt-in until it was stable | already promoted to default in the conflict branch; the `0` value can go when the previous resolver is deleted |
+| ~~`JHOL_NEST_RESOLVER`~~ | **retired** — see "Retired" below | — |
 | `JHOL_NO_SELECTION_CACHE` | the selection cache needed an off switch while it was new | cache is verified on load; keep as a diagnostic |
 | `JHOL_LICENSE_ALLOW_UNKNOWN` | a real policy needs an explicit exception | keep — the escape hatch *is* the feature |
 | `JHOL_STRICT_PEER_DEPS` | peers are advisory by default (npm semantics) | keep — it selects between two defensible behaviours |
@@ -94,3 +94,18 @@ Speculative prefetch of predicted packages during install. **Default off** — i
 cost 367–453 ms on a six-package install whose cached path costs 50 ms, because it
 fetches predicted packuments from the network before the requested ones. Set to
 `1` to restore it. `jhol prefetch` uses the same predictor and is unaffected.
+
+---
+
+## Retired
+
+Retirement means the variable is gone from the code, the safe behaviour is the only
+behaviour, and the documentation says so. Renaming is not retiring.
+
+| variable | retired | why it existed | why it could go |
+|---|---|---|---|
+| `JHOL_NEST_RESOLVER` | this session | the instance resolver was opt-in while it was unproven | it is the only *first* attempt now; the flat resolver stays as the automatic fallback, not as a mode. That resolver cannot represent a tree with two majors of one package, so an escape hatch to it was a way to be surprised, not a way to be safe. Verified afterwards: normal install (71 packages, `verify` clean), dated install (58 packages), and `JHOL_NEST_RESOLVER=0` now has no effect |
+
+Two more are queued behind work rather than judgement: `JHOL_SINGLE_PASS` needs the
+single-pass path deleted with it, and the `JHOL_NO_*` accelerator switches each need the
+accelerator proven never wrong for a release before the switch goes.

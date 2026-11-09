@@ -573,7 +573,7 @@ declaration with the releases that declare it — as a flat little-endian blob
 | `JAGR_PROFILE_CHART=1` | per-phase chart timings |
 | `JAGR_NO_INDEX=1` | disable reading/writing the binary index |
 | `JHOL_NO_SELECTION_CACHE=1` | disable the verified-selection cache |
-| `JHOL_NEST_RESOLVER=0` | use the previous nested resolver |
+| ~~`JHOL_NEST_RESOLVER=0`~~ | retired: the instance resolver is the only first attempt |
 | `JHOL_AS_OF` | cut-off timestamp (set by `--as-of`) |
 | `JHOL_ALLOW_LICENSE`, `JHOL_LICENSE_ALLOW_UNKNOWN` | policy |
 | `JHOL_STRICT_PEER_DEPS=1` | peers become failures instead of warnings |

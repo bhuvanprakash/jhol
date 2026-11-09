@@ -7236,7 +7236,7 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                 || std::env::var("JHOL_ALLOW_LICENSE").is_ok()
                 || std::env::var("JHOL_EXCLUDE_VULN").is_ok();
             if as_of_requested {
-                std::env::set_var("JHOL_NEST_RESOLVER", "1");
+                // Nothing to set: the instance resolver is always the first attempt.
             }
             if !dropped.is_empty() || expansion_conflict.is_some() || as_of_requested {
                 if !options.quiet {
@@ -7317,17 +7317,17 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                 // (`function-bind`), i.e. one instance's planned path is not the
                 // path that gets materialised. A resolver whose output the
                 // installer only partly honours must not be the default.
-                // DEFAULT: the instance resolver, because this branch is only
-                // reached when the flat expansion already failed — so it can only
-                // turn a failure into an install. Verified stable on a fresh
-                // `jest@29.7.0` install (266 packages, nested majors, three
-                // consecutive warm runs report Up to date). `JHOL_NEST_RESOLVER=0`
-                // restores the previous resolver, which is also the automatic
-                // fallback if this one errors.
-                let nested_first = !matches!(
-                    std::env::var("JHOL_NEST_RESOLVER").as_deref(),
-                    Ok("0") | Ok("false")
-                );
+                // The instance resolver is the only *first* attempt, and the flat
+                // resolver is its automatic fallback — a fallback, not a mode.
+                //
+                // `JHOL_NEST_RESOLVER=0` used to restore the previous resolver. It is
+                // retired: that resolver cannot represent a tree with two majors of the
+                // same package, its output is what the fallback exists for, and an
+                // escape hatch to a strictly weaker resolver is a way to be surprised
+                // rather than a way to be safe. Retiring it is the first entry in
+                // `ENV-AUDIT.md`'s "retired" list.
+                let nested_first = true;
+                let _ = &nested_first;
                 let resolved_tree: Result<
                     HashMap<String, crate::lockfile_write::ResolvedPackage>,
                     String,
