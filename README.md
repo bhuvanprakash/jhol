@@ -304,7 +304,7 @@ In CI, `jhol cache key` is the cache key. `jhol ci` skips resolution and packume
 The JS engine inside `jhol run` beats Bun on **all 11** engine benchmarks in
 a simultaneous same-seconds A/B: **suite 390 ms vs 552 ms (1.42x ahead)**,
 with wins up to 2.7x (`gc_stress`). Correctness is pinned byte-for-byte
-against node: **51/51 corpus** (JIT on and off), **124/124 unit tests**, both
+against node: **55/55 corpus** (JIT on and off), **127/127 unit tests**, both
 quality gates PASS. `Promise` and a microtask queue landed most recently, and
 their ordering is compared line for line with node — sync logs, `.then`
 chains, a throw inside `then`, `queueMicrotask`, `setTimeout(0)` and a
@@ -367,7 +367,7 @@ typescript, rollup — pass install, verify, idempotent re-install and `ci`+veri
 - Some complex peer graphs can still differ from npm; peers are advisory by default.
 - The flat expander and the JAGR law layer are still two code paths.
 - **Warm installs are ~2.5× behind Bun** — materialisation, not resolution. Measured, cause known, not yet fixed.
-- **Engine gaps, named:** no `async`/`await` (rejected at compile time with a clear message), no `BigInt`, no `Promise.all/race/finally`, no regex lookaround, no `eval`. `Promise`, microtasks, symbols, TDZ and destructuring are done and pinned to node.
+- **Engine gaps, named:** no `BigInt`, no regex lookaround/backrefs, no `eval`. `async`/`await`, the full Promise surface, microtasks, symbols, TDZ, destructuring and per-key enumerability are done and pinned to node (55 corpus pairs).
 - Python install has no console-script rewriting and no uninstall; `pysolve` is resolution only.
 - Pruning is opt-in (`JHOL_PRUNE_EXTRANEOUS=1`) because a lockfile can be an incomplete record.
 
