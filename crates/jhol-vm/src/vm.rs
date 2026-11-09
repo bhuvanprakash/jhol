@@ -111,6 +111,10 @@ pub struct Vm {
     /// macrotask. Promise callbacks and `queueMicrotask` both land here, which is
     /// what makes their ordering match node instead of depending on call depth.
     microtasks: std::collections::VecDeque<(Value, Vec<Value>)>,
+    /// Rejected promises nobody attached a rejection handler to, in the order
+    /// they rejected. Node reports these at exit and exits non-zero; being
+    /// silent turned a failed async operation into a successful-looking run.
+    unhandled_rejections: Vec<(u64, Value)>,
     fc: FrameCache,
     /// Bumped every time an accessor is installed anywhere. Together with a
     /// prototype's identity it answers "can any setter intercept here?" without
@@ -4291,6 +4295,25 @@ impl Vm {
         self.microtasks.push_back((callable, args));
     }
 
+    /// Record a rejected promise that has no rejection handler yet.
+    pub fn note_unhandled_rejection(&mut self, promise: Value, reason: Value) {
+        let bits = promise.bits();
+        if !self.unhandled_rejections.iter().any(|(b, _)| *b == bits) {
+            self.unhandled_rejections.push((bits, reason));
+        }
+    }
+
+    /// A rejection handler was attached: the rejection is accounted for.
+    pub fn clear_unhandled_rejection(&mut self, promise: Value) {
+        let bits = promise.bits();
+        self.unhandled_rejections.retain(|(b, _)| *b != bits);
+    }
+
+    /// The first rejection nobody handled, if any.
+    pub fn first_unhandled_rejection(&self) -> Option<Value> {
+        self.unhandled_rejections.first().map(|(_, r)| *r)
+    }
+
     pub fn has_microtasks(&self) -> bool {
         !self.microtasks.is_empty()
     }
@@ -4497,6 +4520,7 @@ impl Vm {
             },
             handlers: Vec::new(),
             microtasks: std::collections::VecDeque::new(),
+            unhandled_rejections: Vec::new(),
             globals: std::ptr::null_mut(),
             module_dirs: Vec::new(),
             protos: Vec::new(),
@@ -4885,6 +4909,25 @@ impl Engine {
             let drain = self.vm.drain_microtasks();
             if drain.is_err() {
                 return drain.map(|_| Value::UNDEFINED);
+            }
+        }
+        // An unhandled rejection is a failure the user never saw: node reports it
+        // and exits non-zero, and a script that silently continued looked passed.
+        if out.is_ok() {
+            if let Some(reason) = self.vm.first_unhandled_rejection() {
+                self.vm.unhandled_rejections.clear();
+                self.vm.roots.clear();
+                drop(scope);
+                // Print the reason, not a pointer: the bridge renders a string
+                // exception as-is, so build one that names the rejection.
+                let text = crate::builtins::to_str(&mut self.vm, reason)
+                    .unwrap_or_else(|_| "promise rejected with no handler".to_string());
+                let message = self
+                    .vm
+                    .new_string(&format!("UnhandledPromiseRejection: {text}"));
+                return Err(VmError::Exception(Box::new(crate::errors::Thrown::new(
+                    message,
+                ))));
             }
         }
         self.vm.roots.clear();

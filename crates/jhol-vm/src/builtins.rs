@@ -227,7 +227,7 @@ fn string_index(vm: &mut Vm, value: Value) -> VmResult<i64> {
     Ok(if n.is_nan() { 0 } else { n.trunc() as i64 })
 }
 
-fn to_str(vm: &mut Vm, v: Value) -> VmResult<String> {
+pub(crate) fn to_str(vm: &mut Vm, v: Value) -> VmResult<String> {
     if let Some(s) = v.as_str() {
         return Ok(s.to_string());
     }
@@ -5768,6 +5768,13 @@ fn settle(vm: &mut Vm, promise: Value, state: i32, value: Value) -> VmResult<()>
     }
     set_hidden(vm, promise, "state", Value::from_i32(state));
     set_hidden(vm, promise, "value", value);
+    let had_handlers = {
+        let handlers = get_hidden(vm, promise, "handlers");
+        handlers.is_array() && unsafe { handlers.as_array() }.data.len() > 0
+    };
+    if state == 2 && !had_handlers {
+        vm.note_unhandled_rejection(promise, value);
+    }
     // Run every handler that was attached while pending, as microtasks.
     let handlers = get_hidden(vm, promise, "handlers");
     if handlers.is_array() {
@@ -6106,6 +6113,11 @@ native!(n_promise_then, |vm, this, args| {
     let derived = new_pending_promise(vm);
     let on_f = arg(args, 0);
     let on_r = arg(args, 1);
+    if on_r.is_function() {
+        // `then(onFulfilled, onRejected)` accounts for the rejection, exactly as
+        // `catch(onRejected)` does. A `then` with no rejection handler does not.
+        vm.clear_unhandled_rejection(this);
+    }
     let state = get_hidden(vm, this, "state").as_i64();
     if state == 0 {
         let handlers = get_hidden(vm, this, "handlers");
@@ -6126,6 +6138,9 @@ native!(n_promise_then, |vm, this, args| {
 
 native!(n_promise_catch, |vm, this, args| {
     let on_r = arg(args, 0);
+    if on_r.is_function() {
+        vm.clear_unhandled_rejection(this);
+    }
     let derived = new_pending_promise(vm);
     let state = get_hidden(vm, this, "state").as_i64();
     if state == 0 {

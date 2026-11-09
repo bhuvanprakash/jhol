@@ -100,8 +100,16 @@ Corpus pair `51-promise-combinators` compares ordering and results line for line
 including a `race` against a timer and `finally` on both paths. `52-promise-any` pins
 `any` including the empty-input case, which rejects rather than fulfils.
 
+**Unhandled rejections are reported.** A rejected promise with no rejection handler
+used to leave the program exiting 0 with no output — a failed async operation looked
+like a clean run. The engine now records rejections at settle time, clears the record
+when a handler attaches (`catch`, or `then` with a second argument), and fails the run
+at the end with `UnhandledPromiseRejection: <reason>`, exit 1 — node's behaviour.
+
+`VmError::Exception` also renders a thrown *string* as its message instead of the
+generic `uncaught exception`, which is what made the report readable.
+
 **Still open:** `async`/`await` (rejected at compile time with a clear message),
-unhandled-rejection reporting on exit,
 `finally` waiting for a promise returned by its callback, and property enumerability —
 `Error.message` is an own enumerable property here, so `JSON.stringify(new Error("x"))`
 prints `{"message":"x"}` where node prints `{}`. The enumerability debt is the same one

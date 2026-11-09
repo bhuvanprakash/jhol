@@ -26,7 +26,11 @@ pub enum VmError {
     Internal(String),
 
     /// A JS-level `throw` carrying an arbitrary value.
-    #[error("uncaught exception")]
+    ///
+    /// Rendered by the value's own `Display` (below) so a thrown string — which
+    /// is what the engine and `UnhandledPromiseRejection` produce — reads as its
+    /// message instead of "uncaught exception". Anything else keeps the old text.
+    #[error("{}", .0)]
     Exception(#[from] Box<Thrown>),
 }
 
@@ -34,6 +38,13 @@ pub type VmResult<T> = Result<T, VmError>;
 
 impl std::fmt::Display for Thrown {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.value.is_string() {
+            // The string payload lives in the arena; `as_str` is unsafe by
+            // signature but the tag was just checked and the arena is alive for
+            // the duration of this borrow.
+            let text = unsafe { self.value.as_string().as_str() };
+            return write!(f, "{}", text);
+        }
         write!(f, "uncaught exception")
     }
 }

@@ -2034,6 +2034,35 @@ mod strict_assignment_tests {
         assert!(out.contains("42"), "{out}");
     }
 
+
+    /// A rejection nobody handled must fail the program. It used to exit 0 with
+    /// no output, so a failed async operation looked like a clean run.
+    #[test]
+    fn unhandled_rejection_fails_the_program() {
+        let mut e = Engine::new();
+        e.ensure_started();
+        let err = e
+            .eval_source(r#"Promise.reject(new Error("boom")); 1"#, "<unhandled-test>")
+            .expect_err("an unhandled rejection must be an error");
+        let message = format!("{err}");
+        assert!(message.contains("UnhandledPromiseRejection"), "{message}");
+        assert!(message.contains("boom"), "{message}");
+    }
+
+    /// A rejection that *is* handled, by either form, stays quiet and returns.
+    #[test]
+    fn handled_rejection_is_not_reported() {
+        for src in [
+            r#"Promise.reject(new Error("x")).catch(() => 1); 2"#,
+            r#"Promise.reject(new Error("x")).then(null, () => 1); 2"#,
+        ] {
+            let mut e = Engine::new();
+            e.ensure_started();
+            e.eval_source(src, "<handled-test>")
+                .unwrap_or_else(|err| panic!("handled rejection reported: {err} in {src}"));
+        }
+    }
+
     /// The script itself is not strict: node runs `-e` scripts as sloppy code, and a
     /// package manager that made them strict would diverge on one-liners.
     #[test]

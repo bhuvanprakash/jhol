@@ -2775,3 +2775,22 @@ Still open, named: `Promise.any` (needs `AggregateError`), unhandled-rejection
 reporting, `finally` awaiting a returned promise, and property enumerability —
 `JSON.stringify(new Error("x"))` prints `{"message":"x"}` where node prints `{}`,
 because there are no per-property enumerable flags yet.
+
+## Engine: unhandled rejections fail the run
+
+A rejected promise with no rejection handler left the program exiting **0** with no
+output, so a failed async operation looked like a clean run. The engine records a
+rejection at settle time, clears the record when a rejection handler attaches
+(`catch`, or `then` with a second argument), and at the end of the run fails with
+`UnhandledPromiseRejection: <reason>` and exit 1, which is node's behaviour.
+
+Clearing matters as much as recording: `Promise.reject(x).then(null, onErr)` is
+handled, and treating it as unhandled would have broken every `then`-with-two-args
+caller.
+
+Two supporting fixes: `VmError::Exception` now renders a thrown *string* as its
+message (it printed the generic `uncaught exception`, which made the report
+unreadable), and `builtins::to_str` is crate-visible so the reason can be rendered.
+
+Tests: `unhandled_rejection_fails_the_program`, `handled_rejection_is_not_reported`.
+`jhol-vm` 126 tests, corpus 52/52, engine gate PASS.
