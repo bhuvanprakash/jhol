@@ -5,6 +5,7 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod tui;
+mod commands;
 
 use clap::{Arg, ArgAction, Command};
 use clap_complete;
@@ -319,6 +320,14 @@ fn install_command_lock() -> Option<jhol_core::project_lock::ProjectLock> {
     if !writes_tree {
         return None;
     }
+    // A delegated install must **not** hold the project lock: the daemon takes it
+    // itself when it runs the install, so taking it here makes the client and its
+    // own daemon wait for each other until the client's read timeout fires. That is
+    // exactly what `test_daemon_is_not_stalled_by_a_silent_peer` caught — the client
+    // reported "daemon read failed: Resource temporarily unavailable" after 60 s.
+    if std::env::args().any(|a| a == "--daemon") {
+        return None;
+    }
     // Reconcile before the lock even: an unauthorised directory needs no
     // resolution to remove, and doing it here means every tree-writing command
     // starts from a tree that at least matches the lockfile's *set*. It also
@@ -423,6 +432,14 @@ fn plain_install_fully_settled() -> bool {
             "-q" | "--quiet" | "--native-only" | "--offline" | "--no-scripts" => {}
             _ => return false,
         }
+    }
+    // A configuration that asks for a fallback backend is asking for the backend to be
+    // considered, and that decision probes it. Short-circuiting here skipped the probe,
+    // so `install` with `{"fallbackBackend": true}` and nothing to do reported success
+    // without ever telling the user whether the backend they asked for exists.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    if jhol_core::load_config(&cwd).fallback_backend == Some(true) {
+        return false;
     }
     let quiet = args.iter().any(|a| a == "-q" || a == "--quiet")
         || std::env::var("JHOL_QUIET").is_ok();
@@ -3948,153 +3965,11 @@ fn run() -> Result<(), String> {
     }
 
     if let Some(("env", sub_m)) = matches.subcommand() {
-        let envs = std::path::Path::new(".jhol/envs");
-        match sub_m.subcommand() {
-            Some(("fork", m)) => {
-                let name = m.get_one::<String>("name").cloned().unwrap_or_default();
-                if name.is_empty() || name.contains('/') || name.contains("..") {
-                    return Err("env fork: invalid name".into());
-                }
-                let from = m
-                    .get_one::<String>("from")
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|| std::path::PathBuf::from("."));
-                let dest = envs.join(&name);
-                std::fs::create_dir_all(envs).map_err(|e| e.to_string())?;
-                let started = std::time::Instant::now();
-                // Only node_modules is forked: the fork shares the identity files by
-                // copying them, so both environments stay independently lockable.
-                let stats = jhol_core::env_fork::fork_tree(
-                    &from.join("node_modules"),
-                    &dest.join("node_modules"),
-                )
-                .map_err(|e| format!("env fork: {e}"))?;
-                for file in jhol_core::env_fork::identity_files(&from) {
-                    if let Some(name) = file.file_name() {
-                        let _ = std::fs::copy(&file, dest.join(name));
-                    }
-                }
-                if flag(&m, "json") {
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&serde_json::json!({
-                            "name": name,
-                            "dir": dest.display().to_string(),
-                            "dirs": stats.dirs, "files": stats.files,
-                            "cloned": stats.cloned, "copied": stats.copied,
-                            "referenced_bytes": stats.bytes,
-                            "added_bytes": stats.extra_bytes(),
-                            "ms": started.elapsed().as_millis() as u64,
-                        }))
-                        .unwrap_or_default()
-                    );
-                } else {
-                    println!(
-                        "forked {name} in {} ms — {}",
-                        started.elapsed().as_millis(),
-                        stats.describe()
-                    );
-                    println!("  run it with: cd {} · or copy it back when it works", dest.display());
-                }
-                return Ok(());
-            }
-            Some(("list", m)) => {
-                let mut names: Vec<String> = std::fs::read_dir(envs)
-                    .map(|rd| {
-                        rd.flatten()
-                            .filter(|e| e.path().is_dir())
-                            .filter_map(|e| e.file_name().to_str().map(|s| s.to_string()))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                names.sort();
-                if flag(&m, "json") {
-                    println!("{}", serde_json::to_string_pretty(&names).unwrap_or_default());
-                } else if names.is_empty() {
-                    println!("no forks (jhol env fork <name>)");
-                } else {
-                    for n in names {
-                        println!("{n}");
-                    }
-                }
-                return Ok(());
-            }
-            Some(("diff", m)) => {
-                let a = m.get_one::<String>("a").cloned().unwrap_or_default();
-                let b = m.get_one::<String>("b").cloned().unwrap_or_default();
-                // Omitting the second name compares the fork with the project it came
-                // from, which is the question a fork exists to answer. Requiring two
-                // names made the obvious invocation (`env diff exp1`) an error.
-                let b_label = if b.is_empty() { ".".to_string() } else { b.clone() };
-                let read = |name: &str| {
-                    let dir = if name.is_empty() || name == "." {
-                        std::path::PathBuf::from(".")
-                    } else {
-                        envs.join(name)
-                    };
-                    jhol_core::lockfile::read_resolved_from_dir(&dir).unwrap_or_default()
-                };
-                let (ma, mb) = (read(&a), read(&b));
-                let mut keys: Vec<&String> = ma.keys().chain(mb.keys()).collect();
-                keys.sort();
-                keys.dedup();
-                let mut n = 0;
-                for k in keys {
-                    let va = ma.get(k);
-                    let vb = mb.get(k);
-                    if va != vb {
-                        n += 1;
-                        println!(
-                            "{k}: {} -> {}",
-                            va.map(String::as_str).unwrap_or("-"),
-                            vb.map(String::as_str).unwrap_or("-")
-                        );
-                    }
-                }
-                if n == 0 {
-                    println!("{a} and {b_label} resolve identically");
-                }
-                return Ok(());
-            }
-            Some(("rm", m)) => {
-                let name = m.get_one::<String>("name").cloned().unwrap_or_default();
-                std::fs::remove_dir_all(envs.join(&name)).map_err(|e| e.to_string())?;
-                println!("removed fork {name}");
-                return Ok(());
-            }
-            _ => return Err("usage: jhol env fork|list|diff|rm".into()),
-        }
+        return commands::env::run(sub_m);
     }
 
     if let Some(("attest", sub_m)) = matches.subcommand() {
-        if flag(&sub_m, "verify") {
-            let Some(att) = jhol_core::attest::Attestation::load(std::path::Path::new(".")) else {
-                return Err("no attestation found; run `jhol attest` first".into());
-            };
-            match att.verify(std::path::Path::new(".")) {
-                Ok(()) => {
-                    if !flag(&sub_m, "json") {
-                        println!("attestation verified ({} pinned packages)", att.packages.len());
-                    }
-                    return Ok(());
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        let att = jhol_core::attest::Attestation::build(std::path::Path::new("."))
-            .map_err(|e| format!("attest: {e}"))?;
-        att.save(std::path::Path::new(".")).map_err(|e| e.to_string())?;
-        if flag(&sub_m, "json") {
-            println!("{}", serde_json::to_string_pretty(&att).unwrap_or_default());
-        } else {
-            println!(
-                "attested {} packages and {} models at {}",
-                att.packages.len(),
-                att.models.len(),
-                jhol_core::attest::Attestation::path(std::path::Path::new(".")).display()
-            );
-        }
-        return Ok(());
+        return commands::attest::run(sub_m);
     }
 
     if let Some(("axes", sub_m)) = matches.subcommand() {

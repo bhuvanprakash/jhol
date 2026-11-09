@@ -150,6 +150,40 @@ pub fn entry_platform_applies(entry: &serde_json::Value) -> bool {
 /// Keys are `package-lock.json` `packages` keys (`node_modules/a`,
 /// `node_modules/a/node_modules/b`). The root entry (`""`) carries no version
 /// and is skipped.
+/// Install locations that the lockfile records as **links** (`link:`, `file:`,
+/// workspace). They carry no registry version, so they were skipped entirely — which
+/// made a link-only project verify as `Match` with `node_modules` deleted, and `install`
+/// then answer "Up to date (0 packages)" and create nothing.
+fn locked_links(project_dir: &Path) -> Vec<String> {
+    let Some(path) = ["package-lock.json", "npm-shrinkwrap.json", "jhol-lock.json"]
+        .iter()
+        .map(|n| project_dir.join(n))
+        .find(|p| p.exists())
+    else {
+        return Vec::new();
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = v
+        .get("packages")
+        .and_then(|p| p.as_object())
+        .map(|packages| {
+            packages
+                .iter()
+                .filter(|(_, entry)| entry.get("link").and_then(|x| x.as_bool()) == Some(true))
+                .map(|(key, _)| key.clone())
+                .filter(|key| key.contains("node_modules/"))
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
 fn locked_paths(project_dir: &Path) -> Option<HashMap<String, String>> {
     let path = ["package-lock.json", "npm-shrinkwrap.json", "jhol-lock.json"]
         .iter()
@@ -330,6 +364,15 @@ pub fn verify_tree(project_dir: &Path) -> TreeState {
     let installed_set: std::collections::HashSet<&str> =
         installed.iter().map(|s| s.as_str()).collect();
 
+    // Links must exist too. They are not version-compared (a link has no registry
+    // version), but a lockfile that records one is asking for a path on disk.
+    let links = locked_links(project_dir);
+    for path in &links {
+        if !project_dir.join(path).exists() {
+            return TreeState::Missing { path: path.clone() };
+        }
+    }
+
     // Stable iteration order: want deterministic reports and no reliance on
     // HashMap order (the same discipline the resolver needed).
     let mut keys: Vec<&String> = locked.keys().collect();
@@ -363,7 +406,9 @@ pub fn verify_tree(project_dir: &Path) -> TreeState {
     }
     let mut installed_sorted = installed.clone();
     installed_sorted.sort();
-    let has_extras = installed_sorted.iter().any(|p| !locked.contains_key(p));
+    let has_extras = installed_sorted
+        .iter()
+        .any(|p| !locked.contains_key(p) && !links.iter().any(|l| l == p));
     if has_extras && !lockfile_is_complete(project_dir) {
         // Installed packages the lockfile does not mention, *and* a lockfile
         // that does not account for its own dependencies: this is a lockfile
@@ -373,7 +418,7 @@ pub fn verify_tree(project_dir: &Path) -> TreeState {
         };
     }
     for path in installed_sorted {
-        if !locked.contains_key(&path) {
+        if !locked.contains_key(&path) && !links.iter().any(|l| l == &path) {
             return TreeState::Extraneous { path };
         }
     }
@@ -612,8 +657,12 @@ mod tests {
         assert!(!state.needs_install());
     }
 
+    /// A link entry has no registry version, so it is never *version*-compared — but a
+    /// lockfile that records one is asking for a path on disk. Skipping them entirely
+    /// made a link-only project verify as `Match` after `node_modules` was deleted, and
+    /// `jhol install` then answered "Up to date (0 packages)" and created nothing.
     #[test]
-    fn link_and_workspace_entries_are_not_compared() {
+    fn link_entries_must_exist_but_are_not_version_compared() {
         let tmp = tempfile::tempdir().unwrap();
         let d = tmp.path();
         fs::create_dir_all(d.join("node_modules")).unwrap();
@@ -625,7 +674,24 @@ mod tests {
         )
         .unwrap();
         pkg(d, "node_modules/a", "1.0.0");
+
+        // Present, with any version: whatever the link points at is not compared.
+        fs::create_dir_all(d.join("node_modules/linked")).unwrap();
+        fs::write(
+            d.join("node_modules/linked/package.json"),
+            r#"{"name":"linked","version":"9.9.9"}"#,
+        )
+        .unwrap();
         assert_eq!(verify_tree(d), TreeState::Match);
+
+        // Absent: that is the defect this test used to bless.
+        fs::remove_dir_all(d.join("node_modules/linked")).unwrap();
+        assert_eq!(
+            verify_tree(d),
+            TreeState::Missing {
+                path: "node_modules/linked".into()
+            }
+        );
     }
 }
 

@@ -153,3 +153,23 @@ rm -rf target/debug      # always regenerable; never delete target/release blind
 
 Freeing `target/debug` and stale `/tmp` fixture directories took free space from
 194 MB to 7.5 GB and the build then passed.
+
+## Where the CLI lives
+
+`src/main.rs` is the dispatch chain and the shared helpers. Command groups that are
+self-contained live in `src/commands/`:
+
+| module | command |
+|---|---|
+| `commands/env.rs` | `jhol env fork\|list\|diff\|rm` |
+| `commands/attest.rs` | `jhol attest [--verify] [--json]` |
+
+Extracting the next group is mechanical: move the match arm into
+`pub fn run(sub_m: &ArgMatches) -> Result<(), String>`, add the module to
+`commands/mod.rs`, and replace the arm with `return commands::<name>::run(sub_m);`. The
+proof that the move was a move is `cargo test --test commands` plus both gates — nothing
+else changed, so nothing else needs to be argued about.
+
+`cargo test --test commands` is worth running after touching install, the daemon or the
+lockfile: it is the only place several of those contracts are pinned, and it was red
+(24/30) until this session's fixes.

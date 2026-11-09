@@ -5378,6 +5378,17 @@ pub fn resolve_install_from_package_json(strict_lockfile: bool) -> Result<Vec<St
                         if range.is_empty() {
                             continue;
                         }
+                        // `workspace:*`, `file:`, `link:`, git and friends are not
+                        // version ranges. Comparing them with the pinned version made a
+                        // strict install refuse a perfectly consistent workspace
+                        // (reproduced: "lockfile pins ws-lib@3.0.0 but package.json asks
+                        // for workspace:*").
+                        if !matches!(
+                            crate::spec_grammar::classify(range),
+                            crate::spec_grammar::Spec::Registry(_)
+                        ) {
+                            continue;
+                        }
                         let locked = specs
                             .iter()
                             .find(|s| base_name(s) == name.as_str())
