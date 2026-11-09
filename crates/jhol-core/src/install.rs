@@ -7592,8 +7592,23 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                 continue;
             }
 
-            // Soul Path predictive prefetch (once per batch, not O(n²) disk reads)
-            if !options.offline && !options.no_cache && seen_packages.len() == 2 {
+            // Predictive prefetch is **opt-in**.
+            //
+            // It fetches packages the spectral predictor expects next, which is
+            // only useful if they are needed later — and it runs synchronously
+            // inside the install loop, before the packages the user actually
+            // asked for. Measured on a six-package install with a warm cache:
+            // 50 ms offline, 367-453 ms online, so speculation cost seven times
+            // the transaction it decorated. A future install might save that
+            // back; this one paid for it.
+            //
+            // Nothing is deleted: `JHOL_PREDICTIVE_PREFETCH=1` restores it, and
+            // the predictor is still what `jhol prefetch` uses.
+            if !options.offline
+                && !options.no_cache
+                && seen_packages.len() == 2
+                && std::env::var("JHOL_PREDICTIVE_PREFETCH").as_deref() == Ok("1")
+            {
                 let history: Vec<String> = seen_packages.iter().cloned().collect();
                 crate::soul_path::predictive_prefetch(&history, 3);
             }

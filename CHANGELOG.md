@@ -2717,3 +2717,22 @@ reason, after doing the real work.
 Test: `a_dependent_asking_for_two_majors_does_not_empty_the_domain`.
 `jhol-core` 719 tests, installer gate PASS, express install 71 packages and verify
 clean.
+
+## Install: predictive prefetch is opt-in, after measuring what it cost
+
+The spectral predictor ran synchronously inside the install loop and fetched the
+packuments it expected next *before* the packages the user asked for. With a warm
+cache and a six-package manifest:
+
+| | wall time |
+|---|---:|
+| online, prefetch on (old default) | 367–453 ms |
+| `--offline` (prefetch skipped) | 50 ms |
+| online, prefetch off (new default) | 38–110 ms |
+
+Speculation cost seven times the transaction it decorated, and every install paid
+it whether or not the prediction was ever used. `JHOL_PREDICTIVE_PREFETCH=1`
+restores the old behaviour; the predictor still powers `jhol prefetch`.
+
+Express, 71 packages, warm cache: 38–49 ms and `verify` clean.
+`jhol-core` 719 tests, installer gate PASS.

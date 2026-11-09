@@ -87,3 +87,10 @@ definition.
 The honest summary: **nothing here is reduced yet.** The classification is the
 prerequisite — retiring an escape hatch without fixing the default it guards is how
 a project gets a variable named `JHOL_NO_UNSAFE_THING` and keeps the unsafe thing.
+
+### Added: `JHOL_PREDICTIVE_PREFETCH`
+
+Speculative prefetch of predicted packages during install. **Default off** — it
+cost 367–453 ms on a six-package install whose cached path costs 50 ms, because it
+fetches predicted packuments from the network before the requested ones. Set to
+`1` to restore it. `jhol prefetch` uses the same predictor and is unaffected.

@@ -178,3 +178,27 @@ approved script that fails fails the install.
 | materialise from store (266 packages) | 379 ms |
 | warm install, 266-package tree | 18 ms |
 | dated install | 21–24 s |
+
+## Predictive prefetch is opt-in, because measurement said so
+
+The install loop used to call the spectral predictor synchronously, before the
+packages the user asked for, and `DaemonCache::prefetch` goes to the network when
+the predicted packument is not cached.
+
+Measured on a six-package install with a warm cache:
+
+| | wall time |
+|---|---:|
+| online, prefetch on (old default) | 367–453 ms |
+| `--offline`, i.e. prefetch skipped | 50 ms |
+| online, prefetch off (new default) | 38–110 ms |
+| online, `JHOL_PREDICTIVE_PREFETCH=1` | 40 ms (this time, cache warm) |
+
+Speculation cost seven times the transaction it decorated. Nothing was deleted:
+the predictor still exists, still powers `jhol prefetch`, and one variable restores
+the old behaviour. The rule it produced is the one that keeps recurring — **a
+speculative path may save work; it may not charge the user for work they did not
+ask for.**
+
+Express, 71 packages, warm cache, `node_modules` wiped: 49 ms and 38 ms across two
+runs, and `jhol verify` reports the tree matches the lockfile.
