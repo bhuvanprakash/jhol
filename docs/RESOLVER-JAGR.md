@@ -422,6 +422,19 @@ real reason, after doing the real work.
 
 Pinned by `a_dependent_asking_for_two_majors_does_not_empty_the_domain`.
 
+### A failure message that names something
+
+When the search fails and no domain is empty, the obstruction is a *choice*: the
+version picked for one package breaks a requirement of another. The report used to
+say only "constraints are mutually unsatisfiable across 70 packages", which is true
+and unusable. It now names the packages with the fewest candidates — where a human
+actually starts looking:
+
+```
+constraints are mutually unsatisfiable across 70 packages; the fewest-candidate
+packages are: async-function (1 candidates), content-type (1 candidates), ...
+```
+
 ### Why this class of bug survives testing
 
 The old code was self-consistent: it produced conflicts, they looked plausible, and

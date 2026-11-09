@@ -2879,10 +2879,37 @@ pub mod rvm {
                 empt.sort();
                 let detail = match empt.first() {
                     Some(pid) => Self::explain_empty(&chart, *pid),
-                    None => format!(
-                        "constraints are mutually unsatisfiable across {} packages",
-                        chart.packages.len()
-                    ),
+                    None => {
+                        // No domain is empty, so the obstruction is a *choice*:
+                        // whatever version is picked for one package violates a
+                        // requirement of another. "Unsatisfiable across 70
+                        // packages" is true and useless; name the packages with
+                        // the fewest candidates, which is where a human starts.
+                        let mut tight: Vec<(u32, String)> = chart
+                            .packages
+                            .iter()
+                            .map(|(id, p)| {
+                                let label = if p.name.is_empty() {
+                                    format!("pkg#{}", id)
+                                } else {
+                                    p.name.clone()
+                                };
+                                (
+                                    p.allowed.count(),
+                                    format!("{} ({} candidates)", label, p.allowed.count()),
+                                )
+                            })
+                            .collect();
+                        tight.sort();
+                        let shown: Vec<String> =
+                            tight.iter().take(6).map(|(_, s)| s.clone()).collect();
+                        format!(
+                            "constraints are mutually unsatisfiable across {} packages; \
+                             the fewest-candidate packages are: {}",
+                            chart.packages.len(),
+                            shown.join(", ")
+                        )
+                    }
                 };
                 Err(format!("JAGR-∞ unsatisfiable: {}", detail))
             }
