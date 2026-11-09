@@ -322,6 +322,20 @@ pub(crate) fn packument_fresh_with_identity(
         return false;
     };
     let full = packument_path_with_identity(package, false, identity);
+    // Soundest form of the rule, and the cheapest: if the cached document was
+    // *fetched* after the cutoff, it necessarily contains every release published
+    // before the cutoff, whatever its newest entry is. That is strictly more
+    // permissive than comparing release dates and needs no parse, so it also covers
+    // packages that stopped publishing years ago. `mtime` is when we fetched it.
+    if let Ok(meta) = std::fs::metadata(&full) {
+        if let Ok(modified) = meta.modified() {
+            if let Ok(age) = modified.duration_since(std::time::UNIX_EPOCH) {
+                if (age.as_secs() as i64) > cutoff {
+                    return true;
+                }
+            }
+        }
+    }
     let Ok(raw) = std::fs::read(&full) else {
         return false;
     };

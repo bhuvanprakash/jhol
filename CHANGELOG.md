@@ -2990,3 +2990,25 @@ The last row spends 0.41 s user and 0.24 s sys against 2.94 s wall with 622 volu
 context switches: blocked, not computing, with no HTTP from either instrumented path.
 So there is a per-package blocking call in that lane, and the next probe is the
 daemon/IPC lookup — the only per-package blocking call left.
+
+## Install: `--as-of` trusts a cache that was fetched after the cutoff
+
+Freshness for a dated install had one proof: the cached packument's newest release is
+dated after the cutoff. A second, stronger and cheaper proof was missing — if the cached
+file was **fetched after** the cutoff, it necessarily contains every release published
+before it, whatever its newest entry is. That covers packages that stopped publishing
+years ago, needs no parse (mtime), and removes almost every remaining fetch.
+
+| | requests | warm wall |
+|---|---:|---:|
+| before any of this work | 63 | 4.1–8.0 s |
+| after the date-coverage rule | 9 | 2.8–4.0 s |
+| after the fetch-time rule | **1** | **1.5–1.9 s** |
+
+Correctness still pinned by date: `^4.0.0` gives express 4.17.1 (2020-06-01), 4.18.2
+(2023-06-01) and 4.19.2 (2024-06-01); 62 entries, `verify` clean.
+
+Also established by measurement, so the next person does not chase it: `--lockfile-only`
+is 0.76 s and materialising those same 62 packages from a known lockfile is 22–41 ms.
+Resolution and writing are not the cost; the remaining ~1 s is one full-packument fetch
+that the cutoff genuinely requires.

@@ -180,55 +180,34 @@ longer observed, so the remaining reason is packages a developer added by hand.
    and completion generation, so a flag cannot exist in one tree and not the other.
    `flag()` still treats an undeclared flag as off, as defence in depth.
 3. **`--as-of` no longer revalidates settled history.** It used to pay one
-   conditional round trip per package — 63 of them — to be told that a *past* date's
-   record had not changed. Freshness now accepts a cached full packument whose newest
-   release is dated **after** the cutoff: such a document necessarily contains every
-   release dated before it, so it answers every question the cutoff can ask.
+   conditional round trip per package — 63 of them, full packuments, megabytes each —
+   to be told that a *past* date's record had not changed. Freshness now has two sound
+   reasons to trust the cache for a cutoff:
+
+   * the cached file was **fetched after** the cutoff (mtime), so it necessarily
+     contains every release published before it — cheap, no parse, and it covers
+     packages that stopped publishing years ago;
+   * or its newest release is dated after the cutoff, which proves the same thing.
 
    | | requests | warm wall |
    |---|---:|---:|
    | before | 63 | 4.1–8.0 s |
-   | after | **9** | 2.8–4.0 s |
+   | after | **1** | **1.5–1.9 s** (one 5.05 s outlier) |
 
-   The remaining ~4 s is local, not network. Localised by flag diff, not guessed:
+   Correctness pinned across dates from one manifest: `^4.0.0` resolves to express
+   **4.17.1** as of 2020-06-01, **4.18.2** as of 2023-06-01, **4.19.2** as of
+   2024-06-01; 62 lockfile entries, `verify` clean.
 
-   | `install` variant (dated, warm cache) | wall |
-   |---|---:|
-   | `--lockfile-only` (resolve + lockfile, no tree) | **0.76 s** |
-   | full | 4.90 s |
+   What the cost is *not*, measured rather than assumed: `--lockfile-only` is 0.76 s, and
+   materialising the same 62 packages from a known lockfile is **22–41 ms**. So
+   resolution and writing are both cheap; the remaining ~1 s is the single unavoidable
+   full-packument fetch for a package whose cache predates the cutoff.
 
-   So resolution is 0.76 s and **~4.1 s is building the tree**, in a bulk
-   materialiser that never enters the per-package path (`JHOL_DEBUG_JINF` prints
-   nothing, while the same 71 packages undated materialise in **57 ms** through the
-   prepared store).
-
-   **That first reading was wrong, and the correction matters.** `--lockfile-only`
-   also skips *tarball* work, so the 4.1 s was not extraction:
-
-   | measurement | result |
-   |---|---:|
-   | resolution + lockfile | 0.76 s |
-   | materialise 62 packages with a known lockfile | **22–41 ms** |
-   | fresh directory, dated, store warm | 2.9–8.7 s, same input |
-
-   The fresh-directory run spends **0.41 s user + 0.24 s sys against 2.94 s wall**,
-   with 622 voluntary context switches — about ten per package. It is blocked, not
-   computing, and no HTTP is issued through either instrumented path (packuments or
-   tarballs). So there is a per-package blocking call in that lane that we do not
-   instrument yet. Next probe, named: the daemon/IPC lookup per package, since that is
-   the only per-package blocking call left; the fix candidates are batching it or
-   skipping it when the layout is already resolved in memory.
-
-   Instrumentation gap closed on the way: tarball transfer never logged under
-   `JHOL_HTTP_TIMING`, so a run dominated by payload showed zero requests and looked
-   like local compute. `download_tarball` and `download_and_extract_streaming` now
-   report, which is what proved the fresh-directory cost is *not* transfer.
-
-   Two negative results kept on the record. A parallel *frontier* fetch in the resolve
-   loop measured 6.8–10.6 s against 3.7–4.7 s and was reverted — after the baseline
-   itself re-measured at 4.06 s and 8.00 s in consecutive runs, so the comparison could
-   not support a conclusion. **Method: interleave A and B, take medians of ≥5, report
+   Kept on the record: the parallel *frontier* fetch in the resolve loop was reverted —
+   6.8–10.6 s against a 3.7–4.7 s baseline that then re-measured at 4.06 s and 8.00 s,
+   so it could not support a conclusion. **Method: interleave, medians of ≥5, report
    the spread.**
+
 4. **Peers are advisory.** Recorded, reported under `JHOL_STRICT_PEER_DEPS`, not
    binding — npm installs and warns, and making them binding turns working trees
    into failures.
