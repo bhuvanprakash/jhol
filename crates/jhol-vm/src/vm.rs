@@ -468,6 +468,7 @@ impl Vm {
                 spill: None,
                 small,
                 index: None,
+                nonenum: None,
             });
             unsafe { *regs.add(dest as usize) = Value::from_ptr_in(o, base) };
             return 0;

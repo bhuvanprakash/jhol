@@ -1,0 +1,8 @@
+json {}
+keys []
+forin []
+pie false msg boom
+own true
+objproto []
+plain ["a","b"] true
+forin-plain a,b

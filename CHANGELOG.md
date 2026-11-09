@@ -2863,3 +2863,23 @@ natives are created once per VM. Remaining gap is allocation per await, and it i
 documented rather than hidden.
 
 `jhol-vm` 127 tests, corpus 54/54, engine gate PASS.
+
+## Engine: per-key enumerability
+
+Enumerability was all-or-nothing per object, so `JSON.stringify(new Error("x"))`
+printed `{"message":"x"}` where node prints `{}`, `for-in` over an error yielded its
+own `message`, and `Object.keys(Object.prototype)` listed `toString` and friends.
+
+`JObject` now has `nonenum: Option<Box<Vec<PropKey>>>` — a null pointer on ordinary
+objects, a small list only where a key is actually hidden. The filter is applied at the
+enumeration sites (`Object.keys`/`values`/`entries`, `for-in`, `JSON.stringify`) while
+`getOwnPropertyNames` and `propertyIsEnumerable` keep seeing the truth. Built-in
+prototypes remain all-hidden, which is exactly right for them.
+
+Corpus pair `55-enumerability` matches node: error JSON, own keys, `for-in` over an
+error, `propertyIsEnumerable`, `getOwnPropertyNames`, `Object.keys(Object.prototype)`,
+and an ordinary object as the control.
+
+Known ceiling, named: an own enumerable property added to a built-in prototype is
+hidden too, because the flag is per-object. `jhol-vm` 127 tests, corpus 55/55, engine
+gate PASS.

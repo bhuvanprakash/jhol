@@ -631,6 +631,8 @@ pub fn install(vm: &mut Vm) {
     // ---- Error hierarchy ----
     let err_ctor = vm.new_function_native("Error", n_error_ctor, 1);
     let err_proto = Value::from_ptr(arena::active().alloc_object(0, obj_proto));
+    // `name`, `message` and `toString` are non-enumerable on the prototype.
+    unsafe { err_proto.as_object_mut() }.hdr.flags |= FLAG_HIDDEN_KEYS;
     link(vm, err_ctor, err_proto);
     method(vm, err_proto, "toString", n_error_to_string);
     set_obj_str(vm, err_proto, "name", "Error");
@@ -996,8 +998,9 @@ native!(n_symbol_ctor, |vm, _this, args| {
 native!(n_is_enumerable, |vm, this, args| {
     let k = keyv(vm, arg(args, 0));
     if this.is_object() {
+        let o = unsafe { this.as_object() };
         return Ok(Value::from_bool(
-            unsafe { this.as_object() }.find_index(k).is_some(),
+            o.find_index(k).is_some() && !o.is_nonenum(k),
         ));
     }
     Ok(Value::from_bool(false))
@@ -1273,9 +1276,33 @@ fn own_property_names(vm: &mut Vm, v: Value) -> Vec<String> {
 }
 
 fn public_keys(vm: &mut Vm, v: Value) -> Vec<PropKey> {
+    // A marked object (every built-in prototype) has no enumerable own keys at
+    // all: its methods exist for lookup, not for iteration. `Object.keys(
+    // Object.prototype)` is `[]` in node, and it used to list toString & friends.
+    if unsafe { v.obj_tag() }.is_some() {
+        let hidden = unsafe {
+            match v.obj_tag() {
+                Some(TAG_OBJECT) => v.as_object().hdr.flags & FLAG_HIDDEN_KEYS != 0,
+                Some(TAG_FUNCTION) => v.as_function().hdr.flags & FLAG_HIDDEN_KEYS != 0,
+                _ => false,
+            }
+        };
+        if hidden {
+            return Vec::new();
+        }
+    }
+    let nonenum: Vec<PropKey> = match unsafe { v.obj_tag() } {
+        Some(TAG_OBJECT) => unsafe { v.as_object() }
+            .nonenum
+            .as_deref()
+            .cloned()
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
     own_keys_of(vm, v)
         .into_iter()
         .filter(|k| !vm.prop_name(*k).starts_with('#'))
+        .filter(|k| !nonenum.contains(k))
         .collect()
 }
 native!(n_object_values, |vm, _this, args| {
@@ -3532,7 +3559,13 @@ fn json_stringify(
             // `own_keys().filter_map(get)` produces — without a Vec per
             // object. A 5000-element round trip was staging 5000 of them.
             // JSON key order is the same canonical order `Object.keys` uses.
-            let keys = sort_own_keys(vm, obj.own_keys());
+            // Non-enumerable own keys do not appear in JSON, exactly as they do
+            // not appear in `Object.keys`.
+            let nonenum: Vec<PropKey> = obj.nonenum.as_deref().cloned().unwrap_or_default();
+            let keys: Vec<PropKey> = sort_own_keys(vm, obj.own_keys())
+                .into_iter()
+                .filter(|k| !nonenum.contains(k))
+                .collect();
             let pairs: Vec<(PropKey, Value)> = keys
                 .iter()
                 .filter_map(|k| obj.get(*k).map(|val| (*k, val)))
@@ -4206,6 +4239,11 @@ fn make_error(vm: &mut Vm, msg: Option<Value>, proto: Value, into: Value) -> VmR
             let kk = key(vm, "message");
             let sv = vm.new_string(&s);
             vm.set_prop(o, kk, sv).unwrap();
+            // `message` exists but is not enumerable: `JSON.stringify(new
+            // Error("x"))` is `{}` in node, and `for-in` never yields it.
+            if o.is_object() {
+                unsafe { o.as_object_mut() }.mark_nonenum(kk);
+            }
         }
     }
     Ok(o)
@@ -4333,8 +4371,19 @@ native!(n_h_enum_keys, |vm, _this, args| {
         if hidden {
             break;
         }
+        let nonenum: Vec<PropKey> = match unsafe { cur.obj_tag() } {
+            Some(TAG_OBJECT) => unsafe { cur.as_object() }
+                .nonenum
+                .as_deref()
+                .cloned()
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
         let keys = own_keys_of(vm, cur);
         for k in keys {
+            if nonenum.contains(&k) {
+                continue;
+            }
             let name = vm.prop_name(k);
             // `#get:x` / `#set:x` are engine-internal accessor slots and must
             // never surface as properties.

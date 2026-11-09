@@ -204,6 +204,10 @@ pub struct JObject {
     pub small: [(PropKey, Value); INLINE_PROPS],
     /// Key -> slot index, built only for wide objects (> `DENSE_MAX`).
     pub index: Option<Box<FMap<PropKey, u32>>>,
+    /// Keys that exist but are not enumerable. Allocated only for objects that
+    /// actually have one — `Error.prototype.message` is the common case — so an
+    /// ordinary object pays a null pointer, not a list.
+    pub nonenum: Option<Box<Vec<PropKey>>>,
 }
 
 pub const DENSE_MAX: usize = 12;
@@ -220,7 +224,26 @@ impl JObject {
             spill: None,
             small: [(PropKey::Sym(0), Value::UNDEFINED); INLINE_PROPS],
             index: None,
+            nonenum: None,
         }
+    }
+
+    /// Mark a key non-enumerable (it still reads, still exists, but never
+    /// appears in `Object.keys`, `for-in` or `JSON.stringify`).
+    pub fn mark_nonenum(&mut self, key: PropKey) {
+        match &mut self.nonenum {
+            Some(list) => {
+                if !list.contains(&key) {
+                    list.push(key);
+                }
+            }
+            None => self.nonenum = Some(Box::new(vec![key])),
+        }
+    }
+
+    #[inline]
+    pub fn is_nonenum(&self, key: PropKey) -> bool {
+        self.nonenum.as_ref().is_some_and(|l| l.contains(&key))
     }
 
     /// The insertion-ordered property slice, inline or spilled.

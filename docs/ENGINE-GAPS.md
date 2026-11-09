@@ -110,10 +110,7 @@ at the end with `UnhandledPromiseRejection: <reason>`, exit 1 — node's behavio
 generic `uncaught exception`, which is what made the report readable.
 
 **Still open:** `async`/`await` (rejected at compile time with a clear message),
-`finally` waiting for a promise returned by its callback, and property enumerability —
-`Error.message` is an own enumerable property here, so `JSON.stringify(new Error("x"))`
-prints `{"message":"x"}` where node prints `{}`. The enumerability debt is the same one
-noted in `builtins.rs`: there are no per-property enumerable flags.
+`finally` waiting for a promise returned by its callback, and property enumerability — **now fixed, see below**.
 
 ### `async`/`await` — shipped, by lowering onto generators
 
@@ -359,3 +356,24 @@ is how the six hardware/wheel rules in `axes.rs` were kept honest.
 92-column line because the formatter breaks arguments but not a call chain. It was
 found by the gate, not by reading the formatter — the fixture had to be reshaped to a
 form the formatter respects, and the defect is recorded here rather than hidden.
+
+## Per-key enumerability
+
+Properties used to be all-or-nothing: an object flagged with `FLAG_HIDDEN_KEYS` hid
+every key, and a normal object exposed every key. `JSON.stringify(new Error("x"))`
+therefore printed `{"message":"x"}` where node prints `{}`, and
+`Object.keys(Object.prototype)` listed `toString`, `hasOwnProperty` and friends.
+
+`JObject` now carries `nonenum: Option<Box<Vec<PropKey>>>` — one pointer for ordinary
+objects, a small list only for objects that actually have a hidden key. Filtering is
+applied where *enumeration* happens (`Object.keys`/`values`/`entries`, `for-in`,
+`JSON.stringify`), while `Object.getOwnPropertyNames` and `propertyIsEnumerable` keep
+seeing the truth. Built-in prototypes stay all-hidden, which is correct for them.
+
+Corpus pair `55-enumerability` compares with node: `JSON.stringify(error)`, own keys,
+`for-in` over an error, `propertyIsEnumerable`, `getOwnPropertyNames`, `Object.keys` of
+`Object.prototype`, and an ordinary object as the control.
+
+What is still approximated: adding an own enumerable property to a built-in prototype
+(`Object.prototype.x = 1`) hides it too, because that flag is per-object. Naming the
+ceiling is cheaper than a per-slot flag on every object.
