@@ -231,6 +231,54 @@ fn newest_matching(
         .cloned()
 }
 
+/// Pick a version that satisfies this demand **and** as many demands already
+/// waiting in the worklist as possible.
+///
+/// Two ranges that overlap must share one directory. Choosing the newest matching
+/// version in isolation and meeting the second demand afterwards creates a second
+/// copy of a package that never conflicted: every avoidable instance is one more
+/// directory to write, verify and ship, and the tree grows past what the
+/// dependency graph requires.
+///
+/// Coverage is a tie-breaker, not a preference. `versions_desc` is newest-first,
+/// so a candidate only replaces the incumbent when it covers strictly more
+/// pending demands — with nothing competing, the newest release still wins and a
+/// lone `^1.0.0` is never silently downgraded.
+fn choose_version(
+    package: &str,
+    doc: &Value,
+    versions_desc: &[String],
+    published: &HashMap<&str, i64>,
+    compiled: &crate::registry::CompiledSpec,
+    pending: &[crate::registry::CompiledSpec],
+    options: &ResolveOptions,
+) -> Option<String> {
+    let mut best: Option<(usize, String)> = None;
+    for v in versions_desc {
+        let Ok(parsed) = semver::Version::parse(v) else {
+            continue;
+        };
+        if !compiled.matches(&parsed) || options.is_banned(package, v) {
+            continue;
+        }
+        let dated = match options.cutoff {
+            None => true,
+            Some(t) => published.get(v.as_str()).map(|p| *p <= t).unwrap_or(false),
+        };
+        if !dated || !options.license_allows(doc, v) {
+            continue;
+        }
+        let covered = pending.iter().filter(|c| c.matches(&parsed)).count();
+        if best.as_ref().map(|(b, _)| covered > *b).unwrap_or(true) {
+            best = Some((covered, v.clone()));
+            if covered == pending.len() {
+                break; // nothing in the worklist can be covered better
+            }
+        }
+    }
+    best.map(|(_, v)| v)
+}
+
 /// Inputs beyond "what does the manifest ask for".
 ///
 /// Both are *resolution* inputs, not post-hoc filters: a tree that violates policy
@@ -331,6 +379,100 @@ fn version_key(v: &str) -> (u64, u64, u64, String) {
     }
 }
 
+/// Everything the resolver reads from one packument, borrowed so the cache is
+/// never copied.
+struct Meta<'a> {
+    /// The packument itself, for policy fields (license) read per version.
+    doc: &'a Value,
+    versions: Vec<String>,
+    /// Publish time per version, when the packument is a full one.
+    published: HashMap<&'a str, i64>,
+    deps: HashMap<&'a str, Vec<(&'a str, &'a str, bool)>>,
+    peers: HashMap<&'a str, Vec<(&'a str, &'a str)>>,
+}
+
+/// Read one packument into the shape resolution wants.
+///
+/// `None` means "not a usable packument" (no `versions` object); the caller
+/// reports it as a missing packument rather than pretending it is empty.
+fn build_meta<'a>(doc: &'a Value) -> Option<Meta<'a>> {
+    let versions = doc.get("versions").and_then(|v| v.as_object())?;
+    let mut sorted: Vec<(semver::Version, String)> = versions
+        .keys()
+        .filter_map(|k| semver::Version::parse(k).ok().map(|v| (v, k.clone())))
+        .collect();
+    sorted.sort_by(|a, b| b.0.cmp(&a.0)); // newest first
+    let mut deps: HashMap<&str, Vec<(&str, &str, bool)>> = HashMap::new();
+    let mut peers: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
+    for (_parsed, ver) in &sorted {
+        // Borrow the key from the packument, not from `sorted`, so the maps
+        // outlive this loop.
+        let Some((vkey, info)) = versions.get_key_value(ver.as_str()) else {
+            continue;
+        };
+        let mut d = Vec::new();
+        for (section, optional) in
+            [("dependencies", false), ("optionalDependencies", true)]
+        {
+            if let Some(map) = info.get(section).and_then(|v| v.as_object()) {
+                for (t, s) in map {
+                    // Targets that are not in the packument set are checked
+                    // when the edge is expanded, where "optional" is known.
+                    d.push((t.as_str(), s.as_str().unwrap_or("*"), optional));
+                }
+            }
+        }
+        deps.insert(vkey.as_str(), d);
+        if let Some(map) = info.get("peerDependencies").and_then(|v| v.as_object()) {
+            peers.insert(
+                vkey.as_str(),
+                map.iter()
+                    .map(|(t, s)| (t.as_str(), s.as_str().unwrap_or("*")))
+                    .collect(),
+            );
+        }
+    }
+    let mut published: HashMap<&str, i64> = HashMap::new();
+    if let Some(times) = doc.get("time").and_then(|t| t.as_object()) {
+        for (ver, at) in times {
+            if let Some(ts) = at
+                .as_str()
+                .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+                .map(|dt| dt.timestamp())
+            {
+                if let Some((k, _)) = versions.get_key_value(ver.as_str()) {
+                    published.insert(k.as_str(), ts);
+                }
+            }
+        }
+    }
+    Some(Meta {
+        doc,
+        versions: sorted.into_iter().map(|(_, k)| k).collect(),
+        published,
+        deps,
+        peers,
+    })
+}
+
+/// Metadata for `name`, built the first time it is reached and reused after.
+///
+/// The cache is keyed by a `&str` borrowed from `packuments` so a hit costs one
+/// hash and no allocation; nothing is built for packages the tree never touches.
+fn meta_for<'b, 'a>(
+    cache: &'b mut HashMap<&'a str, Meta<'a>>,
+    packuments: &'a HashMap<String, Value>,
+    name: &str,
+) -> Option<&'b Meta<'a>> {
+    if !cache.contains_key(name) {
+        let doc = packuments.get(name)?;
+        let meta = build_meta(doc)?;
+        let key = packuments.get_key_value(name)?.0.as_str();
+        cache.insert(key, meta);
+    }
+    cache.get(name)
+}
+
 /// Resolve a manifest into instances.
 ///
 /// `roots` maps package name to the range the manifest asks for. The returned
@@ -375,85 +517,10 @@ pub fn resolve_with_options(
     const MAX_INSTANCES: usize = 20_000;
     const MAX_STEPS: usize = 200_000;
 
-    // Package name -> published versions (descending) plus per-version deps, read
-    // once. `None` means "not in the packument set": the caller decides whether
-    // that is fatal, we report it as a conflict with an empty published list.
-    struct Meta<'a> {
-        /// The packument itself, for policy fields (license) that are read per
-        /// version and are not worth copying into their own map.
-        doc: &'a Value,
-        versions: Vec<String>,
-        /// Publish time per version, when the packument is a full one.
-        published: HashMap<&'a str, i64>,
-        deps: HashMap<&'a str, Vec<(&'a str, &'a str, bool)>>,
-        peers: HashMap<&'a str, Vec<(&'a str, &'a str)>>,
-    }
+    // Metadata is read **on demand**. A cache can hold ten thousand packuments
+    // and a tree can need sixty; reading them all is work no user asked for, and
+    // it makes resolution cost scale with the cache instead of with the tree.
     let mut meta: HashMap<&str, Meta> = HashMap::new();
-    for (name, doc) in packuments {
-        let Some(versions) = doc.get("versions").and_then(|v| v.as_object()) else {
-            continue;
-        };
-        let mut sorted: Vec<(semver::Version, String)> = versions
-            .keys()
-            .filter_map(|k| semver::Version::parse(k).ok().map(|v| (v, k.clone())))
-            .collect();
-        sorted.sort_by(|a, b| b.0.cmp(&a.0)); // newest first
-        let mut deps: HashMap<&str, Vec<(&str, &str, bool)>> = HashMap::new();
-        let mut peers: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
-        for (_parsed, ver) in &sorted {
-            // Borrow the key from the packument, not from `sorted`, so the maps
-            // outlive this loop.
-            let Some((vkey, info)) = versions.get_key_value(ver.as_str()) else {
-                continue;
-            };
-            let mut d = Vec::new();
-            for (section, optional) in
-                [("dependencies", false), ("optionalDependencies", true)]
-            {
-                if let Some(map) = info.get(section).and_then(|v| v.as_object()) {
-                    for (t, s) in map {
-                        // Targets that are not in the packument set are checked
-                        // when the edge is expanded, where "optional" is known.
-                        d.push((t.as_str(), s.as_str().unwrap_or("*"), optional));
-                    }
-                }
-            }
-            deps.insert(vkey.as_str(), d);
-            if let Some(map) = info.get("peerDependencies").and_then(|v| v.as_object()) {
-                peers.insert(
-                    vkey.as_str(),
-                    map.iter()
-                        .map(|(t, s)| (t.as_str(), s.as_str().unwrap_or("*")))
-                        .collect(),
-                );
-            }
-        }
-        let mut published: HashMap<&str, i64> = HashMap::new();
-        if let Some(times) = doc.get("time").and_then(|t| t.as_object()) {
-            for (ver, at) in times {
-                if let Some(ts) = at
-                    .as_str()
-                    .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
-                    .map(|dt| dt.timestamp())
-                {
-                    if let Some((k, _)) = versions.get_key_value(ver.as_str()) {
-                        published.insert(k.as_str(), ts);
-                    }
-                }
-            }
-        }
-        meta.insert(
-            name.as_str(),
-            Meta {
-                doc,
-                versions: sorted.into_iter().map(|(_, k)| k).collect(),
-                published,
-                deps,
-                peers,
-            },
-        );
-    }
-
     // Instances: index -> (package, version, required_by).
     let mut instances: Vec<Instance> = Vec::new();
     // package -> indices of its instances
@@ -484,19 +551,16 @@ pub fn resolve_with_options(
         }
         // `npm:` aliases resolve the real package under an alternate name.
         let (lookup, lookup_spec) = expand_alias(&target, &spec);
-        if lookup != target {
-            let Some(real_meta) = meta.get(lookup.as_str()) else {
-                return Err(NestConflict {
-                    failure: NestFailure::MissingPackument,
-                    package: lookup,
-                    spec: lookup_spec,
-                    required_by: dependent,
-                    available: Vec::new(),
-                });
-            };
-            let _ = real_meta;
+        if lookup != target && !packuments.contains_key(&lookup) {
+            return Err(NestConflict {
+                failure: NestFailure::MissingPackument,
+                package: lookup,
+                spec: lookup_spec,
+                required_by: dependent,
+                available: Vec::new(),
+            });
         }
-        let Some(meta) = meta.get(lookup.as_str()) else {
+        let Some(meta) = meta_for(&mut meta, packuments, &lookup) else {
             // No metadata for this package: the caller fetches and retries.
             return Err(NestConflict {
                 failure: NestFailure::MissingPackument,
@@ -511,6 +575,13 @@ pub fn resolve_with_options(
         let compiled = crate::registry::compile_spec(&lookup_spec);
         let existing = by_package.get(&lookup).and_then(|ids| {
             ids.iter().copied().find(|i| {
+                // Identity is (installed name, version), not version alone. An
+                // `npm:` alias and its real package are two directories even at
+                // the same version: a dependent that asks for `alias` looks in
+                // `node_modules/alias`, so folding it into `foo` loses the edge.
+                if instances[*i].installed_as != target {
+                    return false;
+                }
                 let v = &instances[*i].version;
                 if options.is_banned(&lookup, v) {
                     return false;
@@ -525,12 +596,26 @@ pub fn resolve_with_options(
             None => {
                 // Newest published version that satisfies the requirement and,
                 // when a cutoff is set, existed then.
-                let chosen = newest_matching(
+                // Demands for this same install name that are already waiting.
+                // Bounded: past this the worklist is large enough that the extra
+                // comparisons cost more than a duplicate copy saves.
+                let pending: Vec<crate::registry::CompiledSpec> = if queue.len() <= 4096 {
+                    queue
+                        .iter()
+                        .filter(|(t, _, _)| t == &target)
+                        .take(64)
+                        .map(|(_, spec, _)| crate::registry::compile_spec(spec))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let chosen = choose_version(
                     &target,
                     meta.doc,
                     &meta.versions,
                     &meta.published,
                     &compiled,
+                    &pending,
                     options,
                 );
                 let Some(chosen) = chosen else {
@@ -801,6 +886,147 @@ mod tests {
             );
         }
         json!({ "name": name, "versions": v })
+    }
+
+    /// An `npm:` alias and the real package are two directories, even at the same
+    /// version. Reuse must be keyed on the *installed name*, not only on the
+    /// version, or the alias is silently materialised under the real name and the
+    /// dependent that asked for the alias finds nothing.
+    #[test]
+    fn alias_does_not_reuse_the_real_name() {
+        let packuments = HashMap::from([
+            (
+                "app".to_string(),
+                pk(
+                    "app",
+                    &[("1.0.0", &[("foo", "^1.0.0"), ("bar", "^1.0.0")])],
+                ),
+            ),
+            (
+                "bar".to_string(),
+                pk("bar", &[("1.0.0", &[("alias", "npm:foo@^1.0.0")])]),
+            ),
+            ("foo".to_string(), pk("foo", &[("1.0.0", &[])])),
+        ]);
+        let roots = HashMap::from([("app".to_string(), "^1.0.0".to_string())]);
+        let r = resolve_with_options(&packuments, &roots, &ResolveOptions::default()).unwrap();
+        let names: Vec<&str> = r.instances.iter().map(|i| i.installed_as.as_str()).collect();
+        assert!(names.contains(&"foo"), "real name missing: {names:?}");
+        assert!(
+            names.contains(&"alias"),
+            "alias was folded into the real name: {names:?}"
+        );
+        let alias = r
+            .instances
+            .iter()
+            .find(|i| i.installed_as == "alias")
+            .expect("alias instance");
+        assert_eq!(alias.package, "foo", "alias must resolve to the real package");
+        assert_eq!(alias.version, "1.0.0");
+    }
+
+    /// Two ranges that overlap must share one directory. The greedy order — first
+    /// demand picks the newest, the second then cannot use it — produced a second
+    /// instance for a conflict that does not exist.
+    #[test]
+    fn overlapping_ranges_share_one_instance() {
+        let packuments = HashMap::from([
+            (
+                "app".to_string(),
+                pk(
+                    "app",
+                    // Sorted deps mean `aaa` is processed before `zzz`, so the
+                    // wide range picks a version first and the narrow one
+                    // arrives second: the unlucky order, on purpose.
+                    &[("1.0.0", &[("aaa", "^1.0.0"), ("zzz", "^1.0.0")])],
+                ),
+            ),
+            ("aaa".to_string(), pk("aaa", &[("1.0.0", &[("c", "^1.0.0")])])),
+            ("zzz".to_string(), pk("zzz", &[("1.0.0", &[("c", "1.2.3")])])),
+            (
+                "c".to_string(),
+                pk("c", &[("1.2.3", &[]), ("1.9.0", &[])]),
+            ),
+        ]);
+        let roots = HashMap::from([("app".to_string(), "^1.0.0".to_string())]);
+        let r = resolve_with_options(&packuments, &roots, &ResolveOptions::default()).unwrap();
+        let cs: Vec<&str> = r
+            .instances
+            .iter()
+            .filter(|i| i.package == "c")
+            .map(|i| i.version.as_str())
+            .collect();
+        assert_eq!(cs, vec!["1.2.3"], "one directory satisfies both demands");
+    }
+
+    /// Sharing must not quietly downgrade a package nobody competes for: with no
+    /// second demand in flight, `^1.0.0` still gets the newest release.
+    #[test]
+    fn unshared_demand_still_takes_the_newest() {
+        let packuments = HashMap::from([
+            ("app".to_string(), pk("app", &[("1.0.0", &[("c", "^1.0.0")])])),
+            ("c".to_string(), pk("c", &[("1.2.3", &[]), ("1.9.0", &[])])),
+        ]);
+        let roots = HashMap::from([("app".to_string(), "^1.0.0".to_string())]);
+        let r = resolve_with_options(&packuments, &roots, &ResolveOptions::default()).unwrap();
+        let c = r.instances.iter().find(|i| i.package == "c").unwrap();
+        assert_eq!(c.version, "1.9.0");
+    }
+
+    /// The invariant both sharing rules must never break: every demand an
+    /// instance records is satisfied by the version that instance ended up with.
+    /// Look-ahead may change *which* version is chosen; it may never break the
+    /// promise that caused the instance to exist.
+    #[test]
+    fn every_recorded_demand_is_satisfied() {
+        let packuments = HashMap::from([
+            (
+                "app".to_string(),
+                pk(
+                    "app",
+                    &[(
+                        "1.0.0",
+                        &[
+                            ("aaa", "^1.0.0"),
+                            ("zzz", "^1.0.0"),
+                            ("pin", "1.0.0"),
+                            ("aliased", "npm:foo@^1.0.0"),
+                            ("maj", "^1.0.0"),
+                        ],
+                    )],
+                ),
+            ),
+            ("aaa".to_string(), pk("aaa", &[("1.0.0", &[("c", "^1.0.0")])])),
+            ("zzz".to_string(), pk("zzz", &[("1.0.0", &[("c", "1.2.3")])])),
+            ("pin".to_string(), pk("pin", &[("1.0.0", &[("c", "^1.0.0")])])),
+            ("maj".to_string(), pk("maj", &[("1.0.0", &[("c", "^2.0.0")])])),
+            ("foo".to_string(), pk("foo", &[("1.0.0", &[])])),
+            (
+                "c".to_string(),
+                pk("c", &[("1.2.3", &[]), ("1.9.0", &[]), ("2.1.0", &[])]),
+            ),
+        ]);
+        let roots = HashMap::from([("app".to_string(), "^1.0.0".to_string())]);
+        let r = resolve_with_options(&packuments, &roots, &ResolveOptions::default()).unwrap();
+        assert!(r.instances.len() >= 6, "graph too small to be a test");
+        for inst in &r.instances {
+            for (dependent, spec) in &inst.required_by {
+                let (_, real) = expand_alias(&inst.installed_as, spec);
+                let compiled = crate::registry::compile_spec(&real);
+                let version = semver::Version::parse(&inst.version).expect("semver");
+                assert!(
+                    compiled.matches(&version),
+                    "{}@{} does not satisfy `{}` demanded by {}",
+                    inst.installed_as,
+                    inst.version,
+                    spec,
+                    dependent
+                );
+            }
+        }
+        // and the alias is still its own directory at the right version
+        let alias = r.instances.iter().find(|i| i.installed_as == "aliased");
+        assert_eq!(alias.map(|a| a.version.as_str()), Some("1.0.0"));
     }
 
     /// The whole point: two dependents that need incompatible majors both get a

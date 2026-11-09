@@ -189,20 +189,94 @@ junk).
 * every instance records `required_by: Vec<(dependent, spec)>` — its derivation.
 
 ```
-jest@29.7.0: 270 instances across 249 packages, 19 packages with >1 version, ~103 ms
-  ansi-styles     6.2.3, 5.2.0, 4.3.0
-  ansi-regex      6.5.0, 5.0.1
-  brace-expansion 5.0.12, 2.1.7
+jest@29.7.0: 266 instances across 260 packages, 6 packages with >1 version, 35 ms
+  ansi-styles      5.2.0, 4.3.0
+  camelcase        6.3.0, 5.3.1
+  semver           7.8.6, 6.3.2
+  supports-color   8.1.1, 7.2.0
 ```
+
+Measured against a 12 484-packument cache — the largest one on this machine, so the
+number is the one a user with a warm cache actually gets.
 
 Properties (all tested):
 
 * **determinism** — sorted roots, sorted child expansion, newest-satisfying;
+* **minimality** — demands that overlap share one instance (coverage look-ahead);
+* **identity** — an instance is `(installed_as, version)`, never version alone;
+* **proportional cost** — metadata is built for reached packages only;
 * **explanation** — `required_by` answers "why is chalk@2 here?";
 * **bounds** — instance and step caps fail loudly;
 * **three failure kinds**, because they need different responses:
   `MissingPackument` (fetch and retry), `Unsatisfiable` (chain + published
   versions), `Bounded`, plus `MissingDates` for `--as-of`.
+
+### Which version, when two demands overlap
+
+A requirement is satisfied either by reusing an instance or by creating one. Both
+choices used to be greedy with no memory of what was *about to be asked*:
+
+```
+aaa@1.0.0  needs c ^1.0.0      -> newest matching: c 1.9.0
+zzz@1.0.0  needs c 1.2.3       -> 1.9.0 does not satisfy it: second copy of c
+```
+
+`c` never conflicted. The tree grew a directory, a tarball extraction and a verify
+entry for a package both dependents could have shared.
+
+`choose_version` therefore scores each candidate by **how many demands already
+waiting in the worklist it covers**, and takes the newest candidate with the
+highest score. The rules that keep this from being a downgrade:
+
+* coverage is a **tie-breaker**, not a preference — with nothing competing, the
+  newest release still wins, so a lone `^1.0.0` is not silently held back;
+* the triggering spec is always satisfied (`compiled.matches` is a precondition),
+  so sharing can never break the promise that created the instance;
+* the worklist scan is capped (4 096 entries, 64 specs) — past that, the extra
+  comparisons cost more than a duplicate copy saves;
+* it is deterministic: newest-first iteration, strict `>` to replace, so ties keep
+  the newest.
+
+Both invariances are pinned by tests: `overlapping_ranges_share_one_instance`,
+`unshared_demand_still_takes_the_newest`, and — over a graph containing an overlap,
+a pin, an alias and a real major conflict — `every_recorded_demand_is_satisfied`.
+
+**Honest result on real data:** jest's instance count did not change, because its
+six duplicates are genuine major conflicts (`^4` vs `^5`). The rule is correct and
+tested; it pays off on graphs whose demands merely overlap, which is the common
+shape for pinned transitive dependencies.
+
+### Identity is the installed name
+
+Reuse used to be keyed on the version alone. That is wrong the moment an `npm:`
+alias exists: `foo` and `"aliased": "npm:foo@^1.0.0"` are **two directories at the
+same version**, and a dependent that asks for `aliased` looks in
+`node_modules/aliased`. Folding the alias into the real instance installs the
+package under the wrong name and the dependent fails at runtime, not at resolve
+time.
+
+The predicate is now `(installed_as, version)`, pinned by
+`alias_does_not_reuse_the_real_name`.
+
+### Metadata is read on demand
+
+The resolver used to build its per-package view (sorted versions, per-version dep
+and peer maps, publish times) for **every** packument in the cache before the first
+requirement was even read. On a 12 484-packument cache that is 12 484 parses to
+resolve a 266-package tree: cost proportional to the cache, not to the tree.
+
+`meta_for` now builds one package's view the first time a requirement reaches it and
+caches it. Nothing is read for packages the tree never touches.
+
+| jest@29.7.0, 12 484-packument cache | before | after |
+|---|---:|---:|
+| resolve | 2 883 ms | **35 ms** |
+| instances / packages / duplicates | 266 / 260 / 6 | 266 / 260 / 6 |
+| express@4.18.2, same cache | — | **4.1 ms** |
+
+The invariant this restores is the one that matters: **resolution costs what the
+tree costs.** It is also why the explainability commands are cheap — they run the
+same resolver over the same cache.
 
 ### Placement (tree building)
 

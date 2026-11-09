@@ -2616,3 +2616,45 @@ to their promise via `bound_this`, and promise jobs are bound natives carrying
 additive on the queue; the hard part — ordering — is done and pinned.
 
 `jhol-vm` 124 tests, corpus 50/50, engine gate PASS, installer gate PASS.
+
+
+## Resolver: shared instances, alias identity, and metadata read only for what is reached
+
+Three defects, each found by trying to break the instance resolver rather than by
+reading it.
+
+**1. `npm:` aliases were folded into the real package.** Instance reuse was keyed on
+the version alone, so `"aliased": "npm:foo@^1.0.0"` was satisfied by the existing
+`foo` instance and never got its own directory. The dependent that asked for
+`aliased` would look in `node_modules/aliased` and find nothing — a failure at
+runtime, long after the install said OK. Identity is now `(installed_as, version)`.
+
+**2. Overlapping ranges created avoidable duplicates.** The first demand for a
+package chose the newest matching version with no memory of the second demand about
+to arrive, so `c ^1.0.0` then `c 1.2.3` produced two copies of `c` although one
+version satisfied both. Version choice now scores candidates by how many demands
+already waiting in the worklist they cover, newest-first, with coverage as a
+tie-breaker only — a lone `^1.0.0` is never downgraded. Deterministic and
+invariant-checked.
+
+Honest result: jest's 266 instances did not shrink, because its six duplicates are
+genuine major conflicts. The rule is correct, tested, and pays off on graphs whose
+demands merely overlap.
+
+**3. Metadata was built for the whole cache.** The resolver constructed its
+per-package view for every packument before reading a single requirement: 12 484
+parses to resolve a 266-package tree. It is now lazy, per reached package.
+
+| jest@29.7.0 over a 12 484-packument cache | before | after |
+|---|---:|---:|
+| resolve | 2 883 ms | **35 ms** |
+| tree | 266 instances / 260 packages | identical |
+
+The invariant: resolution costs what the tree costs, not what the cache costs. That
+is what makes `why`, `why-not` and `--as-of` cheap, since they run the same
+resolver.
+
+New tests: `alias_does_not_reuse_the_real_name`,
+`overlapping_ranges_share_one_instance`, `unshared_demand_still_takes_the_newest`,
+`every_recorded_demand_is_satisfied`. `jhol-core` 716 tests, real install of
+express@4.18.2 verified at 71 packages in 1.33 s.
