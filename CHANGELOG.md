@@ -3049,3 +3049,24 @@ not a violation (nothing declared it as a dependency). Default stays npm's warni
 
 `jhol-core` 723 tests, installer gate PASS, and a satisfied-peer strict install adds 5
 packages cleanly.
+
+## Install: a manifest that drifted from the lockfile is now noticed
+
+Two defects, both found by changing a dependency range and looking at what happened.
+
+**The fast lane never compared the manifest with the lockfile.** With `node_modules`
+present, `package.json` asking `4.17.1` while the lockfile pinned `4.18.2`, `jhol install`
+printed "Up to date" and kept 4.18.2. The freshness check compared the *tree* with the
+lockfile only, so a manifest edit was invisible. `lockfile_matches_manifest` is now part
+of the chokepoint (`lockfile_fingerprint_matches` and the entry-point report), and the
+drift is reported once instead of three times.
+
+**`jhol ci` repaired instead of refusing.** A strict install whose lockfile contradicted
+the manifest re-resolved, moved the old lockfile aside as `package-lock.json.invalid-*`,
+wrote a new one and exited **0**. A CI job whose manifest drifted therefore reported
+success while installing a tree nobody reviewed. It now exits **1** with the pinned
+version, the requested range and the fix, and leaves the lockfile untouched — the same
+contract as `cargo --locked` and `npm ci`. Plain `install` still repairs, which is what it
+is for.
+
+`jhol-core` 723 tests, installer gate PASS.

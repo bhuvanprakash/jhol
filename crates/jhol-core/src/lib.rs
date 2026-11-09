@@ -168,7 +168,13 @@ pub use utils::{log, set_output_silenced};
 /// this project keeps needing and keeps having to re-apply per lane.
 pub fn lockfile_fingerprint_matches() -> bool {
     let cwd = std::path::Path::new(".");
-    crate::instant_lock_proof::prepared_tree_is_valid(cwd)
+    // The manifest must still agree with the lockfile. Without this, editing a
+    // dependency range and running `jhol install` reported "up to date" and kept the
+    // old version, because the tree matched a lockfile nobody had re-checked against
+    // the manifest. npm re-resolves in that situation; a lockfile that contradicts
+    // package.json is not a description of the project any more.
+    crate::install::lockfile_matches_manifest(cwd)
+        && crate::instant_lock_proof::prepared_tree_is_valid(cwd)
         && crate::daemon_cache::can_skip_install_for_dir(cwd)
         && crate::tree_state::verify_tree(cwd).is_match()
 }

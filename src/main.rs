@@ -357,6 +357,12 @@ fn install_command_lock() -> Option<jhol_core::project_lock::ProjectLock> {
 /// directory the lockfile never authorised.
 fn tree_is_current_and_reported(quiet: bool) -> bool {
     use jhol_core::tree_state::{reconcile_tree, verify_tree};
+    // A tree that matches a lockfile which no longer matches the manifest is not
+    // current. Checking this first is what makes `jhol install` after a manifest edit
+    // actually install, instead of reporting "up to date" while keeping the old pin.
+    if !jhol_core::install::lockfile_matches_manifest(Path::new(".")) {
+        return false;
+    }
     let before = verify_tree(Path::new("."));
     let state = reconcile_tree(Path::new("."));
     if !before.is_match() && !matches!(before, jhol_core::tree_state::TreeState::Unverified { .. })

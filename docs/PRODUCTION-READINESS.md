@@ -38,6 +38,26 @@ disagree with — but it is printed, never silent.
 Proven by: `crates/jhol-treecheck` (12 tests) and the manual sequence
 tamper → `jhol install` → restored version.
 
+
+#### …and the lockfile is what the manifest asks for
+
+Two ways that was not true, both found by editing a dependency range and watching what
+happened next:
+
+| situation | before | now |
+|---|---|---|
+| `package.json` asks `4.17.1`, lockfile pins `4.18.2`, `node_modules` present, run `jhol install` | **"Up to date"**, 4.18.2 stays | warns, re-resolves, installs 4.17.1 |
+| same drift, run `jhol ci` | re-resolved, moved the old lockfile aside, **exit 0** | **exit 1**, lockfile untouched |
+
+The first was the fast lane: it compared the tree with the lockfile and never compared
+the lockfile with the manifest, so a manifest edit was invisible. The second was worse —
+a CI job whose manifest drifted reported success while installing a tree nobody reviewed,
+and rewrote the lockfile to match it. `cargo --locked` and `npm ci` both refuse.
+
+Both checks live at the freshness chokepoint (`lockfile_matches_manifest`, consulted by
+`lockfile_fingerprint_matches` and by the entry-point report), so every lane inherits
+them rather than each lane remembering.
+
 ### 2. An install converges
 
 ```

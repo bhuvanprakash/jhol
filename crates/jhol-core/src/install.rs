@@ -4509,10 +4509,16 @@ pub fn lockfile_matches_manifest(project_dir: &Path) -> bool {
             continue;
         };
         if !range.is_empty() && !crate::registry::version_satisfies(range, version) {
-            crate::utils::log(&format!(
-                "warning: lockfile pins {}@{} but package.json asks for {} — re-resolving",
-                name, version, range
-            ));
+            // Three call sites ask this question during one install (the fingerprint,
+            // the entry check, the resolver). Say it once.
+            static DRIFT_REPORTED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !DRIFT_REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                crate::utils::log(&format!(
+                    "warning: lockfile pins {}@{} but package.json asks for {} — re-resolving",
+                    name, version, range
+                ));
+            }
             return false;
         }
     }
@@ -5379,6 +5385,23 @@ pub fn resolve_install_from_package_json(strict_lockfile: bool) -> Result<Vec<St
                         let Some(version) = locked else { continue };
                         if crate::registry::version_satisfies(range, &version) {
                             continue;
+                        }
+                        // A strict install (`ci`, `--frozen`) must **refuse** a lockfile
+                        // that contradicts the manifest. It used to repair it here,
+                        // move the old lockfile aside and exit 0 — so a CI job whose
+                        // manifest drifted reported success while installing something
+                        // nobody reviewed. Cargo's `--locked` and npm's `ci` both fail.
+                        if strict_lockfile {
+                            return Err(crate::error_handling::utils::config_error(
+                                "strict_lockfile_contradiction",
+                                Some(name),
+                                &format!(
+                                    "Strict lockfile: lockfile pins {name}@{version} but \
+                                     package.json asks for {range}. Run `jhol install` to \
+                                     update the lockfile, or fix the manifest — a strict \
+                                     install will not change it for you."
+                                ),
+                            ));
                         }
                         crate::utils::log(&format!(
                             "lockfile pins {}@{} but package.json asks for {} - re-resolving",
