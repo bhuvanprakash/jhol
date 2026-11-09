@@ -4022,8 +4022,17 @@ fn run() -> Result<(), String> {
             Some(("diff", m)) => {
                 let a = m.get_one::<String>("a").cloned().unwrap_or_default();
                 let b = m.get_one::<String>("b").cloned().unwrap_or_default();
+                // Omitting the second name compares the fork with the project it came
+                // from, which is the question a fork exists to answer. Requiring two
+                // names made the obvious invocation (`env diff exp1`) an error.
+                let b_label = if b.is_empty() { ".".to_string() } else { b.clone() };
                 let read = |name: &str| {
-                    jhol_core::lockfile::read_resolved_from_dir(&envs.join(name)).unwrap_or_default()
+                    let dir = if name.is_empty() || name == "." {
+                        std::path::PathBuf::from(".")
+                    } else {
+                        envs.join(name)
+                    };
+                    jhol_core::lockfile::read_resolved_from_dir(&dir).unwrap_or_default()
                 };
                 let (ma, mb) = (read(&a), read(&b));
                 let mut keys: Vec<&String> = ma.keys().chain(mb.keys()).collect();
@@ -4043,7 +4052,7 @@ fn run() -> Result<(), String> {
                     }
                 }
                 if n == 0 {
-                    println!("{a} and {b} resolve identically");
+                    println!("{a} and {b_label} resolve identically");
                 }
                 return Ok(());
             }
@@ -8780,9 +8789,12 @@ fn cli_command() -> Command {
                     .subcommand(Command::new("list").about("List forks").arg(Arg::new("json").long("json").action(ArgAction::SetTrue)))
                     .subcommand(
                         Command::new("diff")
-                            .about("Compare the resolved versions of two forks")
+                            .about(
+                                "Compare resolved versions: two forks, or a fork with the \
+                                 project when the second name is omitted",
+                            )
                             .arg(Arg::new("a").required(true))
-                            .arg(Arg::new("b").required(true)),
+                            .arg(Arg::new("b").required(false)),
                     )
                     .subcommand(
                         Command::new("rm")

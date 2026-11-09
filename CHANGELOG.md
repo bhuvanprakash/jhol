@@ -3228,3 +3228,20 @@ That is npm's model and the right default — hashing every file on every `verif
 more than the install it checks — but it was not written down, and a guarantee that is
 assumed to be broader than it is, is a defect waiting for a user to find it. Now stated in
 `PRODUCTION-READINESS.md` with the two measured cases.
+
+## Fork environments: `env diff <fork>` compares against the project
+
+`jhol env diff` required two fork names, so the obvious question — what did my fork change
+relative to the project I forked — was an error. The second name is now optional and
+defaults to the project:
+
+```
+$ jhol env diff exp2
+exp2 and . resolve identically
+$ jhol env diff exp2           # after editing the fork's lockfile
+express: 0.0.0-test -> 4.22.3
+```
+
+Two names still work. The fork path itself was re-verified: cloning a 72-package tree,
+editing a manifest inside the fork leaves the original untouched (`verify` clean afterwards),
+and `env list` / `env rm` behave.
