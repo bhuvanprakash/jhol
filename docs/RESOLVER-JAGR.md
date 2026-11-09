@@ -377,6 +377,58 @@ resolves correctly through the nested path. Recording it rather than guessing:
 cargo run --release -p jhol-core --example resolve_bench -- <cache>/packuments express
 ```
 
+## 4c. Edges belong to versions, not packages — the defect that hid the resolver
+
+This is the deepest defect found in the resolver, and it made the flat path look
+broken while hiding why.
+
+Propagation narrowed a package by intersecting the requirement masks of **all
+edges pointing at it**. But an edge is created by a *version* of the dependent, and
+a package has many versions that ask for different majors. Instrumenting the real
+`accepts` conflict printed it directly:
+
+```
+[conflict] target=accepts allowed=37 parent=express spec="1.0.0"      mask=1 version
+[conflict] target=accepts allowed=37 parent=express spec="~1.0.5"     mask=3 versions
+[conflict] target=accepts allowed=37 parent=express spec="^2.0.0"     mask=1 version
+[conflict] target=accepts allowed=37 parent=express spec="~1.1.0"     mask=5 versions
+```
+
+Intersecting `{1.0.0, 1.0.1} ∩ {1.0.5..1.0.7} ∩ {2.0.0} ∩ …` is empty **by
+construction**, for every real tree, because express published 153 releases and
+they disagree. The resolver was conjoining alternatives.
+
+The semantics that hold:
+
+* across **versions of one dependent**: the requirement is a **union** — any of its
+  releases may be chosen, and each brings its own demand;
+* across **different dependents**: the requirement is an **intersection** — one
+  instance must serve all of them, which is the whole point of sharing.
+
+The union over-approximates, because it includes demands of parent versions that
+may not end up selected. That is the safe direction: propagation only narrows, and
+legality is proved separately against the versions actually selected, so a weaker
+narrowing cannot ship a tree that violates a spec. What it can do is leave the
+search more room and let the validator speak — which is exactly what happens:
+
+```
+before: propagate: no version of accepts satisfies every dependent   (false)
+after:  search: constraints are mutually unsatisfiable across 70 packages
+```
+
+The second is true: express needs `ms@2.0.0` under `debug` and `ms@2.1.3` under
+`send`, which no single-version tree can express. The flat path now fails for the
+real reason, after doing the real work.
+
+Pinned by `a_dependent_asking_for_two_majors_does_not_empty_the_domain`.
+
+### Why this class of bug survives testing
+
+The old code was self-consistent: it produced conflicts, they looked plausible, and
+the nested fallback silently rescued every install. Nothing failed, so nothing was
+found. What exposed it was instrumenting the conflict with the *actual masks* and
+reading that one dependent version can appear many times with contradictory demands.
+
 ## 5. Policy and history as inputs
 
 ### `--as-of <date>` — `resolve_with_options(.. cutoff)`

@@ -2628,46 +2628,44 @@ pub mod rvm {
                     // requirement expressed in THIS package's ordinals. This is
                     // what makes transitive narrowing work — the generic
                     // interval could only ever be `full` for plain specs.
-                    let mut any_mask = false;
+                    // A dependent's requirement on this package is the
+                    // **union** over the versions of that dependent still in
+                    // play, not the intersection of all of them: express 4.0.0
+                    // asking accepts ~1.0.5 and express 4.18.2 asking ~1.3.8 are
+                    // alternatives, and conjoining them emptied the domain for
+                    // every real tree. Across *different* dependents the
+                    // requirement is a conjunction, because both must be served
+                    // by one instance.
+                    //
+                    // Unioning per parent over-approximates: it includes
+                    // requirements of parent versions that may not be chosen.
+                    // That is the safe direction — propagation only narrows, and
+                    // legality is proved separately against the versions that
+                    // were actually selected, so a weak narrowing cannot ship a
+                    // tree that violates a spec.
+                    let mut from_parent: HashMap<u32, crate::jagr_infinite::chart::VersionBitmap> =
+                        HashMap::new();
                     if let Some(parents) = incoming.get(&pid) {
-                        for (_parent, interval, mask, optional) in parents {
+                        for (parent, _interval, mask, optional) in parents {
                             if *optional {
                                 continue;
                             }
-                            // The mask is the requirement expressed in the
-                            // *target's* ordinals. Two ways to get it wrong:
-                            //
-                            //   Some(empty)  nothing published satisfies the spec.
-                            //                Substituting the generic interval
-                            //                turned that into "any version": the
-                            //                requirement vanished, the resolver
-                            //                accepted a tree that violated it,
-                            //                and the conflict report blamed a
-                            //                package whose demand was `[0..65535]`.
-                            //   None         the spec could not be evaluated.
-                            //                Narrowing with a generic bitmap would
-                            //                compare words from two different
-                            //                ordinal bases, which is meaningless.
-                            //
-                            // So: honour emptiness, and skip what cannot be
-                            // evaluated rather than guessing.
-                            let applied = match mask {
-                                Some(m) => m.clone(),
-                                None => continue,
+                            // `None`: the spec could not be evaluated against
+                            // this package's versions, so it contributes nothing
+                            // rather than everything or nothing.
+                            let Some(m) = mask else {
+                                continue;
                             };
-                            let mut next = applied;
-                            next.intersect(&current);
-                            // Intersection with several dependents: the mask
-                            // must satisfy all of them, so narrow repeatedly.
-                            narrowed = if any_mask {
-                                let mut acc = narrowed.clone();
-                                acc.intersect(&next);
-                                acc
-                            } else {
-                                next
-                            };
-                            any_mask = true;
+                            match from_parent.get_mut(parent) {
+                                Some(acc) => acc.union(m),
+                                None => {
+                                    from_parent.insert(*parent, m.clone());
+                                }
+                            }
                         }
+                    }
+                    for bitmap in from_parent.values() {
+                        narrowed.intersect(bitmap);
                     }
 
                     // Peer requirements narrow a domain when they overlap it,
@@ -6725,6 +6723,62 @@ pub mod sheaf_laplacian {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Edges belong to versions, not packages. A dependent whose releases ask for
+    /// different majors must not be conjoined: express 4.0.0 wants accepts ~1.0.5
+    /// and 4.18.2 wants ~1.3.8, and intersecting those two empties the domain for
+    /// a tree that installs perfectly well.
+    #[test]
+    fn a_dependent_asking_for_two_majors_does_not_empty_the_domain() {
+        let versions = HashMap::from([
+            (0u32, vec![VersionOrdinal(0), VersionOrdinal(1)]),
+            (1u32, vec![VersionOrdinal(0), VersionOrdinal(1)]),
+        ]);
+        let strings = HashMap::from([
+            (0u32, vec!["1.0.0".to_string(), "2.0.0".to_string()]),
+            (1u32, vec!["1.0.0".to_string(), "2.0.0".to_string()]),
+        ]);
+        // app 1.0.0 -> dep ^1, app 2.0.0 -> dep ^2
+        let deps = HashMap::from([
+            (
+                0u32,
+                vec![
+                    (1u32, "^1.0.0".to_string(), VersionInterval::full(), false),
+                    (1u32, "^2.0.0".to_string(), VersionInterval::full(), false),
+                ],
+            ),
+            (1u32, Vec::new()),
+        ]);
+        let peers: HashMap<u32, Vec<(u32, String, VersionInterval)>> =
+            HashMap::from([(0u32, Vec::new()), (1u32, Vec::new())]);
+        let constraints = HashMap::from([
+            (0u32, VersionInterval::full()),
+            (1u32, VersionInterval::full()),
+        ]);
+        let mut chart = atlas::build_chart_from_constraints(
+            &constraints,
+            &versions,
+            &strings,
+            &deps,
+            &peers,
+        );
+        for (id, name) in [(0u32, "app"), (1u32, "dep")] {
+            if let Some(pkg) = chart.packages.get_mut(&id) {
+                pkg.name = name.to_string();
+            }
+        }
+        let narrowed = rvm::exec::RVM::propagate(chart)
+            .expect("alternatives must not be conjoined into a conflict");
+        let dep = narrowed
+            .packages
+            .values()
+            .find(|p| p.name == "dep")
+            .expect("dep present");
+        assert!(
+            !dep.allowed.is_empty(),
+            "dep must keep the versions some app release can use"
+        );
+    }
 
     /// A requirement nothing published satisfies must conflict. It used to be
     /// replaced by the generic full interval, which both erased the requirement

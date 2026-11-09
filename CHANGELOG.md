@@ -2684,3 +2684,36 @@ Open and recorded, not guessed: the flat path still refuses real express with a
 conflict on `accepts` although `accepts@1.3.8` is published and demanded; the
 nested path resolves the same tree correctly. `jhol-core` 718 tests, installer
 gate PASS.
+
+## Resolver: a dependent's requirement is a union over its versions, not a conjunction
+
+The flat resolver conjoined every requirement pointing at a package, including
+requirements coming from *different versions of the same dependent*. Express
+published 153 releases; 4.0.0 asks accepts `~1.0.5`, 4.18.2 asks `~1.3.8`, 5.0.0
+asks `^2.0.0`. Intersecting those is empty by construction, so the propagate phase
+reported "no version of accepts satisfies every dependent" on ordinary trees and
+every install silently fell through to the nested layout.
+
+An edge is created by a version, not a package. Correct semantics:
+
+* across versions of one dependent — **union**: any release may be chosen, each
+  brings its own demand;
+* across different dependents — **intersection**: one instance must serve them all.
+
+The union over-approximates (it includes demands of parent versions that may not be
+selected), which is the safe direction: propagation only narrows, and legality is
+proved separately against the selected versions, so a weak narrowing cannot ship an
+invalid tree.
+
+```
+before: propagate: no version of accepts satisfies every dependent   (false)
+after:  search: constraints are mutually unsatisfiable across 70 packages  (true)
+```
+
+Express still fails flat and still installs through nested, because it genuinely
+needs `ms@2.0.0` and `ms@2.1.3`. The difference is that it now fails for the real
+reason, after doing the real work.
+
+Test: `a_dependent_asking_for_two_majors_does_not_empty_the_domain`.
+`jhol-core` 719 tests, installer gate PASS, express install 71 packages and verify
+clean.
