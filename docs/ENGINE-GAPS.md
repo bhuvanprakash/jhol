@@ -93,13 +93,15 @@ mechanism `Function.prototype.bind` uses; no new object kind was needed.
    inline moved every later `.then` one microtask earlier than node. Fixed by queueing the
    assimilation.
 
-**Combinators shipped** (`all`, `allSettled`, `race`) plus `finally`, on the same queue:
+**Combinators shipped** (`all`, `allSettled`, `race`, `any`) plus `finally` and a global
+`AggregateError`, on the same queue:
 one machine with different settle rules, one pair of handlers, mode selects the rule.
 Corpus pair `51-promise-combinators` compares ordering and results line for line with node,
-including a `race` against a timer and `finally` on both paths.
+including a `race` against a timer and `finally` on both paths. `52-promise-any` pins
+`any` including the empty-input case, which rejects rather than fulfils.
 
 **Still open:** `async`/`await` (rejected at compile time with a clear message),
-`Promise.any` (needs `AggregateError`), unhandled-rejection reporting on exit,
+unhandled-rejection reporting on exit,
 `finally` waiting for a promise returned by its callback, and property enumerability —
 `Error.message` is an own enumerable property here, so `JSON.stringify(new Error("x"))`
 prints `{"message":"x"}` where node prints `{}`. The enumerability debt is the same one
@@ -294,3 +296,10 @@ kind alongside its strictness; then the check is trivial and the acceptance test
 An engine that documents its gaps is usable; one that quietly returns `undefined` is not.
 Every entry above has an acceptance test written down **before** the implementation, which
 is how the six hardware/wheel rules in `axes.rs` were kept honest.
+
+### Formatter: a chained call is not broken at 80 columns
+
+`52-promise-any` exposed it: `Promise.any([a, b]).catch((e) => {` is emitted as one
+92-column line because the formatter breaks arguments but not a call chain. It was
+found by the gate, not by reading the formatter — the fixture had to be reshaped to a
+form the formatter respects, and the defect is recorded here rather than hidden.

@@ -479,6 +479,10 @@ pub fn install(vm: &mut Vm) {
     set_fn(vm, promise_ctor, "all", n_promise_all);
     set_fn(vm, promise_ctor, "allSettled", n_promise_all_settled);
     set_fn(vm, promise_ctor, "race", n_promise_race);
+    set_fn(vm, promise_ctor, "any", n_promise_any);
+    let aggregate_ctor = vm.new_function_native("AggregateError", n_aggregate_error_ctor, 2);
+    link(vm, aggregate_ctor, obj_proto);
+    globals_def(vm, "AggregateError", aggregate_ctor);
     globals_def(vm, "Promise", promise_ctor);
     gcd(vm, "queueMicrotask", n_queue_microtask);
 
@@ -5879,6 +5883,7 @@ native!(n_promise_assimilate, |vm, _this, args| {
 const MODE_ALL: i64 = 0;
 const MODE_ALL_SETTLED: i64 = 1;
 const MODE_RACE: i64 = 2;
+const MODE_ANY: i64 = 3;
 
 fn length_of(vm: &mut Vm, value: Value) -> usize {
     if !value.is_object() && !value.is_array() {
@@ -5909,12 +5914,19 @@ fn combine(vm: &mut Vm, input: Value, mode: i64) -> VmResult<Value> {
     let count = length_of(vm, input);
     if count == 0 {
         let empty = vm.new_array();
-        settle(vm, out, 1, empty)?;
+        if mode == MODE_ANY {
+            let err = aggregate_error(vm, empty)?;
+            settle(vm, out, 2, err)?;
+        } else {
+            settle(vm, out, 1, empty)?;
+        }
         return Ok(out);
     }
     let state = vm.new_object();
     let results_init = vm.new_array();
     set_hidden(vm, state, "results", results_init);
+    let errors_init = vm.new_array();
+    set_hidden(vm, state, "errors", errors_init);
     set_hidden(vm, state, "remaining", Value::from_i64(count as i64));
     set_hidden(vm, state, "out", out);
     set_hidden(vm, state, "done", Value::from_i64(0));
@@ -5946,7 +5958,7 @@ native!(n_combine_ok, |vm, _this, args| {
     }
     let mode = get_hidden(vm, state, "mode").as_i64();
     let out = get_hidden(vm, state, "out");
-    if mode == MODE_RACE {
+    if mode == MODE_RACE || mode == MODE_ANY {
         set_hidden(vm, state, "done", Value::from_i64(1));
         settle(vm, out, 1, value)?;
         return Ok(Value::UNDEFINED);
@@ -5988,6 +6000,18 @@ native!(n_combine_err, |vm, _this, args| {
         return Ok(Value::UNDEFINED);
     }
     let results = get_hidden(vm, state, "results");
+    if mode == MODE_ANY {
+        let errors = get_hidden(vm, state, "errors");
+        vm.set_index(errors, Value::from_i64(index), reason)?;
+        let remaining = get_hidden(vm, state, "remaining").as_i64() - 1;
+        set_hidden(vm, state, "remaining", Value::from_i64(remaining));
+        if remaining == 0 {
+            set_hidden(vm, state, "done", Value::from_i64(1));
+            let err = aggregate_error(vm, errors)?;
+            settle(vm, out, 2, err)?;
+        }
+        return Ok(Value::UNDEFINED);
+    }
     if mode == MODE_ALL_SETTLED {
         let record = vm.new_object();
         let status = vm.new_string("rejected");
@@ -6010,11 +6034,38 @@ native!(n_combine_err, |vm, _this, args| {
     Ok(Value::UNDEFINED)
 });
 
+/// An `AggregateError` shaped like node's: an `Error` whose `name` is
+/// `AggregateError` and which carries `errors`.
+fn aggregate_error(vm: &mut Vm, errors: Value) -> VmResult<Value> {
+    let proto = vm.error_proto();
+    let err = make_error(vm, None, proto, Value::UNDEFINED)?;
+    let name_key = key(vm, "name");
+    let name = vm.new_string("AggregateError");
+    vm.set_prop(err, name_key, name)?;
+    let errors_key = key(vm, "errors");
+    vm.set_prop(err, errors_key, errors)?;
+    Ok(err)
+}
+
+native!(n_aggregate_error_ctor, |vm, _this, args| {
+    let errors = arg(args, 1);
+    let proto = vm.error_proto();
+    let msg = arg(args, 0);
+    let err = make_error(vm, Some(msg), proto, Value::UNDEFINED)?;
+    let name_key = key(vm, "name");
+    let name = vm.new_string("AggregateError");
+    vm.set_prop(err, name_key, name)?;
+    let errors_key = key(vm, "errors");
+    vm.set_prop(err, errors_key, errors)?;
+    Ok(err)
+});
+
 native!(n_promise_all, |vm, _this, args| combine(vm, arg(args, 0), MODE_ALL));
 native!(n_promise_all_settled, |vm, _this, args| {
     combine(vm, arg(args, 0), MODE_ALL_SETTLED)
 });
 native!(n_promise_race, |vm, _this, args| combine(vm, arg(args, 0), MODE_RACE));
+native!(n_promise_any, |vm, _this, args| combine(vm, arg(args, 0), MODE_ANY));
 
 native!(n_promise_finally, |vm, this, args| {
     let cb = arg(args, 0);
