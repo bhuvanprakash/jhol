@@ -202,12 +202,27 @@ longer observed, so the remaining reason is packages a developer added by hand.
    nothing, while the same 71 packages undated materialise in **57 ms** through the
    prepared store).
 
-   The fix is known and the parts exist: `warm_manifest::clone_dir` and
-   `jgrid::materialize::cloner::clone_directory` already copy a directory with
-   clonefile. The dated lane needs to unpack once into the store and clone from there
-   instead of extracting per file. Not started: it is a structural change to the
-   materialiser and deserves its own acceptance test rather than the tail of a long
-   session.
+   **That first reading was wrong, and the correction matters.** `--lockfile-only`
+   also skips *tarball* work, so the 4.1 s was not extraction:
+
+   | measurement | result |
+   |---|---:|
+   | resolution + lockfile | 0.76 s |
+   | materialise 62 packages with a known lockfile | **22–41 ms** |
+   | fresh directory, dated, store warm | 2.9–8.7 s, same input |
+
+   The fresh-directory run spends **0.41 s user + 0.24 s sys against 2.94 s wall**,
+   with 622 voluntary context switches — about ten per package. It is blocked, not
+   computing, and no HTTP is issued through either instrumented path (packuments or
+   tarballs). So there is a per-package blocking call in that lane that we do not
+   instrument yet. Next probe, named: the daemon/IPC lookup per package, since that is
+   the only per-package blocking call left; the fix candidates are batching it or
+   skipping it when the layout is already resolved in memory.
+
+   Instrumentation gap closed on the way: tarball transfer never logged under
+   `JHOL_HTTP_TIMING`, so a run dominated by payload showed zero requests and looked
+   like local compute. `download_tarball` and `download_and_extract_streaming` now
+   report, which is what proved the fresh-directory cost is *not* transfer.
 
    Two negative results kept on the record. A parallel *frontier* fetch in the resolve
    loop measured 6.8–10.6 s against 3.7–4.7 s and was reverted — after the baseline

@@ -2970,3 +2970,23 @@ Kept on the record: a parallel *frontier* fetch in the resolve loop was reverted
 6.8–10.6 s against a 3.7–4.7 s baseline that then re-measured at 4.06 s and 8.00 s, so
 the experiment could not support a conclusion. Method noted: interleave, medians of
 five, report the spread.
+
+## Instrumentation: tarball transfer now reports under `JHOL_HTTP_TIMING`
+
+Tarballs never logged, so a run dominated by payload transfer showed zero requests and
+looked like local compute — which is exactly how a wrong conclusion got made about the
+`--as-of` path. `download_tarball` and `download_and_extract_streaming` now report
+elapsed time and size.
+
+With that in place, the dated lane was re-measured and the earlier reading corrected:
+
+| measurement | result |
+|---|---:|
+| resolution + lockfile | 0.76 s |
+| materialise 62 packages, known lockfile | **22–41 ms** |
+| fresh directory, dated, warm store | 2.9–8.7 s |
+
+The last row spends 0.41 s user and 0.24 s sys against 2.94 s wall with 622 voluntary
+context switches: blocked, not computing, with no HTTP from either instrumented path.
+So there is a per-package blocking call in that lane, and the next probe is the
+daemon/IPC lookup — the only per-package blocking call left.

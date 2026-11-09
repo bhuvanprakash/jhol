@@ -2720,13 +2720,45 @@ pub fn get_version_peer_dependencies_meta(
 /// Download tarball from URL to a file (uses shared HTTP client).
 pub fn download_tarball(url: &str, dest: &Path) -> Result<PathBuf, String> {
     let token = crate::config::registry_auth_token_for_url(Path::new("."), url);
-    crate::http_client::get_to_file_with_bearer(url, dest, token.as_deref())?;
+    // Tarball transfer was invisible to `JHOL_HTTP_TIMING`: the packument path
+    // logs, this one did not, so a run that was dominated by payload transfer
+    // showed zero requests and looked like local compute. Measure it where it
+    // happens.
+    let started = std::env::var_os("JHOL_HTTP_TIMING").map(|_| std::time::Instant::now());
+    let result = crate::http_client::get_to_file_with_bearer(url, dest, token.as_deref());
+    if let Some(started) = started {
+        let bytes = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
+        eprintln!(
+            "[TB-T] tarball {:>7} ms {:>10}B  {}",
+            started.elapsed().as_millis(),
+            bytes,
+            url
+        );
+    }
+    result?;
     Ok(dest.to_path_buf())
 }
 
 /// Streaming download with concurrent extraction
 /// Downloads tarball while simultaneously extracting to reduce total time
 pub fn download_and_extract_streaming(
+    url: &str,
+    dest_dir: &Path,
+    expected_integrity: Option<&str>,
+) -> Result<PathBuf, String> {
+    let timed = std::env::var_os("JHOL_HTTP_TIMING").map(|_| std::time::Instant::now());
+    let result = download_and_extract_streaming_inner(url, dest_dir, expected_integrity);
+    if let Some(started) = timed {
+        eprintln!(
+            "[TB-T] tarball+extract {:>7} ms  {}",
+            started.elapsed().as_millis(),
+            url
+        );
+    }
+    result
+}
+
+fn download_and_extract_streaming_inner(
     url: &str,
     dest_dir: &Path,
     expected_integrity: Option<&str>,
