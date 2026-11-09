@@ -3210,3 +3210,21 @@ Verified:
 | `update not-a-dep --save` | error, naming `jhol install not-a-dep@latest` |
 
 `jhol-core` 723 tests, installer gate PASS.
+
+## Docs: what `verify` and `attest` do not claim
+
+Measured both edit shapes on the same package:
+
+| edit | `jhol verify` |
+|---|---|
+| version in the installed manifest disagrees with the lockfile | **exit 1**, naming both versions |
+| same version, content edited in place | **exit 0** |
+
+Verification is identity-level: one manifest read per package, compared with the lockfile,
+plus presence of every authorised path. It does not hash installed files, and `attest`
+inherits that boundary because it is produced by the same verifier.
+
+That is npm's model and the right default — hashing every file on every `verify` would cost
+more than the install it checks — but it was not written down, and a guarantee that is
+assumed to be broader than it is, is a defect waiting for a user to find it. Now stated in
+`PRODUCTION-READINESS.md` with the two measured cases.

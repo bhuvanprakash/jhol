@@ -195,6 +195,28 @@ Pruning stays opt-in, but its justification narrowed: an incomplete lockfile is 
 longer observed, so the remaining reason is packages a developer added by hand.
 
 
+
+### What `verify` and `attest` do **not** claim
+
+Stated because it was measured, not assumed. Two edits to the same package:
+
+| edit | `jhol verify` |
+|---|---|
+| `node_modules/express/package.json` says `9.9.9`, lockfile pins `4.22.3` | **exit 1** — "node_modules/express is 9.9.9 but the lockfile pins 4.22.3" |
+| same file, version unchanged, extra field added (or a source file edited in place) | **exit 0** — "OK: 72 packages match the lockfile" |
+
+Verification is **identity-level**: for each package it reads one manifest and compares the
+name and version against the lockfile, and it checks that every authorised path exists. It
+does not hash the installed files. `attest` produces that same verdict deterministically
+(byte-identical across runs), so it inherits the same boundary.
+
+That is npm's model — a tarball's `integrity` hash is recorded in the lockfile, and the
+tree is trusted once extracted — and it is the right default: hashing every file on every
+`verify` would cost more than the install it checks. What it means in practice: `verify`
+catches missing, extraneous and version-drifted packages, and does not catch an in-place
+edit inside a package that leaves its version alone. Saying so is cheaper than a reader
+assuming otherwise.
+
 ## Flake status
 
 One suite run early in the resolver work reported `720 passed, 1 failed`, and the failing
