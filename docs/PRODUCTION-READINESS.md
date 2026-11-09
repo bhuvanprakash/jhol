@@ -139,6 +139,10 @@ The tarball phase is not ours to fix by adding parallelism: concurrency is alrea
 
 ## Verification gates
 
+`sh scripts/verify-all.sh` runs all of them, plus `--workspace --all-features` and an
+optional flake hunt (`ROUNDS=5`). CI now has an `all-features` job; without it, 26
+`jhol-core` library tests (747 vs 721) were never executed by anything.
+
 ```
 sh crates/jhol-core/verify.sh    # installer: build, unit, adversarial, E2E offline, determinism, gc
 sh crates/jhol-vm/verify.sh      # engine: corpus, formatter, JIT

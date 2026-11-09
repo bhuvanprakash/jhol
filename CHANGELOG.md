@@ -3012,3 +3012,19 @@ Also established by measurement, so the next person does not chase it: `--lockfi
 is 0.76 s and materialising those same 62 packages from a known lockfile is 22–41 ms.
 Resolution and writing are not the cost; the remaining ~1 s is one full-packument fetch
 that the cutoff genuinely requires.
+
+## Verification: one entry point, and CI now builds every feature
+
+CI ran `cargo test`, which builds default features only and never runs either quality
+gate. With `--all-features`, `jhol-core` runs **747** library tests instead of 721: 26
+tests that nothing was running, plus the model/py/engine features that were only ever
+compiled by hand.
+
+`scripts/verify-all.sh` is the missing entry point: all-features tests, installer gate,
+engine gate (skipped with a notice if `node` is absent), and `ROUNDS=n` for flake
+hunting — it re-runs the four library suites and names the first disagreement. CI gained
+an `all-features` job running the same command.
+
+Also recorded in `OPERATIONS.md`: `--all-features` needs room. The first attempt died
+with `No space left on device` because `target/debug` had reached 7.6 GB; freeing it and
+stale `/tmp` fixtures took free space from 194 MB to 7.5 GB.

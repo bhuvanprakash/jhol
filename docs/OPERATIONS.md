@@ -120,3 +120,36 @@ Rules that came from being wrong:
    tests that still fill them; the builder is now authoritative.
 8. **Pruning is opt-in** (`JHOL_PRUNE_EXTRANEOUS=1`) because a lockfile can be an
    incomplete record; `jhol verify --prune` is the explicit request.
+
+## One entry point: `scripts/verify-all.sh`
+
+CI ran `cargo test`, which builds **default features only** and never runs the two
+quality gates. Measured with `--all-features`: `jhol-core` runs **747** library tests
+instead of 721 — **26 tests nothing was running** — and the model/py/engine features
+were only ever compiled by hand.
+
+```sh
+sh scripts/verify-all.sh                 # everything, one round
+ROUNDS=5 sh scripts/verify-all.sh        # flake hunt: five rounds
+VERIFY_FAST=1 sh scripts/verify-all.sh   # skip the all-features build
+```
+
+It runs `cargo test --workspace --all-features`, the installer gate, the engine gate
+(skipped with a notice when `node` is absent — it is the corpus oracle), and with
+`ROUNDS>1` re-runs the four library suites and names the first disagreement. CI gained
+an `all-features` job with the same command.
+
+### Disk: the all-features build needs room
+
+The first attempt at this failed with
+`failed to write query cache …: No space left on device`. `--all-features` recompiles
+every crate with extra code paths, and `target/debug` alone reached **7.6 GB**. Check
+before a big build:
+
+```sh
+df -h / | tail -1        # want > 3 GB free
+rm -rf target/debug      # always regenerable; never delete target/release blindly
+```
+
+Freeing `target/debug` and stale `/tmp` fixture directories took free space from
+194 MB to 7.5 GB and the build then passed.

@@ -126,6 +126,20 @@ jobs:
       - name: Test install front door and prepared-tree proof
         run: cargo test -p jhol-trampoline
 
+  all-features:
+    name: workspace with every feature
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # `cargo test` above builds with default features, so the feature-gated half of
+      # the workspace was never compiled in CI. Measured: with `--all-features`
+      # `jhol-core` runs 747 library tests instead of 721 — 26 tests that nothing was
+      # running. The model/py/engine features also only get built here.
+      - name: Test every feature
+        run: cargo test --workspace --all-features --lib
+
   package-manager-windows:
     name: package manager correctness (windows-latest)
     runs-on: windows-latest
