@@ -7,12 +7,47 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::time::Instant;
 
+/// Refuse to load a cache big enough to swap the machine.
+///
+/// A packument set is parsed into JSON values and held: 12 000 documents is
+/// several gigabytes and the machine goes down, not slow. Benchmarks over a
+/// large shared cache must opt in explicitly.
+fn refuse_if_huge(dir: &std::path::Path) -> bool {
+    if std::env::var_os("JHOL_BENCH_FORCE").is_some() {
+        return false;
+    }
+    let mut files = 0usize;
+    let mut bytes = 0u64;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.extension().map(|x| x == "json").unwrap_or(false) {
+                files += 1;
+                bytes += e.metadata().map(|m| m.len()).unwrap_or(0);
+            }
+        }
+    }
+    if files > 2000 || bytes > 1_500_000_000 {
+        println!(
+            "[bench] refusing {} ({files} packuments, {} MB): too large to hold in memory.\n\
+             [bench] use a focused cache, or set JHOL_BENCH_FORCE=1 if the machine has the RAM",
+            dir.display(),
+            bytes / 1_000_000
+        );
+        return true;
+    }
+    false
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let dir = args.first().cloned().unwrap_or_default();
     let name = args.get(1).cloned().unwrap_or_else(|| "jest".into());
     let spec = args.get(2).cloned().unwrap_or_else(|| "29.7.0".into());
 
+    if refuse_if_huge(std::path::Path::new(&dir)) {
+        return;
+    }
     let mut world: HashMap<String, serde_json::Value> = HashMap::new();
     let t_load = Instant::now();
     if let Ok(entries) = std::fs::read_dir(&dir) {

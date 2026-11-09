@@ -2634,11 +2634,26 @@ pub mod rvm {
                             if *optional {
                                 continue;
                             }
+                            // The mask is the requirement expressed in the
+                            // *target's* ordinals. Two ways to get it wrong:
+                            //
+                            //   Some(empty)  nothing published satisfies the spec.
+                            //                Substituting the generic interval
+                            //                turned that into "any version": the
+                            //                requirement vanished, the resolver
+                            //                accepted a tree that violated it,
+                            //                and the conflict report blamed a
+                            //                package whose demand was `[0..65535]`.
+                            //   None         the spec could not be evaluated.
+                            //                Narrowing with a generic bitmap would
+                            //                compare words from two different
+                            //                ordinal bases, which is meaningless.
+                            //
+                            // So: honour emptiness, and skip what cannot be
+                            // evaluated rather than guessing.
                             let applied = match mask {
-                                Some(m) if !m.is_empty() => m.clone(),
-                                _ => crate::jagr_infinite::chart::VersionBitmap::from_interval(
-                                    *interval,
-                                ),
+                                Some(m) => m.clone(),
+                                None => continue,
                             };
                             let mut next = applied;
                             next.intersect(&current);
@@ -2756,6 +2771,7 @@ pub mod rvm {
                         ))
                     })
                     .map(|(_, v)| v.clone())
+                    .rev()
                     .take(6)
                     .collect();
                 let mut demands: Vec<String> = Vec::new();
@@ -3514,6 +3530,47 @@ pub fn select_versions_stats(
                 return (None, stats, Some("a direct range matches nothing published".to_string()));
             }
             pkg.allowed = mask;
+        }
+    }
+
+    // Scope the solve to what the manifest can reach.
+    //
+    // The chart is built from the whole packument set, and propagation used to
+    // require a satisfiable version for **every** package in it. A packument set
+    // is routinely larger than the tree (a prefetch frontier fetches ahead of
+    // the resolution, a shared cache view holds unrelated packages), so a
+    // package nobody depends on could fail the entire resolve — an express
+    // manifest once failed on `@esbuild/aix-ppc64`, a darwin-arm64 machine being
+    // asked to satisfy a Linux ppc64 binary — and force the nested fallback on a
+    // tree with no conflict in it.
+    //
+    // Reachability is computed over edges without regard to version choice, so
+    // it over-approximates: everything that could possibly be needed is kept,
+    // and only packages no path from a root can name are dropped.
+    {
+        let mut reachable: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut stack: Vec<u32> = constraints.keys().copied().collect();
+        while let Some(id) = stack.pop() {
+            if !reachable.insert(id) {
+                continue;
+            }
+            if let Some(pkg) = chart.packages.get(&id) {
+                for edge in &pkg.deps {
+                    stack.push(edge.target_pkg);
+                }
+                for peer in &pkg.peers {
+                    stack.push(peer.target_pkg);
+                }
+            }
+        }
+        let before = chart.packages.len();
+        chart.packages.retain(|id, _| reachable.contains(id));
+        stats.packages = chart.packages.len();
+        if std::env::var_os("JAGR_PROFILE_CHART").is_some() {
+            eprintln!(
+                "[chart] reachable {before} -> {} packages",
+                chart.packages.len()
+            );
         }
     }
 
@@ -6667,6 +6724,62 @@ pub mod sheaf_laplacian {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// A requirement nothing published satisfies must conflict. It used to be
+    /// replaced by the generic full interval, which both erased the requirement
+    /// and intersected bitmaps from two different ordinal bases.
+    #[test]
+    fn unsatisfiable_requirement_conflicts_instead_of_widening() {
+        let versions = HashMap::from([
+            (0u32, vec![VersionOrdinal(0)]),
+            (1u32, vec![VersionOrdinal(0), VersionOrdinal(1)]),
+        ]);
+        let strings = HashMap::from([
+            (0u32, vec!["1.0.0".to_string()]),
+            (1u32, vec!["1.0.0".to_string(), "2.0.0".to_string()]),
+        ]);
+        let deps = HashMap::from([
+            (
+                0u32,
+                vec![(
+                    1u32,
+                    "^3.0.0".to_string(),
+                    VersionInterval::full(),
+                    false,
+                )],
+            ),
+            (1u32, Vec::new()),
+        ]);
+        let peers: HashMap<u32, Vec<(u32, String, VersionInterval)>> =
+            HashMap::from([(0u32, Vec::new()), (1u32, Vec::new())]);
+        let constraints = HashMap::from([
+            (0u32, VersionInterval::full()),
+            (1u32, VersionInterval::full()),
+        ]);
+        let mut chart = atlas::build_chart_from_constraints(
+            &constraints,
+            &versions,
+            &strings,
+            &deps,
+            &peers,
+        );
+        for (id, name) in [(0u32, "app"), (1u32, "dep")] {
+            if let Some(pkg) = chart.packages.get_mut(&id) {
+                pkg.name = name.to_string();
+            }
+        }
+        let result = rvm::exec::RVM::propagate(chart);
+        let message = match result {
+            Ok(_) => panic!("an unsatisfiable requirement resolved anyway"),
+            Err(e) => format!("{e:?}"),
+        };
+        assert!(
+            message.contains("dep"),
+            "conflict must name the package: {message}"
+        );
+    }
+
     use super::*;
     use serde_json::json;
 

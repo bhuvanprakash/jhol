@@ -2658,3 +2658,29 @@ New tests: `alias_does_not_reuse_the_real_name`,
 `overlapping_ranges_share_one_instance`, `unshared_demand_still_takes_the_newest`,
 `every_recorded_demand_is_satisfied`. `jhol-core` 716 tests, real install of
 express@4.18.2 verified at 71 packages in 1.33 s.
+
+## Resolver: propagation honours an empty mask, and solves only what is reachable
+
+**An empty requirement mask was widened to "any version".** `Some(empty)` means
+nothing published satisfies the spec. The narrowing code treated it like a missing
+mask and substituted the *generic* interval — a bitmap on a different ordinal base.
+The requirement disappeared, the intersect compared two scales, and the conflict
+report blamed a package demanding `[0..65535]` because the real mask had been
+discarded. A tree that violated a requirement could therefore be accepted silently.
+Emptiness is now honoured; a mask that cannot be evaluated narrows nothing instead
+of guessing.
+
+**The solve covered the whole packument set.** The chart was built from every
+cached packument and propagation required a satisfiable version for each of them,
+reachable or not. An `express` manifest failed on `@esbuild/aix-ppc64` — a Linux
+ppc64 binary on darwin/arm64, from a package express never depends on — and forced
+the nested fallback on a tree with no conflict. The chart is now pruned to the
+edge-reachable set from the roots: 128 -> 70 packages on the express set.
+
+**Conflict candidates printed the six oldest releases**, because `take(6)` ran over
+versions stored ascending. Newest-first now.
+
+Open and recorded, not guessed: the flat path still refuses real express with a
+conflict on `accepts` although `accepts@1.3.8` is published and demanded; the
+nested path resolves the same tree correctly. `jhol-core` 718 tests, installer
+gate PASS.

@@ -306,6 +306,77 @@ a cold install to a 600 s timeout — that is why every bound exists.
 
 ---
 
+## 4b. Two defects the deep probe found in propagation
+
+### An empty mask was silently widened
+
+Propagation narrowed with:
+
+```rust
+let applied = match mask {
+    Some(m) if !m.is_empty() => m.clone(),
+    _ => VersionBitmap::from_interval(*interval),   // generic scale
+};
+```
+
+`Some(empty)` means *nothing published satisfies this spec*. The fallback turned
+that into "any version", on a bitmap whose ordinal base was **not** the target's —
+so the requirement vanished and the intersect compared words from two different
+scales. Consequences:
+
+* a tree that violated a requirement could be accepted (silent, wrong);
+* the conflict report blamed a package whose demand was `[0..65535]`, i.e. the
+  generic interval, because the real mask had been discarded.
+
+Now: `Some(m)` is honoured **including emptiness**, and `None` (a spec that could
+not be evaluated) narrows nothing rather than guessing. Pinned by
+`unsatisfiable_requirement_conflicts_instead_of_widening`.
+
+### The solve covered packages nobody asked for
+
+`select_versions_stats` built the chart from the **entire packument set** and then
+propagated over all of it, so every package in the set had to have a satisfiable
+version — reachable from a root or not. A packument set is routinely bigger than
+the tree (a prefetch frontier fetches ahead; a shared cache view holds unrelated
+packages).
+
+Real symptom: an `express` manifest failed with
+
+```
+no version of @esbuild/aix-ppc64 satisfies every dependent
+```
+
+on a darwin/arm64 machine — a Linux ppc64 binary belonging to a package `express`
+never depends on. The resolve then fell back to the nested layout for a tree with
+no conflict in it.
+
+The chart is now pruned to the edge-reachable set from the roots before
+propagation. Reachability ignores version choice, so it over-approximates and
+keeps everything that could be needed:
+
+| express, same packument set | before | after |
+|---|---:|---:|
+| chart packages | 128 | **70** |
+| propagate | 0.7 ms | 0.2 ms |
+
+### Diagnostic, not arithmetic
+
+The conflict report listed candidates with `take(6)` over versions stored
+ascending, so it printed the **six oldest** releases as "candidates after
+narrowing" — the least useful end. It now prints newest-first.
+
+### Open, with the reproduction
+
+After both fixes the flat path still refuses real express with
+`no version of accepts satisfies every dependent`, while `accepts@1.3.8` is
+present in the packument (37 versions) and express asks `~1.3.8`. It is not an
+empty mask (an empty mask is now logged and named with its spec) and the tree
+resolves correctly through the nested path. Recording it rather than guessing:
+
+```sh
+cargo run --release -p jhol-core --example resolve_bench -- <cache>/packuments express
+```
+
 ## 5. Policy and history as inputs
 
 ### `--as-of <date>` — `resolve_with_options(.. cutoff)`
