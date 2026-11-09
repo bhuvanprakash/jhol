@@ -2943,3 +2943,30 @@ support a conclusion.
 
 Method note recorded in `PRODUCTION-READINESS.md`: interleave A and B, take medians of
 at least five, and report the spread.
+
+## Install: `--as-of` stops revalidating settled history
+
+A dated install needs full packuments (the `time` field), and freshness applied the
+normal TTL to them, so every `--as-of` run paid one conditional round trip per package
+to be told that a *past* date's record had not changed: 63 requests, 4.1–8.0 s.
+
+Freshness now accepts a cached full packument whose newest release is dated **after**
+the cutoff. Such a document necessarily contains every release dated before it, so it
+is authoritative for every question the cutoff can ask, regardless of age. Anything
+not covered — or no cutoff at all — still goes to the network.
+
+| | requests | warm wall |
+|---|---:|---:|
+| before | 63 | 4.1–8.0 s |
+| after | **9** | 2.8–4.0 s |
+
+A repeat run issues **zero** requests, so what remains is extraction, not network: the
+same materialisation gap as warm installs.
+
+`--as-of` parsing moved into one strict `jagr_nest::parse_cutoff` (RFC 3339 or a
+calendar date taken as end-of-day; anything else is refused), with a test.
+
+Kept on the record: a parallel *frontier* fetch in the resolve loop was reverted —
+6.8–10.6 s against a 3.7–4.7 s baseline that then re-measured at 4.06 s and 8.00 s, so
+the experiment could not support a conclusion. Method noted: interleave, medians of
+five, report the spread.

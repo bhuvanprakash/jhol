@@ -473,6 +473,22 @@ fn meta_for<'b, 'a>(
     cache.get(name)
 }
 
+/// Parse a `--as-of` value into a unix timestamp: an RFC 3339 instant, or a
+/// calendar date taken as the end of that day. `None` means "not a date", and the
+/// caller must refuse rather than silently treating it as today.
+pub fn parse_cutoff(raw: &str) -> Option<i64> {
+    let raw = raw.trim();
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|d| d.timestamp())
+        .or_else(|| {
+            chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")
+                .ok()
+                .and_then(|d| d.and_hms_opt(23, 59, 59))
+                .map(|dt| dt.and_utc().timestamp())
+        })
+}
+
 /// Resolve a manifest into instances.
 ///
 /// `roots` maps package name to the range the manifest asks for. The returned
@@ -886,6 +902,21 @@ mod tests {
             );
         }
         json!({ "name": name, "versions": v })
+    }
+
+    /// `--as-of` accepts an instant or a calendar date, and refuses anything else
+    /// rather than falling back to "today" — the one outcome a reproducibility
+    /// input must never produce on its own.
+    #[test]
+    fn cutoff_parsing_is_strict() {
+        assert_eq!(parse_cutoff("2020-06-01"), Some(1_591_055_999));
+        assert_eq!(
+            parse_cutoff("2020-06-01T00:00:00Z"),
+            Some(1_590_969_600)
+        );
+        for bad in ["", "yesterday", "2020-13-40", "01/06/2020"] {
+            assert_eq!(parse_cutoff(bad), None, "accepted {bad:?}");
+        }
     }
 
     /// An `npm:` alias and the real package are two directories, even at the same

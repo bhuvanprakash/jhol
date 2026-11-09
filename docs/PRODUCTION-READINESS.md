@@ -179,13 +179,26 @@ longer observed, so the remaining reason is packages a developer added by hand.
 3. ~~**Two clap builders.**~~ **Resolved**: one `cli_command()` serves both parsing
    and completion generation, so a flag cannot exist in one tree and not the other.
    `flag()` still treats an undeclared flag as off, as defence in depth.
-3. **`--as-of` needs full packuments.** Cold 21–24 s, warm 4–8 s against 0.5 s
-   undated. An attempt to fetch the *frontier* in parallel instead of one package per
-   resolve pass measured 6.8–10.6 s, which looked like a regression — until the
-   baseline re-measured at 4.06 s and 8.00 s in consecutive runs. The comparison was
-   confounded by network variance, so the change was reverted rather than shipped on a
-   bad measurement. **Method note for whoever tries next: interleave A and B, take
-   medians of ≥5, and record the spread, not one pair.**
+3. **`--as-of` no longer revalidates settled history.** It used to pay one
+   conditional round trip per package — 63 of them — to be told that a *past* date's
+   record had not changed. Freshness now accepts a cached full packument whose newest
+   release is dated **after** the cutoff: such a document necessarily contains every
+   release dated before it, so it answers every question the cutoff can ask.
+
+   | | requests | warm wall |
+   |---|---:|---:|
+   | before | 63 | 4.1–8.0 s |
+   | after | **9** | 2.8–4.0 s |
+
+   The remaining 2.8–4 s is local, not network (a second run issues **zero**
+   requests): it is extraction of the tree, the same materialisation gap as warm
+   installs, and that is where the next win is.
+
+   Two negative results kept on the record. A parallel *frontier* fetch in the resolve
+   loop measured 6.8–10.6 s against 3.7–4.7 s and was reverted — after the baseline
+   itself re-measured at 4.06 s and 8.00 s in consecutive runs, so the comparison could
+   not support a conclusion. **Method: interleave A and B, take medians of ≥5, report
+   the spread.**
 4. **Peers are advisory.** Recorded, reported under `JHOL_STRICT_PEER_DEPS`, not
    binding — npm installs and warns, and making them binding turns working trees
    into failures.

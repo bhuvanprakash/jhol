@@ -2937,17 +2937,9 @@ pub fn resolve_full_tree_nested(
     // the current manifest. Honouring it needs publish dates, which the cached
     // abbreviated packuments do not carry, so this path fetches full documents —
     // paid only when the user asks for history.
-    let as_of: Option<i64> = std::env::var("JHOL_AS_OF").ok().and_then(|raw| {
-        chrono::DateTime::parse_from_rfc3339(&raw)
-            .ok()
-            .map(|d| d.timestamp())
-            .or_else(|| {
-                chrono::NaiveDate::parse_from_str(&raw, "%Y-%m-%d")
-                    .ok()
-                    .and_then(|d| d.and_hms_opt(23, 59, 59))
-                    .map(|dt| dt.and_utc().timestamp())
-            })
-    });
+    let as_of: Option<i64> = std::env::var("JHOL_AS_OF")
+        .ok()
+        .and_then(|raw| crate::jagr_nest::parse_cutoff(&raw));
     // License policy (`--allow-license`): also a resolution input, so it needs the
     // per-version `license` field that abbreviation omits.
     let allowed_licenses: Option<Vec<String>> = std::env::var("JHOL_ALLOW_LICENSE")

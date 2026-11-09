@@ -305,11 +305,52 @@ pub(crate) fn packument_fresh_with_identity(
     abbreviated: bool,
     identity: &crate::registry::RegistryIdentity,
 ) -> bool {
-    within_metadata_ttl(&packument_path_with_identity(
-        package,
-        abbreviated,
-        identity,
-    ))
+    let path = packument_path_with_identity(package, abbreviated, identity);
+    if within_metadata_ttl(&path) {
+        return true;
+    }
+    // `--as-of`: a **past** cutoff is settled history. A cached full packument
+    // containing any release dated after the cutoff necessarily contains every
+    // release dated before it, so it answers every question the cutoff can ask and
+    // revalidating it can only confirm what we already have. Without this, every
+    // `--as-of` install paid one conditional round trip per package (measured: 63
+    // of them) to be told the historical record had not changed.
+    let Some(cutoff) = std::env::var("JHOL_AS_OF")
+        .ok()
+        .and_then(|raw| crate::jagr_nest::parse_cutoff(&raw))
+    else {
+        return false;
+    };
+    let full = packument_path_with_identity(package, false, identity);
+    let Ok(raw) = std::fs::read(&full) else {
+        return false;
+    };
+    let Some(newline) = raw.iter().position(|b| *b == b'\n') else {
+        return false;
+    };
+    let header = &raw[..newline];
+    let payload = &raw[newline + 1..];
+    let body = if header.ends_with(b"gzip") {
+        gunzip_bytes(payload)
+    } else {
+        payload.to_vec()
+    };
+    let Ok(doc) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return false;
+    };
+    doc.get("time")
+        .and_then(|t| t.as_object())
+        .map(|times| {
+            times
+                .values()
+                .filter_map(|v| v.as_str())
+                .filter_map(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+                .map(|d| d.timestamp())
+                .max()
+                .map(|newest| newest > cutoff)
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
 }
 
 /// Is the file at `p` young enough to trust without revalidating against the
