@@ -190,9 +190,24 @@ longer observed, so the remaining reason is packages a developer added by hand.
    | before | 63 | 4.1–8.0 s |
    | after | **9** | 2.8–4.0 s |
 
-   The remaining 2.8–4 s is local, not network (a second run issues **zero**
-   requests): it is extraction of the tree, the same materialisation gap as warm
-   installs, and that is where the next win is.
+   The remaining ~4 s is local, not network. Localised by flag diff, not guessed:
+
+   | `install` variant (dated, warm cache) | wall |
+   |---|---:|
+   | `--lockfile-only` (resolve + lockfile, no tree) | **0.76 s** |
+   | full | 4.90 s |
+
+   So resolution is 0.76 s and **~4.1 s is building the tree**, in a bulk
+   materialiser that never enters the per-package path (`JHOL_DEBUG_JINF` prints
+   nothing, while the same 71 packages undated materialise in **57 ms** through the
+   prepared store).
+
+   The fix is known and the parts exist: `warm_manifest::clone_dir` and
+   `jgrid::materialize::cloner::clone_directory` already copy a directory with
+   clonefile. The dated lane needs to unpack once into the store and clone from there
+   instead of extracting per file. Not started: it is a structural change to the
+   materialiser and deserves its own acceptance test rather than the tail of a long
+   session.
 
    Two negative results kept on the record. A parallel *frontier* fetch in the resolve
    loop measured 6.8–10.6 s against 3.7–4.7 s and was reverted — after the baseline
