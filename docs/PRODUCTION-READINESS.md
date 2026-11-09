@@ -150,11 +150,33 @@ Ignored tests are not skipped work: each names a defect and the fix that would m
 it pass (`completeness_against_brute_force` documents the base-misaligned bitmap
 intersection and the rework it depends on).
 
+## Lockfile completeness, re-measured
+
+An earlier measurement found `express@latest` installing 68 packages while writing 56
+lockfile entries. It no longer reproduces — measured after the resolver fixes, three
+manifests:
+
+| manifest | lockfile entries | installed | difference |
+|---|---:|---:|---|
+| `express@latest` | 70 | 70 | **0** |
+| `express@4.18.2` | 71 | 71 | **0** |
+| `vite@5.0.0` | 58 | 11 | 47, all `optional: true` platform binaries for other OSes/arches (`@esbuild/aix-ppc64`, …) |
+
+The third row is correct behaviour, not a gap: npm lists optional platform packages in
+the lockfile and installs only the applicable one, which is exactly what
+`jhol-treecheck::entry_platform_applies` decides on the verify side. Any future
+completeness check must apply that rule, or every cross-platform tree looks broken.
+
+Pruning stays opt-in, but its justification narrowed: an incomplete lockfile is no
+longer observed, so the remaining reason is packages a developer added by hand.
+
 ## Known gaps, stated rather than implied
 
 1. **Payload time.** 19–54 s of a cold install is tarball transfer from the
    registry. Measured as not addressable by more concurrency.
-2. ~~**Two clap builders.**~~ **Resolved**: one `cli_command()` serves both parsing
+2. ~~**Lockfile can be incomplete**~~ **Not reproducible**: 70/70, 71/71 and a
+   platform-optional difference on `vite` — see the section above.
+3. ~~**Two clap builders.**~~ **Resolved**: one `cli_command()` serves both parsing
    and completion generation, so a flag cannot exist in one tree and not the other.
    `flag()` still treats an undeclared flag as off, as defence in depth.
 3. **`--as-of` needs full packuments.** 21–24 s against 0.5 s undated. Correctness

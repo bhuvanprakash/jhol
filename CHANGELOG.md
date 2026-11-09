@@ -2910,3 +2910,21 @@ per target, and the child's domain is narrowed once.
 
 `jhol-core` 720 tests with 6 ignored (the obligation is live now), installer gate
 PASS, express install 71 packages and verify clean.
+
+## Lockfile completeness re-measured (no longer reproducible)
+
+An earlier measurement had `express@latest` installing 68 packages and writing 56
+entries. After the resolver work it does not reproduce:
+
+| manifest | lockfile entries | installed |
+|---|---:|---:|
+| `express@latest` | 70 | 70 |
+| `express@4.18.2` | 71 | 71 |
+| `vite@5.0.0` | 58 | 11 + 47 optional |
+
+The `vite` difference is the 47 `@esbuild/*` platform binaries marked `optional: true`:
+npm lists those in its lockfile and installs only the applicable one, so a completeness
+check must apply the same platform rule the verifier uses.
+
+Pruning remains opt-in, but for the narrower reason: an incomplete lockfile is no longer
+observed; what remains is packages a developer added by hand.
