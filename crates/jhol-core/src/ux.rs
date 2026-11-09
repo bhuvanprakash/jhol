@@ -137,54 +137,62 @@ pub fn uninstall(package: &str, update_package_json: bool) -> Result<bool, Strin
 }
 
 /// Update lockfile to latest versions (optionally for specific package names).
+/// Update dependencies **within the ranges `package.json` declares**, then make the tree
+/// match.
+///
+/// What this used to do, and must not: resolve each named package at `latest`, write
+/// `^<latest>` into the manifest — turning a deliberate `4.17.1` pin into `^5.3.0` — and
+/// refresh the lockfile while installing nothing. It printed "Update complete." over a tree
+/// that was still the old version and a lockfile that described the new one, so the next
+/// `verify` failed.
+///
+/// The contract now: the manifest is the range authority. `update` re-resolves inside those
+/// ranges (newest satisfying), rewrites the lockfile, and materialises the result. Moving a
+/// package to a new major is `jhol install <pkg>@latest`, which says so.
 pub fn update_packages(packages: &[String]) -> Result<(), String> {
     let pj = Path::new("package.json");
     if !pj.exists() {
         return Err("No package.json found in current directory".to_string());
     }
-    if packages.is_empty() {
-        let tree = lockfile_write::resolve_full_tree(pj)?;
-        let lock_path = Path::new("package-lock.json");
-        lockfile_write::write_package_lock(lock_path, pj, &tree)?;
-        return Ok(());
-    }
-    let mut v = read_package_json(pj)?;
-    let mut deps_map: HashMap<String, String> = HashMap::new();
-    for key in ["dependencies", "devDependencies", "peerDependencies"] {
-        if let Some(deps) = v.get(key).and_then(|d| d.as_object()) {
-            for (name, spec) in deps {
-                if let Some(s) = spec.as_str() {
-                    deps_map.insert(name.clone(), s.to_string());
-                }
+    if !packages.is_empty() {
+        let v = read_package_json(pj)?;
+        let declared: Vec<String> = ["dependencies", "devDependencies", "peerDependencies"]
+            .iter()
+            .filter_map(|k| v.get(k).and_then(|d| d.as_object()))
+            .flat_map(|d| d.keys().cloned())
+            .collect();
+        for p in packages {
+            if !declared.iter().any(|d| d == p) {
+                return Err(format!(
+                    "{} is not a dependency in package.json: this command only updates what the \
+                     manifest already asks for, use `jhol install {}@latest` to change the range",
+                    p, p
+                ));
             }
         }
     }
-    let mut changed = false;
-    for pkg in packages {
-        if !deps_map.contains_key(pkg) {
-            continue;
-        }
-        let meta = registry::fetch_metadata(pkg)?;
-        let version = registry::resolve_version(&meta, "latest")
-            .ok_or_else(|| format!("Could not resolve latest for {}", pkg))?;
-        for key in ["dependencies", "devDependencies", "peerDependencies"] {
-            if let Some(deps) = v.get_mut(key).and_then(|d| d.as_object_mut()) {
-                if deps.contains_key(pkg) {
-                    deps.insert(
-                        pkg.clone(),
-                        serde_json::Value::String(format!("^{}", version)),
-                    );
-                    changed = true;
-                }
-            }
-        }
-    }
-    if changed {
-        write_package_json(pj, &v)?;
-    }
-    let tree = lockfile_write::resolve_full_tree(pj)?;
-    let lock_path = Path::new("package-lock.json");
-    lockfile_write::write_package_lock(lock_path, pj, &tree)?;
+
+    // Re-resolve from the manifest (newest satisfying each declared range), then install
+    // it. Writing a lockfile that describes something other than the tree on disk is the
+    // defect this function shipped with.
+    let tree = lockfile_write::resolve_full_tree_nested(pj)?;
+    lockfile_write::write_package_lock(Path::new("package-lock.json"), pj, &tree)?;
+    let specs = crate::install::resolve_install_from_package_json_omit(
+        false,
+        crate::omit::Omit::NONE.with_env(false),
+    )
+    .map_err(|e| e.to_string())?;
+    let refs: Vec<&str> = specs.iter().map(|s| s.as_str()).collect();
+    // Materialise from the lockfile just written, exactly as `ci` does: the lockfile is
+    // the authority for *paths* (nested instances included), so installing from the
+    // manifest's ranges instead loses the nested copies and leaves the tree short.
+    let opts = crate::install::InstallOptions {
+        from_lockfile: true,
+        native_only: true,
+        no_scripts: true,
+        ..Default::default()
+    };
+    crate::install::install_package(&refs, &opts).map_err(|e| e.to_string())?;
     Ok(())
 }
 

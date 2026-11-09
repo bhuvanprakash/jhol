@@ -3181,3 +3181,32 @@ removal updates the manifest, drops the lockfile entry, deletes the directory, p
 shim, and `verify` reports the remaining tree clean — including removing the last package
 (`{}` dependencies, 0 installed, `verify` clean). `jhol-core` 723 tests, installer gate
 PASS.
+
+## Update: respect the declared range, and actually install the result
+
+`jhol update express --save` on a manifest pinned to `4.17.1` rewrote it to **`^5.3.0`**
+(resolving `latest`, ignoring the range), refreshed the lockfile, installed **nothing**, and
+printed "Update complete." The next `verify` failed, because the lockfile described a tree
+that was not on disk. Three separate wrongs in one command.
+
+Now:
+
+* the **manifest is the range authority** — `update` re-resolves inside the declared ranges
+  (newest satisfying) and never rewrites them. Moving to a new major is
+  `jhol install <pkg>@latest`, which says so;
+* the result is **materialised from the lockfile just written**, exactly as `ci` does,
+  because the lockfile is the authority for *paths* — installing from the manifest's ranges
+  instead loses the nested copies and leaves the tree short;
+* asking for a package that is not a dependency is an error naming the alternative, not a
+  silent no-op.
+
+Verified:
+
+| case | result |
+|---|---|
+| pinned `4.17.1`, `update express --save` | manifest unchanged, tree unchanged, `verify` clean |
+| `~4.17.1`, already newest in range | no-op, `verify` clean |
+| lock drifted behind a widened `^4.17.1` | updated 4.17.3 → **4.22.3**, 72 packages, `verify` clean |
+| `update not-a-dep --save` | error, naming `jhol install not-a-dep@latest` |
+
+`jhol-core` 723 tests, installer gate PASS.
