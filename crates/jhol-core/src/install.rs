@@ -78,12 +78,13 @@ where
 /// `jhol install` with an empty snapshot. That is why the conflict path had to
 /// re-resolve the manifest from scratch (a second full metadata pass) instead of
 /// re-nesting what it had already fetched. Enabling it costs one map entry plus
-/// an `Arc` clone per package — the packuments themselves already exist — so the
-/// default is on; `JHOL_NO_TRANSITIVE_CACHE=1` restores the old behaviour.
+/// an `Arc` clone per package — the packuments themselves already exist.
+///
+/// `JHOL_NO_TRANSITIVE_CACHE` is retired: it restored a behaviour whose only
+/// property was being slower, and an escape hatch that makes things worse is not a
+/// safety valve.
 fn transitive_cache_enabled() -> bool {
-    !std::env::var("JHOL_NO_TRANSITIVE_CACHE")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    true
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -1967,11 +1968,10 @@ fn expand_with_transitive_dependencies(
     // Version selection still happens in the BFS — only the network fetch is swapped,
     // so resolution quality is identical by construction. Any packument the floodgate
     // misses falls through to the existing deferred waves (correctness preserved).
-    if !offline
-        && !registry::offline_mode()
-        && !packages.is_empty()
-        && std::env::var("JHOL_NO_FLOODGATE").is_err()
-    {
+    // `JHOL_NO_FLOODGATE` is retired. Any packument the floodgate misses falls
+    // through to the deferred waves below, so the switch could only ever make an
+    // install slower — that is a preference, not a safety valve.
+    if !offline && !registry::offline_mode() && !packages.is_empty() {
         let mut direct_map: HashMap<String, String> = HashMap::new();
         for package in packages {
             let base = base_name(package);

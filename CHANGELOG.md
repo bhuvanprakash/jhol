@@ -3148,3 +3148,18 @@ The same measurement run also corrected the record: the identical binary measure
 `nest_solve` at **143 ms per solve** in one session and **20 ms per solve** in another, with
 an add of `lodash` falling from 1.16–2.16 s to **0.484 s** with no code change. Machine
 state dominates this path, so the ranges are the claim and any single reading is not.
+
+## Configuration: two more knobs retired
+
+`JHOL_NO_FLOODGATE` and `JHOL_NO_TRANSITIVE_CACHE` are gone. Both disabled a performance
+path with no correctness role:
+
+* the floodgate's misses fall through to the deferred waves, so switching it off could
+  only make an install slower;
+* the transitive-expansion cache restored an empty snapshot, which is what made conflict
+  re-nesting cost a second full metadata pass.
+
+An escape hatch that can only make things worse is a preference, not a safety valve.
+Verified after removal: fresh install (71 packages, `verify` clean), one-package add
+(652 ms), and both variables now have no effect. `jhol-core` 723 tests, installer gate
+PASS. `ENV-AUDIT.md` lists all three retirements with the reason each could go.

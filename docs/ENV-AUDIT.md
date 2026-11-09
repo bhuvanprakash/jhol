@@ -35,7 +35,8 @@ removing the flag — not renaming it.
 | `JHOL_NO_SELECTION_CACHE` | the selection cache needed an off switch while it was new | cache is verified on load; keep as a diagnostic |
 | `JHOL_LICENSE_ALLOW_UNKNOWN` | a real policy needs an explicit exception | keep — the escape hatch *is* the feature |
 | `JHOL_STRICT_PEER_DEPS` | peers are advisory by default (npm semantics) | keep — it selects between two defensible behaviours |
-| `JHOL_NO_HARVEST`, `JHOL_NO_CACHE`, `JHOL_NO_DAEMON`, `JHOL_NO_PREFETCH`, `JHOL_NO_SPECULATE`, `JHOL_NO_FLOODGATE`, `JHOL_NO_HTTP2`, `JHOL_NO_PACKUMENT_TTL`, `JHOL_NO_TRANSITIVE_CACHE` | each disables an accelerator | retire one at a time by proving the accelerator is never wrong (the tree verifier is the tool), then delete both the accelerator's escape hatch and, where it is redundant, the accelerator |
+| `JHOL_NO_HARVEST`, `JHOL_NO_CACHE`, `JHOL_NO_DAEMON`, `JHOL_NO_PREFETCH`, `JHOL_NO_SPECULATE`, `JHOL_NO_HTTP2`, `JHOL_NO_PACKUMENT_TTL` | each disables an accelerator | retire one at a time by proving the accelerator is never wrong (the tree verifier is the tool), then delete both the accelerator's escape hatch and, where it is redundant, the accelerator |
+| ~~`JHOL_NO_FLOODGATE`~~, ~~`JHOL_NO_TRANSITIVE_CACHE`~~ | **retired** — see below | — |
 
 ---
 
@@ -104,6 +105,8 @@ behaviour, and the documentation says so. Renaming is not retiring.
 
 | variable | retired | why it existed | why it could go |
 |---|---|---|---|
+| `JHOL_NO_FLOODGATE` | this session | a prefetch accelerator could be switched off | the switch could only make an install slower: any packument it misses falls through to the deferred waves, so correctness never depended on it. That is a preference, not a safety valve |
+| `JHOL_NO_TRANSITIVE_CACHE` | this session | the in-run expansion snapshot used to be daemon-only | the variable restored the empty snapshot, i.e. the second full metadata pass that made conflict re-nesting expensive. Nothing it disabled was ever unsafe |
 | `JHOL_NEST_RESOLVER` | this session | the instance resolver was opt-in while it was unproven | it is the only *first* attempt now; the flat resolver stays as the automatic fallback, not as a mode. That resolver cannot represent a tree with two majors of one package, so an escape hatch to it was a way to be surprised, not a way to be safe. Verified afterwards: normal install (71 packages, `verify` clean), dated install (58 packages), and `JHOL_NEST_RESOLVER=0` now has no effect |
 
 Two more are queued behind work rather than judgement: `JHOL_SINGLE_PASS` needs the
