@@ -244,23 +244,73 @@ pub mod chart {
                 self.words[hi_wi] &= hi_mask;
             }
         }
-        /// Intersection (AND) — SIMD via u64 words
+        /// Intersection (AND), **base-aware**.
+        ///
+        /// Word `i` means "the 64 versions starting at `ordinal_lo + 64*i`", so two
+        /// bitmaps can only be ANDed positionally when their bases agree. They used
+        /// not to be compared at all: `from_interval` anchors at `interval.lo`, so
+        /// applying `^1.1.0` to a package whose versions start at 1.0.0 produced a
+        /// bitmap based at ordinal 1, intersected it with a domain based at 0, and
+        /// selected ordinal **0** — a version the range excludes. The result was
+        /// both a false conflict (valid trees reported unsatisfiable) and, on other
+        /// shapes, a silently wrong selection.
+        ///
+        /// Fast path when the bases match (the overwhelmingly common case, since
+        /// masks for one target are built on that target's window). Otherwise align
+        /// **by ordinal**, which is O(versions) but rare and obviously correct.
         #[inline]
         pub fn intersect(&mut self, other: &Self) {
-            let len = self.words.len().min(other.words.len());
-            for i in 0..len {
-                self.words[i] &= other.words[i];
+            if self.ordinal_lo == other.ordinal_lo && self.words.len() >= other.words.len() {
+                for (a, b) in self.words.iter_mut().zip(other.words.iter()) {
+                    *a &= *b;
+                }
+                return;
             }
+            let lo = self.ordinal_lo.0.max(other.ordinal_lo.0);
+            let hi = self.ordinal_hi.0.min(other.ordinal_hi.0);
+            let mut words = vec![0u64; self.words.len()];
+            if lo <= hi {
+                for ord in lo..=hi {
+                    let o = VersionOrdinal(ord);
+                    if self.contains_ordinal(o) && other.contains_ordinal(o) {
+                        let off = (ord - self.ordinal_lo.0) as usize;
+                        let wi = off / 64;
+                        if wi < words.len() {
+                            words[wi] |= 1u64 << (off % 64);
+                        }
+                    }
+                }
+            }
+            self.words = words;
         }
-        /// Union (OR)
+        /// Union (OR), base-aware for the same reason as `intersect`.
         #[inline]
         pub fn union(&mut self, other: &Self) {
-            let len = self.words.len().max(other.words.len());
-            self.words.resize(len, 0);
-            for i in 0..len {
-                let o = other.words.get(i).copied().unwrap_or(0);
-                self.words[i] |= o;
+            if self.ordinal_lo == other.ordinal_lo {
+                if other.words.len() > self.words.len() {
+                    self.words.resize(other.words.len(), 0);
+                }
+                for (a, b) in self.words.iter_mut().zip(other.words.iter()) {
+                    *a |= *b;
+                }
+                return;
             }
+            let lo = self.ordinal_lo.0.min(other.ordinal_lo.0);
+            let hi = self.ordinal_hi.0.max(other.ordinal_hi.0);
+            let mut out = VersionBitmap::empty(VersionOrdinal(lo), VersionOrdinal(hi));
+            for ord in self.ordinal_lo.0..=self.ordinal_hi.0 {
+                let o = VersionOrdinal(ord);
+                if self.contains_ordinal(o) {
+                    out.set_ordinal(o);
+                }
+            }
+            for ord in other.ordinal_lo.0..=other.ordinal_hi.0 {
+                let o = VersionOrdinal(ord);
+                if other.contains_ordinal(o) {
+                    out.set_ordinal(o);
+                }
+            }
+            *self = out;
         }
         #[inline]
         pub fn is_empty(&self) -> bool {
@@ -2958,41 +3008,50 @@ pub mod rvm {
                     let mut saved: Vec<(u32, VersionBitmap)> = Vec::new();
                     let mut ok = true;
                     if let Some(pkg) = chart.packages.get(&pid) {
+                        // Two mistakes lived here, both the same mistake: a mask is
+                        // expressed in the **target's** ordinals, so it can never be
+                        // tested against the dependent's chosen ordinal (`ord`), and
+                        // edges from different versions of this dependent are
+                        // alternatives, not conjuncts.
+                        //
+                        // So: group the package's edges by target, union their masks
+                        // (any release of this dependent may apply), and narrow each
+                        // child once. The child's own choice is then checked against
+                        // its narrowed domain, which is the only place a version is
+                        // actually constrained.
+                        let mut by_target: HashMap<u32, VersionBitmap> = HashMap::new();
+                        let mut optional: std::collections::HashSet<u32> =
+                            std::collections::HashSet::new();
                         for edge in &pkg.deps {
-                            let required_ok = match &edge.required_mask {
-                                Some(m) if !m.is_empty() => m.contains_ordinal(
-                                    crate::jagr_infinite::chart::VersionOrdinal(ord),
-                                ),
-                                _ => edge.required.contains(
-                                    crate::jagr_infinite::chart::VersionOrdinal(ord),
-                                ),
-                            };
-                            if !required_ok {
-                                if edge.optional {
-                                    continue; // soft: drop the child
-                                }
-                                ok = false;
-                                break;
+                            if edge.optional {
+                                optional.insert(edge.target_pkg);
                             }
-                            let Some(child_domain) = domains.get(&edge.target_pkg).cloned() else {
-                                ok = false;
-                                break;
+                            let Some(m) = &edge.required_mask else {
+                                continue; // unevaluable: narrow nothing
+                            };
+                            match by_target.get_mut(&edge.target_pkg) {
+                                Some(acc) => acc.union(m),
+                                None => {
+                                    by_target.insert(edge.target_pkg, m.clone());
+                                }
+                            }
+                        }
+                        for (target, mask) in by_target {
+                            let Some(child_domain) = domains.get(&target).cloned() else {
+                                continue; // pruned out of scope with its parent
                             };
                             let mut narrowed = child_domain.clone();
-                            match &edge.required_mask {
-                                Some(m) if !m.is_empty() => narrowed.intersect(m),
-                                _ => narrowed.mask_to_interval(edge.required),
-                            }
+                            narrowed.intersect(&mask);
                             if narrowed.is_empty() {
-                                if edge.optional {
-                                    continue;
+                                if optional.contains(&target) {
+                                    continue; // soft edge: the child is dropped
                                 }
                                 ok = false;
                                 break;
                             }
                             if narrowed != child_domain {
-                                saved.push((edge.target_pkg, child_domain.clone()));
-                                domains.insert(edge.target_pkg, narrowed);
+                                saved.push((target, child_domain));
+                                domains.insert(target, narrowed);
                             }
                         }
                     }
@@ -8909,23 +8968,27 @@ mod proof_obligations {
         }
     }
 
-    /// **Known defect (pinned, not hidden).**
+    /// **Obligation: completeness against brute force.**
     ///
-    /// `VersionBitmap::intersect` ANDs words positionally and ignores
-    /// `ordinal_lo`, so bitmaps built on different bases are compared bit-to-bit
-    /// as if they described the same versions. `VersionBitmap::from_interval`
-    /// anchors at `interval.lo`, so `select_versions` applying a direct range
-    /// such as `^1.1.0` to a package whose versions start at 1.0.0 produces a
-    /// bitmap based at ordinal 1, intersects it with a domain based at 0, and
-    /// ends up selecting ordinal **0** — a version the range excludes.
+    /// For every combination of two specs over a two-version package, the solver
+    /// must agree with exhaustive enumeration. This failed for two independent
+    /// reasons, both now fixed:
     ///
-    /// Fix (verified to make this test pass, held back because it changes what
-    /// real trees resolve to and belongs with the nested-layout rework): make
-    /// `intersect`/`union` base-aware — fast path when the bases match, rebase
-    /// onto the overlap otherwise — and replace the `from_interval` +
-    /// `intersect` pattern with `mask_to_interval` on a clone of the domain.
+    /// 1. `VersionBitmap::intersect` ANDed words positionally and ignored
+    ///    `ordinal_lo`, so bitmaps built on different bases were compared
+    ///    bit-to-bit as if they described the same versions. `^1.1.0` against a
+    ///    package starting at 1.0.0 selected ordinal 0 — a version the range
+    ///    excludes. `intersect`/`union` are now base-aware: positional fast path
+    ///    when the bases agree, alignment by ordinal otherwise.
+    /// 2. The backtracking step tested a **target-space** mask against the
+    ///    **dependent's** chosen ordinal, and intersected the masks of all of a
+    ///    package's versions, which are alternatives rather than conjuncts. Edges
+    ///    are now grouped by target, unioned per target, and the child's own
+    ///    domain is narrowed once.
+    ///
+    /// Both were kept as an ignored test with the exact defect written down rather
+    /// than deleted or tuned to pass; this one is now live.
     #[test]
-    #[ignore = "known defect: VersionBitmap::intersect ignores ordinal_lo (see doc comment)"]
     fn completeness_against_brute_force() {
         let versions = ["1.0.0", "1.1.0"];
         for a_spec in ["^1.0.0", "^1.1.0", "~1.0.0"] {
@@ -8950,10 +9013,11 @@ mod proof_obligations {
                         }
                     }
                 }
+                let (_, _, why) = select_versions_stats(&packuments, &roots);
                 assert_eq!(
                     got.is_some(),
                     brute_exists,
-                    "a_spec={a_spec} b_spec={b_spec}: solver={got:?}"
+                    "a_spec={a_spec} b_spec={b_spec}: solver={got:?} why={why:?}"
                 );
             }
         }

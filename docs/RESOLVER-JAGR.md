@@ -442,6 +442,45 @@ the nested fallback silently rescued every install. Nothing failed, so nothing w
 found. What exposed it was instrumenting the conflict with the *actual masks* and
 reading that one dependent version can appear many times with contradictory demands.
 
+## 4d. The base was invisible: two fixes that made the solver complete
+
+`completeness_against_brute_force` compares the solver with exhaustive enumeration
+over every combination of two specs on a two-version package. It failed, and the
+defects it named were real and independent.
+
+**1. A bitmap's words only mean something together with its base.** `intersect` ANDed
+`words[i]` positionally, ignoring `ordinal_lo`. `from_interval` anchors at
+`interval.lo`, so applying `^1.1.0` to a package whose versions start at 1.0.0 built a
+bitmap based at ordinal 1, intersected it with a domain based at 0, and selected
+ordinal **0** — a version the range excludes. `intersect`/`union` are now base-aware:
+a positional fast path when the bases agree (the common case, since masks for one
+target are built on that target's window) and alignment by ordinal otherwise.
+
+**2. A requirement is expressed in the target's ordinals, so it cannot be compared
+with the dependent's ordinal.** The backtracking step did exactly that:
+
+```rust
+let required_ok = match &edge.required_mask {
+    Some(m) => m.contains_ordinal(VersionOrdinal(ord)),   // ord is the PARENT's
+    ...
+};
+```
+
+and then intersected the masks of all of that package's edges — the same
+alternatives-versus-conjuncts mistake that propagation had, one level up. Edges are
+now grouped by target, unioned per target (any release of the dependent may apply),
+and the child's domain is narrowed once.
+
+Effect on real data:
+
+| root | before | after |
+|---|---|---|
+| `accepts` | no solution | **10 packages** |
+| `debug` | no solution | **2 packages** |
+| `vite`, `express` | no solution | no solution — **correctly**: both need two majors of `chalk` / `ms`, which a single-version tree cannot express |
+
+`jhol-core` 720 tests, 6 ignored (was 7 — this obligation is live).
+
 ## 5. Policy and history as inputs
 
 ### `--as-of <date>` — `resolve_with_options(.. cutoff)`

@@ -2883,3 +2883,30 @@ and an ordinary object as the control.
 Known ceiling, named: an own enumerable property added to a built-in prototype is
 hidden too, because the flag is per-object. `jhol-vm` 127 tests, corpus 55/55, engine
 gate PASS.
+
+## Resolver: base-aware bitmaps and target-space edge checks (solver completeness)
+
+`completeness_against_brute_force` — solver vs exhaustive enumeration over every pair
+of specs on a two-version package — failed. Two independent defects:
+
+**`VersionBitmap::intersect` ignored `ordinal_lo`.** Words were ANDed positionally, so
+two bitmaps anchored at different ordinals were compared bit-to-bit as if they meant
+the same versions. `^1.1.0` applied to a package starting at 1.0.0 produced a bitmap
+based at ordinal 1, intersected it with a domain based at 0, and selected ordinal 0 —
+outside the range. `intersect`/`union` are now base-aware: positional fast path when
+the bases agree, alignment by ordinal when they do not.
+
+**The backtracking step compared a target-space mask with the dependent's ordinal**
+(`m.contains_ordinal(VersionOrdinal(ord))` where `ord` belongs to the parent), then
+intersected the masks of all of a package's versions — alternatives treated as
+conjuncts, the same mistake propagation had. Edges are now grouped by target, unioned
+per target, and the child's domain is narrowed once.
+
+| root | before | after |
+|---|---|---|
+| `accepts` | no solution | **10 packages** |
+| `debug` | no solution | **2 packages** |
+| `vite`, `express` | no solution | no solution, correctly — both need two majors |
+
+`jhol-core` 720 tests with 6 ignored (the obligation is live now), installer gate
+PASS, express install 71 packages and verify clean.
