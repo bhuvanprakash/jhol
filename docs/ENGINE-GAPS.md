@@ -115,6 +115,26 @@ generic `uncaught exception`, which is what made the report readable.
 prints `{"message":"x"}` where node prints `{}`. The enumerability debt is the same one
 noted in `builtins.rs`: there are no per-property enumerable flags.
 
+### `async`/`await` — the plan, and why it was not started today
+
+The pieces that exist: `Op::Yield`, `FnProto::is_generator`, corpus pair 31 exercising
+generators, and a correct microtask queue with the whole Promise surface.
+
+The lowering that fits this engine: an `async` function compiles exactly like a
+generator (body → `is_generator`), `await e` compiles to `yield e`, and the call site
+drives the generator — each yielded value is subscribed with `then(resume, reject)`,
+the final return resolves the promise, a throw rejects it.
+
+Two things are missing before that is honest work rather than a demo:
+
+1. **`Generator.prototype.throw`.** Needed for `try { await x } catch (e)` and for
+   rejecting a resumed await. The generator object exposes `next` only.
+2. **`try`/`catch` across a suspension point.** Our handler table is per-frame and
+   unwound on throw; resuming a generator has to restore it at the yield point.
+
+Until both land, `async` stays a compile-time `SyntaxError` naming the gap, which is
+better than an engine that silently drops an exception inside an async body.
+
 ## 3. `BigInt` is absent
 
 **Today:** `10n` is a syntax error.
