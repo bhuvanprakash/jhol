@@ -3086,3 +3086,28 @@ Verified afterwards: normal install (71 packages, `verify` clean), dated install
 packages), and `JHOL_NEST_RESOLVER=0` now has no effect. `ENV-AUDIT.md` gained a
 "Retired" section naming what is queued behind work rather than judgement
 (`JHOL_SINGLE_PASS`, the `JHOL_NO_*` accelerator switches).
+
+## Install: the prefetch frontier follows the newest release only
+
+Adding one package to a 71-package project loaded 196 packuments for a 72-package tree and
+took 6.3 s, with zero HTTP requests: the cost was parsing documents the resolution never
+asked for. `missing_packages_bounded` walked the dependencies of **every published
+version** of each reachable package, while the resolver picks the newest satisfying
+release.
+
+| adding `lodash` | before | after |
+|---|---:|---:|
+| documents loaded | 196 | **75** |
+| `nested_resolve` | 6190 ms | **732–1281 ms** |
+| total | 6.3 s | **0.80–1.37 s** |
+
+When a range does force an older release, the resolver's `needs_fetch` names it and it is
+fetched then — the frontier is a hint, not a contract. A three-dependency manifest
+(83 packages) installs in 358 ms and verifies clean.
+
+Two attempts failed first and are recorded: capping the budget at 96 would have made large
+cold installs fetch the remainder one at a time, and resolving after each fixed-size slice
+made it *worse* (286 documents, 7.1 s) because the over-approximating frontier kept
+supplying names the tree did not need.
+
+`jhol-core` 723 tests, installer gate PASS.

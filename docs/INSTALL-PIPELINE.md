@@ -251,8 +251,25 @@ Two comparisons that keep this honest: the same 73-package tree materialises in 
 from an existing lockfile (`jhol install` with `node_modules` wiped), and
 `--lockfile-only` for the same add is **0.08 s** because it never enters this path.
 
-The fix is not "more parallelism" — nothing here touches the network. It is to stop
-parsing documents the resolution never asks for: either a loader the resolver calls on
-demand (it already reports exactly which package it needs via `needs_fetch`), or a
-bounded frontier of 16 rather than 400 so the parse set tracks the tree. Not started:
-both change how `world` is populated, which deserves its own measurement round.
+The fix was in the frontier itself, not in parallelism — nothing here touches the
+network. `missing_packages_bounded` walked the dependencies of **every published
+version** of every reachable package. The resolver picks the *newest* satisfying
+release, so the older releases' dependencies are mostly never needed. It now follows the
+newest release only, and when a range does force an older one the resolver's
+`needs_fetch` names it.
+
+| adding `lodash` to a 71-package project | before | after |
+|---|---:|---:|
+| documents loaded into `world` | 196 | **75** (tree: 72) |
+| `nested_resolve` | 6190 ms | **732–1281 ms** |
+| total | 6.3 s | **0.80–1.37 s** |
+
+A three-dependency manifest (express + vite + lodash, 83 packages) installs in 358 ms and
+`verify` is clean. Fewer documents loaded also means fewer wrong guesses: the frontier is
+now within 4% of the tree size instead of 2.7× it.
+
+Kept on the record: two attempts that did **not** work. Capping the fetch budget at 96
+helped small adds but would have made a large cold install fetch the remainder one request
+at a time; adding a resolve attempt after each 48-name slice made it worse (286 documents,
+7.1 s) because the over-approximating frontier kept feeding names the tree did not need.
+Fixing the frontier fixed both.

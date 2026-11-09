@@ -860,9 +860,26 @@ pub fn missing_packages_bounded(
         let Some(versions) = doc.get("versions").and_then(|v| v.as_object()) else {
             continue;
         };
-        for info in versions.values() {
-            // Deliberately no peerDependencies: advisory, and they explode the
-            // frontier (measured: never closed on a real jest tree).
+        // Only the newest release's dependencies. The resolver picks the newest
+        // version that satisfies the range, so older releases' dependencies are, in
+        // the common case, never needed — and walking *every* version inflated the
+        // frontier two to three times over (196 documents for a 72-package tree; 4.7 s
+        // of a 6.3 s one-package add). When a range does force an older release, the
+        // resolver's `needs_fetch` names it and it is fetched then.
+        //
+        // Deliberately no peerDependencies: advisory, and they explode the frontier
+        // (measured: never closed on a real jest tree).
+        let newest = versions
+            .keys()
+            .filter_map(|k| semver::Version::parse(k).ok().map(|v| (v, k)))
+            .max_by(|a, b| a.0.cmp(&b.0));
+        let Some((_, newest_key)) = newest else {
+            continue;
+        };
+        let Some(info) = versions.get(newest_key.as_str()) else {
+            continue;
+        };
+        {
             for section in ["dependencies", "optionalDependencies"] {
                 let Some(map) = info.get(section).and_then(|v| v.as_object()) else {
                     continue;
