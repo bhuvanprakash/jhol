@@ -2928,3 +2928,18 @@ check must apply the same platform rule the verifier uses.
 
 Pruning remains opt-in, but for the narrower reason: an incomplete lockfile is no longer
 observed; what remains is packages a developer added by hand.
+
+## Reverted: frontier fetch in the `--as-of` resolve loop
+
+The nested resolve fetched **one** package per pass on `needs_fetch` and rebuilt the
+whole resolve each time. Replacing that with a bounded parallel frontier fetch (the
+same helper the prefetch uses) measured 6.8–10.6 s where the previous build had shown
+3.7–4.7 s.
+
+Then the baseline was re-measured: **4.06 s and 8.00 s in consecutive runs**. The
+apparent regression was network variance, and the experiment could not distinguish the
+two builds. The change was reverted instead of shipped on a measurement that cannot
+support a conclusion.
+
+Method note recorded in `PRODUCTION-READINESS.md`: interleave A and B, take medians of
+at least five, and report the spread.

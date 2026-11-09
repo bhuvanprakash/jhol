@@ -179,8 +179,13 @@ longer observed, so the remaining reason is packages a developer added by hand.
 3. ~~**Two clap builders.**~~ **Resolved**: one `cli_command()` serves both parsing
    and completion generation, so a flag cannot exist in one tree and not the other.
    `flag()` still treats an undeclared flag as off, as defence in depth.
-3. **`--as-of` needs full packuments.** 21–24 s against 0.5 s undated. Correctness
-   first; the fetch path is the obvious target for the next round.
+3. **`--as-of` needs full packuments.** Cold 21–24 s, warm 4–8 s against 0.5 s
+   undated. An attempt to fetch the *frontier* in parallel instead of one package per
+   resolve pass measured 6.8–10.6 s, which looked like a regression — until the
+   baseline re-measured at 4.06 s and 8.00 s in consecutive runs. The comparison was
+   confounded by network variance, so the change was reverted rather than shipped on a
+   bad measurement. **Method note for whoever tries next: interleave A and B, take
+   medians of ≥5, and record the spread, not one pair.**
 4. **Peers are advisory.** Recorded, reported under `JHOL_STRICT_PEER_DEPS`, not
    binding — npm installs and warns, and making them binding turns working trees
    into failures.
