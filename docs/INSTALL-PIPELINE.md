@@ -227,3 +227,32 @@ Two related fixes in the same measurement loop:
 | after | **0.77 s** | **0** |
 
 `jhol verify` reports 7 packages matching the lockfile.
+
+## Adding one package to an existing tree: where 6.3 s actually goes
+
+`jhol install lodash@4.17.21` on a project that already has 71 packages took **6.3 s
+with zero HTTP requests**. Profile (`JHOL_PROFILE_INSTALL=1`), same run:
+
+| stage | time |
+|---|---:|
+| `nested_resolve` (whole function) | 6190 ms |
+| — prefetch + parse of the frontier (196 packuments) | **≈4700 ms** |
+| — `nest_solve` (the resolver itself) | 1417 ms |
+| — `nest_paths` | 0 ms |
+| — `nest_snapshots` (72 packages) | 14 ms |
+| `lockfile_layout` (writing the tree) | 60 ms |
+
+So the resolver is 1.4 s and the tree write is 60 ms; the rest is loading packuments.
+The frontier `missing_packages_bounded` returns is the transitive *name* closure — 196
+documents when the tree needs 72 — and every one is read from cache and parsed into a
+`serde_json::Value` before the resolver runs.
+
+Two comparisons that keep this honest: the same 73-package tree materialises in **52 ms**
+from an existing lockfile (`jhol install` with `node_modules` wiped), and
+`--lockfile-only` for the same add is **0.08 s** because it never enters this path.
+
+The fix is not "more parallelism" — nothing here touches the network. It is to stop
+parsing documents the resolution never asks for: either a loader the resolver calls on
+demand (it already reports exactly which package it needs via `needs_fetch`), or a
+bounded frontier of 16 rather than 400 so the parse set tracks the tree. Not started:
+both change how `world` is populated, which deserves its own measurement round.

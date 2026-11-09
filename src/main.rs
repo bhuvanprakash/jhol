@@ -4449,7 +4449,15 @@ fn run() -> Result<(), String> {
             &package,
             &range,
         ) {
-            Some(report) => print!("{}", report.render()),
+            // A report is a line (or several); printing it without a trailing newline
+            // ran the next shell prompt into the answer.
+            Some(report) => {
+                let text = report.render();
+                print!("{text}");
+                if !text.ends_with('\n') {
+                    println!();
+                }
+            }
             None => {
                 return Err(format!(
                     "no cached metadata for {}; run `jhol install {}` once so its versions are known",

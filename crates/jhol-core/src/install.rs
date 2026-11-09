@@ -7328,6 +7328,7 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                 // `ENV-AUDIT.md`'s "retired" list.
                 let nested_first = true;
                 let _ = &nested_first;
+                let t_nested = std::time::Instant::now();
                 let resolved_tree: Result<
                     HashMap<String, crate::lockfile_write::ResolvedPackage>,
                     String,
@@ -7364,6 +7365,12 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                         attempt
                     }
                 };
+                if std::env::var_os("JHOL_PROFILE_INSTALL").is_some() {
+                    eprintln!(
+                        "[jhol-profile] stage=nested_resolve delta_ms={}",
+                        t_nested.elapsed().as_millis()
+                    );
+                }
                 match resolved_tree {
                     Ok(mut tree) => {
                         // This path resolves the *manifest*, so a package the user asked for
@@ -7440,7 +7447,15 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                         let mut lock_opts = options.clone();
                         lock_opts.from_lockfile = true;
                         finalize_special_deps(&lock_path, special_deps);
-                        if install_lockfile_layout(&lock_opts)? {
+                        let t_layout = std::time::Instant::now();
+                        let layout_ok = install_lockfile_layout(&lock_opts)?;
+                        if std::env::var_os("JHOL_PROFILE_INSTALL").is_some() {
+                            eprintln!(
+                                "[jhol-profile] stage=lockfile_layout delta_ms={}",
+                                t_layout.elapsed().as_millis()
+                            );
+                        }
+                        if layout_ok {
                             sync_hidden_lockfile();
                             let _ = crate::capsule::write_capsule_from_project(Path::new("."));
                             remember_installed_packages(Path::new("node_modules"));

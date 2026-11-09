@@ -3107,6 +3107,7 @@ pub fn resolve_full_tree_nested(
     let exclude_vuln = std::env::var("JHOL_EXCLUDE_VULN").is_ok();
     let mut audit_rounds = 0usize;
 
+    let t_resolve = std::time::Instant::now();
     let mut resolved = loop {
         match jagr_nest::resolve_with_options(&world, &roots, &options) {
             Ok(r) => break r,
@@ -3244,6 +3245,16 @@ pub fn resolve_full_tree_nested(
     }
     let _ = demand;
 
+    if std::env::var_os("JHOL_PROFILE_INSTALL").is_some() {
+        eprintln!(
+            "[jhol-profile] stage=nest_solve delta_ms={} world={} instances={}",
+            t_resolve.elapsed().as_millis(),
+            world.len(),
+            resolved.instances.len()
+        );
+    }
+    let t_paths = std::time::Instant::now();
+
     // Assign paths. A winner sits at the top; everything else nests under a
     // dependent whose path is already known.
     let mut path_of: HashMap<(String, String), String> = HashMap::new();
@@ -3336,6 +3347,13 @@ pub fn resolve_full_tree_nested(
         ));
     }
 
+    if std::env::var_os("JHOL_PROFILE_INSTALL").is_some() {
+        eprintln!(
+            "[jhol-profile] stage=nest_paths delta_ms={}",
+            t_paths.elapsed().as_millis()
+        );
+    }
+    let t_snaps = std::time::Instant::now();
     let mut out: HashMap<String, ResolvedPackage> = HashMap::new();
     for inst in &resolved.instances {
         let key = (inst.package.clone(), inst.version.clone());
@@ -3364,7 +3382,15 @@ pub fn resolve_full_tree_nested(
         );
     }
     let _ = &mut resolved;
-    Ok(out)
+    
+    if std::env::var_os("JHOL_PROFILE_INSTALL").is_some() {
+        eprintln!(
+            "[jhol-profile] stage=nest_snapshots delta_ms={} packages={}",
+            t_snaps.elapsed().as_millis(),
+            out.len()
+        );
+    }
+Ok(out)
 }
 
 #[cfg(test)]
