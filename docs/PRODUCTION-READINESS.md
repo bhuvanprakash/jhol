@@ -194,6 +194,24 @@ completeness check must apply that rule, or every cross-platform tree looks brok
 Pruning stays opt-in, but its justification narrowed: an incomplete lockfile is no
 longer observed, so the remaining reason is packages a developer added by hand.
 
+
+## Flake status
+
+One suite run early in the resolver work reported `720 passed, 1 failed`, and the failing
+test's name was not captured. It has not reproduced since:
+
+* 10 consecutive runs of `jhol-core --lib` — clean;
+* `ROUNDS=15 sh scripts/verify-all.sh`, i.e. 15 rounds across `jhol-core`, `jhol-vm`,
+  `jhol-treecheck` and `jhol-ai` (60 suite runs) — clean;
+* `--workspace --all-features` — clean.
+
+That is ~70 clean runs after one failure, so the honest status is **unpinned, not fixed**.
+The tool that would catch it if it returns is `ROUNDS=n sh scripts/verify-all.sh`, which
+names the first disagreement instead of just failing. Why it matters even at one
+occurrence: a resolver test that fails one time in seventy and passes on retry is a real
+defect being reported as infrastructure noise, and this project's whole claim is that the
+tree is verified rather than hoped for.
+
 ## Known gaps, stated rather than implied
 
 1. **Payload time.** 19–54 s of a cold install is tarball transfer from the
