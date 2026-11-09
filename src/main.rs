@@ -3833,7 +3833,10 @@ fn run() -> Result<(), String> {
     if let Some(("uninstall", sub_m)) = matches.subcommand() {
         let package = sub_m.get_one::<String>("package").unwrap();
         let save = !flag(&sub_m, "no-save");
-        jhol_core::uninstall(package, save).map_err(|e| e.to_string())?;
+        let removed = jhol_core::uninstall(package, save).map_err(|e| e.to_string())?;
+        if !removed {
+            eprintln!("jhol: {package} not in dependencies or node_modules");
+        }
         success(&format!("Removed {}", package));
         return Ok(());
     }
@@ -4718,10 +4721,25 @@ fn run() -> Result<(), String> {
         if packages.is_empty() {
             return Err("At least one package must be specified".to_string());
         }
-        for pkg in packages {
-            jhol_core::uninstall(pkg, save).map_err(|e| e.to_string())?;
+        let mut removed_any = false;
+        let mut untouched: Vec<&str> = Vec::new();
+        for pkg in &packages {
+            match jhol_core::uninstall(pkg, save).map_err(|e| e.to_string())? {
+                true => removed_any = true,
+                false => untouched.push(pkg),
+            }
         }
-        success("Package(s) removed.");
+        // Say what happened. "Package(s) removed." after removing nothing made a
+        // misspelled name look like a success.
+        if !untouched.is_empty() {
+            eprintln!(
+                "jhol: {} not in dependencies or node_modules",
+                untouched.join(", ")
+            );
+        }
+        if removed_any {
+            success("Package(s) removed.");
+        }
         return Ok(());
     }
 

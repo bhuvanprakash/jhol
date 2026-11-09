@@ -3163,3 +3163,21 @@ An escape hatch that can only make things worse is a preference, not a safety va
 Verified after removal: fresh install (71 packages, `verify` clean), one-package add
 (652 ms), and both variables now have no effect. `jhol-core` 723 tests, installer gate
 PASS. `ENV-AUDIT.md` lists all three retirements with the reason each could go.
+
+## Uninstall: say what actually happened
+
+`jhol remove not-a-package` printed **"Package(s) removed."** and exited 0 having touched
+nothing — the success message made a misspelled name look like it worked.
+`ux::uninstall` now reports whether anything changed (a directory removed, or an entry
+dropped from `dependencies`/`devDependencies`/`peerDependencies`), and the command says:
+
+```
+$ jhol remove not-a-package
+jhol: not-a-package not in dependencies or node_modules
+```
+
+Exit stays 0, which is npm's behaviour; only the claim changed. Verified end to end:
+removal updates the manifest, drops the lockfile entry, deletes the directory, prunes the
+shim, and `verify` reports the remaining tree clean — including removing the last package
+(`{}` dependencies, 0 installed, `verify` clean). `jhol-core` 723 tests, installer gate
+PASS.

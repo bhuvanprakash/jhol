@@ -45,7 +45,12 @@ fn remove_dep(map: &mut serde_json::Map<String, serde_json::Value>, name: &str) 
 }
 
 /// Uninstall package: remove from node_modules and (optionally) package.json.
-pub fn uninstall(package: &str, update_package_json: bool) -> Result<(), String> {
+/// Remove a package from `node_modules` and (optionally) from `package.json`.
+///
+/// Returns whether anything actually changed: `remove not-a-package` used to print
+/// "Package(s) removed." having touched nothing, which is the kind of success message
+/// that makes a wrong command look right.
+pub fn uninstall(package: &str, update_package_json: bool) -> Result<bool, String> {
     let pkg = package.trim();
     if pkg.is_empty() {
         return Err("Package name required".to_string());
@@ -53,6 +58,7 @@ pub fn uninstall(package: &str, update_package_json: bool) -> Result<(), String>
     let pkg = utils::sanitize_package_name(pkg)
         .ok_or_else(|| format!("Invalid package name: {}", package))?;
     let pkg_for_path = pkg.clone();
+    let mut removed_from_disk = false;
     let node_modules = Path::new("node_modules");
     if node_modules.exists() {
         let path = if pkg_for_path.starts_with('@') {
@@ -68,16 +74,17 @@ pub fn uninstall(package: &str, update_package_json: bool) -> Result<(), String>
             fs::remove_dir_all(&path)
                 .or_else(|_| fs::remove_file(&path))
                 .map_err(|e| e.to_string())?;
+            removed_from_disk = true;
         }
     }
 
+    let mut changed = false;
     if update_package_json {
         let pj = Path::new("package.json");
         if !pj.exists() {
             return Err("No package.json found in current directory".to_string());
         }
         let mut v = read_package_json(pj)?;
-        let mut changed = false;
         if let Some(deps) = v.get_mut("dependencies").and_then(|d| d.as_object_mut()) {
             if remove_dep(deps, &pkg) {
                 changed = true;
@@ -125,7 +132,8 @@ pub fn uninstall(package: &str, update_package_json: bool) -> Result<(), String>
     // it failed with `cannot execute: No such file or directory`; npm removes the
     // entry on uninstall. `rebuild_bin_links` now also drops dangling shims.
     let _ = crate::bin_links::rebuild_bin_links(node_modules);
-    Ok(())
+    Ok(removed_from_disk || changed)
+
 }
 
 /// Update lockfile to latest versions (optionally for specific package names).
