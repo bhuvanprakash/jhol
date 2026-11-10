@@ -21,10 +21,26 @@ const PAGE: &str = r#"<!doctype html>
   .k { color:#888 }
   .ok { color:#5bd67b } .bad { color:#ff6b6b } .warn { color:#e0b341 }
   code { color:#9ad0ff }
+  .acts { margin: 1.4rem 0 .6rem; display:flex; gap:.5rem; flex-wrap:wrap }
+  button { font: inherit; background:#1b1b1b; color:#e8e8e8; border:1px solid #333;
+           border-radius:5px; padding:.35rem .7rem; cursor:pointer }
+  button:hover { border-color:#5bd67b }
+  button[disabled] { opacity:.5; cursor:progress }
+  pre { background:#0d0d0d; border:1px solid #1e1e1e; border-radius:6px; padding:.7rem;
+        min-height:3rem; max-height:18rem; overflow:auto; white-space:pre-wrap }
+
 </style>
 <h1 id="name">jhol</h1>
 <div class="sub" id="version"></div>
 <div id="rows"></div>
+<div class="acts">
+  <button data-a="verify">verify</button>
+  <button data-a="prune">verify --prune</button>
+  <button data-a="install">install</button>
+  <button data-a="ci">ci</button>
+  <button data-a="policy">install --exclude-vuln</button>
+</div>
+<pre id="out"></pre>
 <script>
 const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 function row(k, v, cls) {
@@ -56,14 +72,91 @@ async function tick() {
     document.getElementById("rows").innerHTML = row("error", esc(e.message), "bad");
   }
 }
+const token = new URLSearchParams(location.search).get("t") || "";
+document.querySelectorAll("button[data-a]").forEach(b => {
+  b.onclick = async () => {
+    const label = b.textContent;
+    document.querySelectorAll("button").forEach(x => x.disabled = true);
+    document.getElementById("out").textContent = `running ${label}…`;
+    try {
+      const r = await fetch(`/action?t=${encodeURIComponent(token)}`, {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({action: b.dataset.a}),
+      });
+      const j = await r.json();
+      document.getElementById("out").textContent =
+        `${label} → exit ${j.code}\n${j.stdout || ""}${j.stderr || ""}`.trim();
+      tick();
+    } catch (e) {
+      document.getElementById("out").textContent = "error: " + e.message;
+    } finally {
+      document.querySelectorAll("button").forEach(x => x.disabled = false);
+    }
+  };
+});
 tick(); setInterval(tick, 1000);
 </script>
 "#;
 
+/// One-shot session token. The page is served to a browser on this machine, but a page on
+/// any other origin could POST to `127.0.0.1` too; requiring the token that only the opened
+/// tab knows keeps a random web page from driving installs.
+fn session_token() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{:x}{:x}", std::process::id(), nanos)
+}
+
+/// The whole write surface. Deliberately a **whitelist of CLI invocations**, not a shell:
+/// every action runs the same binary a user would run, so verification, policy and exit
+/// codes are the ones already tested. There is nothing here that can be re-implemented
+/// slightly differently.
+fn action_argv(action: &str) -> Option<Vec<&'static str>> {
+    Some(match action {
+        "verify" => vec!["verify"],
+        "prune" => vec!["verify", "--prune"],
+        "install" => vec!["install"],
+        "ci" => vec!["ci"],
+        "policy" => vec!["install", "--exclude-vuln"],
+        _ => return None,
+    })
+}
+
+fn run_action(action: &str) -> serde_json::Value {
+    let Some(argv) = action_argv(action) else {
+        return serde_json::json!({ "ok": false, "code": 2, "stderr": "unknown action" });
+    };
+    let exe = std::env::current_exe().unwrap_or_else(|_| "jhol".into());
+    let out = std::process::Command::new(exe).args(&argv).output();
+    match out {
+        Ok(o) => {
+            let tail = |b: &[u8]| {
+                let s = String::from_utf8_lossy(b);
+                let s = s.trim_end();
+                // Keep the last 8 KB: an install log can be long, and the useful part
+                // (the summary or the error) is at the end.
+                let start = s.len().saturating_sub(8192);
+                s[start..].to_string()
+            };
+            serde_json::json!({
+                "ok": o.status.success(),
+                "code": o.status.code().unwrap_or(-1),
+                "stdout": tail(&o.stdout),
+                "stderr": tail(&o.stderr),
+            })
+        }
+        Err(e) => serde_json::json!({ "ok": false, "code": -1, "stderr": e.to_string() }),
+    }
+}
+
 pub fn serve() -> Result<(), String> {
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("bind: {e}"))?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
-    let url = format!("http://{addr}/");
+    let token = session_token();
+    let url = format!("http://{addr}/?t={token}");
     println!("jhol gui --web on {url}  (Ctrl-C to stop)");
     // Best effort: open the default browser. Failure just means the user copies the URL.
     let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
@@ -78,7 +171,46 @@ pub fn serve() -> Result<(), String> {
         let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
         let mut request = String::new();
         let _ = reader.read_line(&mut request);
-        let path = request.split_whitespace().nth(1).unwrap_or("/");
+        let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
+
+        // Actions: POST only, token required, whitelisted argv.
+        if path.starts_with("/action") {
+            let mut length = 0usize;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header == "\r\n" {
+                    break;
+                }
+                if let Some(v) = header.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = v.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut raw = vec![0u8; length.min(4096)];
+            use std::io::Read;
+            let _ = reader.read_exact(&mut raw);
+            let given = path
+                .split_once("t=")
+                .map(|(_, t)| t.trim().to_string())
+                .unwrap_or_default();
+            let reply = if given != token {
+                serde_json::json!({ "ok": false, "code": 403, "stderr": "bad token" })
+            } else {
+                let action = serde_json::from_slice::<serde_json::Value>(&raw)
+                    .ok()
+                    .and_then(|v| v.get("action").and_then(|a| a.as_str()).map(str::to_string))
+                    .unwrap_or_default();
+                run_action(&action)
+            };
+            let body = reply.to_string();
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                 Cache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            continue;
+        }
+
         let body = if path.starts_with("/status.json") {
             serde_json::to_string(&jhol_core::status::collect(std::path::Path::new(".")))
                 .unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))

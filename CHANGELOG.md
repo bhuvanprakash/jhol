@@ -3697,3 +3697,20 @@ instead of collecting numbers itself.
 implementation; `std::net` and a page.
 
 jhol-core 723 tests, CLI suite 30/30, installer gate PASS, engine gate PASS (corpus 55/55).
+
+## GUI: a write contract that is a whitelist, not a shell
+
+`jhol gui --web` gained the five actions a user actually repeats: `verify`, `verify --prune`,
+`install`, `ci`, and a policy install (`--exclude-vuln`). Each one runs the **same CLI
+invocation** a terminal user would run — nothing is reimplemented, so the verification, the
+policy and the exit codes are the ones already tested.
+
+Requests must be `POST` with the session token from the URL that was opened, so a page on
+another origin cannot drive installs on `127.0.0.1`. Unknown actions are refused with exit 2;
+there is no shell and no command string anywhere in the path.
+
+Replies are `{ok, code, stdout, stderr}` with the last 8 KB of each stream — the useful part of
+an install log is at the end.
+
+Verified: `verify` → `code 0, "OK: 71 packages match the lockfile"`; `prune` and `install`
+succeed; `bad token` → 403; `{"action":"rm -rf /"}` → `code 2, unknown action`.

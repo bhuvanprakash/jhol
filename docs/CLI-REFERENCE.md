@@ -201,3 +201,28 @@ demo 1.0.0
 struct; it previously collected its own numbers, which is how two answers to one question
 start. `jhol gui --web` serves the same data as a single page on `127.0.0.1:<random>` and opens
 the browser: no webview dependency, no second implementation, `/status.json` behind it.
+
+### The write contract: `POST /action`
+
+The web view is not read-only. It exposes exactly **five** actions, and every one is a
+whitelisted CLI invocation — the same binary a user would run, so verification, policy and
+exit codes are the ones already tested:
+
+| action | runs |
+|---|---|
+| `verify` | `jhol verify` |
+| `prune` | `jhol verify --prune` |
+| `install` | `jhol install` |
+| `ci` | `jhol ci` |
+| `policy` | `jhol install --exclude-vuln` |
+
+There is no shell and no arbitrary command: an unknown action is refused with exit 2. Requests
+must be `POST` and must carry the session token embedded in the URL that was opened — a random
+web page cannot drive installs on `127.0.0.1`, even though it can reach the port.
+
+The reply is JSON: `{ok, code, stdout, stderr}` with the last 8 KB of each stream, because the
+useful part of an install log is at the end.
+
+Verified: `verify` → `code 0, "OK: 71 packages match the lockfile"`; `prune` and `install`
+succeed; a bad token returns `403 bad token`; `{"action":"rm -rf /"}` returns
+`code 2, unknown action`.
