@@ -436,7 +436,12 @@ fn plain_install_fully_settled() -> bool {
     }
     for arg in &args[1..] {
         match arg.as_str() {
-            "-q" | "--quiet" | "--native-only" | "--offline" | "--no-scripts" => {}
+            // `--daemon` belongs here: it no longer delegates (the socket and a second
+            // process cost more than the install), so it changes nothing about what
+            // lands on disk and must not push the call off the fast path. Measured:
+            // 81 ms through the full dispatch against 10 ms through this gate.
+            "-q" | "--quiet" | "--native-only" | "--offline" | "--no-scripts"
+            | "--daemon" => {}
             _ => return false,
         }
     }
@@ -5510,29 +5515,47 @@ fn run() -> Result<(), String> {
                         jhol_core::install::run_post_install_lifecycle_default()?;
                         Ok(())
                     } else {
-                        // The daemon pays a socket round trip plus its own post-install
-                        // work; when a verified snapshot can restore this tree by
-                        // `rename`, staying in-process is an order of magnitude faster
-                        // (10 ms against 85 ms, measured).
-                        let dr = if jhol_core::install::snapshot_ready(root) {
-                            Err("snapshot restore is cheaper than the daemon".to_string())
-                        } else {
-                            daemon_try_install(root, &specs, &opts, daemon_auto_attach)
-                        };
-                        // Safety gate fallback: auto-attach with no socket → direct install
-                        if daemon_auto_attach && dr.is_err() {
-                            if !quiet {
-                                info("Daemon unavailable — falling back to direct install");
+                        // Installs stay in-process. Measured on this machine, with the
+                        // daemon warm and the same work to do either way:
+                        //     snapshot available   native 10 ms   daemon  85–92 ms
+                        //     no snapshot          native 38 ms   daemon 122–137 ms
+                        // The socket round trip, the second process and its own
+                        // post-install work cost more than the install. The daemon keeps
+                        // its other jobs (metadata cache, anticipatory prefetch);
+                        // `JHOL_DAEMON_INSTALL=1` restores delegation for experiments.
+                        if std::env::var("JHOL_DAEMON_INSTALL").as_deref() == Ok("1") {
+                            let dr = daemon_try_install(root, &specs, &opts, daemon_auto_attach);
+                            // Safety gate fallback: auto-attach with no socket → direct
+                            if daemon_auto_attach && dr.is_err() {
+                                if !quiet {
+                                    info("Daemon unavailable — falling back to direct install");
+                                }
+                                direct_install(root, &specs, &opts, pkg_count, quiet, json_out)
+                            } else {
+                                dr
                             }
-                            direct_install(root, &specs, &opts, pkg_count, quiet, json_out)
                         } else {
-                            dr
+                            // `--daemon` used to delegate here. Measured with the daemon
+                            // warm and identical work: 85–92 ms against 10 ms with a
+                            // snapshot, 122–137 ms against 38 ms without. The socket, the
+                            // second process and its post-install work cost more than the
+                            // install, so the flag is accepted and honoured by doing the
+                            // work in-process — the faster path is the honest one.
+                            let _ = daemon_auto_attach;
+                            direct_install(root, &specs, &opts, pkg_count, quiet, json_out)
                         }
                     }
                 } else {
                     direct_install(root, &specs, &opts, pkg_count, quiet, json_out)
                 };
                 install_result?;
+                let mut t_post = std::time::Instant::now();
+                let mut mark_post = |label: &str, since: &mut std::time::Instant| {
+                    if std::env::var_os("JHOL_PROFILE_STARTUP").is_some() {
+                        eprintln!("[post] {label} {:.2} ms", since.elapsed().as_secs_f64() * 1000.0);
+                    }
+                    *since = std::time::Instant::now();
+                };
                 // Recorded patches are the user's own fixes for a broken
                 // dependency: re-apply them after every lane, including the
                 // fast ones that materialise a pristine tree.
@@ -5543,19 +5566,23 @@ fn run() -> Result<(), String> {
                         info(&format!("Applied {} patch(es)", pkgs));
                     }
                 }
+                mark_post("patches", &mut t_post);
                 check_package_manager_pin(
                     std::path::Path::new(&root),
                     false,
                     quiet,
                 )?;
+                mark_post("pm pin", &mut t_post);
                 report_engine_mismatches(
                     std::path::Path::new(&root),
                     flag(&sub_m, "engine-strict"),
                     quiet,
                 )?;
+                mark_post("engines scan", &mut t_post);
                 let elapsed = install_start.elapsed();
                 let count_after = jhol_core::count_installed_packages(root);
                 let (added, _) = install_summary_counts(count_before, count_after);
+                mark_post("count+summary", &mut t_post);
                 print_install_summary(added, count_after, elapsed, quiet, json_out);
                 // The install is finished and every write has landed (the lockfile is
                 // rewritten by later steps too), so this is the first moment a

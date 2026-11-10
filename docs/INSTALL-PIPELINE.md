@@ -577,3 +577,27 @@ install: **2 → 1**.
 Honest position on cold: repeated fresh-cache runs land at **0.72–1.00 s** for jhol, 0.75–1.04 s
 for bun and 2.0–2.4 s for npm — jhol and bun are within each other's noise because both are
 waiting on the same registry. The 17 ms that is ours is not where cold installs go.
+
+### The daemon never wins an install, so it no longer tries
+
+Measured with the daemon warm and identical work to do either way:
+
+| | native | `--daemon` |
+|---|---:|---:|
+| snapshot available | **10 ms** | 85–92 ms |
+| no snapshot | **38 ms** | 122–137 ms |
+
+The daemon's own `install_package` is 15 ms and the socket round trip 12–18 ms; the rest is
+the second process's post-install work. There is no size at which this layer pays for itself
+now that a verified tree restores by `rename`, so **installs stay in-process** and the flag is
+honoured by doing the work on the faster path. `JHOL_DAEMON_INSTALL=1` restores delegation for
+experiments; the daemon process keeps its other jobs (metadata cache, anticipatory prefetch).
+
+The flag is also allowed on the fast gate now: it changes nothing about what lands on disk, and
+pushing it off the gate cost 81 ms against 10 ms.
+
+**Honest caveat.** Back-to-back wipes (`rm -rf node_modules` in a tight loop, as a benchmark
+does) can empty both snapshot slots faster than the detached child refills them, so the run
+falls back to the projection path: the same four-run loop gave 10 ms, 149 ms, 163 ms, 542 ms.
+A third slot would make that rarer, not impossible; the trade is disk metadata. With any
+human-paced repetition the fast path is taken every time.

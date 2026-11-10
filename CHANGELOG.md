@@ -3541,3 +3541,24 @@ legitimately see different bodies.
 Repeated fresh-cache runs: jhol **0.72–1.00 s**, bun 0.75–1.04 s, npm 2.0–2.4 s. jhol and bun
 are within each other's noise on cold because both are waiting on the same registry; the 17 ms
 that is ours cannot be the difference.
+
+## Daemon: installs stay in-process, and the flag rides the fast gate
+
+With the daemon warm and identical work to do:
+
+| | native | `--daemon` |
+|---|---:|---:|
+| snapshot available | **10 ms** | 85–92 ms |
+| no snapshot | **38 ms** | 122–137 ms |
+
+No size makes the socket plus a second process plus its post-install work cheaper than the
+install itself, so `--daemon` is accepted and honoured by running in-process.
+`JHOL_DAEMON_INSTALL=1` restores delegation for experiments; the daemon process keeps its
+metadata-cache and prefetch roles.
+
+The flag is now allowed on the fast gate — it no longer changes what lands on disk, and keeping
+it off cost 81 ms against 10 ms.
+
+Caveat recorded: back-to-back wipes can outrun the detached snapshot refill, so a tight
+benchmark loop sees the projection path (10 ms, 149 ms, 163 ms, 542 ms across four runs). A
+third slot would make it rarer, not impossible.
