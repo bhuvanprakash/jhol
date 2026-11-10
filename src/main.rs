@@ -9179,9 +9179,14 @@ fn cli_command() -> Command {
                 .long_about(
                     "Launches the jhol Terminal GUI (TUI). \
                      The classic CLI is still available — this is purely additive.\n\n\
+                     Tabs: 1 Status · 2 Packages · 3 Cache · 4 Health · 5 Actions.\n\
+                     Status renders the same struct as `jhol status --json`; Actions runs\n\
+                     verify / verify --prune / install / ci / policy — the same five\n\
+                     whitelisted CLI invocations as `jhol gui --web`.\n\n\
                      Keyboard shortcuts inside the GUI:\n  \
                      ↑↓ / j k   navigate\n  \
-                     Tab / 1 2 3  switch panels\n  \
+                     Tab / 1 2 3 4 5  switch panels\n  \
+                     ⏎           run the selected action (tab 5)\n  \
                      r / F5      refresh\n  \
                      q / Esc     quit\n  \
                      ?           help"

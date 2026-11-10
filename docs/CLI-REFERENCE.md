@@ -197,10 +197,24 @@ demo 1.0.0
 
 ### `jhol gui` and `jhol gui --web`
 
-`jhol gui` is the terminal dashboard (ratatui). Its Overview panel now renders the status
-struct; it previously collected its own numbers, which is how two answers to one question
-start. `jhol gui --web` serves the same data as a single page on `127.0.0.1:<random>` and opens
-the browser: no webview dependency, no second implementation, `/status.json` behind it.
+`jhol gui` is the terminal dashboard (ratatui), five tabs:
+
+| tab | shows |
+|---|---|
+| **1. Status** | the `jhol status` struct — tree verdict and reason, lockfile drift, policy, axes, artifacts, proof |
+| **2. Packages** | declared dependencies, direct and dev |
+| **3. Cache** | tarballs, bytes, contents |
+| **4. Health** | `doctor` scan results |
+| **5. Actions** | the five whitelisted invocations; **Enter** runs the selected one and shows its output |
+
+The dashboard no longer collects its own numbers: tab 1 renders `jhol_core::status::Status`,
+the same struct the CLI and web page use. The old JAGR-invariants tab is gone — it displayed a
+secondary analysis in a place where the verdict belongs.
+
+`jhol gui --web` serves the same data as a single page on `127.0.0.1:<random>` and opens the
+browser: no webview dependency, no second implementation, `/status.json` and `/action` behind
+it. A unit test asserts the TUI's five actions are byte-identical to the web surface's, so the
+two cannot drift apart silently.
 
 ### The write contract: `POST /action`
 

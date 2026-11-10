@@ -3714,3 +3714,25 @@ an install log is at the end.
 
 Verified: `verify` → `code 0, "OK: 71 packages match the lockfile"`; `prune` and `install`
 succeed; `bad token` → 403; `{"action":"rm -rf /"}` → `code 2, unknown action`.
+
+## TUI: five tabs, a status-first dashboard, and the same five actions as the web view
+
+The terminal dashboard was built for an older product: *Dashboard (Instant-Lock)*,
+*Dependencies*, *JGrid Storage & Cache*, *Health & Diagnostics*, *JAGR-∞ Invariants*. It
+collected its own numbers, which is how two answers to one question start.
+
+Now:
+
+| tab | shows |
+|---|---|
+| **1. Status** | the `jhol status` struct: tree verdict and its reason, lockfile drift, policy, axes, artifacts, proof |
+| **2. Packages** | declared dependencies |
+| **3. Cache** | tarballs, bytes, contents |
+| **4. Health** | doctor results |
+| **5. Actions** | verify · verify --prune · install · ci · policy — **Enter** runs the selected one, output in a pane |
+
+The JAGR-invariants tab is gone: it displayed a secondary analysis where the verdict belongs.
+Actions shell this same binary, exactly like `jhol gui --web`, and a unit test pins the TUI's
+five argv entries to the web surface's five so the two cannot drift.
+
+TUI 1,414 → 1,486 lines; the status panel and the action runner are the only new logic.

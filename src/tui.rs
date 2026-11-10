@@ -28,17 +28,17 @@ enum ActiveTab {
     Dependencies = 1,
     Cache = 2,
     Doctor = 3,
-    Jagr = 4,
+    Actions = 4,
 }
 
 impl ActiveTab {
     fn title(&self) -> &'static str {
         match self {
-            ActiveTab::Overview => " 1. Dashboard (Instant-Lock) ",
-            ActiveTab::Dependencies => " 2. Dependencies ",
-            ActiveTab::Cache => " 3. JGrid Storage & Cache ",
-            ActiveTab::Doctor => " 4. Health & Diagnostics ",
-            ActiveTab::Jagr => " 5. JAGR-∞ Invariants ",
+            ActiveTab::Overview => " 1. Status ",
+            ActiveTab::Dependencies => " 2. Packages ",
+            ActiveTab::Cache => " 3. Cache ",
+            ActiveTab::Doctor => " 4. Health ",
+            ActiveTab::Actions => " 5. Actions ",
         }
     }
 
@@ -47,21 +47,31 @@ impl ActiveTab {
             ActiveTab::Overview => ActiveTab::Dependencies,
             ActiveTab::Dependencies => ActiveTab::Cache,
             ActiveTab::Cache => ActiveTab::Doctor,
-            ActiveTab::Doctor => ActiveTab::Jagr,
-            ActiveTab::Jagr => ActiveTab::Overview,
+            ActiveTab::Doctor => ActiveTab::Actions,
+            ActiveTab::Actions => ActiveTab::Overview,
         }
     }
 
     fn prev(&self) -> Self {
         match self {
-            ActiveTab::Overview => ActiveTab::Jagr,
+            ActiveTab::Overview => ActiveTab::Actions,
             ActiveTab::Dependencies => ActiveTab::Overview,
             ActiveTab::Cache => ActiveTab::Dependencies,
             ActiveTab::Doctor => ActiveTab::Cache,
-            ActiveTab::Jagr => ActiveTab::Doctor,
+            ActiveTab::Actions => ActiveTab::Doctor,
         }
     }
 }
+
+/// The write surface, identical to `jhol gui --web`: each entry is a CLI invocation of this
+/// same binary, so verification, policy and exit codes are the ones already tested.
+const ACTIONS: [(&str, &[&str]); 5] = [
+    ("verify  — tree vs lockfile", &["verify"]),
+    ("prune   — verify and remove unauthorised", &["verify", "--prune"]),
+    ("install — from package.json", &["install"]),
+    ("ci      — reproduce the lockfile", &["ci"]),
+    ("policy  — install, exclude known CVEs", &["install", "--exclude-vuln"]),
+];
 
 /// Hidden extras. Each is free until the user triggers it: the sequence buffer is a
 /// small ring, animations tick only while active, puns are picked on keypress.
@@ -249,6 +259,8 @@ struct AppState {
     /// The same struct `jhol status`, the CLI and the web page render. The dashboard must
     /// not compute its own truth — that is how two answers to one question start.
     status: Option<jhol_core::status::Status>,
+    /// Output of the last action run from tab 5.
+    action_out: String,
     direct_deps: Vec<(String, String)>,
     dev_deps: Vec<(String, String)>,
     cache_tarballs: usize,
@@ -285,6 +297,7 @@ impl AppState {
             pkg_name: "jhol-project".to_string(),
             pkg_version: "1.0.0".to_string(),
             status: None,
+            action_out: String::new(),
             direct_deps: Vec::new(),
             dev_deps: Vec::new(),
             cache_tarballs: 0,
@@ -454,6 +467,28 @@ impl AppState {
         self.dev_deps.get(j).map(|(n, _)| n.clone())
     }
 
+    /// Run one of the whitelisted actions by shelling this same binary. No logic is
+    /// reimplemented here: the exit code and the output are the CLI's.
+    fn run_action(&mut self, index: usize) {
+        let Some((label, argv)) = ACTIONS.get(index).map(|(l, a)| (l.to_string(), *a)) else {
+            return;
+        };
+        self.action_out = format!("running {label}…");
+        self.start_job(&label, move || {
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            let out = std::process::Command::new(exe)
+                .args(argv)
+                .output()
+                .map_err(|e| e.to_string())?;
+            let mut text = String::from_utf8_lossy(&out.stdout).to_string();
+            text.push_str(&String::from_utf8_lossy(&out.stderr));
+            if !out.status.success() {
+                text.push_str(&format!("\n[exit {}]", out.status.code().unwrap_or(-1)));
+            }
+            Ok(text.trim_end().to_string())
+        });
+    }
+
     fn start_job<F>(&mut self, label: &str, work: F)
     where
         F: FnOnce() -> Result<String, String> + Send + 'static,
@@ -484,6 +519,7 @@ impl AppState {
                 self.busy_label.clear();
                 self.job_started = None;
                 self.recover_screen = true;
+                self.action_out = msg.clone();
                 self.reload_manifest();
                 self.reload_cache();
                 self.instant_lock = InstantLock::probe();
@@ -639,6 +675,7 @@ impl AppState {
         let count = match self.tab {
             ActiveTab::Dependencies => self.direct_deps.len() + self.dev_deps.len(),
             ActiveTab::Cache => self.cache_pkgs.len(),
+            ActiveTab::Actions => ACTIONS.len(),
             _ => 0,
         };
         if count == 0 {
@@ -831,7 +868,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut AppState) -> Result
                         app.dirty = true;
                     }
                     KeyCode::Char('5') => {
-                        app.tab = ActiveTab::Jagr;
+                        app.tab = ActiveTab::Actions;
                         app.dirty = true;
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
@@ -840,6 +877,10 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut AppState) -> Result
                     }
                     KeyCode::Up | KeyCode::Char('k') => {
                         app.prev_item();
+                        app.dirty = true;
+                    }
+                    KeyCode::Enter if app.tab == ActiveTab::Actions => {
+                        app.run_action(app.list_state.selected().unwrap_or(0));
                         app.dirty = true;
                     }
                     KeyCode::Char('r') => {
@@ -902,11 +943,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut AppState) -> Result
                     }
                     _ => {}
                 }
-                // The JAGR tab costs a resolver pass; pay it when the tab opens.
-                if app.tab == ActiveTab::Jagr && !app.jagr_loaded {
-                    app.ensure_jagr();
-                    app.dirty = true;
-                }
+
             }
         }
 
@@ -1005,7 +1042,7 @@ fn ui(f: &mut Frame, app: &mut AppState) {
         ActiveTab::Dependencies.title(),
         ActiveTab::Cache.title(),
         ActiveTab::Doctor.title(),
-        ActiveTab::Jagr.title(),
+        ActiveTab::Actions.title(),
     ];
     let tabs = Tabs::new(tab_titles)
         .select(app.tab as usize)
@@ -1020,7 +1057,7 @@ fn ui(f: &mut Frame, app: &mut AppState) {
         ActiveTab::Dependencies => render_dependencies(f, app, chunks[2]),
         ActiveTab::Cache => render_cache(f, app, chunks[2]),
         ActiveTab::Doctor => render_doctor(f, app, chunks[2]),
-        ActiveTab::Jagr => render_jagr(f, app, chunks[2]),
+        ActiveTab::Actions => render_actions(f, app, chunks[2]),
     }
 
     // Status / Help Bar — two rows so a long status never mashes into the key hints.
@@ -1077,7 +1114,7 @@ fn ui(f: &mut Frame, app: &mut AppState) {
     if std::env::var_os("JHOL_EGGS").is_some() {
         status.push_str(&format!("  [secrets {}/4]", app.eggs.found()));
     }
-    let keys = "i install  d doctor  f fix  a audit  p prune  w why  x remove  s script  ? help  q";
+    let keys = "⏎ run  i install  d doctor  f fix  a audit  p prune  w why  x remove  s script  ? help  q";
     let help_lines = vec![
         Line::from(Span::styled(
             truncate(&format!(" {status}"), inner_w),
@@ -1486,15 +1523,69 @@ fn render_doctor(f: &mut Frame, app: &AppState, area: Rect) {
     f.render_widget(block, area);
 }
 
-fn render_jagr(f: &mut Frame, app: &AppState, area: Rect) {
-    let lines: Vec<Line> = app.jagr_info.lines().map(Line::from).collect();
-    let block = Paragraph::new(lines)
+fn render_actions(f: &mut Frame, app: &AppState, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(46), Constraint::Percentage(54)])
+        .split(area);
+
+    let items: Vec<ListItem> = ACTIONS
+        .iter()
+        .map(|(label, _)| ListItem::new(Line::from(format!("  {label}"))))
+        .collect();
+    let list = List::new(items)
         .block(
             Block::default()
-                .title(" JAGR-∞ Sheaf Cohomology & Invariants (Press r to refresh) ")
+                .title(" Actions — Enter runs the selected one ")
                 .borders(Borders::ALL)
                 .style(Style::default().fg(Color::Cyan)),
         )
-        .wrap(Wrap { trim: true });
-    f.render_widget(block, area);
+        .highlight_style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▸ ");
+    f.render_stateful_widget(list, chunks[0], &mut app.list_state.clone());
+
+    let out = if app.action_out.is_empty() {
+        "Nothing run yet. These are the same five actions `jhol gui --web` exposes; each one\n\
+         runs this binary, so the exit code and output are the CLI's own."
+            .to_string()
+    } else {
+        app.action_out.clone()
+    };
+    let lines: Vec<Line> = out.lines().map(Line::from).collect();
+    let pane = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Output ")
+                .borders(Borders::ALL)
+                .style(Style::default().fg(Color::White)),
+        )
+        .wrap(Wrap { trim: false });
+    f.render_widget(pane, chunks[1]);
+}
+
+#[cfg(test)]
+mod action_tests {
+    use super::ACTIONS;
+
+    /// The TUI and `jhol gui --web` claim the same five actions. If one gains an entry the
+    /// other does not, the two surfaces disagree about what the tool can do.
+    #[test]
+    fn tui_actions_match_the_web_surface() {
+        let mut argv: Vec<Vec<&str>> = ACTIONS.iter().map(|(_, a)| a.to_vec()).collect();
+        argv.sort();
+        let mut web: Vec<Vec<&str>> = vec![
+            vec!["verify"],
+            vec!["verify", "--prune"],
+            vec!["install"],
+            vec!["ci"],
+            vec!["install", "--exclude-vuln"],
+        ];
+        web.sort();
+        assert_eq!(argv, web);
+    }
 }
