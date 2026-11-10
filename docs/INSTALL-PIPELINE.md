@@ -468,3 +468,36 @@ projection path) to **26–29 ms**, with `taken=true` on every run.
 
 This is the same defect class as the rest of this document: *a cache keyed on inputs must be
 keyed on their final value*. The snapshot existed, was correct, and was unreachable.
+
+### Restoring by `rename`, rebuilding in a detached child
+
+`rename` of a directory on the same volume is instant; `clonefile` of the same 738-file
+tree costs 18–22 ms. So the snapshot is **moved** into `node_modules`, and the slot it
+consumed is rebuilt afterwards by a **detached child process** — work the user never waits
+for.
+
+Two slots, one marker each (`.jhol/prepared-1`, `-2`, with `.json` markers holding the
+fingerprint). The invariants that keep it honest:
+
+* a slot is used only when its marker matches a hash of the **final** manifest and lockfile;
+* the moved-in tree is verified against the lockfile before anything is reported, and
+  removed if it fails, so the normal install runs;
+* a slot's marker is **deleted before** the rebuild starts and written **last**, so an
+  interrupted rebuild leaves an unusable slot rather than a half-filled one;
+* with two slots, an in-flight rebuild never makes the fast path unavailable.
+
+| warm rebuild of 71 packages (`node_modules` wiped), bash `time` | jhol | bun 1.4.4 |
+|---|---:|---:|
+| run 1 | **17 ms** | 32 ms |
+| run 2 | 41 ms (both slots mid-fill) | 32 ms |
+| run 3–5 | **17–18 ms** | 31–32 ms |
+
+The 41 ms case is the honest cost of the design: when both slots are empty — immediately
+after two wipes in quick succession — it falls back to the normal projection path. A third
+slot would make that rarer, not impossible; the trade is disk metadata, and one slow run in
+five is a better deal than paying 18–22 ms every run.
+
+Proof that it is not just fast: a restored tree and a normally-installed tree were compared
+file by file — **0 content differences**. A deliberately corrupted slot was **refused**
+(verification failed, normal install ran, correct tree resulted), and a tampered live tree
+still fails `verify`.

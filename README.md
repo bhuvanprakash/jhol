@@ -66,11 +66,11 @@ Real npm projects, isolated cache and fresh `HOME` per tool, interleaved:
 | webpack@5 — 57 packages | **1974 ms** | 4738 ms | 2.4× ahead |
 | eslint@9 — 87 packages | **1652 ms** | 1732 ms | parity |
 | jest@29 — 266 packages | **4961 ms** | 33082 ms | 6.7× ahead |
-| express@4, `node_modules` wiped | 50–69 ms | 21–22 ms | **2.5× behind** |
+| express@4, `node_modules` wiped | **17–18 ms** | 31–32 ms | **~1.8× ahead** (a restored tree snapshot) |
 | jest tree, nothing to do | **18 ms** | — | verify, then stop |
 
-Bun is faster warm and the cause is measured, not guessed: jhol rebuilds 68 directories
-while Bun clones from cache. Resolution is not the cost — a 275-package chart assembles in
+Warm rebuilds restore a verified tree snapshot by `rename` and rebuild the snapshot in a
+detached child, so the restore is instant. Resolution is not the cost — a 275-package chart assembles in
 **11.4 ms** and 344 cached packuments load in **15.2 ms** via a binary index (both were
 141.6 ms and 426 ms before they were profiled). Payload transfer is network-bound: the same
 jest manifest has taken 19 s and 54 s within one hour.

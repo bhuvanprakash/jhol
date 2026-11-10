@@ -3424,3 +3424,26 @@ So startup is ~6–8 ms for both (not 18), we are ahead on no-op, and warm rebui
 behind — clone-dominated, not startup-dominated. `examples/clone_parallel.rs` (fixed to run
 waves concurrently rather than sequentially) shows parallel cloning does not help: 9–12 ms
 against 9–11 ms serial.
+
+## Warm install: restore by `rename`, rebuild in a detached child
+
+`rename` of a directory is instant on the same volume; the equivalent `clonefile` is 18–22 ms.
+So the snapshot is **moved** into `node_modules` and the consumed slot is rebuilt by a
+**detached child process**, which the user never waits for.
+
+Two slots, each with a marker holding a hash of the **final** manifest and lockfile. The guard
+rails: the marker is deleted before a rebuild and written last (an interrupted rebuild leaves
+an unusable slot, never a half-filled one); the moved-in tree is verified before anything is
+reported and removed if it fails; two slots mean an in-flight rebuild never blocks the fast
+path.
+
+| warm rebuild, 71 packages, `node_modules` wiped (bash `time`) | jhol | bun 1.4.4 |
+|---|---:|---:|
+| typical | **17–18 ms** | 31–32 ms |
+| both slots mid-fill (1 run in 5 here) | 41 ms | — |
+
+Correctness, checked rather than assumed: a restored tree and a normally-installed tree
+compared file by file — **0 content differences**; a corrupted slot was **refused**, the
+normal install ran, and the tree came out correct; a tampered live tree still fails `verify`.
+
+`jhol-core` 723 tests, treecheck 15, CLI suite 30/30, installer gate PASS.

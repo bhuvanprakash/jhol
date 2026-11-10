@@ -6613,22 +6613,29 @@ fn materialize_downloaded_package(
 /// end (no lane ever wrote integrity back). One convergence point covers all
 /// lanes now and any lane added later. No-op when integrity already present.
 
-/// A verified tree kept as a copy-on-write snapshot, so a warm install is one
-/// `clonefile` instead of N per-package projections.
+/// Two verified-tree snapshots, restored by **moving** one into place.
 ///
-/// The measurement that decides this: a single recursive `clonefile` of a
-/// 71-package tree (738 files) takes **12 ms**; our per-package projection takes
-/// ~55 ms for the same tree; and `cp -cR` takes 114 ms because it clones *per file*
-/// — the two are not the same syscall, and the earlier write-up that called this idea
-/// dead had measured the slow one.
+/// `rename` of a directory on the same volume is instant; a `clonefile` of the same
+/// tree costs 18-22 ms. So the restore is a rename, and the snapshot it consumed is
+/// rebuilt afterwards by a **detached child process** — work the user never waits
+/// for. Two slots, one marker each, so a valid snapshot always exists even when the
+/// rebuild was interrupted, the machine lost power, or the user wiped `node_modules`
+/// again immediately.
 ///
-/// SAFETY OF REUSE, in three parts: the snapshot is keyed by a hash of the manifest
-/// and lockfile; it is only cloned when `node_modules` is **absent** (a partial tree
-/// needs the real path); and the cloned tree is verified against the lockfile before
-/// it is trusted. A snapshot that fails verification is deleted and the normal path
-/// runs, so the worst case is one wasted clone.
-fn prepared_snapshot_dir(root: &Path) -> PathBuf {
-    root.join(".jhol/prepared")
+/// What keeps this honest:
+/// * a slot is used only when its marker matches a hash of the **final** manifest and
+///   lockfile (a marker written before the lockfile was last rewritten is useless —
+///   that is exactly the defect that made the earlier single-slot version never fire);
+/// * the restored tree is verified against the lockfile before anything is reported,
+///   and a tree that fails is deleted so the normal install runs;
+/// * the rebuild clones `node_modules` as it stands immediately after the restore, so
+///   the snapshot is a copy-on-write capture of a complete, verified tree.
+fn snapshot_slots(root: &Path) -> [PathBuf; 2] {
+    [root.join(".jhol/prepared-1"), root.join(".jhol/prepared-2")]
+}
+
+fn snapshot_marker(index: usize) -> PathBuf {
+    PathBuf::from(format!(".jhol/prepared-{}.json", index + 1))
 }
 
 fn prepared_fingerprint(root: &Path) -> Option<String> {
@@ -6643,38 +6650,79 @@ fn prepared_fingerprint(root: &Path) -> Option<String> {
     Some(format!("{:x}", h.finalize()))
 }
 
-/// Install the snapshot in place of `node_modules` when it matches these inputs.
-/// Returns true only when the cloned tree verifies.
-pub fn try_prepared_clone(root: &Path) -> bool {
+fn slot_is_valid(root: &Path, index: usize, want: &str) -> bool {
+    if !snapshot_slots(root)[index].is_dir() {
+        return false;
+    }
+    std::fs::read_to_string(root.join(snapshot_marker(index)))
+        .map(|s| s.trim() == want)
+        .unwrap_or(false)
+}
+
+/// Swap a valid snapshot into `node_modules`, then ask a detached child to refill it.
+///
+/// Returns true only when the moved-in tree verifies.
+pub fn restore_snapshot(root: &Path) -> bool {
     let Some(want) = prepared_fingerprint(root) else {
         return false;
     };
-    let recorded = std::fs::read_to_string(root.join(".jhol/prepared.json"))
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
-    if recorded != want {
-        return false;
-    }
-    let prepared = prepared_snapshot_dir(root);
-    if !prepared.is_dir() {
-        return false;
-    }
     let node_modules = root.join("node_modules");
     if node_modules.exists() {
-        return false; // a partial tree needs the real path, not a snapshot
+        return false; // a partial tree needs the real install path
     }
-    if crate::jgrid::materialize::Cloner::clone_directory(&prepared, &node_modules).is_err() {
+    let Some(index) = (0..2).find(|i| slot_is_valid(root, *i, &want)) else {
+        return false;
+    };
+    let slot = snapshot_slots(root)[index].clone();
+    let _ = std::fs::remove_file(root.join(snapshot_marker(index)));
+    if std::fs::rename(&slot, &node_modules).is_err() {
         return false;
     }
-    if crate::tree_state::verify_tree(root).is_match() {
-        return true;
+    if !crate::tree_state::verify_tree(root).is_match() {
+        let _ = std::fs::remove_dir_all(&node_modules);
+        return false;
     }
-    let _ = std::fs::remove_dir_all(&node_modules);
-    false
+    spawn_snapshot_fill(index);
+    true
 }
 
-/// Record the current, **verified** tree as the snapshot. Best-effort: a failure
-/// costs the fast path next time, never correctness.
+/// Ask a separate process to rebuild the slot we just consumed.
+fn spawn_snapshot_fill(index: usize) {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let _ = std::process::Command::new(exe)
+        .arg("__snapshot-fill")
+        .arg(index.to_string())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+/// Rebuild one slot from the current `node_modules`. Runs in the detached child.
+pub fn fill_snapshot(root: &Path, index: usize) -> Result<(), String> {
+    let Some(want) = prepared_fingerprint(root) else {
+        return Err("no fingerprint".into());
+    };
+    let node_modules = root.join("node_modules");
+    if !node_modules.is_dir() {
+        return Err("no tree to snapshot".into());
+    }
+    let slot = snapshot_slots(root)[index].clone();
+    let marker = root.join(snapshot_marker(index));
+    let _ = std::fs::remove_file(&marker); // invalid while we work
+    let _ = std::fs::remove_dir_all(&slot);
+    crate::jgrid::materialize::Cloner::clone_directory(&node_modules, &slot)
+        .map_err(|e| format!("snapshot clone: {e}"))?;
+    // Marker last: a slot without a matching marker is never used.
+    crate::file_lock::AtomicWrite::write_to_file(&marker, want.as_bytes())
+        .map_err(|e| format!("snapshot marker: {e}"))?;
+    Ok(())
+}
+
+/// Record the current, verified tree in both slots (used after a normal install, where
+/// no snapshot was consumed and the work can be done inline).
 pub fn save_prepared_snapshot(root: &Path) {
     if std::env::var_os("JHOL_NO_PREPARED_SNAPSHOT").is_some() {
         return;
@@ -6682,25 +6730,9 @@ pub fn save_prepared_snapshot(root: &Path) {
     if !crate::tree_state::verify_tree(root).is_match() {
         return;
     }
-    let Some(fingerprint) = prepared_fingerprint(root) else {
-        return;
-    };
-    let node_modules = root.join("node_modules");
-    if !node_modules.is_dir() {
-        return;
-    }
-    let tmp = root.join(".jhol/prepared.tmp");
-    let _ = std::fs::remove_dir_all(&tmp);
-    if crate::jgrid::materialize::Cloner::clone_directory(&node_modules, &tmp).is_err() {
-        return;
-    }
-    let prepared = prepared_snapshot_dir(root);
-    let _ = std::fs::remove_dir_all(&prepared);
-    if std::fs::rename(&tmp, &prepared).is_err() {
-        let _ = std::fs::remove_dir_all(&tmp);
-        return;
-    }
-    let _ = std::fs::write(root.join(".jhol/prepared.json"), fingerprint);
+    // One inline clone is enough: the next restore consumes it and the detached child
+    // refills that slot, so the pair converges after one install.
+    let _ = fill_snapshot(root, 0);
 }
 
 pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<(), JholError> {
@@ -6721,7 +6753,7 @@ pub fn install_package(packages: &[&str], options: &InstallOptions) -> Result<()
     // only for a missing tree whose snapshot matches these exact inputs, and the
     // clone is verified before it is trusted.
     if !options.lockfile_only {
-        let ok = try_prepared_clone(Path::new("."));
+        let ok = restore_snapshot(Path::new("."));
         if std::env::var_os("JHOL_DEBUG_PREPARED").is_some() {
             eprintln!("[prepared] clone taken = {ok}");
         }

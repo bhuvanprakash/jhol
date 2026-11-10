@@ -461,7 +461,7 @@ fn plain_install_fully_settled() -> bool {
     // snapshot that fails is deleted by `try_prepared_clone`, so the fallback is the
     // normal install.
     let t1 = std::time::Instant::now();
-    let cloned = jhol_core::install::try_prepared_clone(std::path::Path::new("."));
+    let cloned = jhol_core::install::restore_snapshot(std::path::Path::new("."));
     if std::env::var_os("JHOL_PROFILE_STARTUP").is_some() {
         eprintln!(
             "[startup] snapshot clone {:.2} ms (taken={cloned})",
@@ -2373,6 +2373,20 @@ fn load_prettier_ignore(dir: &std::path::Path) -> globset::GlobSet {
 }
 
 fn run() -> Result<(), String> {
+    // Detached child: rebuild one snapshot slot from the tree we just restored.
+    // Spawned by `restore_snapshot`, never typed by a human.
+    if let Some(args) = std::env::args().nth(1) {
+        if args == "__snapshot-fill" {
+            let index = std::env::args()
+                .nth(2)
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(0)
+                .min(1);
+            return jhol_core::install::fill_snapshot(std::path::Path::new("."), index)
+                .map_err(|e| format!("snapshot fill: {e}"));
+        }
+    }
+
     let fast_start = std::time::Instant::now();
     if let Some(fast_res) = try_fast_install() {
         let fast_elapsed = fast_start.elapsed();
