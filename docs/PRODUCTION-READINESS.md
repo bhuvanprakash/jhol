@@ -217,6 +217,32 @@ catches missing, extraneous and version-drifted packages, and does not catch an 
 edit inside a package that leaves its version alone. Saying so is cheaper than a reader
 assuming otherwise.
 
+
+## Warm install: what is guaranteed, and what the guarantee costs
+
+A warm rebuild restores a verified tree snapshot by `rename` and refills the consumed slot
+from its sibling in a detached child. Measured, 71 packages, `node_modules` wiped:
+
+| | jhol | bun 1.4.4 |
+|---|---:|---:|
+| tight loop | **8–10 ms** | 26–32 ms |
+| 400 ms idle | **12–19 ms** | 26–32 ms |
+
+The invariants, all enforced in code:
+
+1. the snapshot marker holds a hash of the **final** `package.json` and `package-lock.json`;
+2. the marker is deleted before a rebuild and written **after** the clone is verified, so an
+   interrupted rebuild leaves an unusable slot, never a half-filled one;
+3. the restore is verified against the lockfile before anything is reported, and removed if it
+   fails — the fallback is a normal install;
+4. the refill verifies the **slot** (the thing that will be restored), not the live tree (the
+   thing about to be deleted), and copies from the **sibling slot**, not from `node_modules`;
+5. two slots, so an in-flight refill never blocks the fast path.
+
+Failure modes that were observed and are now covered: a corrupted slot is refused and the tree
+is rebuilt; a killed fill leaves no marker and self-heals on the next install; a changed
+lockfile byte invalidates both slots.
+
 ## Flake status
 
 One suite run early in the resolver work reported `720 passed, 1 failed`, and the failing

@@ -66,11 +66,12 @@ Real npm projects, isolated cache and fresh `HOME` per tool, interleaved:
 | webpack@5 — 57 packages | **1974 ms** | 4738 ms | 2.4× ahead |
 | eslint@9 — 87 packages | **1652 ms** | 1732 ms | parity |
 | jest@29 — 266 packages | **4961 ms** | 33082 ms | 6.7× ahead |
-| express@4, `node_modules` wiped | **11–12 ms** | 26–29 ms | **~2.4× ahead** (restored tree snapshot) |
+| express@4, `node_modules` wiped | **8–10 ms** | 26–32 ms | **~3× ahead** (restored tree snapshot) |
 | jest tree, nothing to do | **18 ms** | — | verify, then stop |
 
-Warm rebuilds restore a verified tree snapshot by `rename` and rebuild the snapshot in a
-detached child, so the restore is instant. Resolution is not the cost — a 275-package chart assembles in
+Warm rebuilds restore a verified tree snapshot by `rename`, then refill the consumed slot
+from its sibling in a detached child, so the restore is instant and no clone races a wipe.
+Resolution is not the cost — a 275-package chart assembles in
 **11.4 ms** and 344 cached packuments load in **15.2 ms** via a binary index (both were
 141.6 ms and 426 ms before they were profiled). Payload transfer is network-bound: the same
 jest manifest has taken 19 s and 54 s within one hour.
@@ -285,7 +286,8 @@ In CI, `jhol cache key` is the cache key. `jhol ci` skips resolution and packume
 | [Instance model](./docs/plans/e145-instance-model.md) | Nested versions |
 | [Innovation log](./docs/internal/INNOVATION_LOG.md) | What was kept, and what was measured and dropped |
 | [How We Won](./HOW-WE-WON.md) | 11/11 vs Bun: standings, method, caught bugs |
-| [Technical report](./docs/REPORT-2026-11-07.md) | The current session end to end, with every measurement |
+| [Technical report](./docs/REPORT-2026-11-07.md) | The session end to end, with every measurement |
+| [The warm path](./docs/REPORT-2026-11-10.md) | Install, daemon, fmt, engine — anatomy, guards, negative results |
 | [Resolver](./docs/RESOLVER-JAGR.md) | Bitmaps, bases, masks, instances, index, policy, obligations |
 | [Install pipeline](./docs/INSTALL-PIPELINE.md) | argv to tree, lane by lane, with failure modes |
 | [CLI reference](./docs/CLI-REFERENCE.md) | Every command, flag, exit code and env var |
