@@ -58,6 +58,66 @@ pub fn run(sub_m: &ArgMatches) -> Result<(), String> {
                 }
                 return Ok(());
             }
+            Some(("promote", m)) => {
+                let name = m.get_one::<String>("name").cloned().unwrap_or_default();
+                if name.is_empty() || name.contains('/') || name.contains("..") {
+                    return Err("env promote: invalid name".into());
+                }
+                let dest = envs.join(&name);
+                if !dest.join("node_modules").is_dir() {
+                    return Err(format!(
+                        "env promote: no fork {name} — `jhol env list` shows what exists"
+                    ));
+                }
+                // A promote is two renames and no copying: the fork's tree becomes the
+                // project's tree, and the tree it replaces is kept until the new one is
+                // verified. Nothing is materialised, so a 1,200-package environment
+                // promotes as fast as its smallest rename.
+                let started = std::time::Instant::now();
+                let backup = std::path::PathBuf::from(format!(".jhol/promote-old-{}", std::process::id()));
+                let live = std::path::Path::new("node_modules");
+                if live.exists() {
+                    let _ = std::fs::rename(live, &backup);
+                }
+                let staged = dest.join("node_modules");
+                if let Err(e) = std::fs::rename(&staged, live) {
+                    // Put the old tree back: a failed promote must leave the project
+                    // exactly as it was.
+                    if backup.exists() {
+                        let _ = std::fs::rename(&backup, live);
+                    }
+                    return Err(format!("env promote: {e}"));
+                }
+                for file in jhol_core::env_fork::identity_files(&dest) {
+                    if let Some(name) = file.file_name() {
+                        let _ = std::fs::copy(&file, std::path::Path::new(".").join(name));
+                    }
+                }
+                let _ = std::fs::remove_dir_all(&backup);
+                let verdict = jhol_core::tree_state::verify_tree(std::path::Path::new("."));
+                if flag(&m, "json") {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "promoted": name,
+                            "ms": started.elapsed().as_millis() as u64,
+                            "tree": format!("{verdict:?}"),
+                        }))
+                        .unwrap_or_default()
+                    );
+                } else {
+                    println!(
+                        "promoted {name} in {} ms — tree {}",
+                        started.elapsed().as_millis(),
+                        if verdict == jhol_core::tree_state::TreeState::Match {
+                            "matches the lockfile"
+                        } else {
+                            "does not match; run `jhol verify`"
+                        }
+                    );
+                }
+                return Ok(());
+            }
             Some(("list", m)) => {
                 let mut names: Vec<String> = std::fs::read_dir(envs)
                     .map(|rd| {

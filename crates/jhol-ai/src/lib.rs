@@ -1203,6 +1203,77 @@ pub mod safetensors {
     }
 
     /// Parse a local `.safetensors` file by reading only its header.
+    /// Bytes per element, for the dtypes safetensors actually carries.
+    pub fn bytes_per_dtype(dtype: &str) -> Option<u64> {
+        Some(match dtype {
+            "F64" | "I64" | "U64" => 8,
+            "F32" | "I32" | "U32" => 4,
+            "F16" | "BF16" | "I16" | "U16" => 2,
+            "I8" | "U8" | "BOOL" | "F8_E4M3" | "F8_E5M2" => 1,
+            _ => return None,
+        })
+    }
+
+    /// A model, described from its header alone: parameter count, dtype mix, and the
+    /// bytes it will occupy once loaded.
+    ///
+    /// This is the whole reason weights can enter resolution with real metadata: a 7 GB
+    /// checkpoint answers "how big will you be in memory?" after reading a few kilobytes.
+    #[derive(Debug, Clone, PartialEq, Eq, Default)]
+    pub struct WeightSummary {
+        pub tensors: usize,
+        pub params: u64,
+        /// Bytes of tensor data (sum of each tensor's byte range).
+        pub data_bytes: u64,
+        /// Bytes of JSON header — the price of asking.
+        pub header_bytes: usize,
+        /// dtype -> tensor count, ordered so two runs print the same table.
+        pub dtypes: BTreeMap<String, usize>,
+        /// dtypes with no known width, so a caller can refuse to quote a size.
+        pub unknown_dtypes: Vec<String>,
+    }
+
+    impl WeightSummary {
+        /// Resident estimate: tensor bytes plus 20% for the allocator, the Python object
+        /// graph and the activations a loader keeps alive. Deliberately generous — an
+        /// under-quote here is an out-of-memory at the worst possible moment.
+        pub fn vram_bytes(&self) -> u64 {
+            self.data_bytes + self.data_bytes / 5
+        }
+
+        pub fn params_human(&self) -> String {
+            let p = self.params as f64;
+            if p >= 1e9 {
+                format!("{:.2} B", p / 1e9)
+            } else if p >= 1e6 {
+                format!("{:.1} M", p / 1e6)
+            } else {
+                format!("{}", self.params)
+            }
+        }
+    }
+
+    pub fn summarise(path: &Path) -> Result<WeightSummary, AiError> {
+        let header = parse_file(path)?;
+        let mut out = WeightSummary {
+            tensors: header.tensors.len(),
+            params: header.total_params,
+            header_bytes: header.header_bytes,
+            dtypes: header.dtypes.clone(),
+            ..Default::default()
+        };
+        for tensor in &header.tensors {
+            out.data_bytes += tensor.end.saturating_sub(tensor.begin);
+        }
+        out.unknown_dtypes = out
+            .dtypes
+            .keys()
+            .filter(|d| bytes_per_dtype(d).is_none())
+            .cloned()
+            .collect();
+        Ok(out)
+    }
+
     pub fn parse_file(path: &Path) -> Result<Header, AiError> {
         use std::io::Read;
         let mut f = std::fs::File::open(path)?;

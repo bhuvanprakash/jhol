@@ -5,9 +5,21 @@
 
 use clap::ArgMatches;
 
+fn human(n: u64) -> String {
+    let gb = 1024.0 * 1024.0 * 1024.0;
+    let mb = 1024.0 * 1024.0;
+    if n as f64 >= gb {
+        format!("{:.1} GB", n as f64 / gb)
+    } else if n as f64 >= mb {
+        format!("{:.1} MB", n as f64 / mb)
+    } else {
+        format!("{} KB", (n / 1024).max(1))
+    }
+}
+
 pub fn run(m: &ArgMatches) -> Result<(), String> {
     let root = std::path::Path::new(".");
-    let status = jhol_core::status::collect(root);
+    let status = crate::status_view::enrich(jhol_core::status::collect(root), root);
     if crate::flag(m, "json") {
         println!(
             "{}",
@@ -83,5 +95,67 @@ pub fn run(m: &ArgMatches) -> Result<(), String> {
         status.proof.attested_packages,
         status.proof.attested_models
     );
+
+    // The four questions, in the order an ML developer asks them.
+    if !status.artifacts.is_empty() {
+        println!();
+        println!("  artifacts");
+        for a in &status.artifacts {
+            let mark = match a.fits {
+                Some(true) => "✓",
+                Some(false) => "✗",
+                None => "?",
+            };
+            let size = match a.bytes {
+                Some(b) => format!(" {}", human(b)),
+                None => String::new(),
+            };
+            println!("    {mark} {} {} {}{size}", a.kind, a.name, a.version);
+            if a.params.is_some() || !a.dtypes.is_empty() {
+                let dtypes: Vec<String> = a
+                    .dtypes
+                    .iter()
+                    .map(|(d, n)| format!("{d}×{n}"))
+                    .collect();
+                if !dtypes.is_empty() {
+                    println!("        {} tensors · {}", a.dtypes.values().sum::<usize>(), dtypes.join(" "));
+                }
+            }
+            for r in &a.reasons {
+                println!("        {r}");
+            }
+        }
+    }
+    if status.plan.missing_bytes > 0 || !status.plan.items.is_empty() {
+        println!();
+        println!(
+            "  plan       {:.1} MB missing, {:.1} MB cached · ~{} s at {} MB/s",
+            status.plan.missing_bytes as f64 / 1_048_576.0,
+            status.plan.cached_bytes as f64 / 1_048_576.0,
+            status.plan.eta_seconds,
+            status.plan.throughput_bytes_per_sec / 1_048_576
+        );
+        for item in status.plan.items.iter().filter(|i| !i.present) {
+            println!(
+                "        missing  {} ({:.1} MB)",
+                item.name,
+                item.bytes as f64 / 1_048_576.0
+            );
+        }
+    }
+    if !status.forks.is_empty() {
+        println!();
+        for f in &status.forks {
+            println!("  fork       {} ({:.1} MB beyond base)", f.name, f.bytes as f64 / 1_048_576.0);
+        }
+    }
+    if !status.agent.tools.is_empty() {
+        println!();
+        println!("  agent      {} MCP tools (jhol mcp --stdio)", status.agent.tools.len());
+        for t in &status.agent.tools {
+            println!("        {:<26} {:<8} {}", t.name, t.cost, t.purpose);
+        }
+    }
+
     Ok(())
 }

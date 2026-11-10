@@ -24,41 +24,49 @@ use std::{
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum ActiveTab {
-    Overview = 0,
-    Dependencies = 1,
-    Cache = 2,
-    Doctor = 3,
+    Status = 0,
+    Artifacts = 1,
+    Budget = 2,
+    Proof = 3,
     Actions = 4,
+    Dependencies = 5,
+    Doctor = 6,
 }
 
 impl ActiveTab {
     fn title(&self) -> &'static str {
         match self {
-            ActiveTab::Overview => " 1. Status ",
-            ActiveTab::Dependencies => " 2. Packages ",
-            ActiveTab::Cache => " 3. Cache ",
-            ActiveTab::Doctor => " 4. Health ",
+            ActiveTab::Status => " 1. Status ",
+            ActiveTab::Artifacts => " 2. Artifacts ",
+            ActiveTab::Budget => " 3. Budget ",
+            ActiveTab::Proof => " 4. Proof ",
             ActiveTab::Actions => " 5. Actions ",
+            ActiveTab::Dependencies => " 6. Packages ",
+            ActiveTab::Doctor => " 7. Health ",
         }
     }
 
     fn next(&self) -> Self {
         match self {
-            ActiveTab::Overview => ActiveTab::Dependencies,
-            ActiveTab::Dependencies => ActiveTab::Cache,
-            ActiveTab::Cache => ActiveTab::Doctor,
-            ActiveTab::Doctor => ActiveTab::Actions,
-            ActiveTab::Actions => ActiveTab::Overview,
+            ActiveTab::Status => ActiveTab::Artifacts,
+            ActiveTab::Artifacts => ActiveTab::Budget,
+            ActiveTab::Budget => ActiveTab::Proof,
+            ActiveTab::Proof => ActiveTab::Actions,
+            ActiveTab::Actions => ActiveTab::Dependencies,
+            ActiveTab::Dependencies => ActiveTab::Doctor,
+            ActiveTab::Doctor => ActiveTab::Status,
         }
     }
 
     fn prev(&self) -> Self {
         match self {
-            ActiveTab::Overview => ActiveTab::Actions,
-            ActiveTab::Dependencies => ActiveTab::Overview,
-            ActiveTab::Cache => ActiveTab::Dependencies,
-            ActiveTab::Doctor => ActiveTab::Cache,
-            ActiveTab::Actions => ActiveTab::Doctor,
+            ActiveTab::Status => ActiveTab::Doctor,
+            ActiveTab::Artifacts => ActiveTab::Status,
+            ActiveTab::Budget => ActiveTab::Artifacts,
+            ActiveTab::Proof => ActiveTab::Budget,
+            ActiveTab::Actions => ActiveTab::Proof,
+            ActiveTab::Dependencies => ActiveTab::Actions,
+            ActiveTab::Doctor => ActiveTab::Dependencies,
         }
     }
 }
@@ -293,7 +301,7 @@ impl AppState {
         // has to resolve over the network (measured: 1106 ms of blank screen when this
         // constructor did the loading; 7 ms after drawing first).
         Self {
-            tab: ActiveTab::Overview,
+            tab: ActiveTab::Status,
             pkg_name: "jhol-project".to_string(),
             pkg_version: "1.0.0".to_string(),
             status: None,
@@ -349,7 +357,10 @@ impl AppState {
                 if let Some(ver) = v.get("version").and_then(|s| s.as_str()) {
                     self.pkg_version = ver.to_string();
                 }
-                self.status = Some(jhol_core::status::collect(Path::new(".")));
+                self.status = Some(crate::status_view::enrich(
+                    jhol_core::status::collect(Path::new(".")),
+                    Path::new("."),
+                ));
                 self.direct_deps.clear();
                 if let Some(deps) = v.get("dependencies").and_then(|d| d.as_object()) {
                     for (k, v) in deps {
@@ -487,6 +498,41 @@ impl AppState {
             }
             Ok(text.trim_end().to_string())
         });
+    }
+
+    /// Enter on the Artifacts tab: describe the selected artifact in the detail pane. The
+    /// header is already read for weights (the status was enriched), so this names what we
+    /// know and, for a wheel, repeats the exact incompatibility.
+    fn inspect_selected_artifact(&mut self) {
+        let Some(s) = &self.status else { return };
+        let Some(a) = s.artifacts.get(self.list_state.selected().unwrap_or(0)) else {
+            return;
+        };
+        let mut text = format!("{} {} ({})\n", a.kind, a.name, a.version);
+        text.push_str(&format!(
+            "present: {}   bytes: {}\n",
+            if a.present { "yes" } else { "no" },
+            a.bytes.map(|b| b.to_string()).unwrap_or_else(|| "unknown".into())
+        ));
+        if let Some(p) = a.params {
+            text.push_str(&format!("parameters: {p}\n"));
+        }
+        if let Some(v) = a.vram_bytes {
+            text.push_str(&format!("resident: {:.2} GB\n", v as f64 / 1_073_741_824.0));
+        }
+        if !a.dtypes.is_empty() {
+            let d: Vec<String> = a.dtypes.iter().map(|(k, n)| format!("{k}x{n}")).collect();
+            text.push_str(&format!("dtypes: {}\n", d.join(" ")));
+        }
+        text.push_str(&format!("fit: {}\n", match a.fits {
+            Some(true) => "fits",
+            Some(false) => "does not fit",
+            None => "unknown",
+        }));
+        for r in &a.reasons {
+            text.push_str(&format!("- {r}\n"));
+        }
+        self.action_out = text;
     }
 
     fn start_job<F>(&mut self, label: &str, work: F)
@@ -674,7 +720,7 @@ impl AppState {
     fn next_item(&mut self) {
         let count = match self.tab {
             ActiveTab::Dependencies => self.direct_deps.len() + self.dev_deps.len(),
-            ActiveTab::Cache => self.cache_pkgs.len(),
+            ActiveTab::Artifacts => self.status.as_ref().map(|s| s.artifacts.len()).unwrap_or(0),
             ActiveTab::Actions => ACTIONS.len(),
             _ => 0,
         };
@@ -697,7 +743,7 @@ impl AppState {
     fn prev_item(&mut self) {
         let count = match self.tab {
             ActiveTab::Dependencies => self.direct_deps.len() + self.dev_deps.len(),
-            ActiveTab::Cache => self.cache_pkgs.len(),
+            ActiveTab::Artifacts => self.status.as_ref().map(|s| s.artifacts.len()).unwrap_or(0),
             _ => 0,
         };
         if count == 0 {
@@ -852,23 +898,31 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut AppState) -> Result
                         app.dirty = true;
                     }
                     KeyCode::Char('1') => {
-                        app.tab = ActiveTab::Overview;
+                        app.tab = ActiveTab::Status;
                         app.dirty = true;
                     }
                     KeyCode::Char('2') => {
-                        app.tab = ActiveTab::Dependencies;
+                        app.tab = ActiveTab::Artifacts;
                         app.dirty = true;
                     }
                     KeyCode::Char('3') => {
-                        app.tab = ActiveTab::Cache;
+                        app.tab = ActiveTab::Budget;
                         app.dirty = true;
                     }
                     KeyCode::Char('4') => {
-                        app.tab = ActiveTab::Doctor;
+                        app.tab = ActiveTab::Proof;
                         app.dirty = true;
                     }
                     KeyCode::Char('5') => {
                         app.tab = ActiveTab::Actions;
+                        app.dirty = true;
+                    }
+                    KeyCode::Char('6') => {
+                        app.tab = ActiveTab::Dependencies;
+                        app.dirty = true;
+                    }
+                    KeyCode::Char('7') => {
+                        app.tab = ActiveTab::Doctor;
                         app.dirty = true;
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
@@ -877,6 +931,10 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut AppState) -> Result
                     }
                     KeyCode::Up | KeyCode::Char('k') => {
                         app.prev_item();
+                        app.dirty = true;
+                    }
+                    KeyCode::Enter if app.tab == ActiveTab::Artifacts => {
+                        app.inspect_selected_artifact();
                         app.dirty = true;
                     }
                     KeyCode::Enter if app.tab == ActiveTab::Actions => {
@@ -1038,11 +1096,13 @@ fn ui(f: &mut Frame, app: &mut AppState) {
 
     // Navigation Tabs
     let tab_titles = vec![
-        ActiveTab::Overview.title(),
-        ActiveTab::Dependencies.title(),
-        ActiveTab::Cache.title(),
-        ActiveTab::Doctor.title(),
+        ActiveTab::Status.title(),
+        ActiveTab::Artifacts.title(),
+        ActiveTab::Budget.title(),
+        ActiveTab::Proof.title(),
         ActiveTab::Actions.title(),
+        ActiveTab::Dependencies.title(),
+        ActiveTab::Doctor.title(),
     ];
     let tabs = Tabs::new(tab_titles)
         .select(app.tab as usize)
@@ -1053,11 +1113,13 @@ fn ui(f: &mut Frame, app: &mut AppState) {
 
     // Content Area
     match app.tab {
-        ActiveTab::Overview => render_overview(f, app, chunks[2]),
-        ActiveTab::Dependencies => render_dependencies(f, app, chunks[2]),
-        ActiveTab::Cache => render_cache(f, app, chunks[2]),
-        ActiveTab::Doctor => render_doctor(f, app, chunks[2]),
+        ActiveTab::Status => render_overview(f, app, chunks[2]),
+        ActiveTab::Artifacts => render_artifacts(f, app, chunks[2]),
+        ActiveTab::Budget => render_budget(f, app, chunks[2]),
+        ActiveTab::Proof => render_proof(f, app, chunks[2]),
         ActiveTab::Actions => render_actions(f, app, chunks[2]),
+        ActiveTab::Dependencies => render_dependencies(f, app, chunks[2]),
+        ActiveTab::Doctor => render_doctor(f, app, chunks[2]),
     }
 
     // Status / Help Bar — two rows so a long status never mashes into the key hints.
@@ -1114,7 +1176,7 @@ fn ui(f: &mut Frame, app: &mut AppState) {
     if std::env::var_os("JHOL_EGGS").is_some() {
         status.push_str(&format!("  [secrets {}/4]", app.eggs.found()));
     }
-    let keys = "⏎ run  i install  d doctor  f fix  a audit  p prune  w why  x remove  s script  ? help  q";
+    let keys = "⏎ inspect/run  i install  d doctor  f fix  a audit  p prune  w why  x remove  s script  ? help  q";
     let help_lines = vec![
         Line::from(Span::styled(
             truncate(&format!(" {status}"), inner_w),
@@ -1466,31 +1528,220 @@ fn render_dependencies(f: &mut Frame, app: &mut AppState, area: Rect) {
     f.render_stateful_widget(list, area, &mut app.list_state);
 }
 
-fn render_cache(f: &mut Frame, app: &mut AppState, area: Rect) {
-    let items: Vec<ListItem> = app
-        .cache_pkgs
-        .iter()
-        .map(|pkg| ListItem::new(format!("   {}", pkg)))
-        .collect();
+fn render_budget(f: &mut Frame, app: &AppState, area: Rect) {
+    let Some(s) = &app.status else {
+        f.render_widget(Paragraph::new("  collecting…"), area);
+        return;
+    };
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("{:.1} MB missing", s.plan.missing_bytes as f64 / 1_048_576.0),
+            if s.plan.missing_bytes > 0 {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::Green)
+            },
+        ),
+        Span::raw(format!(
+            " · {:.1} MB cached · ~{} s at {} MB/s",
+            s.plan.cached_bytes as f64 / 1_048_576.0,
+            s.plan.eta_seconds,
+            s.plan.throughput_bytes_per_sec / 1_048_576
+        )),
+    ]));
+    lines.push(Line::from(""));
+    for item in &s.plan.items {
+        lines.push(Line::from(vec![
+            Span::styled(
+                if item.present { " cached  " } else { " missing " },
+                if item.present {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Yellow)
+                },
+            ),
+            Span::raw(format!(
+                "{:<44} {:>9}",
+                item.name,
+                format!("{:.1} MB", item.bytes as f64 / 1_048_576.0)
+            )),
+        ]));
+    }
+    if !s.forks.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            " forks",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )));
+        for fork in &s.forks {
+            lines.push(Line::from(format!(
+                "   {:<20} {:.1} MB beyond base",
+                fork.name,
+                fork.bytes as f64 / 1_048_576.0
+            )));
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        " the rate is stated, not implied: a number without its assumption is a guess",
+        Style::default().fg(Color::DarkGray),
+    )));
+    let block = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Budget — bytes and seconds before you commit ")
+                .borders(Borders::ALL)
+                .style(Style::default().fg(Color::Cyan)),
+        )
+        .wrap(Wrap { trim: false });
+    f.render_widget(block, area);
+}
 
+fn render_artifacts(f: &mut Frame, app: &AppState, area: Rect) {
+    let Some(s) = &app.status else {
+        f.render_widget(Paragraph::new("  collecting…"), area);
+        return;
+    };
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
+        .split(area);
+
+    let items: Vec<ListItem> = s
+        .artifacts
+        .iter()
+        .map(|a| {
+            let (mark, style) = match a.fits {
+                Some(true) => ("✓", Style::default().fg(Color::Green)),
+                Some(false) => ("✗", Style::default().fg(Color::Red)),
+                None => ("?", Style::default().fg(Color::Yellow)),
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(format!(" {mark} "), style),
+                Span::styled(format!("{:<11}", a.kind), Style::default().fg(Color::DarkGray)),
+                Span::raw(format!("{} {}", a.name, a.version)),
+            ]))
+        })
+        .collect();
     let list = List::new(items)
         .block(
             Block::default()
-                .title(format!(
-                    " JGrid Content Store & Inode Cache  ·  {} packages  ·  c clean  ·  p prune ",
-                    app.cache_pkgs.len()
-                ))
+                .title(" Artifacts — will it run here? (Enter describes) ")
                 .borders(Borders::ALL)
-                .style(Style::default().fg(Color::White)),
+                .style(Style::default().fg(Color::Cyan)),
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .fg(Color::Black)
+                .bg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("\u{25b6} ");
+        .highlight_symbol("▸ ");
+    f.render_stateful_widget(list, chunks[0], &mut app.list_state.clone());
 
-    f.render_stateful_widget(list, area, &mut app.list_state);
+    let selected = app.list_state.selected().unwrap_or(0);
+    let lines: Vec<Line> = match s.artifacts.get(selected) {
+        Some(a) => {
+            let mut out = vec![Line::from(Span::styled(
+                format!("{} {}", a.name, a.version),
+                Style::default().add_modifier(Modifier::BOLD),
+            ))];
+            if let Some(p) = a.params {
+                out.push(Line::from(format!("  {p} parameters")));
+            }
+            if let Some(v) = a.vram_bytes {
+                out.push(Line::from(format!(
+                    "  resident ~{:.1} GB (tensors + 20%)",
+                    v as f64 / 1_073_741_824.0
+                )));
+            }
+            if !a.dtypes.is_empty() {
+                let d: Vec<String> = a.dtypes.iter().map(|(k, n)| format!("{k}×{n}")).collect();
+                out.push(Line::from(format!("  dtypes {}", d.join(" "))));
+            }
+            if !a.digest.is_empty() {
+                out.push(Line::from(format!(
+                    "  sha256 {}",
+                    &a.digest[..a.digest.len().min(16)]
+                )));
+            }
+            if !a.reasons.is_empty() {
+                out.push(Line::from(""));
+                for r in &a.reasons {
+                    out.push(Line::from(format!("  • {r}")));
+                }
+            }
+            out
+        }
+        None => vec![Line::from("  no artifacts: no wheels pinned, no weights locked")],
+    };
+    let pane = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Detail ")
+                .borders(Borders::ALL)
+                .style(Style::default().fg(Color::White)),
+        )
+        .wrap(Wrap { trim: false });
+    f.render_widget(pane, chunks[1]);
+}
+
+fn render_proof(f: &mut Frame, app: &AppState, area: Rect) {
+    let Some(s) = &app.status else {
+        f.render_widget(Paragraph::new("  collecting…"), area);
+        return;
+    };
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("snapshot  ", Style::default().fg(Color::Cyan)),
+            Span::raw(if s.proof.snapshot_ready {
+                "ready — the next install is a rename"
+            } else {
+                "absent — the next install materialises from the lockfile"
+            }),
+        ]),
+        Line::from(vec![
+            Span::styled("attested  ", Style::default().fg(Color::Cyan)),
+            Span::raw(format!(
+                "{} packages, {} models",
+                s.proof.attested_packages, s.proof.attested_models
+            )),
+        ]),
+        Line::from(vec![
+            Span::styled("policy    ", Style::default().fg(Color::Cyan)),
+            Span::raw(if s.policy.as_of.is_some() || s.policy.exclude_vulnerable {
+                "restricted — see tab 1"
+            } else {
+                "latest, any licence, CVEs not filtered"
+            }),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            " agent surface — what a tool can ask this project to do",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )),
+    ];
+    for tool in &s.agent.tools {
+        lines.push(Line::from(format!(
+            "   {:<26} {:<8} {}",
+            tool.name, tool.cost, tool.purpose
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        " jhol attest · jhol replay · jhol verify --as-of — one line each, into a README",
+        Style::default().fg(Color::DarkGray),
+    )));
+    let block = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Proof — can this environment be reproduced? ")
+                .borders(Borders::ALL)
+                .style(Style::default().fg(Color::Cyan)),
+        )
+        .wrap(Wrap { trim: true });
+    f.render_widget(block, area);
 }
 
 fn render_doctor(f: &mut Frame, app: &AppState, area: Rect) {

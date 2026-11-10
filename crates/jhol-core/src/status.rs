@@ -3,7 +3,21 @@
 //! The CLI, the TUI and the web dashboard all render **this** struct. That is the point:
 //! the TUI used to collect its own numbers, which is how two implementations of one fact
 //! start disagreeing. Anything that wants to show project state reads this.
+//!
+//! Four questions an ML developer actually asks, and the fields that answer them:
+//!
+//! | question | field |
+//! |---|---|
+//! | will it run on *this* box? | [`Artifact::fits`], [`Artifact::reasons`] |
+//! | what will it cost? | [`Plan`] — missing bytes and a time at a stated throughput |
+//! | what am I getting? | [`Artifact::params`], [`Artifact::vram_bytes`] |
+//! | can I prove it later? | [`Proof`], [`Artifact::digest`] |
+//!
+//! Nothing here touches the network. `collect` reads lockfiles and the filesystem; the
+//! only expensive step is a safetensors header, which [`crate::status`] callers add
+//! through `jhol-ai` so this crate stays free of model parsing.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::Serialize;
@@ -22,6 +36,14 @@ pub struct Status {
     pub python: Python,
     pub axes: Axes,
     pub proof: Proof,
+    /// Wheels and weights: the things that decide whether this environment runs.
+    pub artifacts: Vec<Artifact>,
+    /// What is still missing, in bytes and seconds.
+    pub plan: Plan,
+    /// Environment forks under `.jhol/envs`.
+    pub forks: Vec<ForkRow>,
+    /// What an agent can ask this project to do, with a cost class.
+    pub agent: Agent,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -59,6 +81,8 @@ pub struct Axes {
     pub libc: String,
     pub python: Option<String>,
     pub cuda_driver: Option<String>,
+    pub sm: Vec<u32>,
+    pub gpu_mem_mb: Option<u64>,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -66,6 +90,100 @@ pub struct Proof {
     pub snapshot_ready: bool,
     pub attested_packages: usize,
     pub attested_models: usize,
+}
+
+/// One thing that must exist for the environment to work.
+///
+/// `fits` is `None` when we cannot decide — a pure-python wheel with no platform tag, or a
+/// weight file whose need depends on a GPU this tool cannot probe. `None` is information:
+/// it is never reported as a pass.
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct Artifact {
+    /// `wheel` | `model`
+    pub kind: String,
+    pub name: String,
+    pub version: String,
+    pub bytes: Option<u64>,
+    pub present: bool,
+    /// Digest from the lockfile, truncated for display by the renderers, not by us.
+    pub digest: String,
+    pub fits: Option<bool>,
+    pub reasons: Vec<String>,
+    /// Where the artifact lives, relative to the project root, when it lives there.
+    pub path: Option<String>,
+    /// For weights: parameter count read from the safetensors header.
+    pub params: Option<u64>,
+    /// For weights: estimated resident bytes.
+    pub vram_bytes: Option<u64>,
+    /// For weights: dtype -> tensor count.
+    pub dtypes: BTreeMap<String, usize>,
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct Plan {
+    pub items: Vec<PlanItem>,
+    pub cached_bytes: u64,
+    pub missing_bytes: u64,
+    /// Seconds for `missing_bytes` at [`Plan::throughput_bytes_per_sec`].
+    pub eta_seconds: u64,
+    /// The rate the estimate assumes. Stated in every rendering: a number without its
+    /// assumption is a guess dressed as a measurement.
+    pub throughput_bytes_per_sec: u64,
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct PlanItem {
+    pub kind: String,
+    pub name: String,
+    pub bytes: u64,
+    pub present: bool,
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct ForkRow {
+    pub name: String,
+    /// Bytes the fork occupies beyond the base tree, when measurable.
+    pub bytes: u64,
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct Agent {
+    pub tools: Vec<ToolInfo>,
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct ToolInfo {
+    pub name: String,
+    pub purpose: String,
+    /// `read` — no writes and no network; `network` — may fetch; `write` — changes the tree.
+    pub cost: String,
+}
+
+/// What an agent can ask for. Kept as a catalog next to the MCP server so a dashboard can
+/// show it without starting a JSON-RPC conversation; a test asserts every name here is one
+/// the MCP server actually answers, so the two cannot drift.
+pub fn tool_catalog() -> Vec<ToolInfo> {
+    let row = |name: &str, purpose: &str, cost: &str| ToolInfo {
+        name: name.to_string(),
+        purpose: purpose.to_string(),
+        cost: cost.to_string(),
+    };
+    vec![
+        row(
+            "jhol_resolve_speculation",
+            "resolve a spec in memory without touching disk",
+            "read",
+        ),
+        row("jhol_explain_failure", "attribute an unsatisfiable spec", "read"),
+        row("jhol_auto_heal", "reconcile the tree with the lockfile", "write"),
+        row("jhol_typosquat_check", "compare a name against known packages", "read"),
+        row("jhol_verify_environment", "verify tree, models and attestation", "read"),
+        row("jhol_axes", "report host os/arch/python/cuda/sm", "read"),
+        row("jhol_why_not", "minimal unsat core for a pinned version", "read"),
+        row("jhol_plan_model", "bytes and time for a model plan", "network"),
+        row("jhol_plan_python", "bytes and time for a wheel plan", "network"),
+        row("jhol_audit_report", "licences and known vulnerabilities", "read"),
+    ]
 }
 
 fn read_manifest(root: &Path) -> (String, String) {
@@ -79,6 +197,159 @@ fn read_manifest(root: &Path) -> (String, String) {
         v.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string(),
         v.get("version").and_then(|n| n.as_str()).unwrap_or("").to_string(),
     )
+}
+
+/// Directory sizes are useful and must never be a stall: stop after `cap` entries and say
+/// nothing rather than walk a million files in a dashboard refresh.
+fn tree_bytes(path: &Path, cap: usize) -> u64 {
+    let mut total = 0u64;
+    let mut seen = 0usize;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > cap {
+                return total;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else {
+                total += meta.len();
+            }
+        }
+    }
+    total
+}
+
+fn wheel_artifacts(host: &crate::axes::HostAxes, lock: &crate::pyinstall::PyLock) -> Vec<Artifact> {
+    lock.distributions
+        .iter()
+        .map(|(name, dist)| {
+            let mut reasons = Vec::new();
+            let fits = match crate::axes::WheelTag::parse(&dist.artifact) {
+                Some(tag) => match crate::axes::wheel_fits(&tag, host) {
+                    Ok(()) => {
+                        reasons.push(format!(
+                            "{} {} {} fits this host",
+                            tag.python, tag.abi, tag.platform
+                        ));
+                        Some(true)
+                    }
+                    Err(why) => {
+                        reasons.push(why.to_string());
+                        Some(false)
+                    }
+                },
+                None => {
+                    reasons.push("no wheel tag in the artefact name".to_string());
+                    None
+                }
+            };
+            Artifact {
+                kind: "wheel".into(),
+                name: name.clone(),
+                version: dist.version.clone(),
+                bytes: None,
+                present: true,
+                digest: dist.sha256.clone(),
+                fits,
+                reasons,
+                path: Some(crate::pyinstall::SITE_PACKAGES.to_string()),
+                params: None,
+                vram_bytes: None,
+                dtypes: BTreeMap::new(),
+            }
+        })
+        .collect()
+}
+
+/// Weights, with sizes from the lock. Whether they *fit* needs a header read, which the
+/// binary adds through `jhol-ai` — this crate does not parse model files.
+fn model_artifacts(root: &Path, lock: &crate::model_lock::ModelLock) -> (Vec<Artifact>, Plan) {
+    let mut out = Vec::new();
+    let mut plan = Plan {
+        throughput_bytes_per_sec: crate::pyinstall::THROUGHPUT_BYTES_PER_SEC,
+        ..Default::default()
+    };
+    for (name, entry) in &lock.models {
+        let mut total = 0u64;
+        let mut missing = 0u64;
+        let mut present_all = true;
+        for file in &entry.files {
+            total += file.size;
+            // `ModelFile::path` is relative to the model's own directory; joining the
+            // project root twice produces `models/x/models/x/...`, which is exactly the
+            // defect that made `verify` and `status` disagree about one file.
+            let here = root.join(&entry.dir).join(&file.path).is_file();
+            if here {
+                plan.cached_bytes += file.size;
+            } else {
+                plan.missing_bytes += file.size;
+                missing += file.size;
+                present_all = false;
+            }
+            plan.items.push(PlanItem {
+                kind: "model".into(),
+                name: format!("{name}/{}", file.path),
+                bytes: file.size,
+                present: here,
+            });
+        }
+        let mut reasons = vec![format!(
+            "{} @ {} (pinned)",
+            entry.source,
+            entry.revision.chars().take(12).collect::<String>()
+        )];
+        if missing > 0 {
+            reasons.push(format!(
+                "{:.1} MB missing of {:.1} MB",
+                missing as f64 / 1_048_576.0,
+                total as f64 / 1_048_576.0
+            ));
+        }
+        out.push(Artifact {
+            kind: "model".into(),
+            name: name.clone(),
+            version: entry.revision.chars().take(12).collect(),
+            bytes: Some(total),
+            present: present_all,
+            digest: entry
+                .files
+                .first()
+                .map(|f| f.sha256.clone())
+                .unwrap_or_default(),
+            // Unknown until the header is read: a weight that does not fit is a runtime
+            // out-of-memory, and we will not call that a pass.
+            fits: None,
+            reasons,
+            path: Some(entry.dir.clone()),
+            params: None,
+            vram_bytes: None,
+            dtypes: BTreeMap::new(),
+        });
+    }
+    (out, plan)
+}
+
+fn forks(root: &Path) -> Vec<ForkRow> {
+    let Ok(entries) = std::fs::read_dir(root.join(".jhol/envs")) else {
+        return Vec::new();
+    };
+    let mut out: Vec<ForkRow> = entries
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| ForkRow {
+            name: e.file_name().to_string_lossy().to_string(),
+            // A fork is mostly shared inodes; the cap keeps this from becoming a scan.
+            bytes: tree_bytes(&e.path(), 4096),
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 /// Collect everything, cheaply. No network, no resolution: one lockfile parse, one tree
@@ -100,32 +371,33 @@ pub fn collect(root: &Path) -> Status {
         crate::tree_state::TreeState::Unverified { reason } => ("unverified", reason.clone()),
     };
 
-    let models = crate::model_lock::ModelLock::load(root)
-        .map(|lock| Models {
-            pinned: lock.models.len(),
-            names: lock.models.keys().cloned().collect(),
-        })
-        .unwrap_or_default();
+    let model_lock = crate::model_lock::ModelLock::load(root).unwrap_or_default();
+    let models = Models {
+        pinned: model_lock.models.len(),
+        names: model_lock.models.keys().cloned().collect(),
+    };
 
-    let python = std::fs::read_to_string(root.join(".jhol/py/lock.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .map(|v| {
-            let n = v
-                .get("distributions")
-                .and_then(|d| d.as_object())
-                .map(|d| d.len())
-                .or_else(|| v.as_array().map(|a| a.len()))
-                .unwrap_or(0);
-            Python { pinned: n }
-        })
-        .unwrap_or_default();
+    let py_lock: Option<crate::pyinstall::PyLock> =
+        std::fs::read_to_string(root.join(crate::pyinstall::PY_LOCK_PATH))
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok());
 
-    let axes = crate::axes::HostAxes::detect();
+    let host = crate::axes::HostAxes::detect();
 
     let (attested_packages, attested_models) = crate::attest::Attestation::load(root)
         .map(|a| (a.packages.len(), a.models.len()))
         .unwrap_or((0, 0));
+
+    let mut artifacts = Vec::new();
+    if let Some(lock) = &py_lock {
+        artifacts.extend(wheel_artifacts(&host, lock));
+    }
+    let (model_rows, mut plan) = model_artifacts(root, &model_lock);
+    artifacts.extend(model_rows);
+
+    plan.eta_seconds = plan
+        .missing_bytes
+        .div_ceil(plan.throughput_bytes_per_sec.max(1));
 
     Status {
         project,
@@ -144,18 +416,110 @@ pub fn collect(root: &Path) -> Status {
             exclude_vulnerable: std::env::var("JHOL_EXCLUDE_VULN").is_ok(),
         },
         models,
-        python,
+        python: Python {
+            pinned: py_lock.as_ref().map(|l| l.distributions.len()).unwrap_or(0),
+        },
         axes: Axes {
-            os: axes.os.clone(),
-            arch: axes.arch.clone(),
-            libc: axes.libc.to_string(),
-            python: axes.python.clone(),
-            cuda_driver: axes.cuda_driver.clone(),
+            os: host.os.clone(),
+            arch: host.arch.clone(),
+            libc: host.libc.to_string(),
+            python: host.python.clone(),
+            cuda_driver: host.cuda_driver.clone(),
+            sm: host.sm.clone(),
+            gpu_mem_mb: host.gpu_mem_mb,
         },
         proof: Proof {
             snapshot_ready: crate::install::snapshot_ready(root),
             attested_packages,
             attested_models,
         },
+        artifacts,
+        plan,
+        forks: forks(root),
+        agent: Agent {
+            tools: tool_catalog(),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The catalog a dashboard shows and the catalog the MCP server answers must be one
+    /// list. Cheap check, strong invariant: every name here must appear in `mcp.rs`.
+    #[test]
+    fn agent_catalog_names_exist_in_the_mcp_server() {
+        let source = include_str!("mcp.rs");
+        for tool in tool_catalog() {
+            let needle = format!("\"{}\"", tool.name);
+            assert!(
+                source.contains(&needle),
+                "catalog lists {} but the MCP server does not answer it",
+                tool.name
+            );
+        }
+    }
+
+    /// The lock stores a path relative to the model directory. Resolving it against the
+    /// project root as well makes one file look like two different files, and `status`
+    /// then claims present while `verify` reports missing.
+    #[test]
+    fn a_weight_path_is_resolved_against_the_model_directory_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_dir = dir.path().join("models/w");
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("model.safetensors"), b"x").unwrap();
+        let lock = crate::model_lock::ModelLock {
+            schema: 1,
+            models: [(
+                "w".to_string(),
+                crate::model_lock::ModelEntry {
+                    source: "hf://x".into(),
+                    revision: "abc".into(),
+                    dir: "models/w".into(),
+                    files: vec![crate::model_lock::ModelFile {
+                        path: "model.safetensors".into(),
+                        sha256: "00".into(),
+                        size: 1,
+                    }],
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let (rows, plan) = model_artifacts(dir.path(), &lock);
+        assert!(rows[0].present, "dir-qualified path must resolve once");
+        assert_eq!(plan.cached_bytes, 1);
+        assert_eq!(plan.missing_bytes, 0);
+    }
+
+    #[test]
+    fn a_missing_weight_file_is_a_plan_item_not_a_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = crate::model_lock::ModelLock {
+            schema: 1,
+            models: [(
+                "w".to_string(),
+                crate::model_lock::ModelEntry {
+                    source: "hf://x".into(),
+                    revision: "abc".into(),
+                    dir: "models/w".into(),
+                    files: vec![crate::model_lock::ModelFile {
+                        path: "model.safetensors".into(),
+                        sha256: "00".into(),
+                        size: 1_000_000,
+                    }],
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let (rows, plan) = model_artifacts(dir.path(), &lock);
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].present, "absent file must not report present");
+        assert_eq!(rows[0].fits, None, "unread weights are not a pass");
+        assert_eq!(plan.missing_bytes, 1_000_000);
+        assert_eq!(plan.cached_bytes, 0);
     }
 }

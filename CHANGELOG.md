@@ -3736,3 +3736,47 @@ Actions shell this same binary, exactly like `jhol gui --web`, and a unit test p
 five argv entries to the web surface's five so the two cannot drift.
 
 TUI 1,414 → 1,486 lines; the status panel and the action runner are the only new logic.
+
+## The AI/ML surface: fitness, budget, provenance, and a 6 ms look inside a 6.7 GB checkpoint
+
+Four questions, one screen each, one struct behind all of them.
+
+**Artifacts (fitness).** `jhol status`, the TUI and the web page now list every wheel and
+weight with a verdict and a reason: `✓` fits, `✗` does not and why, `?` unknown and why. A
+wheel's verdict comes from its ABI tag against the host; a weight's from its resident estimate
+against probed GPU memory. **`?` is never a pass** — no GPU means unknown, and saying so is the
+feature.
+
+**Budget.** Missing and cached bytes, an ETA, and the throughput that produced it (`at 5 MB/s`)
+— a number without its assumption is a guess in a suit. Missing weight files are plan items,
+not passes.
+
+**Proof.** Snapshot state, attestation counts, and the agent tool catalog: ten MCP tools with
+a cost class (`read` / `network` / `write`), asserted against the MCP server source so the two
+lists cannot drift.
+
+**`jhol inspect` — header-only model description.** A safetensors header maps every tensor to a
+byte range, so a 3.36 B-parameter model reports its tensors, dtypes and resident size after
+reading **40 KB of 6.7 GB**. Measured 5–6 ms on both a 419 MB and a 6.7 GB file: the cost is
+the header, not the weights. Nothing is downloaded, nothing is loaded.
+
+**`jhol env promote <name>`** — make a fork the project's tree with two renames and no copying;
+the replaced tree is kept until the new one is renamed into place, then it verifies. Measured
+35–40 ms on 71 packages.
+
+**TUI: seven tabs** (Status · Artifacts · Budget · Proof · Actions · Packages · Health) with
+Enter-to-describe on Artifacts. **Web: six sections**, an inspect box, and streaming actions —
+`/action?stream=1` writes chunks as the child emits them, so a download reports progress
+instead of holding the connection silent.
+
+Two defects found by building this, both now pinned by tests:
+
+1. **A weight path was joined against the project root *and* the model directory** —
+   `models/x/models/x/model.safetensors` — so `status` said present while `verify` said
+   missing. The lock stores a path relative to the model directory; there is now a test that it
+   resolves exactly once.
+2. **A whitelist is only a whitelist if the name is validated.** `env fork <name>` accepts an
+   argument, so the web surface validates it (`[A-Za-z0-9._-]`, no leading dash, no `..`) and
+   refuses anything else with exit 2.
+
+jhol-core 726 tests (3 new), bin tests 9 (4 new), CLI suite 30/30, installer gate PASS.

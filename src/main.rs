@@ -4,6 +4,7 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+mod status_view;
 mod tui;
 mod commands;
 
@@ -4182,6 +4183,9 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    if let Some(("inspect", sub_m)) = matches.subcommand() {
+        return commands::inspect::run(sub_m);
+    }
     if let Some(("status", sub_m)) = matches.subcommand() {
         return commands::status::run(sub_m);
     }
@@ -8738,6 +8742,12 @@ fn cli_command() -> Command {
                     )
                     .subcommand(Command::new("list").about("List forks").arg(Arg::new("json").long("json").action(ArgAction::SetTrue)))
                     .subcommand(
+                        Command::new("promote")
+                            .about("Make a fork the project's tree — two renames, no copying")
+                            .arg(Arg::new("name").required(true))
+                            .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
+                    )
+                    .subcommand(
                         Command::new("diff")
                             .about(
                                 "Compare resolved versions: two forks, or a fork with the \
@@ -8761,6 +8771,25 @@ fn cli_command() -> Command {
             .subcommand(
                 Command::new("status")
                     .about("One screen: tree verdict, policy in force, artifacts, axes, proof")
+                    .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
+            )
+            .subcommand(
+                Command::new("inspect")
+                    .about("Describe a weight file from its header — params, dtypes, resident size")
+                    .long_about(
+                        "Describe a .safetensors weight file from its header alone.\n\n\
+                         A safetensors header maps every tensor to a byte range, so a 7 GB\n\
+                         checkpoint answers 'how many parameters, which dtypes, how much\n\
+                         memory?' after reading a few kilobytes. Nothing is downloaded and\n\
+                         nothing is loaded.\n\n\
+                         The target may be a path to a .safetensors file, a directory\n\
+                         containing one, or the name of a model pinned in\n\
+                         models.lock.json.\n\n\
+                         Examples:\n  \
+                         jhol inspect models/llama-3-8b\n  \
+                         jhol inspect ./model.safetensors --json",
+                    )
+                    .arg(Arg::new("target").required(true))
                     .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
             )
             .subcommand(

@@ -240,3 +240,46 @@ useful part of an install log is at the end.
 Verified: `verify` → `code 0, "OK: 71 packages match the lockfile"`; `prune` and `install`
 succeed; a bad token returns `403 bad token`; `{"action":"rm -rf /"}` returns
 `code 2, unknown action`.
+
+## Inspecting weights: `jhol inspect`
+
+```
+jhol inspect models/llama-3-8b            # a directory
+jhol inspect ./model.safetensors --json   # one file
+jhol inspect llama-tiny                   # a name pinned in .jhol/models.lock.json
+```
+
+A safetensors header maps every tensor to a byte range, so the *structure* of a checkpoint is
+readable from a few kilobytes:
+
+```
+/tmp/MW/huge.safetensors
+  400 tensors · 3.36 B params · 6710886400 bytes of tensor data
+  dtypes     BF16×400
+  resident   7.5 GB — no GPU memory detected, fit unknown
+  header     40153 bytes read (0.0006% of the file)
+```
+
+`resident` is tensor bytes plus 20% for the allocator and the object graph — deliberately
+generous, because an under-quote here is an out-of-memory at the worst moment. Nothing is
+downloaded and nothing is loaded. When a GPU is detected the last line states the comparison
+(`fits` / `does not fit`); when it is not, the verdict is *unknown*, never a pass.
+
+Measured: **5–6 ms** for both a 419 MB and a 6.7 GB file (the cost is the header).
+
+## Promoting a fork: `jhol env promote <name>`
+
+Makes a fork the project's tree with **two renames and no copying**: the current `node_modules`
+moves aside, the fork's moves in, identity files are copied back, and the replaced tree is kept
+until the new one is renamed into place — a failed promote leaves the project exactly as it
+was. Then it verifies.
+
+```
+promoted trial2 in 37 ms — tree matches the lockfile
+```
+
+## The ML dashboard: `jhol gui` and `jhol gui --web`
+
+See `docs/GUI-ML.md`: seven tabs / six web sections, all rendered from the same status struct,
+with an artifact fitness table, a byte budget that states its throughput assumption, a proof
+tab, streaming actions, and header-only weight inspection.
