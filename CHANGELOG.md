@@ -3651,3 +3651,25 @@ package cache present, output captured through a pipe.
 - New `JHOL_PROFILE_INSTALL=1` stage output: `[lane]`, `[l2]`, `[fastlane]`, `[fastwarm]`.
   Findings: the no-snapshot reinstall goes through direct bundle projection; of its ~27 ms,
   ~23 ms is the kernel `clonefile` of the cached tree. Not changed.
+
+## Warm install: the refill raced the wipe (11/45 ms → 8–19 ms)
+
+Warm reinstalls alternated 11 ms and 45 ms. The cause was where the refill copied from: it
+cloned the live `node_modules` into the slot it had just consumed, so the caller's next
+`rm -rf node_modules` deleted the source mid-clone. The fill then discarded the slot ("tree
+changed"), the next run found nothing to restore, and paid a full projection install — every
+second run.
+
+Two corrections:
+
+- the refill verifies the **slot** (`tree_state::subtree_matches`), not the live tree: the
+  slot is what gets restored, the live tree is what is about to be deleted;
+- the consumed slot is refilled from its **sibling**, a directory nothing deletes.
+
+| warm install, 71 packages, tree wiped | before | after |
+|---|---:|---:|
+| 400 ms idle | 11 / 45 ms alternating | **12–19 ms** |
+| tight loop | 33–36 ms | **8–10 ms** |
+
+The tight loop — the shape benchmarks use — is now the fastest case. `verify` clean after
+every run; jhol-core 723 tests, treecheck 15, CLI suite 30/30, installer gate PASS.

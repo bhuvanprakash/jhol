@@ -456,6 +456,31 @@ pub fn verify_tree(project_dir: &Path) -> TreeState {
     TreeState::Match
 }
 
+/// Does `tree` hold what the lockfile authorises, when `tree` is *not* the live
+/// `node_modules`?
+///
+/// The snapshot refill needs this: it clones `node_modules` into a slot and must prove
+/// the **slot** is complete. Verifying the live tree instead is wrong — in a
+/// wipe-and-reinstall loop the caller deletes that tree while the clone is running, so a
+/// good slot was being discarded and the next run fell back to a full install. Version
+/// comparison only, like `verify_tree`: same guarantee, different root.
+pub fn subtree_matches(project_dir: &Path, tree: &Path) -> bool {
+    let Some(locked) = locked_paths(project_dir) else {
+        return false;
+    };
+    for (key, want) in &locked {
+        let Some(rel) = key.strip_prefix("node_modules/") else {
+            continue;
+        };
+        let manifest = tree.join(rel).join("package.json");
+        match disk_version(&manifest) {
+            Some(got) if &got == want => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
 /// Bring the tree into agreement with the lockfile, as far as that needs no
 /// resolution: verify, drop unauthorised directories, verify again.
 ///

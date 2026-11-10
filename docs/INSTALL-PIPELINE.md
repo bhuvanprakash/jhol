@@ -601,3 +601,33 @@ does) can empty both snapshot slots faster than the detached child refills them,
 falls back to the projection path: the same four-run loop gave 10 ms, 149 ms, 163 ms, 542 ms.
 A third slot would make that rarer, not impossible; the trade is disk metadata. With any
 human-paced repetition the fast path is taken every time.
+
+### The refill raced the wipe, and that was the whole gap
+
+Warm installs alternated **11 ms / 45 ms**. The cause was not the clone and not the
+verification — it was *where the refill copied from*:
+
+```
+restore consumes slot A (rename)  →  fork a refill  →  clone node_modules → A
+                                                        ^ the caller's next
+                                                          `rm -rf node_modules`
+                                                          deletes this mid-clone
+```
+
+The clone lost its source, the fill discarded the slot ("tree changed during snapshot"), and
+the next run had nothing to restore and paid a full projection install. Every second run.
+
+Two fixes:
+
+* the fill now verifies the **slot** (`tree_state::subtree_matches`), not the live tree —
+  the slot is what will be restored, and the live tree is what is about to be deleted;
+* the consumed slot is refilled from its **sibling slot**, a directory nothing deletes.
+
+| warm install, 71 packages, `node_modules` wiped | before | after |
+|---|---:|---:|
+| 400 ms idle | 11 ms / 45 ms alternating | **12–19 ms** |
+| tight loop (no idle) | 33–36 ms | **8–10 ms** |
+
+The tight loop — the shape every benchmark uses — is now the *fastest* case, because a
+sibling slot is always available and no clone ever races a delete. `verify` clean after
+every run.

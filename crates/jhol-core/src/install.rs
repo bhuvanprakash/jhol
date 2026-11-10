@@ -6712,8 +6712,66 @@ pub fn restore_snapshot(root: &Path) -> bool {
         let _ = std::fs::remove_dir_all(&node_modules);
         return false;
     }
-    spawn_snapshot_fill(index);
+    // Refill the slot we consumed from its **sibling**, which is a directory nothing
+    // deletes. Copying the live `node_modules` instead races the caller's next
+    // `rm -rf node_modules`: the clone loses its source, the slot is discarded, and every
+    // second reinstall pays a full install (measured: 11 ms and 45 ms alternating).
+    let sibling = 1 - index;
+    if slot_is_valid(root, sibling, &want) {
+        spawn_slot_fill(index, sibling);
+    } else {
+        spawn_snapshot_fill(index);
+    }
     true
+}
+
+/// Clone a *sibling slot* into `index`. Nothing deletes a slot, so this cannot race the
+/// caller's next wipe the way copying the live tree does.
+pub fn fill_slot_from_slot(root: &Path, index: usize, source: usize) -> Result<(), String> {
+    let Some(want) = prepared_fingerprint(root) else {
+        return Err("no fingerprint".into());
+    };
+    let slots = snapshot_slots(root);
+    if !slots[source].is_dir() || !slot_is_valid(root, source, &want) {
+        return Err("source slot is not valid".into());
+    }
+    let marker = root.join(snapshot_marker(index));
+    let _ = std::fs::remove_file(&marker);
+    let _ = std::fs::remove_dir_all(&slots[index]);
+    crate::jgrid::materialize::Cloner::clone_directory(&slots[source], &slots[index])
+        .map_err(|e| format!("slot clone: {e}"))?;
+    if !crate::tree_state::subtree_matches(root, &slots[index]) {
+        let _ = std::fs::remove_dir_all(&slots[index]);
+        return Err("cloned slot is incomplete".into());
+    }
+    crate::file_lock::AtomicWrite::write_to_file(&marker, want.as_bytes())
+        .map_err(|e| format!("snapshot marker: {e}"))?;
+    Ok(())
+}
+
+fn spawn_slot_fill(index: usize, source: usize) {
+    #[cfg(unix)]
+    unsafe {
+        let pid = libc::fork();
+        if pid == 0 {
+            libc::setsid();
+            let devnull = libc::open(b"/dev/null\0".as_ptr() as *const libc::c_char, libc::O_RDWR);
+            if devnull >= 0 {
+                libc::dup2(devnull, 0);
+                libc::dup2(devnull, 1);
+                libc::dup2(devnull, 2);
+                if devnull > 2 {
+                    libc::close(devnull);
+                }
+            }
+            let _ = fill_slot_from_slot(std::path::Path::new("."), index, source);
+            libc::_exit(0);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (index, source);
+    }
 }
 
 /// Ask a separate process to rebuild the slot we just consumed.
@@ -6771,20 +6829,35 @@ pub fn fill_snapshot(root: &Path, index: usize) -> Result<(), String> {
     if !node_modules.is_dir() {
         return Err("no tree to snapshot".into());
     }
+    let __t = std::time::Instant::now();
+    let __p = std::env::var_os("JHOL_PROFILE_STARTUP").is_some();
     let _ = std::fs::remove_file(&marker); // invalid while we work
     let _ = std::fs::remove_dir_all(&slot);
+    if __p { eprintln!("[fill] clear {:.1} ms", __t.elapsed().as_secs_f64()*1000.0); }
+    let __t2 = std::time::Instant::now();
     crate::jgrid::materialize::Cloner::clone_directory(&node_modules, &slot)
         .map_err(|e| format!("snapshot clone: {e}"))?;
-    // A live `node_modules` can change under the clone (the user wipes it, another
-    // install starts). Re-verify it afterwards, and discard the slot if it no longer
-    // matches: a torn capture must never get a marker.
-    if !crate::tree_state::verify_tree(root).is_match() {
+    if __p { eprintln!("[fill] clone {:.1} ms", __t2.elapsed().as_secs_f64()*1000.0); }
+    // Verify the **slot**, not the live tree. The slot is what will be restored, and the
+    // live tree is about to be deleted by the very loop that triggers a refill — checking
+    // it discarded good slots and made every second reinstall fall back to a full
+    // install. A torn clone still fails this, because the slot is what is incomplete.
+    let __t3 = std::time::Instant::now();
+    let __ok = crate::tree_state::subtree_matches(root, &slot);
+    if std::env::var_os("JHOL_PROFILE_STARTUP").is_some() {
+        eprintln!("[fill] verify slot {:.1} ms (match={})", __t3.elapsed().as_secs_f64()*1000.0, __ok);
+    }
+    if !__ok {
         let _ = std::fs::remove_dir_all(&slot);
         return Err("tree changed during snapshot".into());
     }
     // Marker last: a slot without a matching marker is never used.
+    let __t4 = std::time::Instant::now();
     crate::file_lock::AtomicWrite::write_to_file(&marker, want.as_bytes())
         .map_err(|e| format!("snapshot marker: {e}"))?;
+    if std::env::var_os("JHOL_PROFILE_STARTUP").is_some() {
+        eprintln!("[fill] marker {:.1} ms", __t4.elapsed().as_secs_f64()*1000.0);
+    }
     Ok(())
 }
 
