@@ -3318,3 +3318,31 @@ Corrected the record with an order-alternated A/B (express@4.18.2, clean cache):
 The 25–27 ms warm figure measured earlier was real but hot-cache-only: with nothing else
 running the store's pages are in RAM, and interleaving with bun evicts them. Remaining gap is
 ~0.4 ms per package (clonefile + finish) against bun's ~0.25 ms.
+
+## Warm install: a verified tree snapshot, restored with one `clonefile`
+
+Two findings, one correcting the other.
+
+**`cp -cR` was the wrong reference.** I had rejected a whole-tree snapshot because `cp -c`
+on this 738-file tree took 114 ms. But `cp -c` clones *per file*, while `libc::clonefile` on
+a directory is one kernel call: measured at **12–15 ms**. `examples/clone_probe.rs` now
+measures the right thing.
+
+A verified tree is kept at `.jhol/prepared`, keyed by a hash of the manifest and lockfile,
+and restored with one clone when `node_modules` is absent. It is written only after
+`verify_tree` reports `Match`, used only when the fingerprint matches and the tree is
+absent, and **verified again** after cloning — deleted if that fails, so the fallback is the
+normal install.
+
+**Verification was the other half of the cost.** `jhol verify` on this tree took 41 ms —
+more than bun's entire install — because the freshness report verified and then called
+`reconcile_tree`, which verified again. One walk when the tree already matches.
+
+| warm rebuild, express@4.18.2 (71 packages) | before | after | bun |
+|---|---:|---:|---:|
+| wall | 52–60 ms | **39–45 ms** | 34–38 ms |
+
+Cold is unchanged at 0.83–1.13 s against bun's 1.49–2.01 s. The remaining ~5 ms is the
+verification walk; the clone is no longer the bottleneck.
+
+jhol-core 723 tests, treecheck 15, CLI suite 30/30, installer gate PASS.

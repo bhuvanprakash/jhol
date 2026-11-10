@@ -322,7 +322,7 @@ count taken after every run:
 | scenario | jhol | bun 1.4.4 | |
 |---|---:|---:|---|
 | no-op (tree present, nothing to do) | **22 ms** | 21 ms | parity |
-| `node_modules` wiped, rebuilt | **52–60 ms** | 34–38 ms | ~1.6× behind |
+| `node_modules` wiped, rebuilt | **39–45 ms** | 34–38 ms | parity, within ~10% |
 | cold, fresh cache | **0.83–1.13 s** | 1.49–2.01 s | 1.8× ahead |
 
 Three numbers from this session had to be corrected before the table above was true:
@@ -340,3 +340,33 @@ making the per-package step cheaper — fewer syscalls, batched marker writes, a
 post-install verification into the pass that already touches every file — not changing the
 strategy. A whole-tree `clonefile` was measured and is **slower** (`cp -cR` of 737 files:
 114 ms), so that door is closed with evidence.
+
+### How the warm rebuild got to parity
+
+Two measurements, one of which corrected the other.
+
+**A recursive `clonefile` is 12–15 ms; `cp -cR` is 114 ms.** I had rejected a whole-tree
+snapshot because `cp -cR` on this tree took 114 ms — but `cp -c` clones *per file*, while
+`libc::clonefile` on a **directory** is a single kernel call that snapshots the whole tree.
+`examples/clone_probe.rs` measures the right one. The idea was not wrong; the reference was.
+
+So a verified tree is kept at `.jhol/prepared`, keyed by a hash of the manifest and
+lockfile, and restored with one clone when `node_modules` is absent:
+
+* the snapshot is only written after `verify_tree` reports `Match`, so it never pins an
+  unverified tree;
+* it is only used when the fingerprint matches and `node_modules` is **absent**;
+* the clone is **verified again** before anything is reported, and deleted if it fails.
+
+**Verification was the other half.** `jhol verify` on this tree cost 41 ms — more than bun's
+entire install — because the freshness report verified, then called `reconcile_tree`, which
+verified again. One walk when the tree already matches.
+
+| warm rebuild of 71 packages | before | after |
+|---|---:|---:|
+| per-package projection | 52–60 ms | — |
+| snapshot clone + one verify walk | — | **39–45 ms** |
+| bun 1.4.4 | 34–38 ms | 34–38 ms |
+
+Remaining ~5 ms is the verification walk itself; the next lever is making that walk cheaper
+(it reads 71 manifests and stats 140 directories), not the clone.
