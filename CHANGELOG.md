@@ -3364,3 +3364,22 @@ is startup + one clone.
 Which means the remaining lever is **startup**, and both tools are within 3 ms of each other
 there at this tree size. Further installer micro-optimisation has no room: a per-file hardlink
 farm is ~0.4 ms/package (worse), `cp -cR` is 114 ms (worse), `verify_tree` is 1.6 ms.
+
+## Warm install, measured inside the process
+
+`JHOL_PROFILE_STARTUP=1` now prints what the fast path spends:
+
+| piece | cost |
+|---|---:|
+| process start → `main` | ~18 ms (bun ~17 ms) |
+| config load | **0.04 ms** |
+| snapshot clone (738 files) | 18–21 ms |
+| freshness report | 1.6–2.3 ms |
+
+A warm rebuild is process start, one `clonefile`, and a 2 ms verification. Config loading —
+which the architecture had every reason to suspect — is 40 microseconds.
+
+Ruled out with measurements rather than opinion: stripping the binary (no size change, no
+startup change), a `cp -c` tree copy (114 ms), a per-file hardlink farm (~0.4 ms/package and
+it shares inodes, which is the trap the model store already taught), symlinking
+`node_modules` to the snapshot (no isolation), and more work on `verify_tree` (1.6 ms).

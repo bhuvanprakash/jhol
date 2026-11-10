@@ -394,3 +394,24 @@ same tree.
 
 What this rules out, with numbers: a hardlink farm per file (≈0.4 ms/package, worse), a
 whole-tree `cp -c` (114 ms), and further work on `verify_tree` (1.6 ms).
+
+### The final breakdown, measured inside the process
+
+`JHOL_PROFILE_STARTUP=1` prints the fast path's own numbers; the rest is process start.
+
+| piece | cost | note |
+|---|---:|---|
+| process start → `main` | **~18 ms** | bun ~17 ms; stripping the binary changes nothing (already stripped) |
+| config load | **0.04 ms** | not the cost it looked like |
+| snapshot clone | **18–21 ms** | 738 files; `cp -cR` needs 114 ms, a per-file hardlink farm ~0.4 ms/package |
+| freshness report (verify) | **1.6–2.3 ms** | |
+| total in the fast path | **~20–24 ms** | |
+
+That is the whole warm install: process start plus one clone plus a 2 ms verification.
+Beating bun here would mean beating the OS at cloning a 738-file tree or beating process
+start — and both tools sit within a millisecond of each other on startup.
+
+What was *not* worth doing, each measured first: stripping (no change), a `cp -c` tree copy
+(114 ms), a per-file hardlink farm (0.4 ms/package, and it shares inodes — the model-store
+trap), symlinking node_modules to the snapshot (no isolation), and further work on
+`verify_tree` (1.6 ms).

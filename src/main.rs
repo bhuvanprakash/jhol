@@ -444,8 +444,13 @@ fn plain_install_fully_settled() -> bool {
     // considered, and that decision probes it. Short-circuiting here skipped the probe,
     // so `install` with `{"fallbackBackend": true}` and nothing to do reported success
     // without ever telling the user whether the backend they asked for exists.
+    let t0 = std::time::Instant::now();
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    if jhol_core::load_config(&cwd).fallback_backend == Some(true) {
+    let cfg = jhol_core::load_config(&cwd);
+    if std::env::var_os("JHOL_PROFILE_STARTUP").is_some() {
+        eprintln!("[startup] config {:.2} ms", t0.elapsed().as_secs_f64() * 1000.0);
+    }
+    if cfg.fallback_backend == Some(true) {
         return false;
     }
     let quiet = args.iter().any(|a| a == "-q" || a == "--quiet")
@@ -455,10 +460,28 @@ fn plain_install_fully_settled() -> bool {
     // The clone is verified against the lockfile before anything is reported, and a
     // snapshot that fails is deleted by `try_prepared_clone`, so the fallback is the
     // normal install.
-    if jhol_core::install::try_prepared_clone(std::path::Path::new(".")) {
-        return tree_is_current_and_reported(quiet);
+    let t1 = std::time::Instant::now();
+    let cloned = jhol_core::install::try_prepared_clone(std::path::Path::new("."));
+    if std::env::var_os("JHOL_PROFILE_STARTUP").is_some() {
+        eprintln!(
+            "[startup] snapshot clone {:.2} ms (taken={cloned})",
+            t1.elapsed().as_secs_f64() * 1000.0
+        );
     }
-    tree_is_current_and_reported(quiet)
+    let t2 = std::time::Instant::now();
+    let out = if cloned {
+        tree_is_current_and_reported(quiet)
+    } else {
+        tree_is_current_and_reported(quiet)
+    };
+    if std::env::var_os("JHOL_PROFILE_STARTUP").is_some() {
+        eprintln!(
+            "[startup] freshness report {:.2} ms; total in fast path {:.2} ms",
+            t2.elapsed().as_secs_f64() * 1000.0,
+            t0.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+    out
 }
 
 /// Read a boolean flag without panicking when the argument is not declared
