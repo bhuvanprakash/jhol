@@ -1516,8 +1516,12 @@ fn install_via_daemon(
     }
 
     // Connect (retry once)
+    let t_client = std::time::Instant::now();
     let mut stream = UnixStream::connect(&socket_path)
         .map_err(|e| format!("daemon unavailable at {}: {}", socket_path.display(), e))?;
+    if std::env::var_os("JHOL_PROFILE_STARTUP").is_some() {
+        eprintln!("[client] connect {:.2} ms", t_client.elapsed().as_secs_f64() * 1000.0);
+    }
     // Bounded: an unresponsive or half-dead daemon must not park an install for
     // ten minutes. A local install reply is fast; 60 s is already far beyond it.
     let client_timeout = std::env::var("JHOL_DAEMON_TIMEOUT_SECS")
@@ -1526,6 +1530,9 @@ fn install_via_daemon(
         .filter(|v| *v > 0)
         .unwrap_or(60);
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(client_timeout)));
+    if std::env::var_os("JHOL_PROFILE_STARTUP").is_some() {
+        eprintln!("[client] connected at {:.2} ms of this process", t_client.elapsed().as_secs_f64() * 1000.0);
+    }
 
     // Packed struct — zero serde, zero alloc
     let cwd_str = cwd
@@ -1549,8 +1556,12 @@ fn install_via_daemon(
         .map_err(|e| format!("daemon write failed: {}", e))?;
     let _ = stream.shutdown(std::net::Shutdown::Write);
 
+    let t_wait = std::time::Instant::now();
     let resp = jhol_core::daemon_cache::read_response(&mut stream)
         .map_err(|e| format!("daemon read failed: {}", e))?;
+    if std::env::var_os("JHOL_PROFILE_STARTUP").is_some() {
+        eprintln!("[client] round trip {:.2} ms", t_wait.elapsed().as_secs_f64() * 1000.0);
+    }
     if resp.ok == 0 {
         Ok(())
     } else {
@@ -1675,6 +1686,7 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
         let _ = jhol_core::daemon_cache::write_response(&mut stream, &response);
         return Ok(());
     }
+    let t_daemon = std::time::Instant::now();
     let prev_cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let result = (|| -> Result<(), String> {
         std::env::set_current_dir(&cwd).map_err(|e| format!("chdir {}: {}", cwd, e))?;
@@ -1710,7 +1722,20 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
         jhol_core::set_daemon_mode(true);
         jhol_core::set_transitive_depth(2);
 
+        let t_daemon_install = std::time::Instant::now();
+        if std::env::var_os("JHOL_PROFILE_STARTUP").is_some() {
+            eprintln!(
+                "[daemon] before install_package {:.2} ms",
+                t_daemon.elapsed().as_secs_f64() * 1000.0
+            );
+        }
         let install_result = jhol_core::install_package(&refs, &opts).map_err(|e| e.to_string());
+        if std::env::var_os("JHOL_PROFILE_STARTUP").is_some() {
+            eprintln!(
+                "[daemon] install_package {:.2} ms",
+                t_daemon_install.elapsed().as_secs_f64() * 1000.0
+            );
+        }
         // SNR speculation: after successful install, pre-compute neighbor resolutions.
         // Gated behind JHOL_ANTICIPATORY=1 AND >3 deps (small projects don't need speculation).
         if install_result.is_ok() && !packages.is_empty() {
@@ -5485,7 +5510,15 @@ fn run() -> Result<(), String> {
                         jhol_core::install::run_post_install_lifecycle_default()?;
                         Ok(())
                     } else {
-                        let dr = daemon_try_install(root, &specs, &opts, daemon_auto_attach);
+                        // The daemon pays a socket round trip plus its own post-install
+                        // work; when a verified snapshot can restore this tree by
+                        // `rename`, staying in-process is an order of magnitude faster
+                        // (10 ms against 85 ms, measured).
+                        let dr = if jhol_core::install::snapshot_ready(root) {
+                            Err("snapshot restore is cheaper than the daemon".to_string())
+                        } else {
+                            daemon_try_install(root, &specs, &opts, daemon_auto_attach)
+                        };
                         // Safety gate fallback: auto-attach with no socket → direct install
                         if daemon_auto_attach && dr.is_err() {
                             if !quiet {
@@ -9399,6 +9432,7 @@ fn main() {
     }
     mark("color");
 
+    mark("before run()");
     let code = match std::panic::catch_unwind(|| run()) {
         Ok(Ok(())) => 0,
         Ok(Err(e)) => {
@@ -9410,6 +9444,7 @@ fn main() {
             1
         }
     };
+    mark("after run()");
     std::process::exit(code);
 }
 

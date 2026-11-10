@@ -3508,3 +3508,21 @@ files must be rewritten (the cache is not the cost; `--no-cache` is identical). 
 the process-start floor for this machine.
 
 `jhol-core` 723 tests, CLI suite 30/30, installer gate PASS.
+
+## Daemon: decline when the snapshot can serve the install (85 ms → 6 ms)
+
+Measured with a warm cache and `node_modules` wiped: native restore 10–11 ms, `install
+--daemon` 85–92 ms. Instrumenting the round trip found where it went — the daemon's own
+`install_package` is 15 ms and the client's round trip 12–18 ms, but the client spends another
+**70 ms after the response** on post-install work (patch replay, engine scan, summary counts)
+that the native path overlaps with the restore.
+
+The daemon was built when a warm install cost 50–70 ms. It now declines when a verified
+snapshot can serve the install, and stays for the case it was designed for: a first install,
+changed dependencies, no snapshot.
+
+| `install --daemon`, 71 packages, tree wiped | before | after |
+|---|---:|---:|
+| steady state | 85–92 ms | **6 ms** |
+
+`jhol-core` 723 tests, CLI suite 30/30, installer gate PASS.

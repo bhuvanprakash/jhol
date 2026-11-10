@@ -529,3 +529,31 @@ working (corrupted slot → refused → normal install → correct tree).
 
 One honest outlier remains: when both slots are empty (two wipes inside the refill window),
 the run falls back to the projection path and takes ~24–40 ms. It happened once in six.
+
+### The daemon is slower than the machine it was built for
+
+Measured on a warm cache with `node_modules` wiped (71 packages):
+
+| | time |
+|---|---:|
+| native (snapshot restore) | **10–11 ms** |
+| `install --daemon` | **85–92 ms** |
+
+The daemon was built when a warm install cost 50–70 ms and keeping work warm in another
+process paid for the socket. Instrumenting the round trip showed where the 85 ms went: the
+daemon's own `install_package` is **15 ms** and the client's round trip is **12–18 ms**, but
+the client spends another **70 ms after the response** on its own post-install work (patch
+replay, engine scan, summary counts) — work the native path overlaps with the restore.
+
+So the daemon now **declines when a verified snapshot can serve the install**:
+
+```rust
+if jhol_core::install::snapshot_ready(root) { /* stay in-process */ }
+```
+
+| `install --daemon`, 71 packages, tree wiped | before | after |
+|---|---:|---:|
+| steady state | 85–92 ms | **6 ms** |
+
+The daemon is still used when the native fast path cannot help — a first install, changed
+dependencies, no snapshot — which is exactly the case it was designed for.

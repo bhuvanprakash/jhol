@@ -6659,6 +6659,22 @@ fn slot_is_valid(root: &Path, index: usize, want: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Would a snapshot restore serve this install right now?
+///
+/// The daemon exists to make installs cheap by keeping work warm in another process.
+/// Once a verified tree can be restored by `rename`, the native path is faster than the
+/// socket round trip plus a second process's post-install work — so the caller should
+/// stay in-process when this answers true.
+pub fn snapshot_ready(root: &Path) -> bool {
+    let Some(want) = prepared_fingerprint(root) else {
+        return false;
+    };
+    if root.join("node_modules").exists() {
+        return false;
+    }
+    (0..2).any(|i| slot_is_valid(root, i, &want))
+}
+
 /// Swap a valid snapshot into `node_modules`, then ask a detached child to refill it.
 ///
 /// Returns true only when the moved-in tree verifies.
