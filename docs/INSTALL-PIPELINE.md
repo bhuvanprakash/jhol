@@ -415,3 +415,29 @@ What was *not* worth doing, each measured first: stripping (no change), a `cp -c
 (114 ms), a per-file hardlink farm (0.4 ms/package, and it shares inodes — the model-store
 trap), symlinking node_modules to the snapshot (no isolation), and further work on
 `verify_tree` (1.6 ms).
+
+### The floor, and why the remaining gap is not ours
+
+Two more measurements that close the question rather than open it.
+
+**Process start is the platform, not the binary.** A trivial `fn main(){println!()}` compiled
+with `rustc -O` takes **17–18 ms** on this machine — the same as our 17 MB binary and the same
+as `bun --version` (~17 ms). So a warm install's first 18 ms are macOS's, and no amount of
+work on our side changes them.
+
+**clonefile does not parallelise usefully.** Cloning one recursive tree of 73 entries:
+**9–14 ms**; cloning the same entries concurrently across 10 threads: **10–14 ms**. The
+metadata copy is already efficient per call; splitting it adds thread overhead without
+overlapping the work.
+
+Which means the whole warm install — `39–45 ms` — is:
+
+```
+17-18 ms   process start  (platform floor; identical for a hello-world binary)
+19 ms      one clonefile  (kernel's cost for 738 file metadata entries)
+2 ms       verification   (our own work, and the only part we control)
+```
+
+Against bun's 34–38 ms that is parity, and the honest statement is that both tools are
+platform-bound at this tree size. The remaining lever is not an optimisation; it is a smaller
+tree or a faster filesystem.

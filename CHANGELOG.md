@@ -3383,3 +3383,18 @@ Ruled out with measurements rather than opinion: stripping the binary (no size c
 startup change), a `cp -c` tree copy (114 ms), a per-file hardlink farm (~0.4 ms/package and
 it shares inodes, which is the trap the model store already taught), symlinking
 `node_modules` to the snapshot (no isolation), and more work on `verify_tree` (1.6 ms).
+
+## Warm install: the floor, measured
+
+Two measurements that close the question:
+
+* **A trivial `rustc -O` hello-world takes 17–18 ms on this machine** — the same as our 17 MB
+  binary and the same as `bun --version`. A warm install's first 18 ms are the platform's.
+* **clonefile does not parallelise usefully.** One recursive clone of 73 entries: 9–14 ms.
+  The same entries cloned concurrently across 10 threads: 10–14 ms. The per-call metadata
+  copy is already efficient; splitting adds overhead without overlap.
+
+So a 39–45 ms warm rebuild is 18 ms platform + ~19 ms kernel clone + **2 ms of our work**,
+against bun's 34–38 ms. That is parity, and further gains at this tree size would require a
+smaller tree or a faster filesystem — not a better installer. Both probes are checked in as
+`examples/clone_parallel.rs` and `examples/verify_probe.rs`.
