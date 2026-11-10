@@ -3273,3 +3273,31 @@ the tree converges (56 → 68 → 71 across two runs, then `Up to date`, `verify
 
 The rule, added to `DEFECT-LOG.md`: *a completion marker proves a write finished; it does
 not prove the write produced anything.*
+
+## Warm install: measured honestly, one change kept, one idea killed by measurement
+
+With express@4.18.2 (71 packages) on a verified-clean cache, interleaved with bun 1.4.4:
+
+| | jhol | bun | |
+|---|---:|---:|---|
+| cold, fresh cache | **0.83–1.13 s** | 1.49–2.01 s | 1.8× ahead |
+| warm, `node_modules` wiped | **53–60 ms** | 32–35 ms | ~1.6× behind |
+
+Earlier warm figures in this session (38–49 ms, then 105–130 ms) were both artefacts: the
+first was flattered by the corrupt-store bug fixed in the previous entry (it installed 56 of
+71 packages), the second was measuring repair work against the same damaged cache. The
+numbers above come from a fresh cache, with a package count taken after every run.
+
+**Kept:** the capsule is no longer rewritten when neither `package.json` nor
+`package-lock.json` is newer than it. Re-deriving the manifest hash and dependency graph was
+~9 ms of a 60 ms install; skipping it is ~1 ms saved — small, and recorded as small.
+
+**Killed by measurement:** a whole-tree prepared snapshot, cloned with one `clonefile` in
+place of 71 per-package projections. The premise was that CoW clone is O(1) per tree. It is
+not: `cp -cR` of this tree (737 files) takes **114 ms**, twice the per-package path. The
+implementation was reverted with the reference measurement recorded, because the idea is
+seductive and wrong on this filesystem.
+
+Where the remaining ~20 ms sits: per-package projection (25–35 ms), install markers (~8 ms)
+and verification. Closing it means making per-package materialisation cheaper, not changing
+the strategy.

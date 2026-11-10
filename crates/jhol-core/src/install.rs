@@ -6971,7 +6971,23 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
         );
         finalize_special_deps(Path::new("package-lock.json"), &ld.specials);
         sync_hidden_lockfile();
-        let _ = crate::capsule::write_capsule_from_project(Path::new("."));
+        // A warm install that rewrote the same tree does not need a new capsule:
+        // writing one re-derives the manifest hash and the dependency graph, and it
+        // was 10 ms of a 60 ms install. Mtimes are enough to prove the inputs have
+        // not changed since the capsule was written; the capsule's own hash check
+        // still runs whenever it is actually read.
+        let capsule_path = crate::capsule::capsule_path(Path::new("."));
+        let inputs_changed = ["package.json", "package-lock.json"].iter().any(|name| {
+            let input = Path::new(name).metadata().and_then(|m| m.modified());
+            let capsule = std::fs::metadata(&capsule_path).and_then(|m| m.modified());
+            match (input, capsule) {
+                (Ok(i), Ok(c)) => i > c,
+                _ => true,
+            }
+        });
+        if inputs_changed || !capsule_path.exists() {
+            let _ = crate::capsule::write_capsule_from_project(Path::new("."));
+        }
         write_install_markers();
         profiler.mark("layout_capsule_markers");
         #[cfg(feature = "pipeline")]
