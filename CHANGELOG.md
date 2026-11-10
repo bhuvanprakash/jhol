@@ -3245,3 +3245,14 @@ express: 0.0.0-test -> 4.22.3
 Two names still work. The fork path itself was re-verified: cloning a 72-package tree,
 editing a manifest inside the fork leaves the original untouched (`verify` clean afterwards),
 and `env list` / `env rm` behave.
+
+## Refactor: `jhol cache` moved to `src/commands/cache.rs`
+
+Third group out of `main.rs` (9,735 → 9,388 lines across the three): `env`, `attest`,
+`cache`. `cache` is 211 lines and touches only the cache API plus the shared output
+helpers, so the move is mechanical — and the CLI suite (30/30) plus both gates are the
+proof that it stayed mechanical.
+
+One detail worth knowing for the next extraction: a match that is the function's tail
+expression needs an explicit `Ok(())` when its arms are statements. That is what the
+compiler caught on the first attempt here.

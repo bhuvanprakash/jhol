@@ -163,6 +163,7 @@ self-contained live in `src/commands/`:
 |---|---|
 | `commands/env.rs` | `jhol env fork\|list\|diff\|rm` |
 | `commands/attest.rs` | `jhol attest [--verify] [--json]` |
+| `commands/cache.rs` | `jhol cache list\|size\|prune\|gc\|export\|import\|clean\|telemetry\|key` |
 
 Extracting the next group is mechanical: move the match arm into
 `pub fn run(sub_m: &ArgMatches) -> Result<(), String>`, add the module to

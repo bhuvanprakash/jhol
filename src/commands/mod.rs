@@ -5,4 +5,5 @@
 //! was a move.
 
 pub mod attest;
+pub mod cache;
 pub mod env;
