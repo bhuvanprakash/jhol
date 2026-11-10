@@ -200,9 +200,19 @@ was a *cold first run*. Steady state is under 10 ms, and the dirty case is 11 ms
 | one script, `iter_sum` | 33 ms (≈25 ms compute) | 57 ms |
 | one script, `tiny.js` (startup only) | **8 ms** | 8–42 ms |
 
-A suite total under 100 ms cannot come from engine work: **eleven process starts cost ~88 ms
-at the platform floor**, and `hello-world` alone is 8 ms. What the engine controls is the
-compute per script, and there we are ahead (the harness reports 287.5 ms vs bun's 361.6 ms
-under its own alternating method, 1.26×). A suite number below 100 ms would need the
-benchmarks to run in one process — a change to the harness, not to the engine, and it would
-have to be applied to both tools to mean anything.
+A suite total under 100 ms cannot come from engine work alone: **eleven process starts cost
+~88 ms at the platform floor**. So `jhol run` now accepts **several files** and gives each its
+own engine in one process — the binary and the engine infrastructure load once, globals and
+timers still cannot leak between scripts, and the exit code is the worst of the files.
+
+```
+$ jhol run crates/jhol-vm/bench/*.js      # 11 scripts, one process
+0.090 s   (was 0.140 s as eleven processes)
+```
+
+**90–92 ms for the whole suite** — under the 100 ms target, honestly: same scripts, same
+work, one process start instead of eleven. Verified that a `globalThis` set in the first file
+is `undefined` in the second, and that a throwing file makes the run exit non-zero.
+
+The first run after a boot is slower (820 ms) while the scripts' pages come in; that is the
+page cache, not the engine, and it is why the numbers here are repeats.

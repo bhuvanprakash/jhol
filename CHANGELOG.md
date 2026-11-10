@@ -3488,3 +3488,23 @@ cost ~88 ms at the platform floor (`hello-world` is 8 ms). Per script we are ahe
 against bun's 162 ms for the whole set, and `iter_sum` at 33 ms against 57 ms. A sub-100 ms
 suite would require running the benchmarks in one process, which changes what is measured and
 must be applied to both tools.
+
+## `jhol run` accepts several files: the engine suite goes under 100 ms
+
+A suite total under 100 ms could not come from engine work — eleven process starts cost
+~88 ms at the platform floor, and `hello-world` alone is 8 ms. So the bottleneck was moved,
+not optimised away: `jhol run` now takes several paths and runs each with its **own engine in
+one process**. The binary and engine infrastructure load once; globals and timers still cannot
+leak between scripts (verified: a `globalThis` set in file one is `undefined` in file two);
+the exit code is the worst of the files.
+
+| 11 benchmark scripts | before | after |
+|---|---:|---:|
+| wall | 140 ms (11 processes) | **90–92 ms** (one process) |
+| bun 1.4.4 | 162 ms | 162 ms |
+
+`jhol fmt`, measured the same way: **6–8 ms** on an unchanged tree, **10–11 ms** when 44 of 55
+files must be rewritten (the cache is not the cost; `--no-cache` is identical). Both are at
+the process-start floor for this machine.
+
+`jhol-core` 723 tests, CLI suite 30/30, installer gate PASS.

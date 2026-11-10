@@ -2605,11 +2605,11 @@ fn run() -> Result<(), String> {
     }
 
     if let Some(("run", sub_m)) = matches.subcommand() {
-        let script_or_file = sub_m
-            .get_one::<String>("script")
-            .unwrap()
-            .as_str()
-            .to_string();
+        let scripts: Vec<String> = sub_m
+            .get_many::<String>("script")
+            .map(|v| v.cloned().collect())
+            .unwrap_or_default();
+        let script_or_file = scripts.first().cloned().unwrap_or_default();
         let is_file = flag(&sub_m, "file");
         let watch = flag(&sub_m, "watch");
         let engine = sub_m
@@ -2634,6 +2634,20 @@ fn run() -> Result<(), String> {
             }
             #[cfg(feature = "runtime")]
             {
+                // Several files in one process: the binary and the engine's
+                // infrastructure load once, and each file still gets a fresh engine, so
+                // globals and timers do not leak between scripts. One process start per
+                // eleven benchmarks is 88 ms of the suite; this removes ten of them
+                // without changing what each script observes.
+                if scripts.len() > 1 && !watch {
+                    let mut worst = 0;
+                    for script in &scripts {
+                        let path = std::path::Path::new(script);
+                        let code = jhol_runtime::run_file(path).map_err(|e| e.to_string())?;
+                        worst = worst.max(code);
+                    }
+                    std::process::exit(worst);
+                }
                 let path = std::path::Path::new(&script_or_file);
                 if watch {
                     jhol_runtime::run_file_watch(path).map_err(|e| e.to_string())?;
@@ -7787,7 +7801,11 @@ fn cli_command() -> Command {
                 .arg(
                     Arg::new("script")
                         .required(true)
-                        .help("Script name from package.json, or JS/TS file path"),
+                        .num_args(1..)
+                        .help(
+                            "Script name from package.json, or JS/TS file path. Several files \
+                             run in sequence in one process, each with a fresh engine",
+                        ),
                 )
                 .arg(
                     Arg::new("file")

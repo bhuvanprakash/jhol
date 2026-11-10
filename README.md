@@ -315,6 +315,9 @@ measurements, the bugs the gate caught, and the honest open items — is
 ```sh
 cargo build --release --features jholvm
 crates/jhol-vm/bench/run_bench.sh --jholvm --bun --runs 5
+
+# or run the whole suite in one process (each script gets a fresh engine):
+JHOL_RUNTIME_ENGINE=jholvm jhol run crates/jhol-vm/bench/*.js
 ```
 
 ### Install / package-manager benchmarks
