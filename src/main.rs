@@ -2562,7 +2562,16 @@ fn run() -> Result<(), String> {
             .unwrap_or_default()
     }
 
-    let matches = cli_command().get_matches();
+    // Hide the blueprint-era commands unless asked for: a command list is a promise.
+    let mut root = cli_command();
+    if std::env::var("JHOL_BLUEPRINT").as_deref() != Ok("1") {
+        for name in BLUEPRINT_COMMANDS {
+            if let Some(c) = root.find_subcommand_mut(name) {
+                *c = c.clone().hide(true);
+            }
+        }
+    }
+    let matches = root.get_matches();
 
     // global-install (no cache needed)
     if let Some(("global-install", _)) = matches.subcommand() {
@@ -2571,7 +2580,10 @@ fn run() -> Result<(), String> {
     }
 
     // ── jhol gui ─ Terminal GUI ──────────────────────────────────────────────
-    if let Some(("gui", _)) = matches.subcommand() {
+    if let Some(("gui", m)) = matches.subcommand() {
+        if flag(m, "web") {
+            return commands::gui_web::serve();
+        }
         return tui::run_tui();
     }
 
@@ -4168,6 +4180,10 @@ fn run() -> Result<(), String> {
             ));
         }
         return Ok(());
+    }
+
+    if let Some(("status", sub_m)) = matches.subcommand() {
+        return commands::status::run(sub_m);
     }
 
     if let Some(("verify", sub_m)) = matches.subcommand() {
@@ -7482,6 +7498,14 @@ fn refine_star_specs(packages: &[&str]) {
 /// The one CLI definition. Dispatch and shell-completion generation both use it,
 /// so a flag cannot be declared for `--help` and missing from parsing (or the
 /// reverse) — a drift that cost five separate fixes, including a 100 % `ci` crash.
+/// Commands from an earlier vision that do not serve the current surface. Hidden unless
+/// `JHOL_BLUEPRINT=1`, because a command list is a promise: sixteen half-served entries
+/// made `jhol --help` read like a different project.
+const BLUEPRINT_COMMANDS: &[&str] = &[
+    "plan", "diff", "sync", "snapshot", "restore", "db", "dev", "jagr", "audit-jagr",
+    "betti-history", "jagr-impact", "pack", "publish", "login", "cdn", "view",
+];
+
 fn cli_command() -> Command {
     let backend_arg = Arg::new("backend")
         .long("backend")
@@ -7491,9 +7515,10 @@ fn cli_command() -> Command {
     Command::new("jhol")
         .version(env!("CARGO_PKG_VERSION"))
         .author("Bhuvan Prakash <bhuvanstark6@gmail.com>")
-        .about("Fast, offline-friendly package manager — cache first, Bun/npm backend")
+        .about("Verified installs for npm packages, Python wheels and model weights")
         .after_help(
-            "Examples:\n  jhol install lodash\n  jhol install react react-dom\n  jhol install\n  jhol doctor --fix\n  jhol cache list",
+            "One graph, one lockfile, one proof.\n\n\
+             Every day\n               install · ci · update · remove · add · init\n\n             Trust the tree\n               verify [--prune] · status [--json] · why · why-not · attest [--verify]\n\n             Choose what goes in\n               --as-of DATE · --allow-license LIST · --exclude-vuln\n\n             Artifacts\n               ai inspect · ai pull · wheels · pysolve · py install · axes\n\n             Reproduce and prove\n               replay · env fork · env list · attest\n\n             Engine and tools\n               run · eval · fmt · build · exec · mcp\n\n             Examples\n               jhol install lodash\n               jhol verify --prune\n               jhol status --json\n               jhol install --as-of 2023-06-01 --allow-license MIT,ISC\n               jhol install --exclude-vuln",
         )
         .subcommand(
             Command::new("install")
@@ -8734,6 +8759,11 @@ fn cli_command() -> Command {
                     .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
             )
             .subcommand(
+                Command::new("status")
+                    .about("One screen: tree verdict, policy in force, artifacts, axes, proof")
+                    .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
+            )
+            .subcommand(
                 Command::new("axes")
                     .about("Show the hardware/ABI axes jhol uses for compatibility decisions")
                     .arg(Arg::new("json").long("json").action(ArgAction::SetTrue))
@@ -9139,7 +9169,13 @@ fn cli_command() -> Command {
         )
         .subcommand(
             Command::new("gui")
-                .about("Open the jhol Terminal GUI — browse packages, view recent installs, navigate with arrow keys")
+                .about("Open the interactive view: terminal dashboard, or --web for a browser page")
+                .arg(
+                    Arg::new("web")
+                        .long("web")
+                        .action(ArgAction::SetTrue)
+                        .help("Serve the status view over HTTP and open it in the default browser"),
+                )
                 .long_about(
                     "Launches the jhol Terminal GUI (TUI). \
                      The classic CLI is still available — this is purely additive.\n\n\

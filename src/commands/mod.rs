@@ -6,4 +6,6 @@
 
 pub mod attest;
 pub mod cache;
+pub mod gui_web;
+pub mod status;
 pub mod env;

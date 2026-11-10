@@ -3,6 +3,7 @@
 
 pub mod adversarial_install;
 pub mod attest;
+pub mod status;
 pub mod env_fork;
 pub mod audit;
 pub mod axes;

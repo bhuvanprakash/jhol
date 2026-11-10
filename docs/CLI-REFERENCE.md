@@ -165,3 +165,39 @@ that contradicts the filesystem.
 
 Full list: `grep -rhoE 'JHOL_[A-Z0-9_]+' crates src | sort -u` (179 today).
 That number is a symptom, not an achievement.
+
+## The front door
+
+`jhol --help` states what the tool is — *verified installs for npm packages, Python wheels and
+model weights* — and then groups the surface by intent rather than by history: **Every day**,
+**Trust the tree**, **Choose what goes in**, **Artifacts**, **Reproduce and prove**, **Engine
+and tools**.
+
+Sixteen commands from an earlier blueprint era (`plan`, `diff`, `sync`, `snapshot`, `restore`,
+`db`, `dev`, `jagr`, `audit-jagr`, `betti-history`, `jagr-impact`, `pack`, `publish`, `login`,
+`cdn`, `view`) are **hidden by default**, because a command list is a promise and those
+sixteen were a different project. They still run; `JHOL_BLUEPRINT=1 jhol --help` shows them.
+
+### `jhol status [--json]`
+
+One screen of truth, and the only implementation of it. The TUI dashboard and `jhol gui --web`
+render the same `jhol_core::status::Status` struct; nothing recomputes the numbers.
+
+```
+demo 1.0.0
+
+  tree       match — 71 packages
+  lockfile   matches package.json
+  policy     as-of 2023-06-01 · licences MIT,ISC
+  axes       macos/arm64 libc unknown · python - · cuda none
+  proof      snapshot ready · attested 71 packages, 0 models
+```
+
+`--json` is the contract for editors, dashboards and agents.
+
+### `jhol gui` and `jhol gui --web`
+
+`jhol gui` is the terminal dashboard (ratatui). Its Overview panel now renders the status
+struct; it previously collected its own numbers, which is how two answers to one question
+start. `jhol gui --web` serves the same data as a single page on `127.0.0.1:<random>` and opens
+the browser: no webview dependency, no second implementation, `/status.json` behind it.

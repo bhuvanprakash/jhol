@@ -246,6 +246,9 @@ struct AppState {
     tab: ActiveTab,
     pkg_name: String,
     pkg_version: String,
+    /// The same struct `jhol status`, the CLI and the web page render. The dashboard must
+    /// not compute its own truth — that is how two answers to one question start.
+    status: Option<jhol_core::status::Status>,
     direct_deps: Vec<(String, String)>,
     dev_deps: Vec<(String, String)>,
     cache_tarballs: usize,
@@ -281,6 +284,7 @@ impl AppState {
             tab: ActiveTab::Overview,
             pkg_name: "jhol-project".to_string(),
             pkg_version: "1.0.0".to_string(),
+            status: None,
             direct_deps: Vec::new(),
             dev_deps: Vec::new(),
             cache_tarballs: 0,
@@ -332,6 +336,7 @@ impl AppState {
                 if let Some(ver) = v.get("version").and_then(|s| s.as_str()) {
                     self.pkg_version = ver.to_string();
                 }
+                self.status = Some(jhol_core::status::collect(Path::new(".")));
                 self.direct_deps.clear();
                 if let Some(deps) = v.get("dependencies").and_then(|d| d.as_object()) {
                     for (k, v) in deps {
@@ -1140,13 +1145,93 @@ fn ui(f: &mut Frame, app: &mut AppState) {
     }
 }
 
+fn status_lines(app: &AppState) -> Vec<Line<'static>> {
+    let Some(s) = &app.status else {
+        return vec![Line::from("  collecting…")];
+    };
+    let ok = Style::default().fg(Color::Green);
+    let bad = Style::default().fg(Color::Red);
+    let key = |k: &'static str| {
+        Span::styled(
+            format!("{k:<10}"),
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )
+    };
+    let mut out = Vec::new();
+    out.push(Line::from(vec![
+        key("tree"),
+        if s.tree.state == "match" {
+            Span::styled(
+                format!("match — {} packages", s.tree.packages),
+                ok,
+            )
+        } else {
+            Span::styled(format!("{} — {}", s.tree.state, s.tree.detail), bad)
+        },
+    ]));
+    out.push(Line::from(vec![
+        key("lockfile"),
+        if s.manifest_matches_lockfile {
+            Span::styled("matches package.json", ok)
+        } else {
+            Span::styled("drifted — run jhol install", bad)
+        },
+    ]));
+    let mut policy = Vec::new();
+    if let Some(at) = &s.policy.as_of {
+        policy.push(format!("as-of {at}"));
+    }
+    if let Some(l) = &s.policy.allowed_licenses {
+        policy.push(format!("licences {}", l.join(",")));
+    }
+    if s.policy.exclude_vulnerable {
+        policy.push("exclude-vulnerable".to_string());
+    }
+    out.push(Line::from(vec![
+        key("policy"),
+        Span::raw(if policy.is_empty() {
+            "none".to_string()
+        } else {
+            policy.join(" · ")
+        }),
+    ]));
+    out.push(Line::from(vec![
+        key("axes"),
+        Span::raw(format!(
+            "{}/{} {} · python {} · cuda {}",
+            s.axes.os,
+            s.axes.arch,
+            s.axes.libc,
+            s.axes.python.as_deref().unwrap_or("-"),
+            s.axes.cuda_driver.as_deref().unwrap_or("none")
+        )),
+    ]));
+    out.push(Line::from(vec![
+        key("artifacts"),
+        Span::raw(format!(
+            "{} models · {} python dists",
+            s.models.pinned, s.python.pinned
+        )),
+    ]));
+    out.push(Line::from(vec![
+        key("proof"),
+        Span::raw(format!(
+            "snapshot {} · attested {} packages, {} models",
+            if s.proof.snapshot_ready { "ready" } else { "absent" },
+            s.proof.attested_packages,
+            s.proof.attested_models
+        )),
+    ]));
+    out
+}
+
 fn render_overview(f: &mut Frame, app: &AppState, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
-    let info_text = vec![
+    let mut info_text = vec![
         Line::from(vec![
             Span::styled(
                 "Project:       ",
@@ -1219,6 +1304,7 @@ fn render_overview(f: &mut Frame, app: &AppState, area: Rect) {
             Style::default().fg(Color::DarkGray),
         )),
     ];
+    info_text.extend(status_lines(app));
     let left_block = Paragraph::new(info_text)
         .block(
             Block::default()

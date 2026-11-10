@@ -3673,3 +3673,27 @@ Two corrections:
 
 The tight loop — the shape benchmarks use — is now the fastest case. `verify` clean after
 every run; jhol-core 723 tests, treecheck 15, CLI suite 30/30, installer gate PASS.
+
+## CLI and GUI: one status contract, an honest front door, and a browser view
+
+**`jhol status [--json]`** — one screen of truth: tree verdict with the reason, whether the
+lockfile still matches `package.json`, policy in force, models, Python distributions, host
+axes, and proof state. It is the *only* implementation of those numbers: the TUI dashboard and
+the web view render the same `jhol_core::status::Status` struct.
+
+**The front door now describes the tool.** Tagline changed from "cache first, Bun/npm backend"
+— the old wrapper story — to "verified installs for npm packages, Python wheels and model
+weights", with the surface grouped by intent (Every day · Trust the tree · Choose what goes in
+· Artifacts · Reproduce and prove · Engine and tools). Sixteen blueprint-era commands (`plan`,
+`diff`, `sync`, `snapshot`, `restore`, `db`, `dev`, `jagr*`, `betti-history`, `pack`, `publish`,
+`login`, `cdn`, `view`) are hidden unless `JHOL_BLUEPRINT=1`: a command list is a promise, and
+those were a different project.
+
+**The TUI is no longer its own source of truth.** Its Overview renders the status struct
+instead of collecting numbers itself.
+
+**`jhol gui --web`** serves one HTML page on `127.0.0.1:<random>`, opens the browser, and polls
+`/status.json` — the same struct again. No webview dependency, no Tauri, no second
+implementation; `std::net` and a page.
+
+jhol-core 723 tests, CLI suite 30/30, installer gate PASS, engine gate PASS (corpus 55/55).
