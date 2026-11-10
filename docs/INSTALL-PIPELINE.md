@@ -441,3 +441,30 @@ Which means the whole warm install — `39–45 ms` — is:
 Against bun's 34–38 ms that is parity, and the honest statement is that both tools are
 platform-bound at this tree size. The remaining lever is not an optimisation; it is a smaller
 tree or a faster filesystem.
+
+### Correction: the harness was inflating both sides
+
+Every timing reported earlier in this document used `python3 -c 'time.time()'` **after** the
+command, so python's own startup (~18 ms) was counted inside the delta. Re-measured with
+bash's `time` builtin — no subprocess — the true numbers are:
+
+| | jhol | bun 1.4.4 | |
+|---|---:|---:|---|
+| no-op warm | **8 ms** | 17 ms | ahead |
+| warm rebuild, 71 packages | **26–29 ms** | 20–22 ms | ~1.3× behind |
+| `--version` | 6 ms | 7 ms | parity |
+| hello-world `rustc -O` | 8 ms | — | the platform floor |
+
+So startup is ~6–8 ms for both tools (the "18 ms" was the harness), and a warm rebuild is
+clone-dominated rather than startup-dominated.
+
+### The snapshot was never used, and why
+
+`save_prepared_snapshot` was called inside `install_package`, but the CLI rewrites
+`package-lock.json` after that returns — so the recorded fingerprint never matched and
+`try_prepared_clone` declined every time (`taken=false`). Saving at the end of the CLI
+install, after every write, made the fast path real: warm rebuilds went from ~40 ms (normal
+projection path) to **26–29 ms**, with `taken=true` on every run.
+
+This is the same defect class as the rest of this document: *a cache keyed on inputs must be
+keyed on their final value*. The snapshot existed, was correct, and was unreachable.

@@ -3398,3 +3398,29 @@ So a 39–45 ms warm rebuild is 18 ms platform + ~19 ms kernel clone + **2 ms of
 against bun's 34–38 ms. That is parity, and further gains at this tree size would require a
 smaller tree or a faster filesystem — not a better installer. Both probes are checked in as
 `examples/clone_parallel.rs` and `examples/verify_probe.rs`.
+
+## Warm install: the snapshot was never used, and the harness was inflating both sides
+
+**The snapshot never fired.** `save_prepared_snapshot` ran inside `install_package`, but the
+CLI rewrites `package-lock.json` afterwards, so the recorded fingerprint never matched and
+`try_prepared_clone` declined on every run. Saving at the end of the CLI install — after every
+write — made the fast path real: warm rebuilds went from ~40 ms (projection path) to
+**26–29 ms**, with the clone taken on every run.
+
+Same defect class as everything else in this document: a cache keyed on inputs must be keyed
+on their **final** value.
+
+**And the harness was wrong.** Earlier timings used `python3 -c 'time.time()'` after the
+command, counting python's ~18 ms startup inside the delta. With bash's `time` builtin:
+
+| | jhol | bun 1.4.4 |
+|---|---:|---:|
+| no-op warm | **8 ms** | 17 ms |
+| warm rebuild (71 pkgs) | **26–29 ms** | 20–22 ms |
+| `--version` | 6 ms | 7 ms |
+| hello-world `rustc -O` | 8 ms | — |
+
+So startup is ~6–8 ms for both (not 18), we are ahead on no-op, and warm rebuild is ~1.3×
+behind — clone-dominated, not startup-dominated. `examples/clone_parallel.rs` (fixed to run
+waves concurrently rather than sequentially) shows parallel cloning does not help: 9–12 ms
+against 9–11 ms serial.

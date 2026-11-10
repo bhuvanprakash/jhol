@@ -5496,6 +5496,13 @@ fn run() -> Result<(), String> {
                 let count_after = jhol_core::count_installed_packages(root);
                 let (added, _) = install_summary_counts(count_before, count_after);
                 print_install_summary(added, count_after, elapsed, quiet, json_out);
+                // The install is finished and every write has landed (the lockfile is
+                // rewritten by later steps too), so this is the first moment a
+                // fingerprint can be trusted for the next warm rebuild. Saving here
+                // instead of inside `install_package` is what made the recorded
+                // fingerprint disagree with the final lockfile — the snapshot existed
+                // and was never used.
+                jhol_core::install::save_prepared_snapshot(std::path::Path::new("."));
                 // Feature 6: post-install hook
                 if let Some(ref hook) = config.hook_post_install {
                     if let Err(e) = std::process::Command::new("sh")

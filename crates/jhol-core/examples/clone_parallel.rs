@@ -21,15 +21,21 @@ fn main() {
         .map(|e| (e.path(), e.file_name()))
         .collect();
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8);
-    for chunk in entries.chunks(entries.len().div_ceil(threads).max(1)) {
+    // All children at once, in waves of `threads`. The first version of this probe
+    // chunked the list and ran each chunk inside its own `scope`, which serialised the
+    // waves: it measured 10-14 ms and looked like parallelism did not help.
+    let mut next = 0usize;
+    while next < entries.len() {
+        let wave: Vec<_> = entries[next..(next + threads).min(entries.len())].to_vec();
         std::thread::scope(|scope| {
-            for (path, name) in chunk {
-                let dst = parallel.join(name);
+            for (path, name) in wave {
+                let dst = parallel.join(&name);
                 scope.spawn(move || {
-                    let _ = jhol_core::jgrid::materialize::Cloner::clone_directory(path, &dst);
+                    let _ = jhol_core::jgrid::materialize::Cloner::clone_directory(&path, &dst);
                 });
             }
         });
+        next += threads;
     }
     let parallel_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!(
