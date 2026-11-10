@@ -26,7 +26,7 @@ impl FileLock {
                     let pid = process::id();
                     use std::io::Write;
                     writeln!(file, "{}", pid)?;
-                    file.sync_all()?;
+                    // pid is a diagnostic; the lock is the create_new itself. No flush.
                     return Ok(Self {
                         _temp_file: file,
                         path: lock_path,
@@ -57,7 +57,7 @@ impl FileLock {
                 let pid = process::id();
                 use std::io::Write;
                 writeln!(file, "{}", pid)?;
-                file.sync_all()?;
+                // pid is a diagnostic; the lock is the create_new itself. No flush.
                 Ok(Some(Self {
                     _temp_file: file,
                     path: lock_path,
@@ -91,6 +91,19 @@ impl AtomicWrite {
         let mut file = File::create(&temp_path)?;
         use std::io::Write;
         file.write_all(data)?;
+        // fsync(2), not `sync_all`: on macOS Rust's `sync_all` is F_FULLFSYNC (a drive-cache
+        // flush, ~3 ms each, measured) while fsync(2) is ~0.02 ms. fsync keeps the data
+        // ordered before the rename against process and kernel failure; it does not promise
+        // the drive's own cache survives a sudden power cut. Every caller writes a cache
+        // index or a "complete" marker that can be rebuilt; lockfiles do not use this.
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            if unsafe { libc::fsync(file.as_raw_fd()) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        #[cfg(not(unix))]
         file.sync_all()?;
         fs::rename(&temp_path, path)?;
         Ok(())

@@ -4532,6 +4532,13 @@ pub fn lockfile_matches_manifest(project_dir: &Path) -> bool {
 /// store_unpacked, directly clones the packages into node_modules via APFS clonefile / CoW
 /// with batch parent directory creation, bypassing the full CLI argument parser and config searches.
 pub fn fast_direct_warm_install() -> Option<Result<(), String>> {
+    let __t0 = std::time::Instant::now();
+    let __prof = std::env::var_os("JHOL_PROFILE_INSTALL").is_some();
+    let __st = |l: &str| {
+        if __prof {
+            eprintln!("[fastwarm] {l} {:.2} ms", __t0.elapsed().as_secs_f64() * 1000.0);
+        }
+    };
     let root = Path::new(".");
     if !crate::instant_lock_proof::shortcut_policy_allows(root) {
         return None;
@@ -4544,6 +4551,7 @@ pub fn fast_direct_warm_install() -> Option<Result<(), String>> {
         return None;
     }
 
+    __st("policy+manifest+lock-parse");
     let cache_dir = crate::instant_lock_proof::cache_dir();
     let mut tasks = Vec::with_capacity(entries.len());
     let mut parent_dirs = std::collections::HashSet::new();
@@ -4579,10 +4587,12 @@ pub fn fast_direct_warm_install() -> Option<Result<(), String>> {
         tasks.push((unpacked, dest, entry.package.clone(), entry.top_level));
     }
 
+    __st("store-lookup");
     // 1. Batch pre-create all parent directories
     for parent in &parent_dirs {
         let _ = std::fs::create_dir_all(parent);
     }
+    __st("mkdirs");
 
     // 2. Parallel clone using Rayon
     use rayon::prelude::*;
@@ -4613,6 +4623,7 @@ pub fn fast_direct_warm_install() -> Option<Result<(), String>> {
             None
         });
 
+    __st("clone+finish");
     if let Some(err) = clone_err {
         return Some(Err(err));
     }
@@ -4621,8 +4632,11 @@ pub fn fast_direct_warm_install() -> Option<Result<(), String>> {
     if let Some(identity) = crate::instant_lock_proof::project_identity(root) {
         let _ = std::fs::write(root.join("node_modules/.jhol-ok"), identity);
     }
+    __st("identity+ok");
     let _ = crate::capsule::write_capsule_from_project(root);
+    __st("capsule");
     write_install_markers();
+    __st("markers");
 
     Some(Ok(()))
 }
@@ -6717,6 +6731,24 @@ fn spawn_snapshot_fill(index: usize) {
         let pid = libc::fork();
         if pid == 0 {
             // Child: keep it minimal — no unwinding, no stdio, no destructors.
+            //
+            // Cut every tie to the caller first. The child inherits the parent's
+            // stdout/stderr; when the caller captures them through a pipe
+            // (`$(jhol install)`, `| tee`, CI log capture, `execSync`), the pipe
+            // stays open until this child exits, so the caller waited ~35 ms for
+            // a refill it never asked for (measured: 45 ms piped vs 12 ms to a
+            // file). New session + fds 0-2 on /dev/null makes the refill truly
+            // background.
+            libc::setsid();
+            let devnull = libc::open(b"/dev/null\0".as_ptr() as *const libc::c_char, libc::O_RDWR);
+            if devnull >= 0 {
+                libc::dup2(devnull, 0);
+                libc::dup2(devnull, 1);
+                libc::dup2(devnull, 2);
+                if devnull > 2 {
+                    libc::close(devnull);
+                }
+            }
             let _ = fill_snapshot(std::path::Path::new("."), index);
             libc::_exit(0);
         }
@@ -6734,15 +6766,22 @@ pub fn fill_snapshot(root: &Path, index: usize) -> Result<(), String> {
         return Err("no fingerprint".into());
     };
     let node_modules = root.join("node_modules");
+    let slot = snapshot_slots(root)[index].clone();
+    let marker = root.join(snapshot_marker(index));
     if !node_modules.is_dir() {
         return Err("no tree to snapshot".into());
     }
-    let slot = snapshot_slots(root)[index].clone();
-    let marker = root.join(snapshot_marker(index));
     let _ = std::fs::remove_file(&marker); // invalid while we work
     let _ = std::fs::remove_dir_all(&slot);
     crate::jgrid::materialize::Cloner::clone_directory(&node_modules, &slot)
         .map_err(|e| format!("snapshot clone: {e}"))?;
+    // A live `node_modules` can change under the clone (the user wipes it, another
+    // install starts). Re-verify it afterwards, and discard the slot if it no longer
+    // matches: a torn capture must never get a marker.
+    if !crate::tree_state::verify_tree(root).is_match() {
+        let _ = std::fs::remove_dir_all(&slot);
+        return Err("tree changed during snapshot".into());
+    }
     // Marker last: a slot without a matching marker is never used.
     crate::file_lock::AtomicWrite::write_to_file(&marker, want.as_bytes())
         .map_err(|e| format!("snapshot marker: {e}"))?;
@@ -6751,6 +6790,81 @@ pub fn fill_snapshot(root: &Path, index: usize) -> Result<(), String> {
 
 /// Record the current, verified tree in both slots (used after a normal install, where
 /// no snapshot was consumed and the work can be done inline).
+/// Take the per-project snapshot-fill lock without waiting. `None` means another fill is
+/// already running (or the lock cannot be taken), so the caller should simply exit:
+/// piling a second set of clones onto the disk only slows both.
+///
+/// A kernel `flock`, not a create-new lock file: it is released when the holder dies,
+/// so a killed child can never wedge snapshots permanently.
+pub fn snapshot_fill_lock(root: &Path) -> Option<std::fs::File> {
+    let dir = root.join(".jhol");
+    let _ = std::fs::create_dir_all(&dir);
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(dir.join("snapshot-fill.lock"))
+        .ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return None;
+        }
+    }
+    Some(file)
+}
+
+/// Record the verified tree in both slots from a detached child, so the caller never
+/// waits for the clones.
+///
+/// The plain-install fast lane returned without ever saving a snapshot, so a project
+/// installed from an npm/bun-written lockfile paid the full ~60 ms rebuild on every
+/// wipe-and-reinstall. Saving inline would move ~35 ms onto this first install; a
+/// detached child costs the caller one spawn. Both slots are filled so an immediate
+/// second wipe still finds a valid one while the first refills.
+///
+/// Re-execs the binary (`__snapshot-fill 2`) rather than `fork()`: this lane has
+/// already run parallel workers, and a forked child of a threaded process can inherit
+/// a lock held by a thread that no longer exists.
+pub fn save_prepared_snapshot_detached(root: &Path) {
+    if std::env::var_os("JHOL_NO_PREPARED_SNAPSHOT").is_some() {
+        return;
+    }
+    let Some(want) = prepared_fingerprint(root) else {
+        return;
+    };
+    if (0..2).all(|i| slot_is_valid(root, i, &want)) {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let Ok(exe) = std::env::current_exe() else {
+            return save_prepared_snapshot(root);
+        };
+        let mut cmd = std::process::Command::new(exe);
+        cmd.arg("__snapshot-fill")
+            .arg("2")
+            .current_dir(root)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // New session: the child must not die with the caller's terminal or process
+        // group, and must hold none of the caller's pipes (stdio is already null).
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        if cmd.spawn().is_err() {
+            save_prepared_snapshot(root);
+        }
+    }
+    #[cfg(not(unix))]
+    save_prepared_snapshot(root);
+}
+
 pub fn save_prepared_snapshot(root: &Path) {
     if std::env::var_os("JHOL_NO_PREPARED_SNAPSHOT").is_some() {
         return;

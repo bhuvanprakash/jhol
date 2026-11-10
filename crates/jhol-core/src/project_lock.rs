@@ -96,7 +96,10 @@ impl ProjectLock {
                     let _ = file.set_len(0);
                     let mut f = &file;
                     let _ = writeln!(f, "{}", std::process::id());
-                    let _ = file.sync_data();
+                    // No fsync: the pid is only a diagnostic message and the kernel's
+                    // flock is the lock. On macOS `sync_data` is F_FULLFSYNC (a physical
+                    // disk flush, ~15 ms measured), paid on every install for a number
+                    // whose loss after a crash is harmless.
                     if let Ok(mut held) = held_by_this_process().lock() {
                         held.insert(path.clone());
                     }

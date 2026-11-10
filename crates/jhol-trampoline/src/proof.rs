@@ -434,6 +434,13 @@ pub fn cache_dir() -> PathBuf {
 
 /// Attempt direct L0 projection from JGrid bundle into root/node_modules
 pub fn try_direct_bundle_projection(root: &Path) -> bool {
+    let __t = std::time::Instant::now();
+    let __p = std::env::var_os("JHOL_PROFILE_INSTALL").is_some();
+    let __m = |l: &str| {
+        if __p {
+            eprintln!("[l2] {l} {:.2} ms", __t.elapsed().as_secs_f64() * 1000.0);
+        }
+    };
     if !shortcut_policy_allows(root) {
         return false;
     }
@@ -455,20 +462,25 @@ pub fn try_direct_bundle_projection(root: &Path) -> bool {
     ) {
         return false;
     }
+    __m("policy+nm-check");
     let Some(identity) = project_identity(root) else {
         return false;
     };
+    __m("project_identity#1");
     let bundle_path = cache_dir().join("grid").join("bundles").join(&identity);
     let bundle_nm = bundle_path.join("node_modules");
     if !bundle_path.join(".jhol-complete").is_file() || !locked_layout_is_valid(root, &bundle_nm) {
         return false;
     }
+    __m("locked_layout_is_valid");
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
     let candidate = root.join(format!(".jhol-projection-{}-{nonce}", std::process::id()));
-    if clone_directory(&bundle_nm, &candidate).is_err()
+    let cloned = clone_directory(&bundle_nm, &candidate);
+    __m("clone_directory");
+    if cloned.is_err()
         || std::fs::write(candidate.join(".jhol-ok"), &identity).is_err()
         || project_identity(root).as_ref() != Some(&identity)
         || std::fs::rename(&candidate, &nm).is_err()
@@ -476,6 +488,7 @@ pub fn try_direct_bundle_projection(root: &Path) -> bool {
         let _ = std::fs::remove_dir_all(&candidate);
         return false;
     }
+    __m("write+identity#2+rename");
     true
 }
 

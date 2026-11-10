@@ -1224,8 +1224,24 @@ pub struct FmtCache {
     pub engine: String,
     pub config: u64,
     pub files: HashMap<String, String>,
+    /// Directory-walk snapshots, keyed by the root the user named (`.` for none). Lets a
+    /// front door prove "the walk would return the same files" without walking; see
+    /// `Walk`. Ignored by older readers.
+    #[serde(default)]
+    pub walks: HashMap<String, Walk>,
     #[serde(skip)]
     pub dirty: bool,
+}
+
+/// What one `jhol fmt <dir>` walk saw: every directory that can influence the result with
+/// its mtime in ns (read **before** the directory was listed, so an entry added during
+/// the walk can only make the snapshot stale, never wrong), and the final file list under
+/// the exact keys the cache uses. A directory's mtime changes when an entry is added,
+/// removed or renamed; an in-place edit is caught by the file's content hash instead.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct Walk {
+    pub dirs: Vec<(String, u64)>,
+    pub files: Vec<String>,
 }
 
 impl FmtCache {
@@ -1237,10 +1253,18 @@ impl FmtCache {
             .unwrap_or_default();
         if c.engine != engine || c.config != config_digest {
             c.files.clear();
+            c.walks.clear();
         }
         c.engine = engine.to_string();
         c.config = config_digest;
         c
+    }
+
+    pub fn set_walk(&mut self, key: &str, walk: Walk) {
+        if self.walks.get(key) != Some(&walk) {
+            self.walks.insert(key.to_string(), walk);
+            self.dirty = true;
+        }
     }
 
     pub fn is_fresh(&self, rel: &str, hash: &str) -> bool {

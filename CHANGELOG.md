@@ -3562,3 +3562,92 @@ it off cost 81 ms against 10 ms.
 Caveat recorded: back-to-back wipes can outrun the detached snapshot refill, so a tight
 benchmark loop sees the projection path (10 ms, 149 ms, 163 ms, 542 ms across four runs). A
 third slot would make it rarer, not impossible.
+
+## Addendum: warm-reinstall snapshot fixes (2026-11-10)
+
+Measured on the 4-dependency fixture (104 packages), `node_modules` removed, lockfile and
+package cache present, output captured through a pipe.
+
+- **Piped callers no longer wait for the background snapshot refill.** The refill child
+  (`spawn_snapshot_fill`) inherited the caller's stdout/stderr. Anything that waits for EOF
+  (`$(jhol install)`, `| tee`, CI log capture, `execSync`) therefore waited for the child's
+  clone: 45 ms piped against 12 ms to a file. The child now calls `setsid` and moves fds 0-2
+  to `/dev/null`. Piped restore: 12.8 ms.
+- **The plain-install fast lane now records a snapshot.** It returned without calling
+  `save_prepared_snapshot`, so a project installed from an npm/bun-written lockfile never
+  got one and every later wipe-and-reinstall paid the full ~60 ms. A detached child
+  (`__snapshot-fill 2`, re-exec, not `fork`, because this lane has already run worker
+  threads) now fills both slots. It takes a non-blocking `flock` (single-flight, released if
+  the child dies), captures only if the same `node_modules` directory survives ~300 ms
+  (inode check), and verifies the tree before and after cloning, so a torn capture never
+  gets a marker.
+- Result: first install of a fresh checkout unchanged; reinstall after >=400 ms idle is
+  ~13 ms. **Not fixed:** a wipe-and-reinstall loop with no idle time (`hyperfine --prepare
+  'rm -rf node_modules'`) still takes ~64 ms, because nothing has been captured yet. The
+  snapshot is a cache of a finished tree, so it cannot help the first reinstalls.
+- Correctness checks run: 15 back-to-back reinstalls verified; SIGKILL of the fill child
+  self-heals on the next install; a changed lockfile byte invalidates the snapshot;
+  no stray fill processes remain.
+- Not run: `cargo test` for the workspace (only release builds and the scripted checks
+  above). Build used `scripts/build_release_safe.sh` (LTO off), not the shipping profile.
+
+## Addendum: startup measurement (2026-11-10, later)
+
+- `JHOL_PROFILE_STARTUP=1` now also prints `[boot] process-start -> main` (kernel process
+  start time to the first line of `main`). Diagnostic only; no behavior change.
+- Measured, not changed: `jhol fmt --check` is ~4.4-4.8 ms wall on one file. Inside `main`
+  it is 0.38 ms. Process start to `main` is ~3.4 ms against ~1.9 ms for an empty Rust
+  binary. Ruled out as causes: dyld rebases (37k, ~0.2 ms), `-dead_strip_dylibs` (no
+  gain). Real cost: ~0.85 ms loading JavaScriptCore/CoreServices/CoreFoundation at
+  launch for commands that never run JS, plus ~800 page faults from the 18 MB image.
+- Benchmark caveat: `JHOL_CACHE_DIR` does not isolate jhol's cache (`content.rs` also reads
+  `~/.jhol-cache`), and 607 popular packages (2.1 GB) ship in `binary-packages/`. A cold
+  comparison must redirect `HOME` and use packages outside the bundle.
+
+## Addendum: fmt front-door lane (2026-11-10, later)
+
+- `jhol-trampoline` now answers `jhol fmt [--check] <file>...` itself when it can prove the
+  full CLI would print `0 changed`: argv has no other flag, no directory; files are
+  in-process-formatter extensions; no `.prettierrc`/`.prettierrc.json`/`.jholrc`/
+  `.prettierignore` in cwd; `.jhol/fmt-cache.json` has the same engine string and default
+  config digest and holds each file under the CLI's key with the SHA-256 of its current
+  bytes. Anything else falls through to `jhol-bin`. Nothing is written.
+- Measured (1 file, p50/p99): 4.39/4.68 ms -> 2.09/2.22 ms. 4 files: 4.54 -> 2.14 ms.
+  Miss path (e.g. `jhol fmt .`, edited file) pays one extra process start: 4.6 -> 6.3 ms.
+- Parity: 15 scenarios compared to the full CLI byte-for-byte (stdout, stderr, exit code):
+  0 differences. 5 unit tests added in `fmt_lane.rs`, including one pinning the engine
+  string to `jhol-bundle` and one pinning the default digest to a value the CLI wrote.
+- Not covered: `jhol fmt` on directories / whole project; external tools (rs/go/py).
+- Active only where the trampoline is installed as `jhol` next to `jhol-bin`.
+
+## Addendum: fmt walk snapshot, directory runs (2026-11-10, later still)
+
+- `.jhol/fmt-cache.json` gains an optional `walks` map (`#[serde(default)]`, ignored by older
+  readers). After a clean `jhol fmt` on one directory root (or none), the CLI records every
+  directory it walked with its mtime in ns, stat'd **before** listing it, plus the file list
+  under the cache's own keys. `.jhol`, `node_modules`, `build`, ... (`is_ignored`) are left
+  out: saving the cache rewrites `.jhol` and would stale every snapshot. Not recorded when
+  any file needs an external tool (rs/go/py), since those never cache.
+- The trampoline answers `jhol fmt [--check] [dir]` when every recorded directory still has
+  the same mtime (no entry added/removed/renamed) and every listed file still hashes to its
+  cache entry; else it falls through. Parity vs the full CLI: 16 scenarios (new file, new file
+  in a `.md`-only dir, new subdir, delete, rename, in-place edit, `.prettierignore`/
+  `.prettierrc` appearing, ignored dirs, external file added): 0 differences.
+- 200 files / 26 dirs unchanged, `fmt --check .`: p50 7.19 -> 4.34 ms. 16 trampoline tests pass.
+- Not run: `jhol-bundle` / workspace test suites (the `FmtCache` struct gained a field).
+
+## Addendum: install lock no longer flushes the disk (2026-11-10, latest)
+
+- `ProjectLock::acquire` wrote its pid and called `sync_data()`, which on macOS is
+  `F_FULLFSYNC` (a physical drive-cache flush). The pid is only a diagnostic ("the lock is
+  the kernel's"). Removed. Wipe-and-reinstall with no snapshot: 63.0 -> 51.0 ms (median of
+  11), `verify` clean. Found by reading the `[boot] project lock` step (1.6 -> 16 ms).
+- `FileLock` pid markers: same, no flush. `AtomicWrite::write_to_file` (cache indexes,
+  tree/bundle/snapshot "complete" markers): `sync_all` (F_FULLFSYNC, ~3.2 ms measured) ->
+  `fsync(2)` (~0.02 ms). Keeps data ordered before the rename against process/kernel
+  failure; does not guarantee the drive's own cache survives a sudden power cut. All eight
+  callers write rebuildable caches/markers. Lockfiles and package.json do not use it.
+  No measurable change on the install path itself.
+- New `JHOL_PROFILE_INSTALL=1` stage output: `[lane]`, `[l2]`, `[fastlane]`, `[fastwarm]`.
+  Findings: the no-snapshot reinstall goes through direct bundle projection; of its ~27 ms,
+  ~23 ms is the kernel `clonefile` of the cached tree. Not changed.

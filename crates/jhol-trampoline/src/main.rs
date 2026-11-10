@@ -8,12 +8,21 @@ use std::env;
 use std::path::Path;
 use std::process::Command;
 
+mod fmt_lane;
 mod proof;
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     if try_instant_trampoline(&args) {
         std::process::exit(0);
+    }
+    // `jhol fmt <files>` where every file is provably already formatted: print what the
+    // full CLI would print and stop. Anything uncertain falls through to the CLI.
+    if let Ok(cwd) = env::current_dir() {
+        if let Some(n) = fmt_lane::try_fresh(&args, &cwd) {
+            eprintln!("fmt: {} file(s), 0 changed, engine {}", n, fmt_lane::FMT_ENGINE);
+            std::process::exit(0);
+        }
     }
 
     // global-install layout: real CLI is `jhol-bin` (this file is `jhol`/front);

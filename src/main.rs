@@ -2305,19 +2305,38 @@ fn try_fast_install() -> Option<Result<(usize, usize), String>> {
         }
         state.is_match()
     };
+    let __lt = std::time::Instant::now();
+    let __lp = std::env::var_os("JHOL_PROFILE_INSTALL").is_some();
+    let __lane = |name: &str, hit: bool| {
+        if __lp {
+            eprintln!("[lane] {name} hit={hit} {:.2} ms", __lt.elapsed().as_secs_f64() * 1000.0);
+        }
+    };
     let result = if tree_ok && jhol_core::instant_lock_proof::prepared_tree_is_valid(Path::new(".")) {
+        __lane("1 prepared_tree_is_valid", true);
         // 1. Zero-cost recheck: node_modules already matches the lockfile
         Some(Ok(()))
-    } else if jhol_core::instant_lock_proof::try_direct_bundle_projection(Path::new(".")) {
+    } else if {
+        __lane("1 prepared_tree_is_valid", false);
+        jhol_core::instant_lock_proof::try_direct_bundle_projection(Path::new("."))
+    } {
+        __lane("2 direct_bundle_projection", true);
         // 2. Direct L0 bundle projection from cache
         Some(Ok(()))
-    } else if jhol_core::try_fresh_project_bundle_replay(Path::new(".")) {
+    } else if {
+        __lane("2 direct_bundle_projection", false);
+        jhol_core::try_fresh_project_bundle_replay(Path::new("."))
+    } {
+        __lane("2b fresh_project_replay", true);
         // 2b. Fresh project (no lockfile yet): replay the bundle published by a
         // previous byte-identical install — same contract as a committed lockfile.
         Some(Ok(()))
     } else {
+        __lane("2b fresh_project_replay", false);
         // 3. Bare-metal fast warm materialization via parallel APFS clonefile(2)
-        jhol_core::fast_direct_warm_install()
+        let r = jhol_core::fast_direct_warm_install();
+        __lane("3 fast_direct_warm_install", r.is_some());
+        r
     };
     // Every lane here completed an install: run the lifecycle phase so script
     // consent is enforced (and skipped scripts surfaced) on the fast path too.
@@ -2355,10 +2374,33 @@ fn try_fast_install() -> Option<Result<(usize, usize), String>> {
     })
 }
 
-fn collect_fmt_files(root: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+/// In-process formatter extensions the `jhol-trampoline` fmt lane may answer for. Must equal
+/// `EXTS` in `crates/jhol-trampoline/src/fmt_lane.rs` (a test there pins them together).
+const FMT_FRONT_EXTS: [&str; 10] = [
+    "js", "mjs", "cjs", "jsx", "ts", "tsx", "mts", "cts", "json", "css",
+];
+
+fn dir_mtime_ns(p: &std::path::Path) -> Option<u64> {
+    let m = std::fs::metadata(p).ok()?.modified().ok()?;
+    Some(m.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos() as u64)
+}
+
+fn collect_fmt_files(
+    root: &std::path::Path,
+    out: &mut Vec<std::path::PathBuf>,
+    dirs: &mut Vec<(String, u64)>,
+) {
     if root.is_file() {
         out.push(root.to_path_buf());
         return;
+    }
+    // Stat BEFORE listing. Skip directories whose whole subtree is filtered out later
+    // (`.jhol` is one, and saving the cache rewrites it, which would make every snapshot
+    // stale the moment it was written).
+    if !jhol_bundle::fmt::is_ignored(root) {
+        if let Some(m) = dir_mtime_ns(root) {
+            dirs.push((root.to_string_lossy().replace('\\', "/"), m));
+        }
     }
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
@@ -2371,7 +2413,7 @@ fn collect_fmt_files(root: &std::path::Path, out: &mut Vec<std::path::PathBuf>) 
             continue;
         }
         if p.is_dir() {
-            collect_fmt_files(&p, out);
+            collect_fmt_files(&p, out, dirs);
         } else if p.is_file() {
             out.push(p);
         }
@@ -2411,15 +2453,51 @@ fn run() -> Result<(), String> {
                 .nth(2)
                 .and_then(|v| v.parse::<usize>().ok())
                 .unwrap_or(0)
-                .min(1);
-            return jhol_core::install::fill_snapshot(std::path::Path::new("."), index)
-                .map_err(|e| format!("snapshot fill: {e}"));
+                .min(2);
+            // 2 = refill both slots (spawned by the plain-install fast lane).
+            let slots: &[usize] = if index == 2 { &[0, 1] } else { &[index] };
+            // Single-flight, done in jhol-core (which owns libc).
+            let Some(_fill_lock) = jhol_core::install::snapshot_fill_lock(Path::new(".")) else {
+                return Ok(());
+            };
+            // The tree may have changed between the install and this child running;
+            // never capture one that no longer matches the lockfile.
+            //
+            // Capture only a tree that survives. A caller that wipes and reinstalls in
+            // a loop (`hyperfine --prepare 'rm -rf node_modules'`, a test harness) would
+            // otherwise have this child clone the full tree twice, concurrently with its
+            // next install, for a tree that is about to be deleted (measured: it made
+            // that pattern slower, 42 -> 65 ms). Remember which directory this is, wait,
+            // and capture only if the same directory is still there: a wipe-and-reinstall
+            // creates a new one, and the child exits having done no clone work.
+            #[cfg(unix)]
+            if index == 2 {
+                use std::os::unix::fs::MetadataExt;
+                let ino = |p: &str| std::fs::metadata(p).ok().map(|m| m.ino());
+                let before = ino("node_modules");
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                if before.is_none() || ino("node_modules") != before {
+                    return Ok(());
+                }
+            }
+            if index == 2 && !jhol_core::tree_state::verify_tree(Path::new(".")).is_match() {
+                return Ok(());
+            }
+            for &slot in slots {
+                jhol_core::install::fill_snapshot(std::path::Path::new("."), slot)
+                    .map_err(|e| format!("snapshot fill: {e}"))?;
+            }
+            return Ok(());
         }
     }
 
     let fast_start = std::time::Instant::now();
+    let __prof = std::env::var_os("JHOL_PROFILE_INSTALL").is_some();
     if let Some(fast_res) = try_fast_install() {
         let fast_elapsed = fast_start.elapsed();
+        if __prof {
+            eprintln!("[fastlane] try_fast_install {:.2} ms", fast_elapsed.as_secs_f64() * 1000.0);
+        }
         match fast_res {
             Ok((before, after)) => {
                 // The ONE convergence point. Regardless of which lane won, the
@@ -2427,7 +2505,11 @@ fn run() -> Result<(), String> {
                 // "done" while the tree still disagrees has not finished the
                 // job, and claiming success here is how a tampered package and
                 // an unauthorised directory both survived an install.
+                let __rt = std::time::Instant::now();
                 let state = jhol_core::tree_state::reconcile_tree(Path::new("."));
+                if __prof {
+                    eprintln!("[fastlane] reconcile_tree {:.2} ms", __rt.elapsed().as_secs_f64() * 1000.0);
+                }
                 if state.is_match() {
                     let (added, _) = install_summary_counts(before, after);
                     let fast_quiet = env::var("JHOL_QUIET").is_ok()
@@ -2436,6 +2518,9 @@ fn run() -> Result<(), String> {
                         eprintln!("[jhol] fast lane verified: {}", state.describe());
                     }
                     print_install_summary(added, after, fast_elapsed, fast_quiet, false);
+                    // The tree just verified against the lockfile: capture it so the
+                    // next wipe-and-reinstall is a rename instead of a rebuild.
+                    jhol_core::install::save_prepared_snapshot_detached(Path::new("."));
                     return Ok(());
                 }
                 if env::var("JHOL_VERBOSE").is_ok() {
@@ -6148,8 +6233,9 @@ fn run() -> Result<(), String> {
                 .map(|it| it.map(|s| s.clone()).collect())
                 .unwrap_or_default();
             let mut files: Vec<std::path::PathBuf> = Vec::new();
+            let mut walk_dirs: Vec<(String, u64)> = Vec::new();
             if roots.is_empty() {
-                collect_fmt_files(std::path::Path::new("."), &mut files);
+                collect_fmt_files(std::path::Path::new("."), &mut files, &mut walk_dirs);
             } else {
                 for r in &roots {
                     let pp = std::path::Path::new(r);
@@ -6162,7 +6248,7 @@ fn run() -> Result<(), String> {
                         return Err(format!("fmt: no such file or directory: {r}"));
                     }
                     if pp.is_dir() {
-                        collect_fmt_files(pp, &mut files);
+                        collect_fmt_files(pp, &mut files, &mut walk_dirs);
                     } else {
                         let has_engine = jhol_bundle::fmt::is_supported(pp)
                             || pp
@@ -6307,6 +6393,41 @@ fn run() -> Result<(), String> {
                         errors += 1;
                         eprintln!("{}: {}", p.display(), e);
                     }
+                }
+            }
+            // Record the walk so the trampoline can answer the next identical run without
+            // loading this binary. Only for one directory root whose files all have an
+            // in-process formatter (external tools are never cached, so never "fresh").
+            if !no_cache && errors == 0 && roots.len() <= 1 {
+                let single_dir = roots
+                    .first()
+                    .map_or(true, |r| std::path::Path::new(r).is_dir());
+                let all_inproc = files.iter().all(|p| {
+                    p.extension()
+                        .and_then(|e| e.to_str())
+                        .map_or(false, |e| FMT_FRONT_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+                });
+                if single_dir && all_inproc {
+                    let key = match roots.first().map(String::as_str) {
+                        None | Some(".") => ".".to_string(),
+                        Some(r) => r.to_string(),
+                    };
+                    let rels: Vec<String> = files
+                        .iter()
+                        .map(|p| {
+                            p.strip_prefix(&cwd)
+                                .unwrap_or(p)
+                                .to_string_lossy()
+                                .replace('\\', "/")
+                        })
+                        .collect();
+                    cache.set_walk(
+                        &key,
+                        jhol_bundle::fmt::Walk {
+                            dirs: walk_dirs.clone(),
+                            files: rels,
+                        },
+                    );
                 }
             }
             if !no_cache {
@@ -9388,7 +9509,59 @@ fn group_digits(n: u64) -> String {
     out
 }
 
+/// Milliseconds between the kernel creating this process and `main` starting
+/// (exec + dyld + static initialisers). Only called under `JHOL_PROFILE_STARTUP`.
+#[cfg(target_os = "macos")]
+fn pre_main_ms() -> Option<f64> {
+    use std::mem::MaybeUninit;
+    extern "C" {
+        fn sysctl(
+            name: *mut i32,
+            namelen: u32,
+            oldp: *mut libc_shim::c_void,
+            oldlenp: *mut usize,
+            newp: *mut libc_shim::c_void,
+            newlen: usize,
+        ) -> i32;
+        fn getpid() -> i32;
+        fn gettimeofday(tv: *mut [i64; 2], tz: *mut libc_shim::c_void) -> i32;
+    }
+    mod libc_shim {
+        pub use std::ffi::c_void;
+    }
+    // CTL_KERN=1, KERN_PROC=14, KERN_PROC_PID=1; kinfo_proc.p_starttime is the
+    // first timeval inside the struct (offset 0 of `kp_proc`).
+    let mut mib = [1i32, 14, 1, unsafe { getpid() }];
+    let mut buf = MaybeUninit::<[u8; 1024]>::zeroed();
+    let mut len = 1024usize;
+    let rc = unsafe {
+        sysctl(
+            mib.as_mut_ptr(),
+            4,
+            buf.as_mut_ptr() as *mut _,
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 || len < 16 {
+        return None;
+    }
+    let b = unsafe { buf.assume_init() };
+    let sec = i64::from_ne_bytes(b[0..8].try_into().ok()?);
+    let usec = i64::from_ne_bytes(b[8..16].try_into().ok()?) & 0xffff_ffff;
+    let mut now = [0i64; 2];
+    unsafe { gettimeofday(&mut now, std::ptr::null_mut()) };
+    Some(((now[0] - sec) as f64) * 1000.0 + ((now[1] & 0xffff_ffff) - usec) as f64 / 1000.0)
+}
+
 fn main() {
+    if std::env::var_os("JHOL_PROFILE_STARTUP").is_some() {
+        #[cfg(target_os = "macos")]
+        if let Some(ms) = pre_main_ms() {
+            eprintln!("[boot] process-start -> main {:.2} ms", ms);
+        }
+    }
     let boot = std::time::Instant::now();
     let mark = |label: &str| {
         if std::env::var_os("JHOL_PROFILE_STARTUP").is_some() {
