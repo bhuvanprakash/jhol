@@ -180,6 +180,7 @@ Quiet output is `-q`. Machine-readable output is `--json` on install, doctor, au
 | Audit and attempt fixes | `jhol audit --fix` |
 | Fail CI on vulnerabilities | `jhol audit --gate` |
 | Write an SBOM | `jhol sbom -o sbom.json` |
+| One screen of truth | `jhol status [--json]` — verdict, policy, artifacts, axes, proof |
 | Prove the tree matches the lockfile | `jhol verify` (exit 0 only when it does) |
 | Delete what the lockfile never authorised | `jhol verify --prune` |
 | Deterministic proof, and re-check it | `jhol attest` · `jhol attest --verify` |
@@ -211,6 +212,8 @@ Quiet output is `-q`. Machine-readable output is `--json` on install, doctor, au
 
 | Goal | Command |
 |---|---|
+| Terminal dashboard | `jhol gui` |
+| Status in a browser | `jhol gui --web` (serves `/status.json`) |
 | MCP server on stdin | `jhol mcp --stdio` |
 | Speculate a resolve with no I/O | tool `jhol_resolve_speculation` |
 | Heal a peer conflict | tool `jhol_auto_heal` |
