@@ -3346,3 +3346,21 @@ Cold is unchanged at 0.83–1.13 s against bun's 1.49–2.01 s. The remaining ~5
 verification walk; the clone is no longer the bottleneck.
 
 jhol-core 723 tests, treecheck 15, CLI suite 30/30, installer gate PASS.
+
+## Measured: a 40 ms warm install is startup plus one clone
+
+Two probes, checked in as `examples/verify_probe.rs` and `examples/clone_probe.rs`:
+
+| piece | cost |
+|---|---:|
+| process start (`jhol --version`) | ~20 ms (bun ~17 ms) |
+| `verify_tree`, 71 packages | **1.6 ms/call** |
+| recursive `clonefile`, 738 files | 12–15 ms |
+
+Verification was never the 41 ms I attributed to it — that was the whole freshness report
+(config load, lockfile parse, two walks, summary). With the snapshot in place, a warm rebuild
+is startup + one clone.
+
+Which means the remaining lever is **startup**, and both tools are within 3 ms of each other
+there at this tree size. Further installer micro-optimisation has no room: a per-file hardlink
+farm is ~0.4 ms/package (worse), `cp -cR` is 114 ms (worse), `verify_tree` is 1.6 ms.

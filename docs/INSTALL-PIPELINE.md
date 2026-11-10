@@ -370,3 +370,27 @@ verified again. One walk when the tree already matches.
 
 Remaining ~5 ms is the verification walk itself; the next lever is making that walk cheaper
 (it reads 71 manifests and stats 140 directories), not the clone.
+
+### Where a 40 ms warm install actually goes
+
+Measured in-process, not guessed (`examples/verify_probe.rs`, `examples/clone_probe.rs`):
+
+| piece | cost |
+|---|---:|
+| process start (`jhol --version`) | **~20 ms** |
+| `verify_tree` on 71 packages | **1.6 ms/call** |
+| recursive `clonefile` of 738 files | **12–15 ms** |
+| rest of the install work | ~2 ms |
+
+So the warm install is **startup + one clone**, and verification — which I had blamed at
+41 ms — is 1.6 ms. The 41 ms was the whole freshness report (config, lockfile parse, two
+walks, summary), not the tree check.
+
+Consequences, in order of size: the way to beat bun warm is to cut **startup**, not the
+installer. `jhol --version` is ~20 ms against bun's ~17 ms, so there is little headroom there
+either; both tools are dominated by process start at this tree size. The clone (12–15 ms for
+738 files) is at the filesystem's floor for metadata copy — `cp -cR` needs 114 ms for the
+same tree.
+
+What this rules out, with numbers: a hardlink farm per file (≈0.4 ms/package, worse), a
+whole-tree `cp -c` (114 ms), and further work on `verify_tree` (1.6 ms).
