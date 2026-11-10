@@ -4033,6 +4033,7 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
         let path = crate::content::tarball_path(&cache_dir, hash);
         cache_hits.push((entry, path));
     }
+    profiler.mark("layout_sources_resolved");
     // Validate cached provenance before publishing any project package.
     for (entry, tarball_path) in &cache_hits {
         if let Some(sri) = entry.integrity.as_deref() {
@@ -4048,6 +4049,7 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
             }
         }
     }
+    profiler.mark("layout_integrity_verify");
     // Parents complete before children across *all* source types. Independent
     // packages at one depth still publish in parallel.
     cache_hits.sort_by_key(|(entry, _)| entry.install_path.matches("/node_modules/").count());

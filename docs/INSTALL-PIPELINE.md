@@ -314,3 +314,29 @@ cannot name them no matter how often it is asked. Anything that fixes it must ei
 all versions (196 documents, ~4.7 s of parsing — worse than the ten solves) or cache the
 resolver's per-package view, which is the lever named above.
 
+## Warm install: the honest scoreboard
+
+express@4.18.2 (71 packages), clean cache, order alternated between the two tools, package
+count taken after every run:
+
+| scenario | jhol | bun 1.4.4 | |
+|---|---:|---:|---|
+| no-op (tree present, nothing to do) | **22 ms** | 21 ms | parity |
+| `node_modules` wiped, rebuilt | **52–60 ms** | 34–38 ms | ~1.6× behind |
+| cold, fresh cache | **0.83–1.13 s** | 1.49–2.01 s | 1.8× ahead |
+
+Three numbers from this session had to be corrected before the table above was true:
+
+* **38–49 ms warm** — measured when a corrupt store entry made installs produce 56 of 71
+  packages (see `DEFECT-LOG.md` §14). It was timing less work.
+* **105–130 ms warm** — the same damaged cache, being *repaired* on every run.
+* **25–27 ms warm** — real, but only with nothing else running: the store's pages were in
+  RAM. Interleaving with bun evicts them, and an order-controlled A/B shows 52–60 ms.
+  A benchmark that only measures the hot case is measuring the page cache.
+
+Where the remaining ~20 ms is: per-package materialisation, ~0.4 ms for each of 71 packages
+(a `clonefile` plus `materialize::finish`), against bun's ~0.25 ms. Closing that means
+making the per-package step cheaper — fewer syscalls, batched marker writes, and folding the
+post-install verification into the pass that already touches every file — not changing the
+strategy. A whole-tree `clonefile` was measured and is **slower** (`cp -cR` of 737 files:
+114 ms), so that door is closed with evidence.

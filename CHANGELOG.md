@@ -3301,3 +3301,20 @@ seductive and wrong on this filesystem.
 Where the remaining ~20 ms sits: per-package projection (25–35 ms), install markers (~8 ms)
 and verification. Closing it means making per-package materialisation cheaper, not changing
 the strategy.
+
+## Warm install: two profile marks and a corrected scoreboard
+
+Added `layout_sources_resolved` and `layout_integrity_verify` marks so the two unmeasured
+phases of the lockfile-layout lane stop being invisible under `JHOL_PROFILE_INSTALL`.
+
+Corrected the record with an order-alternated A/B (express@4.18.2, clean cache):
+
+| scenario | jhol | bun 1.4.4 |
+|---|---:|---:|
+| no-op warm | **22 ms** | 21 ms |
+| warm, `node_modules` wiped | **52–60 ms** | 34–38 ms |
+| cold | **0.83–1.13 s** | 1.49–2.01 s |
+
+The 25–27 ms warm figure measured earlier was real but hot-cache-only: with nothing else
+running the store's pages are in RAM, and interleaving with bun evicts them. Remaining gap is
+~0.4 ms per package (clonefile + finish) against bun's ~0.25 ms.
