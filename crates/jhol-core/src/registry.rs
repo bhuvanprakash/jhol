@@ -4381,7 +4381,22 @@ pub fn store_extract_complete(dest_dir: &Path) -> bool {
         }
     }
     if dest_dir.join(STORE_COMPLETE_MARKER).exists() {
-        return true;
+        // …but a marker over a directory holding **nothing else** is a truncated
+        // extract, not "a tarball without a manifest". Observed as a store entry for
+        // `express` with one file (the marker): every install linked the empty
+        // directory, counted the package as installed, and left a tree missing 14
+        // packages while the lockfile listed 71. A package without any body file is
+        // not installable, so treating it as incomplete costs one re-extract.
+        let body = std::fs::read_dir(dest_dir)
+            .map(|rd| {
+                rd.flatten().any(|e| {
+                    let name = e.file_name();
+                    name.to_string_lossy() != STORE_COMPLETE_MARKER
+                        && e.file_type().map(|t| t.is_file() || t.is_dir()).unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+        return body;
     }
     // Legacy mark-free dirs: a real body file (regular file beyond package.json)
     // proves the tarball was fully materialized. The relink `node_modules/`

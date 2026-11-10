@@ -3256,3 +3256,20 @@ proof that it stayed mechanical.
 One detail worth knowing for the next extraction: a match that is the function's tail
 expression needs an explicit `Ok(())` when its arms are statements. That is what the
 compiler caught on the first attempt here.
+
+## Install: a store entry with a completion marker and nothing else is corruption
+
+A warm-cache install of `express@4.18.2` reported `Added 56 packages`, left
+`node_modules/express` as an **empty directory**, and the lockfile listed 71 — 14 packages
+missing, including express itself. The same install with a cold cache produced 71.
+
+`store_extract_complete` accepted a directory holding the completion marker; the corrupt
+entry for `express` held the marker and nothing else, from an extract truncated after the
+marker was written. `project_package` linked the empty directory and counted the package as
+installed.
+
+A marker over a directory with no other entry is now rejected, the entry re-extracted, and
+the tree converges (56 → 68 → 71 across two runs, then `Up to date`, `verify` clean).
+
+The rule, added to `DEFECT-LOG.md`: *a completion marker proves a write finished; it does
+not prove the write produced anything.*

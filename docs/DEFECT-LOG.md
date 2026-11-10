@@ -253,3 +253,24 @@ calls anything missing.
 | 9 | manifest-keyed alias tests |
 | 10 | `jagr_nest` alias cases |
 | 11 | `crates/jhol-vm/tests/js/*` (44 pairs), `adv/*` |
+
+## 14. A store entry with a completion marker and nothing else
+
+**Symptom.** A warm-cache install of `express@4.18.2` reported `Added 56 packages`, left
+`node_modules/express` as an **empty directory**, and the lockfile listed 71 packages. The
+tree was missing 14 of them, including `express` itself. Cold cache: 71, correct. So every
+fast path was answering "installed" for content that did not exist.
+
+**Root cause.** `store_extract_complete` accepted a directory that contained the completion
+marker, and the corrupt entry for `express` contained the marker and **one file** — the
+marker. The extract had been truncated after the marker was written. `project_package`
+then linked that empty directory, counted the package as installed, and moved on.
+
+**Fix.** A marker over a directory with no other entry is corruption, not "a tarball
+without a manifest". That case is now rejected, the entry re-extracted, and the tree
+converges (56 → 68 → 71 across two runs, then `Up to date`).
+
+**Rule.** *A completion marker proves a write finished; it does not prove the write
+produced anything.* Every "already done" test needs a content check beside it, and the
+cheapest one — "is there anything here at all" — is the one that was missing.
+
