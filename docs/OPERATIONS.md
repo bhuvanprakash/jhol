@@ -174,3 +174,35 @@ else changed, so nothing else needs to be argued about.
 `cargo test --test commands` is worth running after touching install, the daemon or the
 lockfile: it is the only place several of those contracts are pinned, and it was red
 (24/30) until this session's fixes.
+
+## Where the two headline numbers actually come from
+
+Measured with bash's `time` builtin (no subprocess in the delta — `python3 -c 'time.time()'`
+after a command adds ~18 ms to every reading, which flattered and deflated several numbers
+earlier in this project).
+
+**`jhol fmt`, 55 files**
+
+| state | jhol | bun 1.4.4 |
+|---|---:|---:|
+| unchanged (cache hit) | **6–8 ms** | 7–8 ms |
+| 55 fresh copies, 44 rewritten | **11 ms** | — |
+| `--check` on a cold cache | 24 ms | — |
+
+`fmt` was already parallel (rayon) with a content-keyed cache; the 25 ms figure in circulation
+was a *cold first run*. Steady state is under 10 ms, and the dirty case is 11 ms.
+
+**JholVM, 11 benchmark scripts**
+
+| | jhol | bun |
+|---|---:|---:|
+| eleven scripts, separate processes | **155 ms** | 162 ms |
+| one script, `iter_sum` | 33 ms (≈25 ms compute) | 57 ms |
+| one script, `tiny.js` (startup only) | **8 ms** | 8–42 ms |
+
+A suite total under 100 ms cannot come from engine work: **eleven process starts cost ~88 ms
+at the platform floor**, and `hello-world` alone is 8 ms. What the engine controls is the
+compute per script, and there we are ahead (the harness reports 287.5 ms vs bun's 361.6 ms
+under its own alternating method, 1.26×). A suite number below 100 ms would need the
+benchmarks to run in one process — a change to the harness, not to the engine, and it would
+have to be applied to both tools to mean anything.

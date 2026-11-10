@@ -3472,3 +3472,19 @@ verification before trust, corrupted slot refused and repaired. One honest outli
 inside the refill window fall back to the projection path (~24–40 ms), once in six runs.
 
 `jhol-core` 723 tests, treecheck 15, CLI suite 30/30, installer gate PASS.
+
+## Measured: `fmt` steady state is 6–8 ms, and the engine suite floor is process start
+
+`jhol fmt` was already parallel (rayon) with a content-keyed cache, so the 25 ms figure in
+circulation was a **cold first run**. Measured with bash `time`:
+
+| 55 files | jhol | bun 1.4.4 |
+|---|---:|---:|
+| unchanged | **6–8 ms** | 7–8 ms |
+| 55 fresh copies, 44 rewritten | **11 ms** | — |
+
+For JholVM the suite number cannot go under 100 ms by engine work: eleven separate processes
+cost ~88 ms at the platform floor (`hello-world` is 8 ms). Per script we are ahead — 155 ms
+against bun's 162 ms for the whole set, and `iter_sum` at 33 ms against 57 ms. A sub-100 ms
+suite would require running the benchmarks in one process, which changes what is measured and
+must be applied to both tools.
