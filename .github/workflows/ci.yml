@@ -126,6 +126,19 @@ jobs:
       - name: Test install front door and prepared-tree proof
         run: cargo test -p jhol-trampoline
 
+  cli-contracts:
+    name: CLI contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # These cover link:/file: installs, workspace ci, the backend probe rule and the
+      # daemon's project lock. All four were broken while every library test stayed
+      # green, because none of them is a library test.
+      - name: CLI contracts
+        run: cargo test --test commands
+
   all-features:
     name: workspace with every feature
     runs-on: ubuntu-latest

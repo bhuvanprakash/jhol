@@ -32,6 +32,17 @@ else
   say "skipped: --workspace --all-features (VERIFY_FAST=1)"
 fi
 
+# The CLI suite is separate from `--lib`, and that matters: a link-only install, a
+# workspace `ci`, and a daemon deadlock were all broken while every library test and both
+# gates were green. It needs the built binary, so it runs here rather than per-round.
+if [ "${VERIFY_FAST:-0}" != "1" ]; then
+  step "CLI suite (cargo test --test commands)"
+  if ! cargo test -q --test commands 2>&1 | tail -6; then
+    say "FAIL CLI suite"
+    fail=1
+  fi
+fi
+
 if [ "${VERIFY_SKIP_GATES:-0}" != "1" ]; then
   step "installer gate (crates/jhol-core/verify.sh)"
   if ! sh crates/jhol-core/verify.sh 2>&1 | tail -6; then
