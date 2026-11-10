@@ -66,7 +66,7 @@ Real npm projects, isolated cache and fresh `HOME` per tool, interleaved:
 | webpack@5 — 57 packages | **1974 ms** | 4738 ms | 2.4× ahead |
 | eslint@9 — 87 packages | **1652 ms** | 1732 ms | parity |
 | jest@29 — 266 packages | **4961 ms** | 33082 ms | 6.7× ahead |
-| express@4, `node_modules` wiped | **17–18 ms** | 31–32 ms | **~1.8× ahead** (a restored tree snapshot) |
+| express@4, `node_modules` wiped | **11–12 ms** | 26–29 ms | **~2.4× ahead** (restored tree snapshot) |
 | jest tree, nothing to do | **18 ms** | — | verify, then stop |
 
 Warm rebuilds restore a verified tree snapshot by `rename` and rebuild the snapshot in a

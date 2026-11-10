@@ -3447,3 +3447,28 @@ compared file by file — **0 content differences**; a corrupted slot was **refu
 normal install ran, and the tree came out correct; a tampered live tree still fails `verify`.
 
 `jhol-core` 723 tests, treecheck 15, CLI suite 30/30, installer gate PASS.
+
+## Warm install: `fork` instead of `spawn`, and parallel manifest reads (17 ms → 11 ms)
+
+Two costs nobody had counted, both found by asking why the number refused to move.
+
+**Spawning the refill child cost 15 ms.** `Command::spawn` is `fork` + `exec` + dynamic
+linking of a 17 MB binary, and the parent waits for it. Replaced with a bare `fork()` that
+keeps the loaded binary, runs the clone and `_exit`s — fractions of a millisecond. Safe only
+because the restore happens before the network prewarm thread is spawned, so the child is
+single-threaded and inherits no held locks.
+
+**Verifying a freshly restored tree reads 71 manifests cold: ~10 ms.** Now chunked across
+threads with `std::thread::scope` (no new dependency).
+
+| warm rebuild, 71 packages, `node_modules` wiped | jhol | bun 1.4.4 |
+|---|---:|---:|
+| after `rename` only | 17–18 ms | 31–32 ms |
+| after `fork` | 13 ms | — |
+| after parallel reads | **11–12 ms** | 26–29 ms |
+
+Correctness unchanged and re-checked: fingerprint on final inputs, marker written last,
+verification before trust, corrupted slot refused and repaired. One honest outlier: two wipes
+inside the refill window fall back to the projection path (~24–40 ms), once in six runs.
+
+`jhol-core` 723 tests, treecheck 15, CLI suite 30/30, installer gate PASS.

@@ -501,3 +501,31 @@ Proof that it is not just fast: a restored tree and a normally-installed tree we
 file by file — **0 content differences**. A deliberately corrupted slot was **refused**
 (verification failed, normal install ran, correct tree resulted), and a tampered live tree
 still fails `verify`.
+
+### The two costs nobody counted: process spawn, and cold manifest reads
+
+Restoring by `rename` was fast, but the number refused to move below 17 ms. Two pieces of
+work nobody had counted:
+
+**Spawning the refill child cost 15 ms.** `std::process::Command::spawn` = `fork` + `exec` +
+dynamic linking of a 17 MB binary, and the parent *waits for that* before returning. Replaced
+with a bare `fork()` that keeps the already-loaded binary, runs the clone, and `_exit`s:
+fractions of a millisecond. This is only safe because the restore happens **before** the
+network prewarm thread is spawned, so the child is single-threaded and inherits no held locks.
+
+**Verifying a freshly restored tree reads 71 manifests cold — ~10 ms.** Those reads are now
+chunked across threads with `std::thread::scope` (no new dependency; `jhol-treecheck`
+deliberately carries only `serde_json`).
+
+| warm rebuild, 71 packages, `node_modules` wiped (bash `time`) | jhol | bun 1.4.4 |
+|---|---:|---:|
+| after `rename` only | 17–18 ms | 31–32 ms |
+| after `fork` instead of `spawn` | 13 ms | — |
+| after parallel manifest reads | **11–12 ms** | 26–29 ms |
+
+That is ~2.4× ahead of bun, with the same guarantees: fingerprint on final inputs, marker
+written last, verification before the tree is trusted, and a fallback that was observed
+working (corrupted slot → refused → normal install → correct tree).
+
+One honest outlier remains: when both slots are empty (two wipes inside the refill window),
+the run falls back to the projection path and takes ~24–40 ms. It happened once in six.

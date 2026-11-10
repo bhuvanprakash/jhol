@@ -9311,15 +9311,24 @@ fn group_digits(n: u64) -> String {
 }
 
 fn main() {
+    let boot = std::time::Instant::now();
+    let mark = |label: &str| {
+        if std::env::var_os("JHOL_PROFILE_STARTUP").is_some() {
+            eprintln!("[boot] {label} {:.2} ms", boot.elapsed().as_secs_f64() * 1000.0);
+        }
+    };
     // Rust ignores SIGPIPE, so writing to a closed pipe (`jhol cache size | head`)
     // panicked with "Broken pipe" — and release builds use panic=abort, so that
     // killed the process. Restore the default before any output.
     jhol_core::restore_default_sigpipe();
+    mark("sigpipe");
 
     // THE freshness authority, before any lane is chosen. See
     // tree_is_current_and_reported: five downstream gates each answer with
     // evidence too weak for the question, and which one runs decides the result.
-    if plain_install_fully_settled() {
+    let fast = plain_install_fully_settled();
+    mark("fast gate");
+    if fast {
         return;
     }
 
@@ -9328,6 +9337,7 @@ fn main() {
     // the CLI dispatches before any of them: two concurrent `jhol install` runs
     // interleave their writes and leave a tree that matches neither.
     let _install_lock = install_command_lock();
+    mark("project lock");
 
     // An engine name that resolves to nothing used to silently run the script
     // on a different backend, which then surfaced engine-specific errors (a raw
@@ -9348,6 +9358,7 @@ fn main() {
     // Pre-Clap bypass is restricted to exact plain install/i invocations and
     // requires the same lockfile-bound proof as the core install path.
     jhol_core::daemon_cache::try_exit_before_clap();
+    mark("daemon pre-clap");
 
     // Eagerly prewarm HTTP/2 network connection in the background during CLI startup and argument parsing
     let raw_args: Vec<_> = std::env::args_os().collect();
@@ -9364,9 +9375,11 @@ fn main() {
             .ok();
     }
 
+    mark("arg scan + prewarm");
     if !use_color() {
         colored::control::set_override(false);
     }
+    mark("color");
 
     let code = match std::panic::catch_unwind(|| run()) {
         Ok(Ok(())) => 0,

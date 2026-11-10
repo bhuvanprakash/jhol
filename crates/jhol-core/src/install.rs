@@ -6687,17 +6687,29 @@ pub fn restore_snapshot(root: &Path) -> bool {
 }
 
 /// Ask a separate process to rebuild the slot we just consumed.
+///
+/// `fork()` without `exec`: the child keeps the already-loaded binary and just runs the
+/// clone, then `_exit`s. Spawning a fresh process cost **15 ms** — as much as the clone
+/// it was meant to move off the critical path, because the parent waited for `fork` +
+/// `exec` + dynamic linking. A bare fork is fractions of a millisecond.
+///
+/// Safety: this runs before the network prewarm thread exists (the fast path returns
+/// before it is spawned), so the child is single-threaded and inherits no held locks.
 fn spawn_snapshot_fill(index: usize) {
-    let Ok(exe) = std::env::current_exe() else {
-        return;
-    };
-    let _ = std::process::Command::new(exe)
-        .arg("__snapshot-fill")
-        .arg(index.to_string())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+    #[cfg(unix)]
+    unsafe {
+        let pid = libc::fork();
+        if pid == 0 {
+            // Child: keep it minimal — no unwinding, no stdio, no destructors.
+            let _ = fill_snapshot(std::path::Path::new("."), index);
+            libc::_exit(0);
+        }
+        // Parent: nothing to reap — the child is orphaned and exits on its own.
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = index;
+    }
 }
 
 /// Rebuild one slot from the current `node_modules`. Runs in the detached child.
@@ -6727,7 +6739,11 @@ pub fn save_prepared_snapshot(root: &Path) {
     if std::env::var_os("JHOL_NO_PREPARED_SNAPSHOT").is_some() {
         return;
     }
-    if !crate::tree_state::verify_tree(root).is_match() {
+    let st = crate::tree_state::verify_tree(root);
+    if std::env::var_os("JHOL_DEBUG_PREPARED").is_some() {
+        eprintln!("[prepared] save called, verify = {:?}", st);
+    }
+    if !st.is_match() {
         return;
     }
     // One inline clone is enough: the next restore consumes it and the detached child
