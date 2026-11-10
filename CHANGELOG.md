@@ -3526,3 +3526,18 @@ changed dependencies, no snapshot.
 | steady state | 85–92 ms | **6 ms** |
 
 `jhol-core` 723 tests, CLI suite 30/30, installer gate PASS.
+
+## Cold install: one duplicate round trip removed (and the rest is the registry)
+
+Profiled with a fresh cache: `after_expansion` — 39 metadata fetches — is 749–1273 ms, while
+everything else jhol does is **17 ms** (projection 12, index and lockfile 5). The registry was
+answering in ~500 ms per request during the measurement.
+
+One duplicate was ours: `express/4.18.2` fetched **twice**, 540 ms each, because the header and
+bearer download paths bypassed the URL memo that `get()` already had. The memo now covers any
+request without a bearer token — authenticated requests stay uncached, because two tokens can
+legitimately see different bodies.
+
+Repeated fresh-cache runs: jhol **0.72–1.00 s**, bun 0.75–1.04 s, npm 2.0–2.4 s. jhol and bun
+are within each other's noise on cold because both are waiting on the same registry; the 17 ms
+that is ours cannot be the difference.

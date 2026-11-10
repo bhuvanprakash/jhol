@@ -557,3 +557,23 @@ if jhol_core::install::snapshot_ready(root) { /* stay in-process */ }
 
 The daemon is still used when the native fast path cannot help — a first install, changed
 dependencies, no snapshot — which is exactly the case it was designed for.
+
+### Cold install is the registry, and one duplicate round trip was ours
+
+Profiled cold install of express@4.18.2 with a fresh cache:
+
+| stage | time |
+|---|---:|
+| `after_expansion` (39 metadata fetches) | **749–1273 ms** |
+| everything else (projection, index, lockfile) | **17 ms** |
+
+The registry was answering in ~500 ms per request during that measurement, so cold install
+time is the network. One piece *was* ours: `express/4.18.2` was fetched **twice**, 540 ms each,
+because the authenticated/header download path bypassed the URL memo that `get()` already had.
+The memo now covers any request without a bearer token (two tokens can legitimately see
+different bodies, so authenticated requests stay uncached). Duplicate requests in a cold
+install: **2 → 1**.
+
+Honest position on cold: repeated fresh-cache runs land at **0.72–1.00 s** for jhol, 0.75–1.04 s
+for bun and 2.0–2.4 s for npm — jhol and bun are within each other's noise because both are
+waiting on the same registry. The 17 ms that is ours is not where cold installs go.

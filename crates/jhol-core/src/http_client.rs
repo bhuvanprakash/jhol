@@ -1043,7 +1043,25 @@ where
 ///
 /// `JHOL_NO_HTTP2=1` forces the old h1.1/ureq path, so both can be compared in one
 /// binary without rebuilding.
+/// Memoised wrapper: a repeat of the same **public** URL in one process is served
+/// from memory. Cold installs asked the registry for `express/4.18.2` twice, 540 ms
+/// each, because this path bypassed the memo that `get()` already had. Authenticated
+/// requests are excluded — two tokens can legitimately see different bodies.
 pub fn get_bytes_with_bearer(url: &str, bearer_token: Option<&str>) -> Result<Vec<u8>, String> {
+    let public = bearer_token.map(str::is_empty).unwrap_or(true);
+    if public {
+        if let Some(body) = memo_get(url) {
+            return Ok(body);
+        }
+    }
+    let body = get_bytes_with_bearer_inner(url, bearer_token)?;
+    if public {
+        memo_put(url, &body);
+    }
+    Ok(body)
+}
+
+fn get_bytes_with_bearer_inner(url: &str, bearer_token: Option<&str>) -> Result<Vec<u8>, String> {
     #[cfg(feature = "http-reqwest")]
     {
         if std::env::var("JHOL_NO_HTTP2").is_err() {
