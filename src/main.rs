@@ -2583,7 +2583,11 @@ fn run() -> Result<(), String> {
     // ── jhol gui ─ Terminal GUI ──────────────────────────────────────────────
     if let Some(("gui", m)) = matches.subcommand() {
         if flag(m, "web") {
-            return commands::gui_web::serve();
+            let port = m
+                .get_one::<String>("port")
+                .and_then(|p| p.parse::<u16>().ok())
+                .unwrap_or(0);
+            return commands::gui_web::serve(port, !flag(m, "no-open"));
         }
         return tui::run_tui();
     }
@@ -9231,6 +9235,19 @@ fn cli_command() -> Command {
                         .long("web")
                         .action(ArgAction::SetTrue)
                         .help("Serve the status view over HTTP and open it in the default browser"),
+                )
+                .arg(
+                    Arg::new("port")
+                        .long("port")
+                        .value_name("PORT")
+                        .default_value("0")
+                        .help("Port for --web; 0 picks a free one"),
+                )
+                .arg(
+                    Arg::new("no-open")
+                        .long("no-open")
+                        .action(ArgAction::SetTrue)
+                        .help("Do not launch a browser (for headless or remote use)"),
                 )
                 .long_about(
                     "Launches the jhol Terminal GUI (TUI). \

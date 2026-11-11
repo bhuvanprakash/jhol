@@ -3965,3 +3965,31 @@ was rendering as a green dot, which reads as a pass.
 
 Verified in a real browser at 1400×900: console clean, arm → confirm → run, GGUF inspection,
 quiet ETag polling.
+
+## The web view is production-shaped, and the demo fixtures are gone
+
+The dashboard was a demo debugger: one connection at a time, errors as `200` with a JSON body, no
+headers, no health check, and a folder of fixture projects to make it look alive.
+
+Now it behaves like a server:
+
+- **Thread per connection.** A 6 s remote header fetch no longer freezes the dashboard —
+  measured `/healthz` in 19 ms while a GGUF inspect was in flight.
+- **Real status codes**: 304, 204 for JSON-RPC notifications, 400, 403, 404, 405 with `Allow`.
+- **Security headers** on every response, including a CSP limited to inline style/script and
+  same-origin fetch; token required for writes *and* inspects; constant-time token compare;
+  8 KB body cap; 15 s socket timeouts.
+- **`--port N` / `--no-open`**, and a port already in use says which flag to use.
+- **`GET /healthz`** for supervisors.
+- **Status cached by fingerprint** so two tabs polling at once cost one collection.
+- **Accessibility**: labels, `role="status"`, `role="log" aria-live`, focus ring, `type="button"`.
+
+**No project is a first-class state.** `Status` gained `has_manifest`, so the page can tell
+"unnamed package" from "nothing here" and show the three commands that would create a project
+instead of an empty dashboard. Verified by serving a directory with no `package.json`.
+
+Demo fixtures (`gui-demo`, `MW`, `NF`, `FP`, `ST`, `GW`) deleted; the server now runs against
+whatever directory it is started in.
+
+bin 19 (four new: token comparison, whitelist and name validation, query decoding, bridge),
+jhol-core 731.

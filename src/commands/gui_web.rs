@@ -9,164 +9,233 @@
 //! installs on `127.0.0.1` even though it can reach the port.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-pub fn serve() -> Result<(), String> {
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("gui --web: {e}"))?;
+/// Refuse to read a body larger than this. The UI posts small JSON objects; anything bigger
+/// is either a mistake or an attempt to make the server allocate.
+const MAX_BODY: usize = 8 * 1024;
+/// A connection that cannot produce a request line in this long is not a browser.
+const READ_TIMEOUT: Duration = Duration::from_secs(15);
+
+pub fn serve(port: u16, open: bool) -> Result<(), String> {
+    let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|e| match e.kind() {
+        std::io::ErrorKind::AddrInUse => format!(
+            "gui --web: port {port} is already in use — pass --port 0 for a free one"
+        ),
+        _ => format!("gui --web: {e}"),
+    })?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
-    let token = session_token();
-    let url = format!("http://{addr}/?t={token}");
-    println!("jhol gui --web on {url}  (Ctrl-C to stop)");
-    open_browser(&url);
-
+    let shared = Arc::new(Shared {
+        token: session_token(),
+        cache: Mutex::new((String::new(), String::new(), None)),
+    });
+    let url = format!("http://{addr}/?t={}", shared.token);
+    println!("jhol gui --web on {url}");
+    println!("  stop with Ctrl-C · loopback only · requests need the token in the URL");
+    if open {
+        open_browser(&url);
+    }
     for stream in listener.incoming() {
-        let Ok(mut stream) = stream else { continue };
-        let token = token.clone();
-        // Each connection is handled inline: a dashboard poll every second is not a
-        // workload that needs a thread pool, and serial handling means no request can
-        // observe a half-written status.
-        let mut reader = match stream.try_clone() {
-            Ok(s) => BufReader::new(s),
-            Err(_) => continue,
-        };
-        let mut request_line = String::new();
-        if reader.read_line(&mut request_line).unwrap_or(0) == 0 {
-            continue;
-        }
-        let path = request_line
-            .split_whitespace()
-            .nth(1)
-            .unwrap_or("/")
-            .to_string();
-        let (headers, content_length) = read_headers(&mut reader);
-        let if_none_match = headers
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case("if-none-match"))
-            .map(|(_, v)| v.trim().to_string());
-        let given = path
-            .split_once("t=")
-            .map(|(_, t)| t.split('&').next().unwrap_or(t).to_string())
-            .unwrap_or_default();
-
-        if path.starts_with("/action") {
-            let body = read_body(&mut reader, content_length);
-            if given != token {
-                respond(&mut stream, "application/json", &serde_json::json!({
-                    "ok": false, "code": 403, "stderr": "bad token"
-                }).to_string());
-                continue;
-            }
-            let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-            let action = v.get("action").and_then(|a| a.as_str()).unwrap_or("");
-            let name = v.get("name").and_then(|a| a.as_str()).unwrap_or("");
-            if path.contains("stream=1") {
-                stream_argv(&mut stream, action_argv(action, name));
-            } else {
-                respond(&mut stream, "application/json", &run_action_json(action, name).to_string());
-            }
-            continue;
-        }
-
-        if path.starts_with("/mcp") {
-            let body = read_body(&mut reader, content_length);
-            if given != token {
-                respond(&mut stream, "application/json", &serde_json::json!({
-                    "jsonrpc": "2.0", "id": null,
-                    "error": {"code": -32001, "message": "bad token"}
-                }).to_string());
-                continue;
-            }
-            respond(&mut stream, "application/json", &mcp_reply(&body));
-            continue;
-        }
-
-        if path.starts_with("/tools.json") {
-            respond(&mut stream, "application/json", &tools_reply());
-            continue;
-        }
-
-        if path.starts_with("/plan") {
-            let action = path
-                .split("action=")
-                .nth(1)
-                .map(|a| percent_decode(a.split('&').next().unwrap_or(a)))
-                .unwrap_or_default();
-            let status = crate::status_view::enrich(
-                jhol_core::status::collect(Path::new(".")),
-                Path::new("."),
-            );
-            let preview = jhol_core::status::action_preview(&action, &status);
-            respond(
-                &mut stream,
-                "application/json",
-                &serde_json::to_string(&preview).unwrap_or_else(|e| e.to_string()),
-            );
-            continue;
-        }
-
-        if path.starts_with("/inspect") {
-            if given != token {
-                respond(&mut stream, "application/json", "{\"error\":\"bad token\"}");
-                continue;
-            }
-            let target = path
-                .split("path=")
-                .nth(1)
-                .map(|p| percent_decode(p.split('&').next().unwrap_or(p)))
-                .unwrap_or_default();
-            respond(&mut stream, "application/json", &inspect_json(Path::new("."), &target).to_string());
-            continue;
-        }
-
-        if path.starts_with("/status.json") {
-            // A dashboard polls once a second. Collecting a status costs milliseconds; a
-            // fingerprint of the files a status depends on costs microseconds. When the
-            // fingerprint matches, the answer is 304 and **no collection happens at all**.
-            let tag = jhol_core::status::fingerprint(Path::new("."));
-            if if_none_match.as_deref() == Some(tag.as_str()) {
-                let _ = write!(
-                    stream,
-                    "HTTP/1.1 304 Not Modified\r\nETag: {tag}\r\n\
-                     Cache-Control: no-store\r\nConnection: close\r\n\r\n"
-                );
-                continue;
-            }
-            let status = crate::status_view::enrich(
-                jhol_core::status::collect(Path::new(".")),
-                Path::new("."),
-            );
-            respond_etag(
-                &mut stream,
-                "application/json",
-                &serde_json::to_string(&status).unwrap_or_else(|e| e.to_string()),
-                &tag,
-            );
-            continue;
-        }
-
-        respond(&mut stream, "text/html; charset=utf-8", &page_html());
+        let Ok(stream) = stream else { continue };
+        let shared = Arc::clone(&shared);
+        // One thread per connection: an inspect that fetches a 16 MB remote header must not
+        // freeze the dashboard, and neither must a slow client.
+        std::thread::spawn(move || {
+            let _ = handle(stream, &shared);
+        });
     }
     Ok(())
 }
 
-/// One-shot session token. The page is served to a browser on this machine, but a page on
-/// any other origin could POST to `127.0.0.1` too; requiring the token that only the opened
-/// tab knows keeps a random web page from driving installs.
-fn session_token() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!("{:x}{:x}", std::process::id(), nanos)
+struct Shared {
+    token: String,
+    /// (fingerprint, serialised status, the status itself). A matching fingerprint serves the
+    /// previous body, so two tabs polling at once cost one collection.
+    cache: Mutex<(String, String, Option<jhol_core::status::Status>)>,
 }
 
-fn read_headers(reader: &mut BufReader<std::net::TcpStream>) -> (Vec<(String, String)>, usize) {
+fn handle(mut stream: TcpStream, shared: &Shared) -> std::io::Result<()> {
+    let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(READ_TIMEOUT));
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut request_line = String::new();
+    if reader.read_line(&mut request_line)? == 0 {
+        return Ok(());
+    }
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or("").to_string();
+    let path = parts.next().unwrap_or("/").to_string();
+    if !path.starts_with('/') {
+        return respond(&mut stream, 400, "application/json", "{\"error\":\"bad request\"}", &[]);
+    }
+    let (headers, length) = read_headers(&mut reader)?;
+    let if_none_match = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("if-none-match"))
+        .map(|(_, v)| v.trim().to_string());
+    let given = query_param(&path, "t");
+
+    let needs_token = path.starts_with("/action") || path.starts_with("/mcp") || path.starts_with("/inspect");
+    if needs_token && !token_matches(&given, &shared.token) {
+        return respond(
+            &mut stream,
+            403,
+            "application/json",
+            "{\"ok\":false,\"code\":403,\"stderr\":\"bad token\"}",
+            &[],
+        );
+    }
+
+    if path == "/healthz" {
+        return respond(&mut stream, 200, "text/plain; charset=utf-8", "ok", &[]);
+    }
+
+    if path.starts_with("/action") {
+        if method != "POST" {
+            return respond(&mut stream, 405, "application/json", "{\"error\":\"POST only\"}", &[("Allow", "POST")]);
+        }
+        let body = read_body(&mut reader, length);
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+        let action = v.get("action").and_then(|a| a.as_str()).unwrap_or("");
+        let name = v.get("name").and_then(|a| a.as_str()).unwrap_or("");
+        if path.contains("stream=1") {
+            stream_argv(&mut stream, action_argv(action, name));
+        } else {
+            respond(&mut stream, 200, "application/json", &run_action_json(action, name).to_string(), &[]);
+        }
+        return Ok(());
+    }
+
+    if path.starts_with("/mcp") {
+        if method != "POST" {
+            return respond(&mut stream, 405, "application/json", "{\"error\":\"POST only\"}", &[("Allow", "POST")]);
+        }
+        let body = read_body(&mut reader, length);
+        let reply = mcp_reply(&body);
+        if reply.is_empty() {
+            return respond(&mut stream, 204, "application/json", "", &[]);
+        }
+        return respond(&mut stream, 200, "application/json", &reply, &[]);
+    }
+
+    if path.starts_with("/tools.json") {
+        return respond(&mut stream, 200, "application/json", &tools_reply(), &[]);
+    }
+
+    if path.starts_with("/inspect") {
+        let target = query_param(&path, "path");
+        return respond(
+            &mut stream,
+            200,
+            "application/json",
+            &inspect_json(Path::new("."), &target).to_string(),
+            &[],
+        );
+    }
+
+    if path.starts_with("/plan") {
+        let action = query_param(&path, "action");
+        let status = cached_status(shared);
+        let preview = jhol_core::status::action_preview(&action, &status);
+        return respond(
+            &mut stream,
+            200,
+            "application/json",
+            &serde_json::to_string(&preview).unwrap_or_else(|e| e.to_string()),
+            &[],
+        );
+    }
+
+    if path.starts_with("/status.json") {
+        let tag = jhol_core::status::fingerprint(Path::new("."));
+        if if_none_match.as_deref() == Some(tag.as_str()) {
+            let _ = write!(
+                stream,
+                "HTTP/1.1 304 Not Modified\r\nETag: {tag}\r\n{}\r\n",
+                SECURITY_HEADERS
+            );
+            return Ok(());
+        }
+        let body = status_json(shared, &tag);
+        return respond(&mut stream, 200, "application/json", &body, &[("ETag", &tag)]);
+    }
+
+    if path == "/" || path.starts_with("/?") {
+        return respond(&mut stream, 200, "text/html; charset=utf-8", &page_html(), &[]);
+    }
+
+    respond(&mut stream, 404, "application/json", "{\"error\":\"not found\"}", &[])
+}
+
+/// Collected into the status once, and reused while the fingerprint holds.
+fn status_json(shared: &Shared, tag: &str) -> String {
+    let mut cache = shared.cache.lock().unwrap_or_else(|e| e.into_inner());
+    if cache.0 == tag && !cache.1.is_empty() {
+        return cache.1.clone();
+    }
+    let status = crate::status_view::enrich(jhol_core::status::collect(Path::new(".")), Path::new("."));
+    let body = serde_json::to_string(&status).unwrap_or_else(|e| e.to_string());
+    *cache = (tag.to_string(), body.clone(), Some(status));
+    body
+}
+
+fn cached_status(shared: &Shared) -> jhol_core::status::Status {
+    let tag = jhol_core::status::fingerprint(Path::new("."));
+    let _ = status_json(shared, &tag);
+    shared
+        .cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .2
+        .clone()
+        .unwrap_or_default()
+}
+
+const SECURITY_HEADERS: &str = "\
+X-Content-Type-Options: nosniff\r\n\
+Referrer-Policy: no-referrer\r\n\
+X-Frame-Options: DENY\r\n\
+Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:\r\n";
+
+fn respond(
+    stream: &mut TcpStream,
+    code: u16,
+    kind: &str,
+    body: &str,
+    extra: &[(&str, &str)],
+) -> std::io::Result<()> {
+    let reason = match code {
+        200 => "OK",
+        204 => "No Content",
+        400 => "Bad Request",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        _ => "OK",
+    };
+    let mut head = format!(
+        "HTTP/1.1 {code} {reason}\r\nContent-Type: {kind}\r\nCache-Control: no-store\r\n\
+         Content-Length: {}\r\nConnection: close\r\n{SECURITY_HEADERS}",
+        body.len()
+    );
+    for (k, v) in extra {
+        head.push_str(&format!("{k}: {v}\r\n"));
+    }
+    head.push_str("\r\n");
+    stream.write_all(head.as_bytes())?;
+    stream.write_all(body.as_bytes())?;
+    stream.flush()
+}
+
+fn read_headers(reader: &mut BufReader<TcpStream>) -> std::io::Result<(Vec<(String, String)>, usize)> {
     let mut out = Vec::new();
     let mut length = 0usize;
     loop {
         let mut line = String::new();
-        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" || line == "\n" {
+        if reader.read_line(&mut line)? == 0 || line == "\r\n" || line == "\n" {
             break;
         }
         if let Some((k, v)) = line.split_once(':') {
@@ -176,31 +245,50 @@ fn read_headers(reader: &mut BufReader<std::net::TcpStream>) -> (Vec<(String, St
             out.push((k.trim().to_string(), v.trim().to_string()));
         }
     }
-    (out, length)
+    Ok((out, length))
 }
 
-fn read_body(reader: &mut BufReader<std::net::TcpStream>, length: usize) -> Vec<u8> {
-    let mut raw = vec![0u8; length.min(8192)];
+fn read_body(reader: &mut BufReader<TcpStream>, length: usize) -> Vec<u8> {
+    let mut raw = vec![0u8; length.min(MAX_BODY)];
     let _ = reader.read_exact(&mut raw);
     raw
 }
 
-fn respond_etag(stream: &mut std::net::TcpStream, kind: &str, body: &str, tag: &str) {
-    let _ = write!(
-        stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nETag: {tag}\r\n\
-         Cache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
+/// One-shot session token. A page on any other origin can reach `127.0.0.1`, so every write
+/// (and every inspect, which reads files) requires this.
+fn session_token() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{:x}{:x}", std::process::id(), nanos)
 }
 
-fn respond(stream: &mut std::net::TcpStream, kind: &str, body: &str) {
-    let _ = write!(
-        stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nCache-Control: no-store\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
+/// Compare without an early exit on the first differing byte.
+fn token_matches(given: &str, want: &str) -> bool {
+    let (a, b) = (given.as_bytes(), want.as_bytes());
+    if a.len() != b.len() || a.is_empty() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
+}
+
+fn query_param(path: &str, key: &str) -> String {
+    let Some(query) = path.split_once('?').map(|(_, q)| q) else {
+        return String::new();
+    };
+    for pair in query.split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            if k == key {
+                return percent_decode(v);
+            }
+        }
+    }
+    String::new()
 }
 
 fn open_browser(url: &str) {
@@ -212,8 +300,7 @@ fn open_browser(url: &str) {
         .spawn();
 }
 
-/// A fork name becomes a CLI argument, so it is validated here rather than trusted: no
-/// separators, no leading dash, nothing that could be read as a flag.
+/// A fork name becomes a CLI argument, so it is validated here rather than trusted.
 fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
@@ -224,9 +311,7 @@ fn valid_name(name: &str) -> bool {
         && !name.contains("..")
 }
 
-/// The whole write surface. Deliberately a **whitelist of CLI invocations**, not a shell:
-/// every action runs the same binary a user would run, so verification, policy and exit
-/// codes are the ones already tested.
+/// The whole write surface: a whitelist of CLI invocations, never a shell.
 fn action_argv(action: &str, name: &str) -> Option<Vec<String>> {
     let fixed: &[&str] = match action {
         "verify" => &["verify"],
@@ -266,16 +351,14 @@ fn tail(bytes: &[u8], keep: usize) -> String {
     s[start..].to_string()
 }
 
-/// Run an action and stream its output as it arrives, so a download reports progress
-/// instead of holding the connection silent for a minute.
-fn stream_argv(stream: &mut std::net::TcpStream, argv: Option<Vec<String>>) {
+fn stream_argv(stream: &mut TcpStream, argv: Option<Vec<String>>) {
     let _ = write!(
         stream,
         "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\n\
          Cache-Control: no-store\r\nTransfer-Encoding: chunked\r\n\
-         Connection: close\r\n\r\n"
+         Connection: close\r\n{SECURITY_HEADERS}\r\n"
     );
-    let chunk = |stream: &mut std::net::TcpStream, text: &str| {
+    let chunk = |stream: &mut TcpStream, text: &str| {
         if text.is_empty() {
             return;
         }
@@ -288,12 +371,12 @@ fn stream_argv(stream: &mut std::net::TcpStream, argv: Option<Vec<String>>) {
         return;
     };
     let exe = std::env::current_exe().unwrap_or_else(|_| "jhol".into());
-    let mut child = match std::process::Command::new(exe)
+    let spawned = std::process::Command::new(exe)
         .args(&argv)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .spawn()
-    {
+        .spawn();
+    let mut child = match spawned {
         Ok(c) => c,
         Err(e) => {
             chunk(stream, &format!("could not start: {e}\n"));
@@ -301,7 +384,6 @@ fn stream_argv(stream: &mut std::net::TcpStream, argv: Option<Vec<String>>) {
             return;
         }
     };
-    // stderr is collected off-thread so a chatty error stream cannot deadlock the pipe.
     let stderr = child.stderr.take().map(|mut e| {
         std::thread::spawn(move || {
             let mut buf = Vec::new();
@@ -320,8 +402,7 @@ fn stream_argv(stream: &mut std::net::TcpStream, argv: Option<Vec<String>>) {
     }
     let code = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
     if let Some(handle) = stderr {
-        let err = handle.join().unwrap_or_default();
-        let text = tail(&err, 4096);
+        let text = tail(&handle.join().unwrap_or_default(), 4096);
         if !text.is_empty() {
             chunk(stream, &text);
         }
@@ -331,10 +412,9 @@ fn stream_argv(stream: &mut std::net::TcpStream, argv: Option<Vec<String>>) {
     let _ = stream.flush();
 }
 
-/// `jhol inspect`, in-process: a header read is cheap enough that shelling out would cost
-/// more than the work, and a remote target costs one ranged request.
+/// `jhol inspect`, in-process: a header read is cheaper than a process, and a remote target
+/// costs one ranged request per probe step.
 fn inspect_json(root: &Path, target: &str) -> serde_json::Value {
-    // A repository has no header; list its weights (or inspect the only one).
     let mut target = target.to_string();
     if let Some(resolved) = crate::status_view::resolve_repo(&target) {
         match resolved {
@@ -359,7 +439,6 @@ fn inspect_json(root: &Path, target: &str) -> serde_json::Value {
         "architecture": r.architecture,
         "tensors": r.tensors,
         "params": r.params,
-        "params_human": r.params.to_string(),
         "data_bytes": r.data_bytes,
         "vram_bytes": r.vram_bytes,
         "header_bytes": r.header_bytes,
@@ -374,9 +453,7 @@ fn inspect_json(root: &Path, target: &str) -> serde_json::Value {
     })
 }
 
-/// The MCP bridge. An agent and a human drive **one** surface: the same five actions, the
-/// same status struct, and the same tool catalog — over JSON-RPC, in-process, with no
-/// second server to keep in sync.
+/// The MCP bridge: an agent and a human drive one surface over JSON-RPC, in-process.
 fn mcp_reply(body: &[u8]) -> String {
     let req: jhol_core::mcp::JsonRpcRequest = match serde_json::from_slice(body) {
         Ok(r) => r,
@@ -390,7 +467,6 @@ fn mcp_reply(body: &[u8]) -> String {
     };
     match jhol_core::mcp::handle_mcp_request(&req) {
         Some(resp) => serde_json::to_string(&resp).unwrap_or_else(|e| e.to_string()),
-        // A notification gets no response, per JSON-RPC.
         None => String::new(),
     }
 }
@@ -414,6 +490,11 @@ fn percent_decode(s: &str) -> String {
                 i += 3;
                 continue;
             }
+        }
+        if bytes[i] == b'+' {
+            out.push(b' ');
+            i += 1;
+            continue;
         }
         out.push(bytes[i]);
         i += 1;
@@ -452,6 +533,9 @@ const PAGE: &str = r##"<!doctype html>
  body{background:var(--bg);color:var(--ink);font:13.5px/1.6 var(--sans);
       -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
  ::selection{background:var(--accent);color:var(--bg)}
+ .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);
+          white-space:nowrap;border:0}
+ :focus-visible{outline:1px solid var(--accent);outline-offset:2px}
  a{color:inherit;text-decoration:none;border-bottom:1px solid var(--hair2)}
  a:hover{border-bottom-color:var(--accent)}
  .wrap{max-width:1080px;margin:0 auto;padding:0 32px 96px}
@@ -564,7 +648,8 @@ const PAGE: &str = r##"<!doctype html>
      overflow:auto;max-height:24rem;margin:0;padding:16px 0 0;
      border-top:1px solid var(--hair)}
  pre:empty{display:none}
- footer{margin-top:46px;color:var(--dim);font:11.5px/1.9 var(--mono)}
+ footer{max-width:1080px;margin:46px auto 0;padding:0 32px;color:var(--dim);
+        font:11.5px/1.9 var(--mono)}
  footer .kbd{border:1px solid var(--hair2);border-radius:3px;padding:1px 4px}
  @media (max-width:720px){
    .wrap{padding:0 18px 64px} header.top{padding:26px 18px 0}
@@ -579,31 +664,47 @@ const PAGE: &str = r##"<!doctype html>
     <h1 class="title"><span id="name">…</span><span class="ver" id="version"></span></h1>
   </div>
   <div class="dim mono" style="text-align:right" id="stamp"></div>
-  <p class="lede" id="lede"></p>
+  <p class="lede" id="lede" role="status" aria-live="polite"></p>
 </header>
 
 <div class="wrap">
   <nav id="nav"></nav>
 
   <section id="s-status" class="on">
-    <div class="block">
+    <div class="block" id="onboard" hidden>
+      <h2>No project here</h2>
+      <p class="muted" style="max-width:60ch;margin:0 0 14px">
+        This directory has no <span class="mono">package.json</span>, so there is nothing to
+        verify yet. Pick one of these and change what you need in the terminal — the dashboard
+        is read-only until a project exists.</p>
+      <dl class="kv">
+        <dt>start one</dt><dd class="mono">jhol install express</dd>
+        <dt>weights</dt><dd class="mono">jhol ai pull hf://org/repo/model.safetensors</dd>
+        <dt>watch</dt><dd class="mono">jhol status --watch</dd>
+      </dl>
+      <p class="note">Once a lockfile exists, this page fills in on its own — it polls the
+      filesystem, not a server cache.</p>
+    </div>
+    <div class="block status-block">
       <div class="cols">
         <div><h2>Tree</h2><dl class="kv" id="k-tree"></dl></div>
         <div><h2>Artefacts</h2><div id="k-artefacts"></div></div>
       </div>
     </div>
-    <div class="block">
+    <div class="block status-block">
       <div class="cols">
         <div><h2>Host</h2><dl class="kv" id="k-host"></dl></div>
         <div><h2>Policy</h2><dl class="kv" id="k-policy"></dl></div>
       </div>
+    </div>
     </div>
   </section>
 
   <section id="s-artifacts">
     <div class="block">
       <div class="field">
-        <div class="grow"><input id="q" placeholder="Filter by name, kind or reason" autocomplete="off"></div>
+        <div class="grow"><label class="sr-only" for="q">Filter artefacts</label>
+          <input id="q" placeholder="Filter by name, kind or reason" autocomplete="off"></div>
         <label class="check"><input type="checkbox" id="unfit"> Only what will not run</label>
       </div>
     </div>
@@ -619,9 +720,10 @@ const PAGE: &str = r##"<!doctype html>
     <div class="block">
       <h2>Read a header</h2>
       <div class="field">
-        <div class="grow"><input id="path" class="mono"
+        <div class="grow"><label class="sr-only" for="path">Weight file, pinned model or URL</label>
+          <input id="path" class="mono"
           placeholder="path, pinned model, hf://org/repo/file.gguf, or a huggingface.co URL"></div>
-        <button class="link" id="go">Inspect</button>
+        <button class="link" id="go" type="button">Inspect</button>
       </div>
       <div id="detail-host"></div>
     </div>
@@ -650,7 +752,7 @@ const PAGE: &str = r##"<!doctype html>
     <div class="block"><h2>Run</h2>
       <div id="acts"></div>
       <p class="note" id="arm-hint">Writes ask once: the first click states what would happen.</p>
-      <pre id="out"></pre>
+      <pre id="out" role="log" aria-live="polite"></pre>
     </div>
   </section>
 
@@ -713,7 +815,10 @@ function kv(el, rows) {
 }
 
 function render(s) {
-  document.getElementById("name").textContent = s.project || "(unnamed)";
+  const onboard = document.getElementById("onboard");
+  onboard.hidden = !!s.has_manifest;
+  document.querySelectorAll(".status-block").forEach(el => { el.hidden = !s.has_manifest; });
+  document.getElementById("name").textContent = s.has_manifest ? (s.project || "(unnamed)") : "no project";
   document.getElementById("version").textContent = s.version || "";
   const unfit = s.artifacts.filter(a => a.fits === false).length;
   const unknown = s.artifacts.filter(a => a.fits === null || a.fits === undefined).length;
@@ -722,6 +827,14 @@ function render(s) {
   document.getElementById("stamp").textContent =
     new Date().toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
 
+  if (!s.has_manifest) {
+    document.getElementById("lede").innerHTML =
+      `No <span class="mono">package.json</span> in this directory<span class="sep">·</span>nothing to verify yet`;
+    ["status","artifacts","budget","proof","agent","actions"].forEach(k => {
+      const n = document.getElementById("n-" + k); if (n) n.textContent = "";
+    });
+    renderArtifacts(s); return;
+  }
   document.getElementById("lede").innerHTML = s.tree.state === "match"
     ? `<span class="state-ok">Tree matches the lockfile</span><span class="sep">·</span>${s.tree.packages} packages<span class="sep">·</span>${s.manifest_matches_lockfile ? "lockfile current" : `<span class="state-bad">lockfile drifted</span>`}<span class="sep">·</span>${s.plan.missing_bytes ? `${bytes(s.plan.missing_bytes)} to fetch` : "nothing to fetch"}<span class="sep">·</span>${unfit ? `<span class="state-bad">${unfit} artefact${unfit===1?"":"s"} will not run here</span>` : total ? "all fit" : "no artefacts pinned"}`
     : `<span class="state-bad">Tree ${esc(s.tree.state)}</span><span class="sep">·</span>${esc(s.tree.detail)}<span class="sep">·</span>${s.tree.packages} packages`;
@@ -840,7 +953,7 @@ function renderForks(s) {
     <th class="num" style="width:150px">Beyond base</th><th style="width:100px"></th></tr></thead>
     <tbody>${s.forks.map(f => `<tr><td class="name">${esc(f.name)}</td>
       <td class="num">${bytes(f.bytes)}</td>
-      <td style="text-align:right"><button class="link" data-p="${esc(f.name)}">Promote</button></td></tr>`).join("")}</tbody></table>`;
+      <td style="text-align:right"><button class="link" data-p="${esc(f.name)}" type="button">Promote</button></td></tr>`).join("")}</tbody></table>`;
   el.querySelectorAll("button[data-p]").forEach(b => {
     b.onclick = () => armOrRun("promote", b.dataset.p, true, "jhol env promote " + b.dataset.p, b);
   });
@@ -937,7 +1050,7 @@ document.getElementById("acts").innerHTML = ACTIONS.map(([k, cmd, why]) => `
   <div class="act" data-row="${k}">
     <span class="cmd">${esc(cmd)}</span>
     <span class="d" data-desc="${k}">${esc(why)}</span>
-    <button class="link" data-a="${k}">Run</button>
+    <button class="link" data-a="${k}" type="button">Run</button>
   </div>`).join("");
 
 async function armOrRun(action, name, stream, label, btn) {
@@ -1019,8 +1132,39 @@ tick(); setInterval(tick, 2000);
 "##;
 
 #[cfg(test)]
-mod bridge_tests {
+mod server_tests {
     use super::*;
+
+    #[test]
+    fn the_token_is_compared_without_short_circuits_or_prefix_matches() {
+        assert!(token_matches("abcd", "abcd"));
+        assert!(!token_matches("abc", "abcd"));
+        assert!(!token_matches("abce", "abcd"));
+        assert!(!token_matches("", ""));
+        assert!(!token_matches("", "abcd"));
+    }
+
+    #[test]
+    fn the_write_surface_is_a_whitelist_and_names_are_validated() {
+        assert!(action_argv("verify", "").is_some());
+        assert!(action_argv("rm -rf /", "").is_none());
+        assert!(action_argv("fork", "trial").is_some());
+        // A name that could be read as a flag, a path, or two names is refused.
+        for bad in ["-rf", "../x", "a/b", "", "x".repeat(65).as_str()] {
+            assert!(action_argv("promote", bad).is_none(), "{bad:?} must be refused");
+        }
+        assert_eq!(
+            action_argv("policy", "").unwrap(),
+            vec!["install".to_string(), "--exclude-vuln".to_string()]
+        );
+    }
+
+    #[test]
+    fn query_parameters_decode_and_missing_keys_are_empty() {
+        assert_eq!(query_param("/inspect?t=abc&path=a%2Fb+c", "path"), "a/b c");
+        assert_eq!(query_param("/inspect?path=a", "t"), "");
+        assert_eq!(query_param("/status.json", "t"), "");
+    }
 
     #[test]
     fn a_notification_gets_no_response_and_a_bad_request_names_the_parse_error() {
@@ -1036,7 +1180,7 @@ mod bridge_tests {
     fn the_bridge_lists_the_tools_the_server_answers() {
         let v: serde_json::Value = serde_json::from_str(&tools_reply()).unwrap();
         let tools = v["result"]["tools"].as_array().expect("tools array");
-        assert!(tools.len() >= 10, "catalog bridge must expose the real tool set");
+        assert!(tools.len() >= 10, "bridge must expose the real tool set");
         assert!(tools.iter().any(|t| t["name"] == "jhol_axes"));
     }
 }

@@ -26,6 +26,9 @@ use serde::Serialize;
 pub struct Status {
     pub project: String,
     pub version: String,
+    /// Is there a `package.json` here at all? An unnamed project and no project are
+    /// different screens.
+    pub has_manifest: bool,
     /// Is the installed tree what the lockfile authorises?
     pub tree: Tree,
     /// Does the lockfile still describe `package.json`?
@@ -552,6 +555,7 @@ pub fn collect(root: &Path) -> Status {
 
     mark("pylock+axes+attest+plan", &mut t);
     Status {
+        has_manifest: root.join("package.json").is_file(),
         project,
         version,
         manifest_matches_lockfile: crate::install::lockfile_matches_manifest(root),

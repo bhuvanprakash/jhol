@@ -65,6 +65,27 @@ leaves an input.
 Verified in a real browser (agent-browser, 1400×900): console clean, arm → confirm → run works,
 GGUF inspection renders, ETag polling leaves the network tab quiet.
 
+## Production behaviour
+
+The web view is a server, so it behaves like one:
+
+| concern | what it does |
+|---|---|
+| binding | `127.0.0.1` only; `--port N` (0 = free port); a taken port says so and names the fix |
+| headless | `--no-open` serves without launching a browser |
+| concurrency | one thread per connection — a 6 s remote header fetch does not freeze the dashboard (measured: `/healthz` in **19 ms** while a GGUF inspect was running) |
+| status codes | `200`, `304`, `204` (notification), `400`, `403`, `404`, `405` with `Allow` |
+| auth | token required for every write and every inspect; compared without an early exit |
+| input limits | 8 KB request bodies, 15 s read/write timeouts |
+| headers | `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options: DENY`, and a CSP that allows only inline style/script and same-origin fetch |
+| caching | status cached by fingerprint, so two tabs polling cost one collection |
+| health | `GET /healthz` returns `ok` for a supervisor |
+| accessibility | labelled inputs, `role="status"` on the summary line, `role="log" aria-live` on output, visible focus ring, `type="button"` everywhere |
+
+**No project is a first-class state.** With no `package.json`, the page does not show an empty
+dashboard shell — it says so and names three commands that would create one, then fills in on its
+own because it polls the filesystem, not a server cache.
+
 ## Web — `jhol gui --web`
 
 One page on `127.0.0.1:<random>`; `std::net` and a page, no webview dependency.
