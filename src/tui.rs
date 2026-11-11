@@ -269,6 +269,9 @@ struct AppState {
     status: Option<jhol_core::status::Status>,
     /// Output of the last action run from tab 5.
     action_out: String,
+    /// Live chunks from the action currently running, so a download reports progress
+    /// instead of leaving the pane silent for a minute.
+    stream: Option<mpsc::Receiver<String>>,
     direct_deps: Vec<(String, String)>,
     dev_deps: Vec<(String, String)>,
     cache_tarballs: usize,
@@ -306,6 +309,7 @@ impl AppState {
             pkg_version: "1.0.0".to_string(),
             status: None,
             action_out: String::new(),
+            stream: None,
             direct_deps: Vec::new(),
             dev_deps: Vec::new(),
             cache_tarballs: 0,
@@ -478,31 +482,89 @@ impl AppState {
         self.dev_deps.get(j).map(|(n, _)| n.clone())
     }
 
-    /// Run one of the whitelisted actions by shelling this same binary. No logic is
-    /// reimplemented here: the exit code and the output are the CLI's.
+    /// Run one of the whitelisted actions by shelling this same binary, streaming its
+    /// output into the Actions pane as it arrives. No logic is reimplemented here: the
+    /// exit code and the text are the CLI's.
     fn run_action(&mut self, index: usize) {
         let Some((label, argv)) = ACTIONS.get(index).map(|(l, a)| (l.to_string(), *a)) else {
             return;
         };
-        self.action_out = format!("running {label}…");
-        self.start_job(&label, move || {
-            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-            let out = std::process::Command::new(exe)
-                .args(argv)
-                .output()
-                .map_err(|e| e.to_string())?;
-            let mut text = String::from_utf8_lossy(&out.stdout).to_string();
-            text.push_str(&String::from_utf8_lossy(&out.stderr));
-            if !out.status.success() {
-                text.push_str(&format!("\n[exit {}]", out.status.code().unwrap_or(-1)));
+        if self.busy() {
+            self.status_msg = "A job is already running — wait for it to finish.".to_string();
+            return;
+        }
+        self.busy_label = label.clone();
+        self.job_started = Some(Instant::now());
+        self.status_msg = format!("Working: {label}…");
+        self.recover_screen = true;
+        self.action_out = format!("$ jhol {}\n", argv.join(" "));
+
+        let (chunks_tx, chunks_rx) = mpsc::channel::<String>();
+        let (done_tx, done_rx) = mpsc::channel::<Result<String, String>>();
+        self.stream = Some(chunks_rx);
+        self.job_rx = Some(done_rx);
+
+        let argv: Vec<String> = argv.iter().map(|a| a.to_string()).collect();
+        thread::spawn(move || {
+            let _silence = stdio_silence::StderrSilence::enter();
+            let exe = match std::env::current_exe() {
+                Ok(e) => e,
+                Err(e) => {
+                    let _ = done_tx.send(Err(e.to_string()));
+                    return;
+                }
+            };
+            let spawned = std::process::Command::new(exe)
+                .args(&argv)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn();
+            let mut child = match spawned {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = done_tx.send(Err(e.to_string()));
+                    return;
+                }
+            };
+            let err_handle = child.stderr.take().map(|mut e| {
+                std::thread::spawn(move || {
+                    use std::io::Read;
+                    let mut buf = Vec::new();
+                    let _ = e.read_to_end(&mut buf);
+                    buf
+                })
+            });
+            let mut acc = String::new();
+            if let Some(mut out) = child.stdout.take() {
+                use std::io::BufRead;
+                let mut reader = std::io::BufReader::new(&mut out);
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {
+                            acc.push_str(&line);
+                            let _ = chunks_tx.send(line.clone());
+                        }
+                    }
+                }
             }
-            Ok(text.trim_end().to_string())
+            let code = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+            if let Some(h) = err_handle {
+                let err = String::from_utf8_lossy(&h.join().unwrap_or_default()).to_string();
+                if !err.trim().is_empty() {
+                    acc.push_str(&err);
+                    let _ = chunks_tx.send(err);
+                }
+            }
+            let _ = chunks_tx.send(format!("[exit {code}]\n"));
+            let _ = done_tx.send(Ok(acc));
         });
     }
 
-    /// Enter on the Artifacts tab: describe the selected artifact in the detail pane. The
-    /// header is already read for weights (the status was enriched), so this names what we
-    /// know and, for a wheel, repeats the exact incompatibility.
+    /// Enter on the Artifacts tab: describe the selected artifact. A remote weight gets
+    /// described through a ranged header fetch, so nothing is downloaded.
     fn inspect_selected_artifact(&mut self) {
         let Some(s) = &self.status else { return };
         let Some(a) = s.artifacts.get(self.list_state.selected().unwrap_or(0)) else {
@@ -524,15 +586,35 @@ impl AppState {
             let d: Vec<String> = a.dtypes.iter().map(|(k, n)| format!("{k}x{n}")).collect();
             text.push_str(&format!("dtypes: {}\n", d.join(" ")));
         }
-        text.push_str(&format!("fit: {}\n", match a.fits {
-            Some(true) => "fits",
-            Some(false) => "does not fit",
-            None => "unknown",
-        }));
+        text.push_str(&format!(
+            "fit: {}\n",
+            match a.fits {
+                Some(true) => "fits",
+                Some(false) => "does not fit",
+                None => "unknown",
+            }
+        ));
         for r in &a.reasons {
             text.push_str(&format!("- {r}\n"));
         }
         self.action_out = text;
+    }
+
+    /// Drain whatever the running action printed since the last frame.
+    fn poll_stream(&mut self) {
+        let Some(rx) = self.stream.as_ref() else {
+            return;
+        };
+        loop {
+            match rx.try_recv() {
+                Ok(chunk) => self.action_out.push_str(&chunk),
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.stream = None;
+                    break;
+                }
+            }
+        }
     }
 
     fn start_job<F>(&mut self, label: &str, work: F)
@@ -556,6 +638,7 @@ impl AppState {
     }
 
     fn poll_job(&mut self) {
+        self.poll_stream();
         let Some(rx) = self.job_rx.as_ref() else {
             return;
         };

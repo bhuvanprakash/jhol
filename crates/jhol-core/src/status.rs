@@ -183,6 +183,8 @@ pub fn tool_catalog() -> Vec<ToolInfo> {
         row("jhol_plan_model", "bytes and time for a model plan", "network"),
         row("jhol_plan_python", "bytes and time for a wheel plan", "network"),
         row("jhol_audit_report", "licences and known vulnerabilities", "read"),
+        row("jhol_plan_readonly", "a plan with no writes and no network", "read"),
+        row("jhol_sync_lock", "rewrite the lockfile to match the manifest", "write"),
     ]
 }
 
@@ -335,6 +337,96 @@ fn model_artifacts(root: &Path, lock: &crate::model_lock::ModelLock) -> (Vec<Art
     (out, plan)
 }
 
+/// npm in the host's dialect: a lockfile says `darwin`/`win32` where the rest of the
+/// tool says `macos`/`windows`, and `x64` where it says `x86_64`.
+fn npm_os(host: &str) -> &str {
+    match host {
+        "macos" => "darwin",
+        "windows" => "win32",
+        other => other,
+    }
+}
+
+fn npm_arch(host: &str) -> &str {
+    match host {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        other => other,
+    }
+}
+
+/// Native npm packages declare where they may run. Those are the only packages that can
+/// fail for *this* machine, so they are the only ones worth a fitness row: a table of
+/// 71 pure-JS packages that all fit is noise, and noise is how a warning stops working.
+fn npm_artifacts(root: &Path, host: &crate::axes::HostAxes) -> Vec<Artifact> {
+    let Ok(text) = std::fs::read_to_string(root.join("package-lock.json")) else {
+        return Vec::new();
+    };
+    let Ok(lock) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let Some(packages) = lock.get("packages").and_then(|p| p.as_object()) else {
+        return Vec::new();
+    };
+    let want_os = npm_os(&host.os);
+    let want_arch = npm_arch(&host.arch);
+    let mut out = Vec::new();
+    for (path, entry) in packages {
+        let list = |field: &str| -> Vec<String> {
+            entry
+                .get(field)
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+                .unwrap_or_default()
+        };
+        let os_list = list("os");
+        let cpu_list = list("cpu");
+        let libc_list = list("libc");
+        if os_list.is_empty() && cpu_list.is_empty() && libc_list.is_empty() {
+            continue;
+        }
+        let name = path.rsplit("node_modules/").next().unwrap_or(path).to_string();
+        let mut reasons = Vec::new();
+        let mut fits = true;
+        if !os_list.is_empty() {
+            let ok = os_list.iter().any(|o| o == want_os);
+            fits &= ok;
+            reasons.push(format!("os {} (host {want_os})", os_list.join(",")));
+        }
+        if !cpu_list.is_empty() {
+            let ok = cpu_list.iter().any(|c| c == want_arch);
+            fits &= ok;
+            reasons.push(format!("cpu {} (host {want_arch})", cpu_list.join(",")));
+        }
+        if !libc_list.is_empty() {
+            let host_libc = host.libc.to_string();
+            let ok = libc_list.iter().any(|l| host_libc.contains(l.as_str()));
+            fits &= ok;
+            reasons.push(format!("libc {} (host {host_libc})", libc_list.join(",")));
+        }
+        out.push(Artifact {
+            kind: "package".into(),
+            name: name.clone(),
+            version: entry
+                .get("version")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            bytes: None,
+            present: root.join(path).is_dir(),
+            digest: String::new(),
+            fits: Some(fits),
+            reasons,
+            path: Some(path.clone()),
+            params: None,
+            vram_bytes: None,
+            dtypes: BTreeMap::new(),
+        });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
 fn forks(root: &Path) -> Vec<ForkRow> {
     let Ok(entries) = std::fs::read_dir(root.join(".jhol/envs")) else {
         return Vec::new();
@@ -388,7 +480,7 @@ pub fn collect(root: &Path) -> Status {
         .map(|a| (a.packages.len(), a.models.len()))
         .unwrap_or((0, 0));
 
-    let mut artifacts = Vec::new();
+    let mut artifacts = npm_artifacts(root, &host);
     if let Some(lock) = &py_lock {
         artifacts.extend(wheel_artifacts(&host, lock));
     }
@@ -449,7 +541,7 @@ mod tests {
     /// The catalog a dashboard shows and the catalog the MCP server answers must be one
     /// list. Cheap check, strong invariant: every name here must appear in `mcp.rs`.
     #[test]
-    fn agent_catalog_names_exist_in_the_mcp_server() {
+    fn agent_catalog_and_mcp_server_answer_the_same_tools() {
         let source = include_str!("mcp.rs");
         for tool in tool_catalog() {
             let needle = format!("\"{}\"", tool.name);
@@ -459,11 +551,70 @@ mod tests {
                 tool.name
             );
         }
+        // And the other direction: a tool the server answers but the catalog hides is a
+        // capability an agent has and a human cannot see.
+        let served: Vec<&str> = source
+            .match_indices("\"name\": \"jhol_")
+            .map(|(i, _)| {
+                let rest = &source[i + 9..];
+                let end = rest.find('"').unwrap_or(0);
+                &rest[..end]
+            })
+            .collect();
+        for name in served {
+            assert!(
+                tool_catalog().iter().any(|t| t.name == name),
+                "the MCP server answers {name}, which the catalog hides"
+            );
+        }
     }
 
     /// The lock stores a path relative to the model directory. Resolving it against the
     /// project root as well makes one file look like two different files, and `status`
     /// then claims present while `verify` reports missing.
+    #[test]
+    fn npm_names_are_translated_to_the_hosts_dialect() {
+        assert_eq!(npm_os("macos"), "darwin");
+        assert_eq!(npm_os("windows"), "win32");
+        assert_eq!(npm_os("linux"), "linux");
+        assert_eq!(npm_arch("x86_64"), "x64");
+        assert_eq!(npm_arch("aarch64"), "arm64");
+    }
+
+    #[test]
+    fn native_packages_get_a_fitness_row_and_pure_js_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("node_modules/@esbuild/darwin-arm64")).unwrap();
+        std::fs::write(
+            dir.path().join("package-lock.json"),
+            r#"{"packages":{
+              "": {},
+              "node_modules/express": {"version":"4.18.2"},
+              "node_modules/@esbuild/darwin-arm64": {"version":"0.20.0","os":["darwin"],"cpu":["arm64"]},
+              "node_modules/@esbuild/linux-x64": {"version":"0.20.0","os":["linux"],"cpu":["x64"]}
+            }}"#,
+        )
+        .unwrap();
+        let host = crate::axes::HostAxes {
+            os: "macos".into(),
+            arch: "arm64".into(),
+            libc: crate::axes::Libc::Other,
+            python: None,
+            cuda_driver: None,
+            sm: Vec::new(),
+            gpu_mem_mb: None,
+        };
+        let rows = npm_artifacts(dir.path(), &host);
+        assert_eq!(rows.len(), 2, "express must not produce a row");
+        let darwin = rows.iter().find(|r| r.name.contains("darwin")).unwrap();
+        let linux = rows.iter().find(|r| r.name.contains("linux")).unwrap();
+        assert_eq!(darwin.fits, Some(true));
+        assert!(darwin.present, "installed package must report present");
+        assert_eq!(linux.fits, Some(false));
+        assert!(!linux.present);
+        assert!(darwin.reasons.iter().any(|r| r.contains("host darwin")));
+    }
+
     #[test]
     fn a_weight_path_is_resolved_against_the_model_directory_once() {
         let dir = tempfile::tempdir().unwrap();

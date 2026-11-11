@@ -1254,7 +1254,16 @@ pub mod safetensors {
     }
 
     pub fn summarise(path: &Path) -> Result<WeightSummary, AiError> {
-        let header = parse_file(path)?;
+        summarise_from_header(&parse_file(path)?)
+    }
+
+    /// The same summary from bytes already in hand — a ranged fetch reads the header of a
+    /// remote checkpoint, so it never needs the file on disk.
+    pub fn summarise_bytes(bytes: &[u8]) -> Result<WeightSummary, AiError> {
+        summarise_from_header(&parse_header(bytes)?)
+    }
+
+    pub fn summarise_from_header(header: &Header) -> Result<WeightSummary, AiError> {
         let mut out = WeightSummary {
             tensors: header.tensors.len(),
             params: header.total_params,

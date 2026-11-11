@@ -116,6 +116,90 @@ pub fn resolve_weight_target(root: &Path, target: &str) -> Result<PathBuf, Strin
         .ok_or_else(|| format!("{target}: pinned, but no .safetensors file on disk"))
 }
 
+
+/// What `inspect` reports, however it was reached — a local file or a ranged fetch.
+pub struct Inspected {
+    pub display: String,
+    pub summary: jhol_ai::safetensors::WeightSummary,
+    /// Bytes actually read. For a remote checkpoint this is the proof that we read the
+    /// header and not the weights.
+    pub bytes_read: u64,
+    pub requests: u32,
+}
+
+/// `hf://org/repo/file[@rev]` and bare URLs become an HTTP URL; anything else is a path.
+fn remote_url(target: &str) -> Option<String> {
+    if let Some(rest) = target.strip_prefix("hf://") {
+        let (path, rev) = match rest.split_once('@') {
+            Some((p, r)) => (p, r),
+            None => (rest, "main"),
+        };
+        let mut parts = path.splitn(3, '/');
+        let org = parts.next()?;
+        let repo = parts.next()?;
+        let file = parts.next()?;
+        return Some(format!(
+            "https://huggingface.co/{org}/{repo}/resolve/{rev}/{file}"
+        ));
+    }
+    if target.starts_with("https://") || target.starts_with("http://") {
+        return Some(target.to_string());
+    }
+    None
+}
+
+/// First chunk asked for. Bigger than any real header (tens of KB) so the common case is
+/// one request; the rare larger header gets a second range for the remainder.
+const HEADER_PROBE_BYTES: u64 = 128 * 1024;
+
+/// Describe a weight file from its header, fetching only the header when the file is
+/// remote. A 7 GB checkpoint costs one 128 KB range request.
+pub fn inspect_target(root: &Path, target: &str) -> Result<Inspected, String> {
+    let Some(url) = remote_url(target) else {
+        let file = resolve_weight_target(root, target)?;
+        let summary = jhol_ai::safetensors::summarise(&file)
+            .map_err(|e| format!("{}: {e}", file.display()))?;
+        let bytes_read = 8 + summary.header_bytes as u64;
+        return Ok(Inspected {
+            display: file.display().to_string(),
+            summary,
+            bytes_read,
+            requests: 0,
+        });
+    };
+
+    let mut bytes = jhol_core::http_client::get_range(&url, 0, HEADER_PROBE_BYTES - 1)
+        .map_err(|e| format!("{url}: {e}"))?;
+    let mut requests = 1;
+    let need = jhol_ai::safetensors::header_len(&bytes[..8.min(bytes.len())])
+        .map_err(|e| format!("{url}: {e}"))?
+        + 8;
+    if bytes.len() as u64 >= need {
+        bytes.truncate(need as usize);
+    } else {
+        let more = jhol_core::http_client::get_range(&url, bytes.len() as u64, need - 1)
+            .map_err(|e| format!("{url}: {e}"))?;
+        let had = bytes.len() as u64;
+        bytes.extend_from_slice(&more);
+        requests += 1;
+        if (bytes.len() as u64) < need {
+            return Err(format!(
+                "{url}: server returned {} of {need} header bytes",
+                bytes.len()
+            ));
+        }
+        let _ = had;
+    }
+    let summary =
+        jhol_ai::safetensors::summarise_bytes(&bytes).map_err(|e| format!("{url}: {e}"))?;
+    Ok(Inspected {
+        display: url,
+        summary,
+        bytes_read: bytes.len() as u64,
+        requests,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,6 +228,20 @@ mod tests {
         bytes.extend_from_slice(header.as_bytes());
         bytes.extend(std::iter::repeat(0u8).take((n * 4) as usize));
         std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn a_huggingface_target_becomes_one_resolve_url() {
+        assert_eq!(
+            remote_url("hf://meta-llama/Llama-3-8B/model.safetensors").unwrap(),
+            "https://huggingface.co/meta-llama/Llama-3-8B/resolve/main/model.safetensors"
+        );
+        assert_eq!(
+            remote_url("hf://o/r/m.safetensors@abc123").unwrap(),
+            "https://huggingface.co/o/r/resolve/abc123/m.safetensors"
+        );
+        assert_eq!(remote_url("./local.safetensors"), None);
+        assert_eq!(remote_url("llama-tiny"), None);
     }
 
     #[test]

@@ -82,3 +82,68 @@ the tree verified against the lockfile immediately after.
 - **No chart decoration.** Bytes and seconds are printed with the assumption that produced
   them (`at 5 MB/s`), because a number without its assumption is a guess in a suit.
 - **GPU memory is probed, not assumed.** No GPU → `?` everywhere, and the reason says so.
+
+## Remote inspection: describe a checkpoint you have not downloaded
+
+```
+jhol inspect hf://openai-community/gpt2/model.safetensors
+jhol inspect hf://meta-llama/Llama-3-8B/model.safetensors@5f2bc1d   # pinned revision
+```
+
+A safetensors file starts with `[8-byte length][JSON header]`, so the *structure* of a remote
+checkpoint is behind one HTTP `Range` request for the first 128 KB — the common case is a
+single request, and an unusually large header costs a second one for the remainder.
+
+Measured on the public 548 MB GPT-2 checkpoint:
+
+| | |
+|---|---|
+| bytes read | **14,291** (0.0026 % of the file) |
+| range requests | **1** |
+| wall time | 1.2 s, network-bound |
+| reported | 160 tensors · 137.0 M params · F32×160 · 0.6 GB resident |
+
+Local files go through the same path minus the fetch, and the web inspect box accepts
+`hf://` too — the same function, `status_view::inspect_target`.
+
+## npm native packages in the Fitness table
+
+The table used to hold wheels and weights only. Native npm packages declare where they may
+run, and they are the only npm packages that can fail for *this* machine:
+
+```
+ ✓ package @esbuild/darwin-arm64 0.20.0
+      os darwin (host darwin)
+      cpu arm64 (host arm64)
+ ✗ package @esbuild/linux-x64 0.20.0
+      os linux (host darwin)
+      cpu x64 (host arm64)
+```
+
+Rows come from `package-lock.json` entries that declare `os`, `cpu` or `libc`. A pure-JS
+package gets **no row**: 71 packages that all fit is noise, and noise is how a warning stops
+being read. The host is translated into npm's dialect (`macos`→`darwin`, `x86_64`→`x64`), with
+a test for the translation and one for the filtering.
+
+## Live progress in the TUI
+
+Actions used to run to completion behind a spinner. They now stream: the child's stdout is
+read line by line on a worker thread, sent over a channel, and appended to the Actions pane on
+every frame, so a download reports progress in the terminal the same way the browser does. The
+exit line (`[exit 0]`) is appended by the same loop that reads the output, so what you see is
+what ran.
+
+## The MCP bridge: one surface, two drivers
+
+| endpoint | does |
+|---|---|
+| `GET /tools.json` | `tools/list` from the real MCP server, in-process |
+| `POST /mcp?t=…` | any JSON-RPC request — `tools/list`, `tools/call`, notifications |
+
+The bridge calls `jhol_core::mcp::handle_mcp_request` directly. There is no second server and
+no second tool list: a test asserts the catalog and the MCP server answer **the same** tools in
+both directions, after this work found two tools the dashboard was hiding
+(`jhol_plan_readonly`, `jhol_sync_lock`).
+
+Verified over HTTP: `tools/list` → 12 tools; `tools/call jhol_axes` → the host axes JSON; a bad
+token → `-32001`; malformed JSON → `-32700`; a notification → no response, per JSON-RPC.

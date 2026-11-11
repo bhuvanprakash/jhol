@@ -63,6 +63,24 @@ pub fn serve() -> Result<(), String> {
             continue;
         }
 
+        if path.starts_with("/mcp") {
+            let body = read_body(&mut reader);
+            if given != token {
+                respond(&mut stream, "application/json", &serde_json::json!({
+                    "jsonrpc": "2.0", "id": null,
+                    "error": {"code": -32001, "message": "bad token"}
+                }).to_string());
+                continue;
+            }
+            respond(&mut stream, "application/json", &mcp_reply(&body));
+            continue;
+        }
+
+        if path.starts_with("/tools.json") {
+            respond(&mut stream, "application/json", &tools_reply());
+            continue;
+        }
+
         if path.starts_with("/inspect") {
             if given != token {
                 respond(&mut stream, "application/json", "{\"error\":\"bad token\"}");
@@ -260,30 +278,57 @@ fn stream_argv(stream: &mut std::net::TcpStream, argv: Option<Vec<String>>) {
 }
 
 /// `jhol inspect`, in-process: a header read is cheap enough that shelling out would cost
-/// more than the work.
+/// more than the work, and a remote target costs one ranged request.
 fn inspect_json(root: &Path, target: &str) -> serde_json::Value {
-    let file = match crate::status_view::resolve_weight_target(root, target) {
-        Ok(f) => f,
+    let inspected = match crate::status_view::inspect_target(root, target) {
+        Ok(i) => i,
         Err(e) => return serde_json::json!({ "error": e }),
     };
-    match jhol_ai::safetensors::summarise(&file) {
-        Ok(s) => {
-            let host = jhol_core::axes::HostAxes::detect();
-            serde_json::json!({
-                "path": file.display().to_string(),
-                "tensors": s.tensors,
-                "params": s.params,
-                "params_human": s.params_human(),
-                "data_bytes": s.data_bytes,
-                "vram_bytes": s.vram_bytes(),
-                "header_bytes": s.header_bytes,
-                "dtypes": s.dtypes.iter().map(|(d, n)| serde_json::json!({"dtype": d, "tensors": n})).collect::<Vec<_>>(),
-                "gpu_mem_mb": host.gpu_mem_mb,
-                "fits": host.gpu_mem_mb.map(|m| s.vram_bytes().div_ceil(1024 * 1024) <= m),
+    let s = &inspected.summary;
+    let host = jhol_core::axes::HostAxes::detect();
+    serde_json::json!({
+        "path": inspected.display,
+        "tensors": s.tensors,
+        "params": s.params,
+        "params_human": s.params_human(),
+        "data_bytes": s.data_bytes,
+        "vram_bytes": s.vram_bytes(),
+        "header_bytes": s.header_bytes,
+        "bytes_read": inspected.bytes_read,
+        "requests": inspected.requests,
+        "dtypes": s.dtypes.iter().map(|(d, n)| serde_json::json!({"dtype": d, "tensors": n})).collect::<Vec<_>>(),
+        "gpu_mem_mb": host.gpu_mem_mb,
+        "fits": host.gpu_mem_mb.map(|m| s.vram_bytes().div_ceil(1024 * 1024) <= m),
+    })
+}
+
+/// The MCP bridge. An agent and a human drive **one** surface: the same five actions, the
+/// same status struct, and the same tool catalog — over JSON-RPC, in-process, with no
+/// second server to keep in sync.
+fn mcp_reply(body: &[u8]) -> String {
+    let req: jhol_core::mcp::JsonRpcRequest = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return serde_json::json!({
+                "jsonrpc": "2.0", "id": null,
+                "error": {"code": -32700, "message": format!("parse error: {e}")},
             })
+            .to_string()
         }
-        Err(e) => serde_json::json!({ "error": e.to_string() }),
+    };
+    match jhol_core::mcp::handle_mcp_request(&req) {
+        Some(resp) => serde_json::to_string(&resp).unwrap_or_else(|e| e.to_string()),
+        // A notification gets no response, per JSON-RPC.
+        None => String::new(),
     }
+}
+
+fn tools_reply() -> String {
+    mcp_reply(
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})
+            .to_string()
+            .as_bytes(),
+    )
 }
 
 fn percent_decode(s: &str) -> String {
@@ -349,7 +394,7 @@ const PAGE: &str = r#"<!doctype html>
 <section id="s-artifacts">
   <table><thead><tr><th>fit</th><th>kind</th><th>name</th><th>size</th><th>resident</th><th>why</th></tr></thead>
   <tbody id="artifacts"></tbody></table>
-  <p><input id="path" placeholder="path to .safetensors, a directory, or a pinned model name">
+  <p><input id="path" placeholder="path, directory, pinned model name, or hf://org/repo/file">
      <button id="go">inspect</button></p>
   <pre id="detail">Header looks read a few kilobytes, not the weights.</pre>
 </section>
@@ -509,10 +554,34 @@ document.getElementById("go").onclick = async () => {
       `\n  resident ${gb(j.vram_bytes)}` +
       (j.gpu_mem_mb ? ` — host GPU ${j.gpu_mem_mb} MB → ${j.fits ? "fits" : "does not fit"}`
                     : " — no GPU memory detected, fit unknown") +
-      `\n  header ${j.header_bytes} bytes read (${(100 * j.header_bytes / (j.header_bytes + j.data_bytes)).toFixed(4)}% of the file)`;
+      `\n  header ${j.bytes_read} bytes read (${(100 * j.bytes_read / (j.bytes_read + j.data_bytes)).toFixed(4)}% of the file)` +
+      (j.requests ? ` over ${j.requests} range request(s)` : "");
   } catch (e) { detail.textContent = "error: " + e.message; }
 };
 
 tick(); setInterval(tick, 1500);
 </script></body></html>
 "#;
+
+#[cfg(test)]
+mod bridge_tests {
+    use super::*;
+
+    #[test]
+    fn a_notification_gets_no_response_and_a_bad_request_names_the_parse_error() {
+        let note = mcp_reply(br#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+        assert!(note.is_empty(), "JSON-RPC notifications must not be answered");
+
+        let bad = mcp_reply(b"{nope");
+        let v: serde_json::Value = serde_json::from_str(&bad).unwrap();
+        assert_eq!(v["error"]["code"], -32700);
+    }
+
+    #[test]
+    fn the_bridge_lists_the_tools_the_server_answers() {
+        let v: serde_json::Value = serde_json::from_str(&tools_reply()).unwrap();
+        let tools = v["result"]["tools"].as_array().expect("tools array");
+        assert!(tools.len() >= 10, "catalog bridge must expose the real tool set");
+        assert!(tools.iter().any(|t| t["name"] == "jhol_axes"));
+    }
+}

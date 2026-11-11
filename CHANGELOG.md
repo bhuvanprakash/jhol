@@ -3780,3 +3780,28 @@ Two defects found by building this, both now pinned by tests:
    refuses anything else with exit 2.
 
 jhol-core 726 tests (3 new), bin tests 9 (4 new), CLI suite 30/30, installer gate PASS.
+
+## Four extensions: remote headers, TUI streaming, npm fitness rows, one MCP surface
+
+**Remote inspection.** `jhol inspect hf://org/repo/file[@rev]` fetches the header with one HTTP
+`Range` request (128 KB probe; a second request only for an unusually large header) and
+describes a checkpoint you have never downloaded. Measured on the 548 MB GPT-2 checkpoint:
+**14,291 bytes read (0.0026 %), 1 request, 1.2 s** — network-bound, not size-bound. Local
+files, directories and pinned names go through the same one function.
+
+**TUI streaming.** Actions stream as they run: the child's stdout is read line by line off the
+main thread, sent over a channel, and appended to the Actions pane each frame. A download now
+reports progress in a terminal the way the browser already did.
+
+**npm rows in the Fitness table.** Native packages that declare `os`/`cpu`/`libc` get a verdict
+with the reason (`✗ @esbuild/linux-x64 — os linux (host darwin)`). Pure-JS packages get no row,
+because a table where everything fits teaches users to ignore the column. Host names are
+translated into npm's dialect (`macos`→`darwin`, `x86_64`→`x64`), both directions tested.
+
+**One MCP surface.** `GET /tools.json` and `POST /mcp` bridge straight into
+`jhol_core::mcp::handle_mcp_request`, so an agent and a human drive the same five actions and
+the same status struct. The tool catalog test now asserts **equality in both directions** —
+which immediately found two tools the dashboard was hiding: `jhol_plan_readonly` and
+`jhol_sync_lock`.
+
+jhol-core 728 tests (2 new), bin 12 (3 new), CLI suite 30/30.

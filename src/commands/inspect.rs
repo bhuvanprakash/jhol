@@ -15,9 +15,8 @@ pub fn run(m: &ArgMatches) -> Result<(), String> {
         .map(|s| s.as_str())
         .ok_or_else(|| "inspect: missing target".to_string())?;
     let root = std::path::Path::new(".");
-    let file = crate::status_view::resolve_weight_target(root, target)?;
-    let summary =
-        jhol_ai::safetensors::summarise(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let inspected = crate::status_view::inspect_target(root, target)?;
+    let summary = &inspected.summary;
 
     if crate::flag(m, "json") {
         let dtypes: Vec<serde_json::Value> = summary
@@ -26,7 +25,9 @@ pub fn run(m: &ArgMatches) -> Result<(), String> {
             .map(|(d, n)| serde_json::json!({ "dtype": d, "tensors": n }))
             .collect();
         let out = serde_json::json!({
-            "path": file.display().to_string(),
+            "path": inspected.display,
+            "bytes_read": inspected.bytes_read,
+            "requests": inspected.requests,
             "tensors": summary.tensors,
             "params": summary.params,
             "params_human": summary.params_human(),
@@ -41,7 +42,7 @@ pub fn run(m: &ArgMatches) -> Result<(), String> {
     }
 
     let host = jhol_core::axes::HostAxes::detect();
-    println!("{}", file.display());
+    println!("{}", inspected.display);
     println!(
         "  {} tensors · {} params · {} bytes of tensor data",
         summary.tensors,
@@ -74,9 +75,13 @@ pub fn run(m: &ArgMatches) -> Result<(), String> {
         ),
     }
     println!(
-        "  header     {} bytes read ({} of the file)",
-        summary.header_bytes,
-        percent(summary.header_bytes as u64, summary.data_bytes)
+        "  header     {} bytes read ({} of the file){}",
+        inspected.bytes_read,
+        percent(inspected.bytes_read, summary.data_bytes),
+        match inspected.requests {
+            0 => String::new(),
+            n => format!(" over {n} range request(s)"),
+        }
     );
     Ok(())
 }
