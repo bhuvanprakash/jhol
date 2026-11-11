@@ -3920,3 +3920,24 @@ not (five shapes pinned by a test). A genuine 404 is reported as *not found*, wi
 run `jhol inspect <repo>` for the file list — instead of surfacing as a server fault.
 
 bin 16, jhol-core 731.
+
+## The dashboard got a design
+
+The page worked and looked like a debug dump: one monospace column, unformatted numbers
+(`8190735360 params`), table columns that collapsed, a checkbox stranded in the middle of the
+row, and a button strip with no explanation of what each button would do.
+
+Now: a 1160px column on dark slate; sans for prose, monospace only for identifiers and numbers;
+a sticky top bar carrying tree, lockfile, missing bytes, unfit count and forks as live pills;
+tabs with counts; tables with fixed widths, tabular numerals and right-aligned sizes; per-reason
+lines instead of one wrapped sentence; an inspect result built from five numbers plus
+proportional bars for the heaviest tensors; actions as rows (command, what it does, `Run`)
+instead of a nameless button strip; a footer naming the CLI equivalents; `1`–`6` and `/` as
+keyboard shortcuts.
+
+Numbers are humanised everywhere (`8.19 B params`, `8.11 GB`, `16 MB read`), and amber `?`
+stays visibly distinct from green `✓` — an unknown that looks like a pass is the one failure a
+dashboard must never have.
+
+Verified by loading it in a real browser (agent-browser, 1400×900): console clean, arm → preview
+→ run works end to end, ETag polling quiet.

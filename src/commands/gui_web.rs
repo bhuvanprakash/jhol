@@ -430,205 +430,523 @@ const PAGE: &str = r##"<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>jhol</title>
 <style>
- :root { color-scheme: dark }
- body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0;
-        background:#111; color:#e8e8e8; padding: 1.4rem 1.8rem; }
- h1 { font-size: 1.15rem; margin: 0 }
- .sub { color:#8a8a8a; margin-bottom: 1rem }
- nav { display:flex; gap:.35rem; flex-wrap:wrap; margin: 1rem 0 1.2rem }
- nav button { background:#161616; border:1px solid #262626; color:#bbb; border-radius:5px;
-              padding:.3rem .65rem; font:inherit; cursor:pointer }
- nav button.on { border-color:#5bd67b; color:#5bd67b }
- section { display:none } section.on { display:block }
- .row { display:flex; gap:1rem; padding:.18rem 0 }
- .k { width:9.5rem; color:#5bd67b; flex:none }
- table { border-collapse:collapse; width:100% }
- th, td { text-align:left; padding:.28rem .5rem; border-bottom:1px solid #1e1e1e }
- th { color:#888; font-weight:400 }
- .ok { color:#5bd67b } .bad { color:#ff6b6b } .unk { color:#e3b341 }
- .acts { margin: 1.2rem 0 .6rem; display:flex; gap:.5rem; flex-wrap:wrap }
- .acts button { background:#1b1b1b; color:#e8e8e8; border:1px solid #333; border-radius:5px;
-                padding:.35rem .7rem; font:inherit; cursor:pointer }
- .acts button:hover { border-color:#5bd67b }
- .acts button[disabled] { opacity:.5; cursor:progress }
- pre { background:#0d0d0d; border:1px solid #1e1e1e; border-radius:6px; padding:.7rem;
-       min-height:3rem; max-height:20rem; overflow:auto; white-space:pre-wrap }
- input { background:#0d0d0d; border:1px solid #2a2a2a; color:#e8e8e8; border-radius:5px;
-         padding:.35rem .6rem; font:inherit; width: 60%; min-width: 16rem }
- code { color:#9ad0ff }
- .muted { color:#777 }
-</style></head><body>
-<h1 id="name">jhol</h1>
-<div class="sub" id="version">connecting…</div>
-<nav id="nav"></nav>
+ :root{
+   color-scheme: dark;
+   --bg:#0b0d10; --panel:#111419; --panel2:#151920; --line:#1e242c; --line2:#2a323c;
+   --txt:#e7eaef; --mut:#8b95a3; --dim:#5f6b7a;
+   --ok:#4ade80; --bad:#f87171; --warn:#fbbf24; --accent:#60a5fa; --violet:#a78bfa;
+   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+   --sans:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",system-ui,sans-serif;
+ }
+ *{box-sizing:border-box}
+ html,body{margin:0}
+ body{background:var(--bg);color:var(--txt);font:14px/1.55 var(--sans);
+      -webkit-font-smoothing:antialiased}
+ a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+ .wrap{max-width:1160px;margin:0 auto;padding:0 26px 64px}
 
-<section id="s-status" class="on"></section>
-<section id="s-artifacts">
-  <p><input id="q" placeholder="filter by name, kind or reason">
-     <label class="muted"><input type="checkbox" id="unfit"> only what does not fit</label></p>
-  <table><thead><tr><th>fit</th><th>kind</th><th>name</th><th>size</th><th>resident</th><th>why</th></tr></thead>
-  <tbody id="artifacts"></tbody></table>
-  <p><input id="path" placeholder="path, directory, pinned model name, or hf://org/repo/file">
-     <button id="go">inspect</button></p>
-  <pre id="detail">Header looks read a few kilobytes, not the weights.</pre>
-</section>
-<section id="s-budget"></section>
-<section id="s-proof"></section>
-<section id="s-forks"></section>
-<section id="s-agent"></section>
-<section id="s-actions">
-  <div class="acts">
-    <button data-a="verify">verify</button>
-    <button data-a="prune">verify --prune</button>
-    <button data-a="install">install</button>
-    <button data-a="ci">ci</button>
-    <button data-a="policy">install --exclude-vuln</button>
-  </div>
-  <pre id="out">Output streams as it arrives.</pre>
-</section>
+ /* ── top bar ───────────────────────────────────────────── */
+ header.top{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:14px;
+   padding:14px 26px;background:rgba(11,13,16,.86);backdrop-filter:saturate(140%) blur(10px);
+   border-bottom:1px solid var(--line)}
+ .brand{font:600 15px/1 var(--mono);letter-spacing:-.02em;color:var(--txt);
+   padding:5px 9px;border:1px solid var(--line2);border-radius:7px;background:var(--panel2)}
+ .proj{display:flex;align-items:baseline;gap:8px;min-width:0}
+ .proj b{font-weight:600;font-size:14.5px}
+ .proj span{color:var(--mut);font:12px/1 var(--mono)}
+ .pills{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+
+ /* ── pills + badges ────────────────────────────────────── */
+ .pill,.b{display:inline-flex;align-items:center;gap:5px;border-radius:999px;
+   padding:3px 9px;font-size:11.5px;line-height:1.4;border:1px solid var(--line2);
+   color:var(--mut);background:var(--panel2);white-space:nowrap}
+ .b.ok,.pill.ok{color:#bbf7d0;border-color:#1d5c37;background:#0f2a1c}
+ .b.bad,.pill.bad{color:#fecaca;border-color:#6b2525;background:#2a1212}
+ .b.warn,.pill.warn{color:#fde68a;border-color:#5c4a15;background:#2a220e}
+ .b.acc,.pill.acc{color:#bfdbfe;border-color:#1e3f6b;background:#0f1d2e}
+ .b.dot::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;
+   display:inline-block;opacity:.9}
+
+ /* ── tabs ──────────────────────────────────────────────── */
+ nav.tabs{display:flex;gap:4px;flex-wrap:wrap;padding:18px 0 20px}
+ nav.tabs button{appearance:none;border:1px solid transparent;background:transparent;
+   color:var(--mut);font:inherit;font-size:13.5px;padding:7px 12px;border-radius:8px;
+   cursor:pointer;display:inline-flex;align-items:center;gap:7px}
+ nav.tabs button:hover{background:var(--panel);color:var(--txt)}
+ nav.tabs button.on{background:var(--panel2);border-color:var(--line2);color:var(--txt)}
+ nav.tabs .n{font:11px/1 var(--mono);color:var(--dim);background:#0d1014;
+   border:1px solid var(--line);border-radius:6px;padding:2px 5px}
+ nav.tabs button.on .n{color:var(--accent);border-color:#1e3f6b}
+
+ /* ── sections ──────────────────────────────────────────── */
+ section{display:none} section.on{display:block;animation:fade .16s ease}
+ @keyframes fade{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:none}}
+ .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+ .card+ .card{margin-top:14px}
+ h2{font:600 13px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;
+    color:var(--dim);margin:0 0 14px}
+ .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+ .kv{display:grid;grid-template-columns:104px 1fr;gap:10px 14px;align-items:baseline}
+ .kv dt{color:var(--mut);font-size:12.5px}
+ .kv dd{margin:0}
+ .mono{font-family:var(--mono);font-size:12.5px;font-variant-numeric:tabular-nums}
+ .muted{color:var(--mut)} .dim{color:var(--dim)}
+ .empty{color:var(--dim);padding:22px 0;text-align:center;font-size:13px}
+
+ /* ── tables ────────────────────────────────────────────── */
+ table{width:100%;border-collapse:collapse;table-layout:fixed}
+ th{font:500 11px/1 var(--sans);letter-spacing:.07em;text-transform:uppercase;
+    color:var(--dim);text-align:left;padding:0 10px 9px;border-bottom:1px solid var(--line)}
+ td{padding:11px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+ tr:last-child td{border-bottom:0}
+ tbody tr:hover{background:#0e1216}
+ td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;
+        white-space:nowrap;color:#cfd7e3}
+ td.name{font-family:var(--mono);font-size:12.5px;word-break:break-all}
+ .reasons{margin:6px 0 0;padding:0;list-style:none}
+ .reasons li{color:var(--mut);font-size:12.3px;line-height:1.5}
+ .reasons li::before{content:"·";color:var(--dim);margin-right:6px}
+
+ /* ── forms ─────────────────────────────────────────────── */
+ .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+ input[type=text],input:not([type]){background:#0c0f13;border:1px solid var(--line2);
+   color:var(--txt);border-radius:9px;padding:10px 12px;font:13px/1.4 var(--mono);
+   width:100%;outline:none;transition:border-color .15s}
+ input:focus{border-color:#2f5d9a;box-shadow:0 0 0 3px rgba(96,165,250,.12)}
+ label.check{display:inline-flex;align-items:center;gap:8px;color:var(--mut);font-size:13px;
+   cursor:pointer;user-select:none;white-space:nowrap}
+ button.btn{appearance:none;font:500 13px/1 var(--sans);color:var(--txt);
+   background:var(--panel2);border:1px solid var(--line2);border-radius:9px;
+   padding:10px 15px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;
+   transition:border-color .15s,background .15s}
+ button.btn:hover{border-color:#3b4855;background:#191e26}
+ button.btn.primary{background:#132538;border-color:#24507f;color:#dbeafe}
+ button.btn.primary:hover{background:#16304a}
+ button.btn[disabled]{opacity:.5;cursor:progress}
+ .acts{display:flex;flex-direction:column;gap:0}
+ .act{display:flex;align-items:center;gap:14px;padding:12px 2px;border-bottom:1px solid var(--line)}
+ .act:last-child{border-bottom:0}
+ .act .t{font-family:var(--mono);font-size:12.5px;color:var(--txt);min-width:210px}
+ .act .d{color:var(--mut);font-size:12.5px;flex:1}
+ .act .btn{padding:7px 13px;font-size:12.5px}
+ .act.ro .t{color:var(--txt)}
+ .kbd{font:11px/1 var(--mono);color:var(--dim);border:1px solid var(--line2);
+      border-radius:4px;padding:2px 4px}
+ .searchwrap{display:flex;gap:12px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+ .searchwrap input{flex:0 1 460px;min-width:220px}
+
+ /* ── output / inspect ──────────────────────────────────── */
+ pre{background:#0a0c0f;border:1px solid var(--line);border-radius:10px;
+   padding:14px 16px;font:12.4px/1.62 var(--mono);color:#c8d1dc;overflow:auto;
+   max-height:22rem;white-space:pre-wrap;margin:0}
+ pre.tail{margin-top:12px}
+ .bars{margin-top:14px;display:grid;gap:8px}
+ .barrow{display:grid;grid-template-columns:150px 1fr 76px;gap:12px;align-items:center;
+         font-size:12.4px}
+ .barrow .nm{font-family:var(--mono);color:var(--mut);overflow:hidden;text-overflow:ellipsis;
+             white-space:nowrap}
+ .bar{height:7px;background:#161b22;border-radius:99px;overflow:hidden;display:flex}
+ .bar>span{display:block;height:100%;background:linear-gradient(90deg,#2563eb,#22d3ee)}
+ .bar>span.warn{background:linear-gradient(90deg,#b45309,#fbbf24)}
+ .bar>span.ok{background:linear-gradient(90deg,#15803d,#4ade80)}
+ .barrow .v{text-align:right;font-family:var(--mono);color:#cfd7e3;font-variant-numeric:tabular-nums}
+ .stat{display:flex;gap:22px;flex-wrap:wrap;margin-top:4px}
+ .stat div{display:flex;flex-direction:column;gap:2px}
+ .stat .v{font:600 20px/1.2 var(--sans);font-variant-numeric:tabular-nums}
+ .stat .k{font-size:11.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+ .hint{color:var(--dim);font-size:12.5px;margin-top:10px}
+ code{font-family:var(--mono);font-size:12.3px;color:#a5d6ff;background:#0e141b;
+      border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+ @media (max-width:720px){
+   .wrap{padding:0 14px 48px} header.top{padding:12px 14px}
+   .pills{display:none} .kv{grid-template-columns:92px 1fr}
+   .stat .v{font-size:17px}
+ }
+</style></head><body>
+<header class="top">
+  <div class="brand">jhol</div>
+  <div class="proj"><b id="name">…</b><span id="version"></span></div>
+  <div class="pills" id="pills"></div>
+</header>
+
+<div class="wrap">
+  <nav class="tabs" id="nav"></nav>
+
+  <section id="s-status" class="on">
+    <div class="grid2">
+      <div class="card"><h2>Project</h2><dl class="kv" id="k-project"></dl></div>
+      <div class="card"><h2>Artefacts</h2><div id="k-artefacts"></div></div>
+      <div class="card"><h2>Host</h2><dl class="kv" id="k-host"></dl></div>
+    </div>
+  </section>
+
+  <section id="s-artifacts">
+    <div class="card">
+      <div class="searchwrap">
+        <input id="q" placeholder="Filter by name, kind, reason…" autocomplete="off">
+        <label class="check"><input type="checkbox" id="unfit"> Only what does not fit</label>
+      </div>
+      <table>
+        <colgroup>
+          <col style="width:58px"><col style="width:86px"><col style="width:24%">
+          <col style="width:104px"><col style="width:104px"><col>
+        </colgroup>
+        <thead><tr><th>Fit</th><th>Kind</th><th>Name</th><th style="text-align:right">Size</th>
+        <th style="text-align:right">Resident</th><th>Why</th></tr></thead>
+        <tbody id="artifacts"></tbody>
+      </table>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h2>Inspect a header</h2>
+      <div class="row">
+        <input id="path" style="flex:1"
+          placeholder="path · pinned model · hf://org/repo/file.gguf · https://huggingface.co/…">
+        <button class="btn primary" id="go">Inspect</button>
+      </div>
+      <div id="detail-host" style="margin-top:14px"></div>
+      <p class="hint">Reads the header only: parameters, dtypes and resident size without the weights.</p>
+    </div>
+  </section>
+
+  <section id="s-budget">
+    <div class="card"><h2>Download plan</h2><div id="budget"></div></div>
+  </section>
+
+  <section id="s-proof">
+    <div class="grid2">
+      <div class="card"><h2>Reproducibility</h2><dl class="kv" id="proof-kv"></dl></div>
+      <div class="card"><h2>Policy in force</h2><dl class="kv" id="policy-kv"></dl></div>
+    </div>
+    <div class="card" style="margin-top:14px"><h2>Forks</h2><div id="forks"></div></div>
+  </section>
+
+  <section id="s-agent">
+    <div class="card"><h2>Agent surface</h2><div id="agent"></div>
+      <p class="hint">The same tools the MCP server answers — <code>jhol mcp --stdio</code>
+      or <code>POST /mcp</code> on this page.</p></div>
+  </section>
+
+  <section id="s-actions">
+    <div class="card">
+      <h2>Run</h2>
+      <div class="acts" id="acts"></div>
+      <p class="hint" id="arm-hint">Writes ask once — the first click shows what would happen, the second runs it.</p>
+      <pre id="out" class="tail" style="min-height:190px">Output streams here.</pre>
+    </div>
+  </section>
+  <footer class="dim" style="margin-top:34px;font:12px/1.6 var(--mono)">
+    same data as <code>jhol status --json</code> · <code>jhol status --watch</code> ·
+    MCP on <code>POST /mcp</code> · <span class="kbd">1</span>–<span class="kbd">6</span> to switch,
+    <span class="kbd">/</span> to filter
+  </footer>
+</div>
 
 <script>
 const token = new URLSearchParams(location.search).get("t") || "";
-const SECTIONS = ["status","artifacts","budget","proof","forks","agent","actions"];
+const SECTIONS = ["status","artifacts","budget","proof","agent","actions"];
+const LABEL = {status:"Status",artifacts:"Artefacts",budget:"Budget",proof:"Proof",
+               agent:"Agent",actions:"Actions"};
 const nav = document.getElementById("nav");
+const counts = {};
 SECTIONS.forEach((s, i) => {
   const b = document.createElement("button");
-  b.textContent = s;
+  b.dataset.section = s;
   if (i === 0) b.className = "on";
-  b.onclick = () => {
-    document.querySelectorAll("nav button").forEach(x => x.className = "");
-    document.querySelectorAll("section").forEach(x => x.className = "");
-    b.className = "on";
-    document.getElementById("s-" + s).className = "on";
-  };
+  b.innerHTML = `${LABEL[s]}<span class="n" id="n-${s}">·</span>`;
+  b.onclick = () => show(s);
   nav.appendChild(b);
 });
+function show(s) {
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x.dataset.section === s));
+  document.querySelectorAll("section").forEach(x => x.classList.toggle("on", x.id === "s-" + s));
+}
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT") {
+    if (e.key === "Escape") e.target.blur();
+    return;
+  }
+  const i = parseInt(e.key, 10);
+  if (i >= 1 && i <= SECTIONS.length) show(SECTIONS[i - 1]);
+  if (e.key === "/") { e.preventDefault(); show("artifacts");
+    document.getElementById("q").focus(); }
+});
 
-const gb = n => (n / 1073741824).toFixed(2) + " GB";
-const mb = n => (n / 1048576).toFixed(1) + " MB";
-const esc = s => String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function bytes(n) {
+  if (!n) return "—";
+  const u = ["B","KB","MB","GB","TB"]; let i = 0, v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v >= 100 || i === 0 ? v.toFixed(0) : v.toFixed(v >= 10 ? 1 : 2)} ${u[i]}`;
+}
+function params(n) {
+  if (!n) return "—";
+  if (n >= 1e9) return `${(n/1e9).toFixed(2)} B`;
+  if (n >= 1e6) return `${(n/1e6).toFixed(1)} M`;
+  if (n >= 1e3) return `${(n/1e3).toFixed(1)} K`;
+  return String(n);
+}
+const badge = (kind, text) => `<span class="b ${kind}">${esc(text)}</span>`;
+const fitBadge = f => f === true ? badge("ok", "✓ fits")
+  : f === false ? badge("bad", "✗ no") : badge("warn", "? unknown");
 
-function row(k, v, cls) {
-  return `<div class="row"><span class="k">${k}</span><span class="${cls||""}">${v}</span></div>`;
+function kv(el, rows) {
+  el.innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("");
 }
 
 function render(s) {
-  document.getElementById("name").textContent = (s.project || "(unnamed)") + " " + (s.version || "");
-  document.getElementById("version").textContent =
-    `tree ${s.tree.state} · ${s.artifacts.length} artifacts · ${s.plan.items.length} plan items`;
+  document.getElementById("name").textContent = s.project || "(unnamed)";
+  document.getElementById("version").textContent = s.version || "";
+  const unfit = s.artifacts.filter(a => a.fits === false).length;
+  const unknown = s.artifacts.filter(a => a.fits === null || a.fits === undefined).length;
+  document.getElementById("pills").innerHTML = [
+    s.tree.state === "match" ? badge("ok dot", `tree match · ${s.tree.packages}`) : badge("bad dot", `tree ${s.tree.state}`),
+    s.manifest_matches_lockfile ? badge("ok dot", "lockfile ok") : badge("bad dot", "lockfile drifted"),
+    s.plan.missing_bytes ? badge("warn dot", `${bytes(s.plan.missing_bytes)} missing`) : badge("dot", "nothing missing"),
+    unfit ? badge("bad dot", `${unfit} unfit`) : badge("ok dot", "all fit"),
+    s.forks.length ? badge("acc dot", `${s.forks.length} fork${s.forks.length>1?"s":""}`) : "",
+  ].join("");
 
-  armed.plan = s.plan.missing_bytes
-    ? `would fetch ${mb(s.plan.missing_bytes)} — ~${s.plan.eta_seconds} s at ${(s.plan.throughput_bytes_per_sec/1048576)|0} MB/s`
-    : "nothing to download; this re-materialises from the lockfile";
+  counts.status = s.tree.packages; counts.artifacts = s.artifacts.length;
+  counts.budget = s.plan.items.filter(i => !i.present).length;
+  counts.proof = s.proof.attested_packages; counts.agent = s.agent.tools.length;
+  counts.actions = 5;
+  SECTIONS.forEach(k => { const el = document.getElementById("n-" + k);
+    if (el) el.textContent = counts[k] ?? "·"; });
 
-  document.getElementById("s-status").innerHTML =
-    row("tree", s.tree.state === "match" ? `match — ${s.tree.packages} packages` : `${esc(s.tree.state)} — ${esc(s.tree.detail)}`,
-        s.tree.state === "match" ? "ok" : "bad") +
-    row("lockfile", s.manifest_matches_lockfile ? "matches package.json" : "DRIFTED — run install",
-        s.manifest_matches_lockfile ? "ok" : "bad") +
-    row("policy", s.policy.as_of || s.policy.exclude_vulnerable ? "restricted" : "latest, any licence") +
-    row("models", s.models.pinned ? s.models.pinned + " pinned: " + s.models.names.join(", ") : "none") +
-    row("python", s.python.pinned ? s.python.pinned + " distributions" : "none") +
-    row("axes", `${s.axes.os}/${s.axes.arch} ${s.axes.libc} · python ${s.axes.python || "-"} · cuda ${s.axes.cuda_driver || "none"} · sm ${(s.axes.sm||[]).join(",") || "-"} · gpu ${s.axes.gpu_mem_mb || "?"} MB`) +
-    row("proof", `snapshot ${s.proof.snapshot_ready ? "ready" : "absent"} · attested ${s.proof.attested_packages} packages, ${s.proof.attested_models} models`);
+  kv(document.getElementById("k-project"), [
+    ["tree", s.tree.state === "match"
+      ? `${badge("ok","match")} <span class="muted">${s.tree.packages} packages, all version-matched</span>`
+      : `${badge("bad", esc(s.tree.state))} <span class="muted">${esc(s.tree.detail)}</span>`],
+    ["lockfile", s.manifest_matches_lockfile ? `${badge("ok","current")}`
+      : `${badge("bad","drifted")} <span class="muted">run install</span>`],
+    ["snapshot", s.proof.snapshot_ready ? badge("ok","ready") : badge("warn","absent")],
+    ["attested", `<span class="mono">${s.proof.attested_packages}</span> packages ·
+                  <span class="mono">${s.proof.attested_models}</span> models`],
+  ]);
 
-  const tbody = document.getElementById("artifacts");
-  tbody.innerHTML = s.artifacts.map(a => {
-    const mark = a.fits === true ? '<span class="ok">✓</span>'
-               : a.fits === false ? '<span class="bad">✗</span>'
-               : '<span class="unk">?</span>';
-    return `<tr data-fit="${a.fits}"><td>${mark}</td><td class="muted">${a.kind}</td><td>${esc(a.name)}</td>
-      <td>${a.bytes ? mb(a.bytes) : "—"}</td><td>${a.vram_bytes ? gb(a.vram_bytes) : "—"}</td>
-      <td class="muted">${esc(a.reasons.join("; "))}</td></tr>`;
-  }).join("") || '<tr><td colspan="6" class="muted">no wheels pinned, no weights locked</td></tr>';
+  const n = s.artifacts.length;
+  document.getElementById("k-artefacts").innerHTML = n ? `
+    <div class="stat">
+      <div><span class="v">${n}</span><span class="k">artefacts</span></div>
+      <div><span class="v" style="color:var(--ok)">${n - unfit - unknown}</span><span class="k">fit</span></div>
+      <div><span class="v" style="color:var(--bad)">${unfit}</span><span class="k">won't run</span></div>
+      <div><span class="v" style="color:var(--warn)">${unknown}</span><span class="k">unknown</span></div>
+    </div>` : `<div class="empty">No wheels pinned and no weights locked yet.</div>`;
+
+  kv(document.getElementById("k-host"), [
+    ["os / arch", `<span class="mono">${esc(s.axes.os)}/${esc(s.axes.arch)}</span>`],
+    ["libc", `<span class="mono">${esc(s.axes.libc)}</span>`],
+    ["python", `<span class="mono">${esc(s.axes.python || "not pinned")}</span>`],
+    ["cuda", s.axes.cuda_driver ? `<span class="mono">${esc(s.axes.cuda_driver)}</span>
+      ${s.axes.sm.length ? badge("acc", "sm " + s.axes.sm.join(",")) : ""}`
+      : `<span class="muted">no driver</span>`],
+    ["gpu memory", s.axes.gpu_mem_mb ? `<span class="mono">${bytes(s.axes.gpu_mem_mb*1048576)}</span>`
+      : `<span class="muted">not detected — weight fit stays unknown</span>`],
+  ]);
+
+  renderArtifacts(s);
+  renderBudget(s);
+  renderProof(s);
+  renderForks(s);
+  renderAgent(s);
+}
+
+function renderArtifacts(s) {
+  const tb = document.getElementById("artifacts");
+  tb.innerHTML = s.artifacts.map(a => `
+    <tr data-fit="${a.fits}">
+      <td>${fitBadge(a.fits)}</td>
+      <td>${badge("", a.kind)}</td>
+      <td class="name">${esc(a.name)}<div class="dim mono" style="font-size:11.5px">${esc(a.version || "")}</div></td>
+      <td class="num">${bytes(a.bytes)}</td>
+      <td class="num">${bytes(a.vram_bytes)}</td>
+      <td><ul class="reasons">${(a.reasons||[]).map(r => `<li>${esc(r)}</li>`).join("")}</ul></td>
+    </tr>`).join("") ||
+    `<tr><td colspan="6"><div class="empty">No artefacts. Install npm packages, pin wheels, or pin a model.</div></td></tr>`;
   applyFilter();
+}
 
-  const missing = s.plan.items.filter(i => !i.present);
-  document.getElementById("s-budget").innerHTML =
-    row("missing", s.plan.missing_bytes ? mb(s.plan.missing_bytes) : "nothing",
-        s.plan.missing_bytes ? "unk" : "ok") +
-    row("cached", mb(s.plan.cached_bytes)) +
-    row("estimate", s.plan.missing_bytes ? `~${s.plan.eta_seconds} s at ${(s.plan.throughput_bytes_per_sec/1048576)|0} MB/s` : "—") +
-    (missing.length ? `<table><thead><tr><th>missing file</th><th>bytes</th></tr></thead><tbody>` +
-      missing.map(i => `<tr><td>${esc(i.name)}</td><td>${mb(i.bytes)}</td></tr>`).join("") +
-      `</tbody></table>` : "");
+function renderBudget(s) {
+  const cached = s.plan.cached_bytes, missing = s.plan.missing_bytes;
+  const total = cached + missing || 1;
+  const pct = Math.round(cached * 100 / total);
+  const missingFiles = s.plan.items.filter(i => !i.present);
+  document.getElementById("budget").innerHTML = `
+    <div class="stat">
+      <div><span class="v">${bytes(missing)}</span><span class="k">to download</span></div>
+      <div><span class="v">${bytes(cached)}</span><span class="k">already cached</span></div>
+      <div><span class="v">${missing ? s.plan.eta_seconds + " s" : "0 s"}</span>
+        <span class="k">at ${Math.round(s.plan.throughput_bytes_per_sec/1048576)} MB/s</span></div>
+      <div><span class="v">${missingFiles.length}</span><span class="k">file${missingFiles.length===1?"":"s"} missing</span></div>
+    </div>
+    <div class="bars">
+      <div class="barrow"><span class="nm">${pct}% cached</span>
+        <span class="bar"><span class="${pct===100?"ok":""}" style="width:${Math.max(pct,1)}%"></span></span>
+        <span class="v">${bytes(cached)}</span></div>
+    </div>
+    ${missingFiles.length ? `<table style="margin-top:16px">
+      <thead><tr><th>Missing file</th><th style="text-align:right;width:120px">Bytes</th></tr></thead>
+      <tbody>${missingFiles.map(i => `<tr><td class="name">${esc(i.name)}</td>
+        <td class="num">${bytes(i.bytes)}</td></tr>`).join("")}</tbody></table>`
+      : `<div class="empty">Nothing to fetch — everything the lockfile pins is on disk.</div>`}`;
+}
 
-  document.getElementById("s-proof").innerHTML =
-    row("snapshot", s.proof.snapshot_ready ? "ready — the next install is a rename" : "absent") +
-    row("attested", `${s.proof.attested_packages} packages, ${s.proof.attested_models} models`) +
-    row("as-of", s.policy.as_of || "not pinned") +
-    row("licences", (s.policy.allowed_licenses || []).join(",") || "any") +
-    row("vulnerable", s.policy.exclude_vulnerable ? "excluded" : "not filtered");
+function renderProof(s) {
+  kv(document.getElementById("proof-kv"), [
+    ["snapshot", s.proof.snapshot_ready ? `${badge("ok","ready")} <span class="muted">next install is a rename</span>`
+      : `${badge("warn","absent")} <span class="muted">next install materialises from the lockfile</span>`],
+    ["attested", `<span class="mono">${s.proof.attested_packages}</span> packages ·
+                  <span class="mono">${s.proof.attested_models}</span> models`],
+    ["models", s.models.pinned ? s.models.names.map(x => badge("acc", x)).join(" ")
+      : `<span class="muted">none pinned</span>`],
+    ["python", s.python.pinned ? `<span class="mono">${s.python.pinned}</span> distributions`
+      : `<span class="muted">none pinned</span>`],
+  ]);
+  kv(document.getElementById("policy-kv"), [
+    ["as-of", s.policy.as_of ? `<span class="mono">${esc(s.policy.as_of)}</span>` : `<span class="muted">latest</span>`],
+    ["licences", (s.policy.allowed_licenses||[]).length
+      ? s.policy.allowed_licenses.map(l => badge("", l)).join(" ") : `<span class="muted">any</span>`],
+    ["vulnerable", s.policy.exclude_vulnerable ? badge("ok","excluded") : `<span class="muted">not filtered</span>`],
+  ]);
+}
 
-  document.getElementById("s-forks").innerHTML =
-    (s.forks.length ? `<table><thead><tr><th>fork</th><th>beyond base</th><th></th></tr></thead><tbody>` +
-      s.forks.map(f => `<tr><td>${esc(f.name)}</td><td>${mb(f.bytes)}</td>
-        <td><button data-p="${esc(f.name)}">promote</button></td></tr>`).join("") + `</tbody></table>`
-      : '<p class="muted">no forks — <code>jhol env fork &lt;name&gt;</code> makes one in a few ms</p>');
-
-  document.getElementById("s-agent").innerHTML =
-    `<table><thead><tr><th>tool</th><th>cost</th><th>purpose</th></tr></thead><tbody>` +
-    s.agent.tools.map(t => `<tr><td><code>${esc(t.name)}</code></td><td class="muted">${t.cost}</td>
-      <td>${esc(t.purpose)}</td></tr>`).join("") + `</tbody></table>`;
-
-  document.querySelectorAll("button[data-p]").forEach(b => {
+function renderForks(s) {
+  const el = document.getElementById("forks");
+  if (!s.forks.length) {
+    el.innerHTML = `<div class="empty">No forks — <code>jhol env fork &lt;name&gt;</code>
+      copies an environment in milliseconds.</div>`;
+    return;
+  }
+  el.innerHTML = `<table><thead><tr><th>Fork</th>
+    <th style="text-align:right;width:150px">Beyond base</th><th style="width:130px"></th></tr></thead>
+    <tbody>${s.forks.map(f => `<tr><td class="name">${esc(f.name)}</td>
+      <td class="num">${bytes(f.bytes)}</td>
+      <td><button class="btn" data-p="${esc(f.name)}">Promote</button></td></tr>`).join("")}</tbody></table>`;
+  el.querySelectorAll("button[data-p]").forEach(b => {
     b.onclick = () => armOrRun("promote", b.dataset.p, true, "jhol env promote " + b.dataset.p);
   });
 }
 
+function renderAgent(s) {
+  document.getElementById("agent").innerHTML = `<table>
+    <thead><tr><th style="width:250px">Tool</th><th style="width:100px">Cost</th><th>Purpose</th></tr></thead>
+    <tbody>${s.agent.tools.map(t => `<tr>
+      <td class="name">${esc(t.name)}</td>
+      <td>${badge(t.cost === "write" ? "warn" : t.cost === "network" ? "acc" : "ok", t.cost)}</td>
+      <td class="muted">${esc(t.purpose)}</td></tr>`).join("")}</tbody></table>`;
+}
+
+/* ── inspect ─────────────────────────────────────────────── */
+function renderDetail(j) {
+  const host = document.getElementById("detail-host");
+  if (j.error) { host.innerHTML = `<pre style="border-color:#6b2525">${esc(j.error)}</pre>`; return; }
+  if (j.files) {
+    host.innerHTML = `<table><thead><tr><th>Weight file</th>
+      <th style="text-align:right;width:120px">Bytes</th></tr></thead>
+      <tbody>${j.files.map(f => `<tr><td class="name"><a href="#" data-file="${esc(f.name)}">${esc(f.name)}</a></td>
+        <td class="num">${bytes(f.bytes)}</td></tr>`).join("")}</tbody></table>
+      <p class="hint">${esc(j.repository)} · ${j.files.length} weight file(s) — click one to read its header.</p>`;
+    host.querySelectorAll("a[data-file]").forEach(a => {
+      a.onclick = e => {
+        e.preventDefault();
+        document.getElementById("path").value =
+          j.repository.replace(/\/$/, "") + "/" + a.dataset.file;
+        document.getElementById("go").click();
+      };
+    });
+    return;
+  }
+  const dtypes = (j.dtypes || []).map(d => `${d.dtype}×${d.tensors}`).join("  ");
+  const share = j.vram_bytes ? Math.min(100, (j.data_bytes / (j.data_bytes + 1)) * 100) : 0;
+  host.innerHTML = `
+    <div class="row" style="margin-bottom:12px">
+      <span class="mono" style="color:var(--mut);word-break:break-all">${esc(j.path)}</span>
+      ${j.format === "gguf" ? badge("acc", "gguf") : badge("", "safetensors")}
+      ${j.architecture ? badge("", j.architecture) : ""}
+      ${j.fits === true ? badge("ok", "fits here") : j.fits === false ? badge("bad", "too big for this GPU") : badge("warn", "fit unknown")}
+    </div>
+    <div class="stat">
+      <div><span class="v">${params(j.params)}</span><span class="k">parameters</span></div>
+      <div><span class="v">${bytes(j.data_bytes)}</span><span class="k">tensor data</span></div>
+      <div><span class="v">${bytes(j.vram_bytes)}</span><span class="k">resident est.</span></div>
+      <div><span class="v">${j.tensors}</span><span class="k">tensors</span></div>
+      <div><span class="v">${bytes(j.bytes_read)}</span><span class="k">read${j.requests ? ` · ${j.requests} req` : ""}</span></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <span class="mono muted">${esc(dtypes || "—")}</span>
+      <span class="hint" style="margin:0">header read ${((j.bytes_read/(j.bytes_read+j.data_bytes||1))*100).toFixed(3)}% of the file</span>
+    </div>
+    <div class="bars">
+      ${(j.largest||[]).slice(0,5).map(t => {
+        const w = Math.max(2, Math.round(t.bytes / j.largest[0].bytes * 100));
+        return `<div class="barrow"><span class="nm">${esc(t.name)}</span>
+          <span class="bar"><span style="width:${w}%"></span></span>
+          <span class="v">${bytes(t.bytes)}</span></div>`; }).join("")}
+    </div>`;
+}
+
+document.getElementById("go").onclick = async () => {
+  const p = document.getElementById("path").value.trim();
+  if (!p) return;
+  const host = document.getElementById("detail-host");
+  host.innerHTML = `<div class="empty">Reading header…</div>`;
+  try {
+    const r = await fetch(`/inspect?t=${encodeURIComponent(token)}&path=${encodeURIComponent(p)}`);
+    renderDetail(await r.json());
+  } catch (e) { host.innerHTML = `<pre style="border-color:#6b2525">${esc(e.message)}</pre>`; }
+};
+document.getElementById("path").addEventListener("keydown", e => {
+  if (e.key === "Enter") document.getElementById("go").click();
+});
+
+/* ── filtering ───────────────────────────────────────────── */
 function applyFilter() {
   const q = (document.getElementById("q").value || "").toLowerCase();
   const unfitOnly = document.getElementById("unfit").checked;
-  document.querySelectorAll('#artifacts tr').forEach(row => {
+  document.querySelectorAll("#artifacts tr[data-fit]").forEach(row => {
     const text = row.textContent.toLowerCase();
     const isUnfit = row.dataset.fit === "false";
     row.style.display = (!q || text.includes(q)) && (!unfitOnly || isUnfit) ? "" : "none";
   });
 }
+document.getElementById("q").oninput = applyFilter;
+document.getElementById("unfit").onchange = applyFilter;
 
-async function tick() {
-  try {
-    const r = await fetch("/status.json");
-    render(await r.json());
-  } catch (e) { /* server restarting */ }
-}
-
-// Look before you leap: writes are armed on the first click and only run on the second,
-// with the plan they were armed against shown in the output pane.
-const armed = {action: null, at: 0, plan: ""};
+/* ── actions ─────────────────────────────────────────────── */
+const armed = {key: null, at: 0, plan: ""};
 async function armOrRun(action, name, stream, label) {
-  const fresh = armed.action === action + ":" + name && Date.now() - armed.at < 10000;
-  if (!fresh) {
+  const key = action + ":" + name;
+  if (armed.key !== key || Date.now() - armed.at > 10000) {
     let preview = {writes: true, summary: armed.plan};
     try {
-      const r = await fetch(`/plan?action=${encodeURIComponent(action)}`);
-      preview = await r.json();
-    } catch (e) { /* keep the local line */ }
+      preview = await (await fetch(`/plan?action=${encodeURIComponent(action)}`)).json();
+    } catch (e) {}
     if (preview.writes) {
-      armed.action = action + ":" + name;
-      armed.at = Date.now();
+      armed.key = key; armed.at = Date.now();
+      show("actions");
       document.getElementById("out").textContent =
-        `${label}\n  ${preview.summary}\n\n  click again within 10 s to run`;
-      document.querySelector("nav button:nth-child(7)").click();
+        `${label}\n  ${preview.summary}\n\n  click again within 10s to run`;
+      document.getElementById("arm-hint").textContent = "Armed — second click runs it.";
       return;
     }
   }
-  armed.action = null;
-  run(action, name, stream);
+  armed.key = null;
+  document.getElementById("arm-hint").textContent = "Writes ask once.";
+  run(action, name, stream, label);
 }
 
-async function run(action, name, stream) {
+async function run(action, name, stream, label) {
+  show("actions");
   const out = document.getElementById("out");
-  document.querySelectorAll(".acts button").forEach(x => x.disabled = true);
-  out.textContent = `running ${action}${name ? " " + name : ""}…\n`;
+  document.querySelectorAll(".acts button,button[data-p]").forEach(x => x.disabled = true);
+  out.textContent = `$ jhol ${action}${name ? " " + name : ""}\n`;
   try {
     const r = await fetch(`/action?t=${encodeURIComponent(token)}${stream ? "&stream=1" : ""}`, {
       method: "POST", headers: {"content-type": "application/json"},
       body: JSON.stringify({action, name: name || ""}),
     });
-    if (stream) {
-      const reader = r.body.getReader();
-      const dec = new TextDecoder();
+    if (stream && r.body) {
+      const reader = r.body.getReader(), dec = new TextDecoder();
       for (;;) {
         const {value, done} = await reader.read();
         if (done) break;
@@ -637,60 +955,41 @@ async function run(action, name, stream) {
       }
     } else {
       const j = await r.json();
-      out.textContent = `${action} → exit ${j.code}\n${j.stdout || ""}${j.stderr || ""}`;
+      out.textContent = `${label || action} → exit ${j.code}\n${j.stdout || ""}${j.stderr || ""}`;
     }
     tick();
   } catch (e) {
-    out.textContent = "error: " + e.message;
+    out.textContent += `\nerror: ${e.message}`;
   } finally {
-    document.querySelectorAll(".acts button").forEach(x => x.disabled = false);
+    document.querySelectorAll(".acts button,button[data-p]").forEach(x => x.disabled = false);
   }
 }
 
-document.querySelectorAll("button[data-a]").forEach(b => {
-  b.onclick = () => armOrRun(b.dataset.a, "", true, "jhol " + b.dataset.a);
+const ACTIONS = [
+  ["verify", "jhol verify", "Compare the installed tree with the lockfile. Reads only."],
+  ["prune", "jhol verify --prune", "Verify, then remove packages the lockfile does not authorise."],
+  ["install", "jhol install", "Materialise the tree from the lockfile; fetches only what is missing."],
+  ["ci", "jhol ci", "Reproduce the lockfile exactly; refuses to write a drifting lockfile."],
+  ["policy", "jhol install --exclude-vuln", "Install with this project's policy in force."],
+];
+document.getElementById("acts").innerHTML = ACTIONS.map(([k, cmd, why]) => `
+  <div class="act"><span class="t">${esc(cmd)}</span>
+    <span class="d">${esc(why)}</span>
+    <button class="btn" data-a="${k}" data-say="${esc(cmd)}">Run</button></div>`).join("");
+document.querySelectorAll(".acts button[data-a]").forEach(b => {
+  b.onclick = () => armOrRun(b.dataset.a, "", true, b.dataset.say);
 });
 
-document.getElementById("q").oninput = applyFilter;
-document.getElementById("unfit").onchange = applyFilter;
-
-document.getElementById("go").onclick = async () => {
-  const p = document.getElementById("path").value.trim();
-  if (!p) return;
-  const detail = document.getElementById("detail");
-  detail.textContent = "reading header…";
+/* ── polling with ETag ───────────────────────────────────── */
+let etag = null;
+async function tick() {
   try {
-    const r = await fetch(`/inspect?t=${encodeURIComponent(token)}&path=${encodeURIComponent(p)}`);
-    const j = await r.json();
-    if (j.error) { detail.textContent = "error: " + j.error; return; }
-    if (j.files) {
-      detail.innerHTML = `<div class="muted">${esc(j.repository)} — ${j.files.length} weight file(s); click one</div>` +
-        j.files.map(f => `<div class="row"><span class="k" style="width:7rem">${mb(f.bytes)}</span>` +
-          `<a href="#" data-repo="${esc(j.repository)}" data-file="${esc(f.name)}">${esc(f.name)}</a></div>`).join("");
-      detail.querySelectorAll("a[data-file]").forEach(a => {
-        a.onclick = (e) => {
-          e.preventDefault();
-          document.getElementById("path").value =
-            `${a.dataset.repo.replace(/\/$/, "")}/${a.dataset.file}`;
-          document.getElementById("go").click();
-        };
-      });
-      return;
-    }
-    const dtypes = (j.dtypes || []).map(d => `${d.dtype}×${d.tensors}`).join(" ");
-    detail.textContent =
-      `${j.path}\n  ${j.format}${j.architecture ? " · " + j.architecture : ""}` +
-      `\n  ${j.tensors} tensors · ${j.params_human} params · ${j.data_bytes} bytes of tensor data` +
-      `\n  dtypes ${dtypes}` +
-      `\n  resident ${gb(j.vram_bytes)}` +
-      (j.gpu_mem_mb ? ` — host GPU ${j.gpu_mem_mb} MB → ${j.fits ? "fits" : "does not fit"}`
-                    : " — no GPU memory detected, fit unknown") +
-      ((j.largest || []).length ? `\n  heaviest: ` + j.largest.slice(0, 5).map(t => `${t.name} (${mb(t.bytes)})`).join(", ") : "") +
-      `\n  header ${j.bytes_read} bytes read (${(100 * j.bytes_read / (j.bytes_read + j.data_bytes)).toFixed(4)}% of the file)` +
-      (j.requests ? ` over ${j.requests} range request(s)` : "");
-  } catch (e) { detail.textContent = "error: " + e.message; }
-};
-
+    const r = await fetch("/status.json", {headers: etag ? {"If-None-Match": etag} : {}});
+    if (r.status === 304) return;
+    etag = r.headers.get("ETag");
+    render(await r.json());
+  } catch (e) { /* server restarting */ }
+}
 tick(); setInterval(tick, 1500);
 </script></body></html>
 "##;

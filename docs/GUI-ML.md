@@ -30,6 +30,28 @@ too.
 
 Artifacts and Actions are the only tabs with new logic; the rest render fields.
 
+## How it looks
+
+A single 1160px column on a dark slate ground, system sans for prose and monospace only for
+identifiers and numbers — the split tells you at a glance what is a value and what is a label.
+
+- **Top bar** — project name, then live pills: tree verdict and package count, lockfile state,
+  bytes missing, unfit count, fork count. The answer to "is anything wrong?" is visible before
+  you click anything.
+- **Tabs** carry counts (`Status 73`, `Agent 12`), so a section is never a surprise.
+- **Tables** use fixed column widths, tabular numerals and right-aligned sizes; a `?` unknown is
+  amber, never green, and every row lists its reasons as separate dimmed lines rather than one
+  wrapped sentence.
+- **Inspect** answers with five numbers (parameters, tensor data, resident estimate, tensors,
+  bytes read) and proportional bars for the heaviest tensors — the shape of a checkpoint at a
+  glance.
+- **Actions** are rows, not a button strip: the command, what it does, and a `Run` button. The
+  output pane streams and keeps its height so the page does not jump.
+- Keyboard: `1`–`6` switch sections, `/` jumps to the filter, `Esc` leaves an input.
+
+Verified in a real browser (agent-browser, 1400×900): console clean, arm→preview→run works, and
+the ETag poll leaves the network tab quiet.
+
 ## Web — `jhol gui --web`
 
 One page on `127.0.0.1:<random>`; `std::net` and a page, no webview dependency.
