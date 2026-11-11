@@ -1,4 +1,10 @@
 #!/bin/sh
+# Tests are identical with or without debuginfo; the artifacts are not. A debug build of this
+# workspace is ~5 GB and has twice filled the disk mid-gate, which fails in ways that look like
+# code errors (`errno=28`). Debuginfo off keeps the gate honest and the machine usable. Override
+# with CARGO_PROFILE_DEV_DEBUG=2 when you actually intend to debug a test binary.
+: "${CARGO_PROFILE_DEV_DEBUG:=0}"
+export CARGO_PROFILE_DEV_DEBUG
 # One entry point for "is the whole tree green?"
 #
 # CI runs `cargo test`, which never builds with `--all-features` and never runs the
