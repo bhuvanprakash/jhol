@@ -4107,3 +4107,23 @@ and `same-site` are refused, and so is a bare request with no token.
 Verified by rotating the token under a live tab: old-token curl → `403`, `Sec-Fetch-Site:
 cross-site` → `403`, `same-origin` → `200`, and the tab that was open **before** rotation still
 listed the repository and inspected a 4.68 GB checkpoint. A test pins the three cases.
+
+## A Packages tab: size, licence, direct-or-not, and why
+
+The thing developers use most is not a status line — it is "what is in here, what does it cost,
+and why is it here". New **Packages** tab:
+
+| column | source |
+|---|---|
+| name + `direct` marker | lockfile resolutions vs `package.json` dependencies |
+| version | lockfile |
+| bytes on disk | one walk per package directory, capped at 8k entries |
+| licence | the package's own `package.json` (`license`, or legacy `licenses[0].type`) |
+| `why` | `jhol_core::why::explain` — the same chain the CLI prints, with the command copyable |
+
+Sorted by size by default (`react-dom 7.7 MB` first on the fixture tree), filterable by name,
+direct-only toggle, and a header line — *100 of 100 packages · 11.1 MB on disk* — that answers
+"where did my `node_modules` go".
+
+The walk is cached by fingerprint: **82 ms cold, 7 ms cached**. `GET /packages.json` and
+`GET /why?pkg=` are read-only, so they need no token.

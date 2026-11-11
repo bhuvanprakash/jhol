@@ -63,6 +63,7 @@ pub fn serve(port: u16, open: bool, rotate: bool) -> Result<(), String> {
     let shared = Arc::new(Shared {
         token: project_token(rotate),
         cache: Mutex::new((String::new(), String::new(), None)),
+        packages: Mutex::new((String::new(), String::new())),
     });
     let url = format!("http://{addr}/?t={}", shared.token);
     println!("jhol gui --web on {url}");
@@ -86,6 +87,9 @@ pub fn serve(port: u16, open: bool, rotate: bool) -> Result<(), String> {
 
 struct Shared {
     token: String,
+    /// (fingerprint, serialised package list). Walking 108 package directories is the one
+    /// expensive read in this server, so it happens once per change, not once per request.
+    packages: Mutex<(String, String)>,
     /// (fingerprint, serialised status, the status itself). A matching fingerprint serves the
     /// previous body, so two tabs polling at once cost one collection.
     cache: Mutex<(String, String, Option<jhol_core::status::Status>)>,
@@ -184,6 +188,26 @@ fn handle(mut stream: TcpStream, shared: &Shared) -> std::io::Result<()> {
         );
     }
 
+    if path.starts_with("/packages.json") {
+        return respond(
+            &mut stream,
+            200,
+            "application/json",
+            &packages_json(shared),
+            &[],
+        );
+    }
+
+    if path.starts_with("/why") {
+        let pkg = query_param(&path, "pkg");
+        let report = jhol_core::why::explain(Path::new("."), &pkg);
+        let body = match report {
+            Some(r) => serde_json::json!({ "package": pkg, "text": r.render() }),
+            None => serde_json::json!({ "package": pkg, "text": format!("{pkg}: not in the tree") }),
+        };
+        return respond(&mut stream, 200, "application/json", &body.to_string(), &[]);
+    }
+
     if path.starts_with("/plan") {
         let action = query_param(&path, "action");
         let status = cached_status(shared);
@@ -227,6 +251,86 @@ fn status_json(shared: &Shared, tag: &str) -> String {
     let status = crate::status_view::enrich(jhol_core::status::collect(Path::new(".")), Path::new("."));
     let body = serde_json::to_string(&status).unwrap_or_else(|e| e.to_string());
     *cache = (tag.to_string(), body.clone(), Some(status));
+    body
+}
+
+fn dir_bytes(path: &Path, cap: usize) -> u64 {
+    let mut total = 0u64;
+    let mut seen = 0usize;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > cap {
+                return total;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else {
+                total += meta.len();
+            }
+        }
+    }
+    total
+}
+
+fn packages_json(shared: &Shared) -> String {
+    let tag = jhol_core::status::fingerprint(Path::new("."));
+    {
+        let cache = shared.packages.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.0 == tag && !cache.1.is_empty() {
+            return cache.1.clone();
+        }
+    }
+    let root = Path::new(".");
+    let resolved = jhol_core::lockfile::read_resolved_from_dir(root).unwrap_or_default();
+    let direct = jhol_core::lockfile::registry_only_deps(&root.join("package.json"))
+        .unwrap_or_default();
+    let mut rows: Vec<serde_json::Value> = Vec::with_capacity(resolved.len());
+    let mut total = 0u64;
+    for (name, version) in &resolved {
+        let dir = root.join("node_modules").join(name);
+        let bytes = dir_bytes(&dir, 8192);
+        total += bytes;
+        let license = std::fs::read_to_string(dir.join("package.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .and_then(|v| {
+                v.get("license")
+                    .and_then(|l| l.as_str().map(str::to_string))
+                    .or_else(|| {
+                        v.get("licenses")
+                            .and_then(|l| l.as_array())
+                            .and_then(|a| a.first())
+                            .and_then(|f| f.get("type"))
+                            .and_then(|t| t.as_str())
+                            .map(str::to_string)
+                    })
+            })
+            .unwrap_or_default();
+        rows.push(serde_json::json!({
+            "name": name,
+            "version": version,
+            "bytes": bytes,
+            "license": license,
+            "direct": direct.contains_key(name),
+            "present": dir.is_dir(),
+        }));
+    }
+    rows.sort_by(|a, b| {
+        b["bytes"].as_u64().cmp(&a["bytes"].as_u64())
+            .then_with(|| a["name"].as_str().cmp(&b["name"].as_str()))
+    });
+    let body = serde_json::json!({
+        "tree": jhol_core::count_installed_packages(root),
+        "total_bytes": total,
+        "packages": rows,
+    })
+    .to_string();
+    let mut cache = shared.packages.lock().unwrap_or_else(|e| e.into_inner());
+    *cache = (tag, body.clone());
     body
 }
 
@@ -693,6 +797,17 @@ const PAGE: &str = r##"<!doctype html>
  .arow .why{grid-column:1/-1;color:var(--mut);font-size:12.5px;overflow-wrap:anywhere}
  .arow .why span+span::before{content:" · ";color:var(--dim)}
  .arow .sub{color:var(--dim);font:11.5px/1.5 var(--mono);overflow-wrap:anywhere}
+ .prow{display:grid;grid-template-columns:minmax(0,1.5fr) 96px 88px minmax(70px,.8fr) 58px;
+   gap:6px 14px;padding:10px 0;border-top:1px solid var(--line);align-items:baseline}
+ .prow .nm{font-family:var(--mono);font-size:12.5px;overflow-wrap:anywhere;min-width:0}
+ .prow .v{font-family:var(--mono);font-size:12px;color:var(--mut);white-space:nowrap;
+          font-variant-numeric:tabular-nums}
+ .prow .num{text-align:right}
+ .prow .why{text-align:right}
+ @media (max-width:760px){
+   .prow{grid-template-columns:minmax(0,1fr) 80px 62px}
+   .prow .lic,.prow .ver{display:none}
+ }
  .list{display:block}
  .lrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 14px;
        padding:11px 0;border-top:1px solid var(--line);align-items:baseline}
@@ -826,6 +941,29 @@ const PAGE: &str = r##"<!doctype html>
    </div>
  </section>
 
+ <section id="s-packages">
+   <div class="card">
+     <div class="toolbar">
+       <div class="grow"><label class="sr-only" for="pq">Filter packages</label>
+         <input id="pq" placeholder="Filter packages" autocomplete="off"></div>
+       <label class="check"><input type="checkbox" id="pdirect"> Direct only</label>
+       <button class="btn" id="psort" type="button">By size</button>
+     </div>
+     <div class="rowhead"><span>Name</span><span>Version</span><span>On disk</span>
+       <span style="text-align:right">License</span><span>Why</span></div>
+     <div id="packages"><div class="empty">Reading the tree…</div></div>
+     <p class="note" id="psummary"></p>
+   </div>
+   <div class="card" id="why-card" hidden>
+     <h2>Why is this here?</h2>
+     <pre id="why-text" style="border-top:0;padding-top:0"></pre>
+     <div class="toolbar" style="margin-top:10px">
+       <button class="btn" id="why-copy" type="button">Copy the command</button>
+       <span class="dim mono" id="why-cmd" style="font-size:11.5px"></span>
+     </div>
+   </div>
+ </section>
+
  <section id="s-budget">
    <div class="card"><h2>Download plan</h2><div id="budget"></div></div>
    <div class="card"><h2>Forks</h2><div id="forks"></div></div>
@@ -857,15 +995,15 @@ const PAGE: &str = r##"<!doctype html>
    same data as <span class="mono">jhol status --json</span> ·
    <span class="mono">jhol status --watch</span> ·
    MCP on <span class="mono">POST /mcp</span> ·
-   <span class="kbd">1</span>–<span class="kbd">6</span> sections ·
+   <span class="kbd">1</span>–<span class="kbd">7</span> sections ·
    <span class="kbd">/</span> filter
  </footer>
 </div>
 
 <script>
 const token = new URLSearchParams(location.search).get("t") || "";
-const SECTIONS = ["status","artifacts","budget","proof","agent","actions"];
-const LABEL = {status:"Status",artifacts:"Artefacts",budget:"Budget",
+const SECTIONS = ["status","packages","artifacts","budget","proof","agent","actions"];
+const LABEL = {status:"Status",packages:"Packages",artifacts:"Artefacts",budget:"Budget",
                proof:"Proof",agent:"Agent",actions:"Actions"};
 const nav = document.getElementById("nav");
 SECTIONS.forEach((s, i) => {
@@ -879,7 +1017,64 @@ SECTIONS.forEach((s, i) => {
 function show(s) {
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x.dataset.section === s));
   document.querySelectorAll("section").forEach(x => x.classList.toggle("on", x.id === "s-" + s));
+  if (s === "packages") loadPackages();
 }
+
+let packageRows = [];
+let sortBySize = true;
+
+function renderPackages() {
+  const q = (document.getElementById("pq").value || "").toLowerCase();
+  const directOnly = document.getElementById("pdirect").checked;
+  const rows = packageRows
+    .filter(p => (!q || p.name.toLowerCase().includes(q)) && (!directOnly || p.direct))
+    .sort((a, b) => sortBySize ? b.bytes - a.bytes : a.name.localeCompare(b.name));
+  document.getElementById("packages").innerHTML = rows.map(p => `
+    <div class="prow">
+      <span class="nm">${esc(p.name)}${p.direct ? " <span class=\"dim\" style=\"font-size:11px\">direct</span>" : ""}${p.present ? "" : " <span style=\"color:var(--bad);font-size:11px\">missing</span>"}</span>
+      <span class="v ver">${esc(p.version)}</span>
+      <span class="v num">${bytes(p.bytes)}</span>
+      <span class="v lic">${esc(p.license || "—")}</span>
+      <span class="why"><button class="copy" data-why="${esc(p.name)}" type="button">why</button></span>
+    </div>`).join("") || `<div class="empty">Nothing matches.</div>`;
+  document.getElementById("psummary").textContent =
+    `${rows.length} of ${packageRows.length} packages · ${bytes(packageRows.reduce((n, p) => n + p.bytes, 0))} on disk`;
+  document.querySelectorAll("button[data-why]").forEach(b => {
+    b.onclick = () => explainPackage(b.dataset.why);
+  });
+  document.getElementById("psort").textContent = sortBySize ? "By size" : "By name";
+}
+
+async function loadPackages() {
+  if (packageRows.length) { renderPackages(); return; }
+  const el = document.getElementById("packages");
+  const j = await jsonOrError("/packages.json");
+  if (j.error) { el.innerHTML = `<div class="empty">${esc(j.error)}</div>`; return; }
+  packageRows = j.packages || [];
+  renderPackages();
+}
+
+async function explainPackage(name) {
+  const card = document.getElementById("why-card");
+  card.hidden = false;
+  const text = document.getElementById("why-text");
+  text.textContent = "reading the graph…";
+  const j = await jsonOrError(`/why?pkg=${encodeURIComponent(name)}`);
+  text.textContent = j.error ? j.error : j.text;
+  const cmd = `jhol why ${name}`;
+  document.getElementById("why-cmd").textContent = cmd;
+  document.getElementById("why-copy").onclick = async () => {
+    try { await navigator.clipboard.writeText(cmd); } catch (e) {}
+    card.scrollIntoView({behavior: "smooth", block: "nearest"});
+  };
+  card.scrollIntoView({behavior: "smooth", block: "nearest"});
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("pq").oninput = renderPackages;
+  document.getElementById("pdirect").onchange = renderPackages;
+  document.getElementById("psort").onclick = () => { sortBySize = !sortBySize; renderPackages(); };
+});
 document.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT") { if (e.key === "Escape") e.target.blur(); return; }
   const i = parseInt(e.key, 10);
@@ -936,6 +1131,7 @@ function render(s) {
   ].join("");
 
   document.getElementById("n-status").textContent = hasManifest ? s.tree.packages : "";
+  document.getElementById("n-packages").textContent = hasManifest ? s.tree.packages : "";
   document.getElementById("n-artifacts").textContent = total || "";
   document.getElementById("n-budget").textContent = s.plan.items.filter(i => !i.present).length || "";
   document.getElementById("n-proof").textContent = s.proof.attested_packages || "";
@@ -1259,6 +1455,7 @@ async function run(action, name, stream, label) {
       const j = await r.json();
       out.textContent = `${label || action} → exit ${j.code}\n${j.stdout || ""}${j.stderr || ""}`;
     }
+    packageRows = [];
     tick();
   } catch (e) {
     out.textContent += `\nerror: ${e.message}`;

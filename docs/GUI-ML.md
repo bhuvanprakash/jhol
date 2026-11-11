@@ -408,6 +408,27 @@ tests: the split branch ignored paths inside a repository (`Q4_K_M/model-…`), 
 filter compared the directory prefix as part of the shard base, so every sibling was rejected
 and the result silently fell back to shard 1 — the failure mode that looks like success.
 
+## Packages: what is installed, how big, under what licence, and why
+
+The tab developers actually reach for. One row per installed package — name, version, bytes on
+disk, licence, `direct` marker — sorted by size, filterable, with a `why` button per row.
+
+```
+100 of 100 packages · 11.1 MB on disk
+```
+
+`why` answers with the dependency chain from `jhol_core::why::explain`, the same function the CLI
+uses, and copies the equivalent command:
+
+```
+1 installed copy of react-dom
+  19.3.0  (node_modules/react-dom)
+    nothing in the lockfile declares it (extraneous?)
+```
+
+The walk is the only expensive read in the server (one pass over each package directory), so it is
+cached by fingerprint: **82 ms cold, 7 ms cached** on a 100-package tree.
+
 ## What the page does for you
 
 - **Says which directory it is serving** — `…/j/jhol` beside the project name, full path in the
