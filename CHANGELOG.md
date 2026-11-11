@@ -4015,3 +4015,22 @@ of an empty dashboard, and humanises parameters (`671.03 B`) the way the web vie
 
 bin 22 (three new: split-name parsing, URL-shape parsing with subdirectories, shard merging),
 jhol-core 731.
+
+## The unpinned flake is pinned: a test harness that lied under load
+
+`lattice_reopens_domain_after_exact_pin` failed about one full-suite run in eight, and never in
+20 isolated runs. It is a harness: it starts a fake registry and re-executes its own binary four
+times against it.
+
+Three defects, all in the fixture: its accept loop polled every 2 ms, so a starved machine made
+the client fetch time out; a timed-out fetch *synthesises* a manifest by design, so the
+"failure" action was handed a successful resolve of a synthesised parent and asserted
+fail-closed against it; and the flag that sequences the inflight race was shared across all four
+re-executions and never reset.
+
+Fixed with a 200 µs accept poll, a 30 s fetch timeout in the child, and a reset flag. No product
+code changed. **0 failures in 30 full-suite rounds** afterwards, and `VERIFY-ALL: PASS`.
+
+Written up in `docs/DEFECT-LOG.md`: a test that re-executes itself is a small distributed system,
+and its timing assumptions are defects — "flaky" is the word we use instead of "the fixture lies
+under load".

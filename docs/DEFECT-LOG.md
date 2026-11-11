@@ -274,3 +274,39 @@ converges (56 → 68 → 71 across two runs, then `Up to date`).
 produced anything.* Every "already done" test needs a content check beside it, and the
 cheapest one — "is there anything here at all" — is the one that was missing.
 
+## 2026-11-11 — the unpinned flake, caught and fixed
+
+**Symptom.** Roughly one full-suite run in eight failed with
+`jagr_infinite::lattice_codec_tests::lattice_reopens_domain_after_exact_pin` —
+*"required full-domain expansion must fail closed"* — and 20 isolated runs of that test never
+failed. That asymmetry is the clue: the test is a **harness**, not a unit.
+
+**What it does.** The test starts a fake registry on a loopback port, then re-executes its own
+binary four times with `JHOL_TEST_LATTICE_DOMAIN=reopen|late|inflight|failure`, each with a fresh
+cache directory, and asserts the resolver's behaviour against a server it controls.
+
+**Root cause, three parts.**
+
+1. The fixture's accept loop polled a non-blocking listener every **2 ms**. Under a full parallel
+   suite the process is starved, a client connects, and the accept comes late enough for the
+   client's fetch to time out.
+2. A timed-out fetch does not fail the resolve — it **synthesises** a manifest
+   (`_vortex_manifest_synth`) so resolution can continue. That is deliberate product behaviour.
+3. The `failure` action then saw a *successful* resolve of a synthesised parent and asserted
+   "must fail closed" against it. The guard was working; the fixture had handed it a different
+   scenario than the one it meant to test.
+
+A fourth defect made it worse: `parent_seen`, the flag the fixture uses to sequence the
+`inflight` race, was shared across all four re-executions and never reset.
+
+**Fix.** Accept every **200 µs** instead of 2 ms; give the child a 30 s fetch timeout
+(`JHOL_FETCH_TIMEOUT_SECS`) so machine load cannot be mistaken for a registry failure; reset
+`parent_seen` before each action. No product code changed — the resolver still synthesises on
+timeout, because that is the behaviour that keeps a cold install alive.
+
+**Evidence.** Before: 1 failure per ~8 full-suite rounds (reproduced on round 8 of 12). After:
+**0 failures in 30 full-suite rounds** and `VERIFY-ALL: PASS`.
+
+**Lesson.** A test that re-executes itself is a small distributed system: it has a server, a
+client, timeouts and shared state. Timing assumptions in it are defects, and "flaky" is the word
+we use instead of "the fixture lies under load".

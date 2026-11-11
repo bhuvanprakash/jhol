@@ -8408,12 +8408,13 @@ mod lattice_codec_tests {
         let address = listener.local_addr().unwrap();
         let (stop, stopped) = mpsc::channel();
         let parent_seen = Arc::new(AtomicBool::new(false));
+        let server_seen = Arc::clone(&parent_seen);
         let server = std::thread::spawn(move || {
             let mut handlers = Vec::new();
             while stopped.try_recv().is_err() {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
-                        let parent_seen = Arc::clone(&parent_seen);
+                        let parent_seen = Arc::clone(&server_seen);
                         handlers.push(std::thread::spawn(move || {
                             let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
                             let mut request = Vec::new();
@@ -8446,8 +8447,11 @@ mod lattice_codec_tests {
                             let _ = stream.write_all(body.as_bytes());
                         }));
                     }
+                    // A 2 ms poll is enough latency to miss a client's timeout when the
+                    // machine is running the rest of the suite in parallel, which is how
+                    // this fixture used to fail one run in eight.
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(2))
+                        std::thread::sleep(Duration::from_micros(200))
                     }
                     Err(e) => panic!("fixture registry: {e}"),
                 }
@@ -8458,6 +8462,8 @@ mod lattice_codec_tests {
         });
 
         for action in ["reopen", "late", "inflight", "failure"] {
+            // The fixture's flags describe *this* action, not the previous one.
+            parent_seen.store(false, Ordering::Release);
             let dir = tempfile::tempdir().unwrap();
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .arg("--exact")
@@ -8471,6 +8477,9 @@ mod lattice_codec_tests {
                 .env("JHOL_NO_PREFETCH", "1")
                 .env("JHOL_NO_SPECULATE", "1")
                 .env("JHOL_HTTP_RETRIES", "0")
+                // Under a full parallel suite the fixture server can be starved; a timeout
+                // here would synthesise a manifest and turn "must fail closed" into a pass.
+                .env("JHOL_FETCH_TIMEOUT_SECS", "30")
                 .env("NPM_TOKEN", "fixture-token")
                 .env_remove("JHOL_OFFLINE")
                 .env_remove("JHOL_PREFER_BUNDLED")
