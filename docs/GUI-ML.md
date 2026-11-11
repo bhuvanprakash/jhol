@@ -32,25 +32,38 @@ Artifacts and Actions are the only tabs with new logic; the rest render fields.
 
 ## How it looks
 
-A single 1160px column on a dark slate ground, system sans for prose and monospace only for
-identifiers and numbers — the split tells you at a glance what is a value and what is a label.
+Editorial, not dashboard-template. The tells of generated UI — emoji ticks, gradient bars,
+pill-shaped badges for everything, glass headers, uppercase letter-spaced micro-labels, three
+competing accent colours — are all gone. What is left is typography doing the work:
 
-- **Top bar** — project name, then live pills: tree verdict and package count, lockfile state,
-  bytes missing, unfit count, fork count. The answer to "is anything wrong?" is visible before
-  you click anything.
-- **Tabs** carry counts (`Status 73`, `Agent 12`), so a section is never a surprise.
-- **Tables** use fixed column widths, tabular numerals and right-aligned sizes; a `?` unknown is
-  amber, never green, and every row lists its reasons as separate dimmed lines rather than one
-  wrapped sentence.
-- **Inspect** answers with five numbers (parameters, tensor data, resident estimate, tensors,
-  bytes read) and proportional bars for the heaviest tensors — the shape of a checkpoint at a
-  glance.
-- **Actions** are rows, not a button strip: the command, what it does, and a `Run` button. The
-  output pane streams and keeps its height so the page does not jump.
-- Keyboard: `1`–`6` switch sections, `/` jumps to the filter, `Esc` leaves an input.
+- **Serif title, sans prose, mono numbers.** Three faces, each with one job. A number is
+  monospaced and tabular so columns line up without a single striped background.
+- **Hairlines, not boxes.** One-pixel rules separate sections and rows; there are no nested
+  cards, no shadows, no rounded containers inside rounded containers.
+- **One accent.** Sage (`#8fc7a5`) marks "this is fine"; rust marks "this will not run"; ochre
+  marks "we do not know". Nothing else is coloured — including the amber `?`, which must never
+  read as green.
+- **Status is a sentence.** The masthead says *"Tree matches the lockfile · 73 packages ·
+  lockfile current · nothing to fetch · all fit"* and greys out what is unremarkable, so the
+  eye only stops at a problem.
+- **Nav is text with a rule under the active item**, counts inline and dim (`Status 73`), not
+  a row of boxes.
+- **Numbers are human** — `8.19 B` parameters, `8.11 GB` tensor data, `16.0 MB` read — with the
+  full figure in `--json` for anything that needs it.
+- **Tables answer in one line per row**: a status word, the kind, the name in mono, right-aligned
+  sizes, and the reasons joined by a middot at 12.5px.
+- **Hierarchy by weight, not by colour**: section labels are the same 12px as body, just
+  dimmer. Nothing shouts.
+- **Light or dark** follows the OS (`prefers-color-scheme`), both on the same neutral scale.
+- **Motion is one 160 ms fade** when a section appears. That is the entire animation budget.
 
-Verified in a real browser (agent-browser, 1400×900): console clean, arm→preview→run works, and
-the ETag poll leaves the network tab quiet.
+Interaction stays quiet: the armed state of a write lives **inside its own row** (the
+description turns to the plan, the button becomes `Confirm`, and both revert after ten seconds),
+so the page never moves under the cursor. `1`–`6` switch sections, `/` focuses the filter, `Esc`
+leaves an input.
+
+Verified in a real browser (agent-browser, 1400×900): console clean, arm → confirm → run works,
+GGUF inspection renders, ETag polling leaves the network tab quiet.
 
 ## Web — `jhol gui --web`
 

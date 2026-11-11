@@ -3941,3 +3941,27 @@ dashboard must never have.
 
 Verified by loading it in a real browser (agent-browser, 1400×900): console clean, arm → preview
 → run works end to end, ETag polling quiet.
+
+## De-slopped: an editorial dashboard instead of a template
+
+The previous pass was better but still looked generated: emoji ticks, gradient bars, pills for
+every fact, a glass sticky header, uppercase letter-spaced micro-labels, and three accent
+colours competing for attention.
+
+Now the typography carries it — serif title, sans prose, mono numbers — with hairlines instead
+of boxes, no nested cards, no shadows, and a single accent family: sage for fine, rust for
+"will not run", ochre for "unknown". Status is a sentence in the masthead rather than a pill
+rail; nav is text with a rule under the active item and dim inline counts; tables answer in one
+line per row; numbers are humanised; hierarchy comes from weight and dimness, not colour.
+
+The armed state of a write now lives **inside its own row** — the description becomes the plan,
+the button becomes `Confirm`, both revert after ten seconds — so nothing moves under the cursor.
+Light and dark follow the OS on one neutral scale, and the animation budget is a single 160 ms
+fade.
+
+Two layout defects the screenshots caught and this fixed: table headers collided
+(`ResidentWhy`) because the fixed column widths plus right padding overflowed, and a zero count
+was rendering as a green dot, which reads as a pass.
+
+Verified in a real browser at 1400×900: console clean, arm → confirm → run, GGUF inspection,
+quiet ETag polling.
