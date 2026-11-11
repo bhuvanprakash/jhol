@@ -1432,20 +1432,96 @@ pub mod gguf {
         pub rope_theta: Option<f64>,
     }
 
+    /// Bytes per KV element for the three cache precisions loaders actually use. The
+    /// quantised figures are the GGML block ratios, not round numbers: `q8_0` is 34 bytes per
+    /// 32 elements, `q4_0` is 18 per 32.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub enum KvPrecision {
+        #[default]
+        F16,
+        Q8,
+        Q4,
+    }
+
+    impl KvPrecision {
+        pub fn per_element(self) -> f64 {
+            match self {
+                KvPrecision::F16 => 2.0,
+                KvPrecision::Q8 => 34.0 / 32.0,
+                KvPrecision::Q4 => 18.0 / 32.0,
+            }
+        }
+        pub fn parse(s: &str) -> Option<Self> {
+            match s.to_ascii_lowercase().as_str() {
+                "f16" | "fp16" | "half" => Some(KvPrecision::F16),
+                "q8" | "q8_0" => Some(KvPrecision::Q8),
+                "q4" | "q4_0" => Some(KvPrecision::Q4),
+                _ => None,
+            }
+        }
+        pub fn label(self) -> &'static str {
+            match self {
+                KvPrecision::F16 => "f16",
+                KvPrecision::Q8 => "q8_0",
+                KvPrecision::Q4 => "q4_0",
+            }
+        }
+    }
+
     impl ModelMeta {
-        /// Bytes of K and V for one sequence at `ctx` tokens, in f16 (2 bytes), which is what
-        /// every loader uses by default.
-        pub fn kv_bytes(&self, ctx: u64, batch: u64) -> Option<u64> {
+        /// Elements of the KV cache per token: both K and V for every layer.
+        pub fn kv_elements_per_token(&self) -> Option<u64> {
             let layers = self.layers?;
             let heads = self.kv_heads.or(self.heads)?;
             let dim = self.head_dim?;
-            Some(2 * layers * heads * dim * 2 * ctx * batch.max(1))
+            Some(2 * layers * heads * dim)
+        }
+
+        /// Bytes of K and V for one sequence at `ctx` tokens, in f16 — what every loader uses
+        /// by default.
+        pub fn kv_bytes(&self, ctx: u64, batch: u64) -> Option<u64> {
+            self.kv_bytes_at(ctx, batch, KvPrecision::F16)
+        }
+
+        pub fn kv_bytes_at(&self, ctx: u64, batch: u64, precision: KvPrecision) -> Option<u64> {
+            let per_token = self.kv_elements_per_token()?;
+            let bytes = (per_token as f64) * (ctx as f64) * (batch.max(1) as f64)
+                * precision.per_element();
+            Some(bytes.ceil() as u64)
+        }
+
+        /// How many tokens fit in `budget` once the model and its overhead are paid for.
+        pub fn max_context(&self, budget: u64, weights: u64, precision: KvPrecision) -> Option<u64> {
+            let per_token = (self.kv_elements_per_token()? as f64) * precision.per_element();
+            let left = budget.checked_sub(weights + weights * 15 / 100)?;
+            if per_token <= 0.0 {
+                return None;
+            }
+            let fits = (left as f64 / per_token) as u64;
+            // A model cannot exceed the context it was trained for (without rope scaling),
+            // so quoting 135k for a 40k model would be a number that cannot happen.
+            Some(match self.context {
+                Some(native) => fits.min(native),
+                None => fits,
+            })
         }
 
         /// What a loader has to hold beyond the weights: KV cache plus a 15% allowance for the
         /// allocator, the graph and the runtime's own buffers.
         pub fn total_bytes(&self, weights: u64, ctx: u64, batch: u64) -> Option<u64> {
             let kv = self.kv_bytes(ctx, batch)?;
+            Some(weights + kv + weights * 15 / 100)
+        }
+
+        /// Tensor bytes for any of the three cache precisions.
+        pub fn total_bytes_at(
+            &self,
+            weights: u64,
+            ctx: u64,
+            batch: u64,
+            precision: KvPrecision,
+        ) -> Option<u64> {
+            let kv = self.kv_bytes_at(ctx, batch, precision)?;
             Some(weights + kv + weights * 15 / 100)
         }
     }

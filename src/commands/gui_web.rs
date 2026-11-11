@@ -192,6 +192,44 @@ fn handle(mut stream: TcpStream, shared: &Shared) -> std::io::Result<()> {
         return respond(&mut stream, 200, "application/json", &fleet_json(), &[]);
     }
 
+    if path.starts_with("/fit/sweep") {
+        let dir = query_param(&path, "dir");
+        let vram = query_param(&path, "vram")
+            .parse::<f64>()
+            .ok()
+            .map(|g| (g * 1_073_741_824.0) as u64);
+        let ctx = query_param(&path, "ctx").parse::<u64>().ok().unwrap_or(8192).max(128);
+        let precision = jhol_ai::gguf::KvPrecision::parse(&query_param(&path, "kv"))
+            .unwrap_or_default();
+        let reports = crate::status_view::fit_sweep(
+            Path::new(if dir.is_empty() { "." } else { &dir }),
+            vram,
+            ctx,
+            1,
+            precision,
+        );
+        let rows: Vec<serde_json::Value> = reports
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "target": r.target,
+                    "name": r.target.rsplit('/').next().unwrap_or(&r.target),
+                    "weights": r.weights,
+                    "total": r.total,
+                    "fits": r.fits,
+                    "max_context": r.max_context,
+                })
+            })
+            .collect();
+        return respond(
+            &mut stream,
+            200,
+            "application/json",
+            &serde_json::json!({ "models": rows }).to_string(),
+            &[],
+        );
+    }
+
     if path.starts_with("/fit") {
         let target = query_param(&path, "path");
         let vram = query_param(&path, "vram")
@@ -217,8 +255,11 @@ fn handle(mut stream: TcpStream, shared: &Shared) -> std::io::Result<()> {
                 "native_context": r.meta.context,
                 "vocab": r.meta.vocab,
                 "missing_meta": r.missing_meta,
+                "kv_precision": r.kv_precision.label(),
+                "max_context": r.max_context,
                 "quants": r.quants.iter().map(|q| serde_json::json!({
                     "name": q.name, "weights": q.weights, "total": q.total, "fits": q.fits,
+                    "max_context": q.max_context,
                 })).collect::<Vec<_>>(),
                 "recommend": r.recommend,
                 "bytes_read": r.bytes_read,
@@ -1064,9 +1105,20 @@ const PAGE: &str = r##"<!doctype html>
        <span class="dim mono" style="font-size:11.5px">GB</span>
        <label class="check" for="fitctx">context</label>
        <input id="fitctx" class="mono" value="8192" style="width:86px" inputmode="numeric">
+       <label class="check" for="fitkv">kv</label>
+       <select id="fitkv" class="mono" style="background:var(--bg);color:var(--ink);
+         border:1px solid var(--line2);border-radius:8px;padding:8px 6px">
+         <option value="f16">f16</option><option value="q8">q8_0</option><option value="q4">q4_0</option>
+       </select>
        <button class="btn primary" id="fitgo" type="button">Size it</button>
      </div>
      <div id="fitout"></div>
+     <div class="toolbar" style="margin-top:16px">
+       <div class="grow"><label class="sr-only" for="fitdir">Directory to sweep</label>
+         <input id="fitdir" class="mono" placeholder="sweep a directory of models…"></div>
+       <button class="btn" id="fitsweep" type="button">Sweep</button>
+     </div>
+     <div id="sweepout"></div>
      <p class="note">weights from the header, KV cache from layers × kv-heads × head-dim,
        overhead a stated 15 % of weights. Nothing is downloaded beyond the header.</p>
    </div>
@@ -1204,15 +1256,63 @@ async function explainPackage(name) {
   card.scrollIntoView({behavior: "smooth", block: "nearest"});
 }
 
+const FIT_KEY = "jhol.fit";
+function saveFitControls() {
+  try {
+    localStorage.setItem(FIT_KEY, JSON.stringify({
+      vram: document.getElementById("fitvram").value,
+      ctx: document.getElementById("fitctx").value,
+      kv: document.getElementById("fitkv").value,
+      dir: document.getElementById("fitdir").value,
+    }));
+  } catch (e) {}
+}
+function restoreFitControls() {
+  try {
+    const s = JSON.parse(localStorage.getItem(FIT_KEY) || "{}");
+    if (s.vram) document.getElementById("fitvram").value = s.vram;
+    if (s.ctx) document.getElementById("fitctx").value = s.ctx;
+    if (s.kv) document.getElementById("fitkv").value = s.kv;
+    if (s.dir) document.getElementById("fitdir").value = s.dir;
+  } catch (e) {}
+}
+
+async function sweep() {
+  const dir = document.getElementById("fitdir").value.trim();
+  const vram = parseFloat(document.getElementById("fitvram").value) || 0;
+  const ctx = parseInt(document.getElementById("fitctx").value, 10) || 8192;
+  const kv = document.getElementById("fitkv").value;
+  const out = document.getElementById("sweepout");
+  out.innerHTML = `<div class="empty">Sizing every model…</div>`;
+  const j = await jsonOrError(
+    `/fit/sweep?dir=${encodeURIComponent(dir)}&vram=${vram || ""}&ctx=${ctx}&kv=${kv}`);
+  if (j.error) { out.innerHTML = `<div class="error">${esc(j.error)}</div>`; return; }
+  if (!(j.models || []).length) {
+    out.innerHTML = `<div class="empty">No .gguf or .safetensors files there.</div>`;
+    return;
+  }
+  out.innerHTML = `<div class="rowhead"><span style="grid-column:1/4">Model</span>
+      <span class="num">Total</span><span style="text-align:right">Verdict</span></div>` +
+    j.models.map(m => `<div class="lrow">
+      <span class="t">${esc(m.name)}</span>
+      <span class="v">${bytes(m.total)}</span>
+      <span class="d" style="text-align:right;color:${m.fits === false ? "var(--bad)" : m.fits === true ? "var(--ok)" : "var(--dim)"}">
+        ${m.fits === true ? "fits" : m.fits === false ? "too big" : "—"}
+        ${m.max_context ? ` · up to ${m.max_context} tokens` : ""}</span>
+    </div>`).join("");
+}
+
 async function runFit() {
   const target = document.getElementById("fitpath").value.trim();
   const vram = parseFloat(document.getElementById("fitvram").value) || 0;
   const ctx = parseInt(document.getElementById("fitctx").value, 10) || 8192;
+  const kv = document.getElementById("fitkv").value;
+  saveFitControls();
   const out = document.getElementById("fitout");
   if (!target) { out.innerHTML = `<div class="empty">Give a model: a repo, a path, or a pinned name.</div>`; return; }
   out.innerHTML = `<div class="empty">Sizing from the header…</div>`;
   const j = await jsonOrError(
-    `/fit?path=${encodeURIComponent(target)}&vram=${vram || ""}&ctx=${ctx}`);
+    `/fit?path=${encodeURIComponent(target)}&vram=${vram || ""}&ctx=${ctx}&kv=${kv}`);
   if (j.error) { out.innerHTML = `<div class="result"><div class="error">${esc(j.error)}</div></div>`; return; }
   const kvUnknown = !j.kv_cache;
   out.innerHTML = `<div class="result">
@@ -1223,9 +1323,11 @@ async function runFit() {
     <div class="figures" style="margin-top:12px">
       <div class="fig"><b>${bytes(j.weights)}</b><span>weights</span></div>
       <div class="fig"><b>${kvUnknown ? "—" : bytes(j.kv_cache)}</b>
-        <span>kv cache · ${j.context} tokens</span></div>
+        <span>kv cache · ${j.context} tokens · ${esc(j.kv_precision || "f16")}</span></div>
       <div class="fig"><b>${bytes(j.overhead)}</b><span>overhead · 15%</span></div>
       <div class="fig"><b>${bytes(j.total)}</b><span>total</span></div>
+      <div class="fig"><b>${j.max_context ? j.max_context : "—"}</b>
+        <span>tokens fit at this budget</span></div>
       <div class="fig"><b style="color:${j.fits === true ? "var(--ok)" : j.fits === false ? "var(--bad)" : "var(--warn)"}">
         ${j.fits === true ? "fits" : j.fits === false ? "does not fit" : "no budget"}</b>
         <span>${j.headroom != null ? (j.headroom >= 0 ? bytes(j.headroom) + " spare" : bytes(-j.headroom) + " over") : "vs " + bytes(j.vram || 0)}</span></div>
@@ -1236,7 +1338,7 @@ async function runFit() {
       <div class="rowhead"><span style="grid-column:1/3">Quant</span>
         <span>Total</span><span style="grid-column:5;text-align:right">Verdict</span></div>
       ${j.quants.map(q => `<div class="lrow"><span class="t">${esc(q.name)}</span>
-        <span class="v">${bytes(q.total)}</span>
+        <span class="v">${bytes(q.total)}${q.max_context ? ` · ${q.max_context} tok` : ""}</span>
         <span class="d" style="text-align:right;color:${q.fits === false ? "var(--bad)" : q.fits === true ? "var(--ok)" : "var(--dim)"}">
           ${q.fits === true ? "fits" : q.fits === false ? "too big" : "—"}</span></div>`).join("")}
       ${j.recommend ? `<p class="note" style="color:var(--ok)">Recommend
@@ -1246,7 +1348,12 @@ async function runFit() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  restoreFitControls();
   document.getElementById("fitgo").onclick = runFit;
+  document.getElementById("fitsweep").onclick = sweep;
+  ["fitvram", "fitctx", "fitkv", "fitdir"].forEach(id => {
+    document.getElementById(id).addEventListener("change", saveFitControls);
+  });
   document.getElementById("fitpath").addEventListener("keydown",
     e => { if (e.key === "Enter") runFit(); });
   document.getElementById("pq").oninput = renderPackages;

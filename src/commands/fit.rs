@@ -13,10 +13,7 @@ fn gb(bytes: u64) -> String {
 }
 
 pub fn run(m: &ArgMatches) -> Result<(), String> {
-    let target = m
-        .get_one::<String>("target")
-        .map(|s| s.as_str())
-        .ok_or_else(|| "fit: missing target".to_string())?;
+    let target = m.get_one::<String>("target").map(|s| s.as_str());
     let vram = m
         .get_one::<String>("vram")
         .and_then(|v| v.parse::<f64>().ok())
@@ -30,8 +27,76 @@ pub fn run(m: &ArgMatches) -> Result<(), String> {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(1);
 
+    let kv = m
+        .get_one::<String>("kv")
+        .map(|v| v.as_str())
+        .unwrap_or("f16");
+    let precision = jhol_ai::gguf::KvPrecision::parse(kv)
+        .ok_or_else(|| format!("fit: unknown --kv {kv}; use f16, q8 or q4"))?;
+    let explain = crate::flag(m, "explain");
+
+    // A directory sweep answers "which of these files should I serve?".
+    if let Some(dir) = m.get_one::<String>("all") {
+        let reports = crate::status_view::fit_sweep(
+            std::path::Path::new(dir),
+            vram,
+            ctx,
+            batch,
+            precision,
+        );
+        if reports.is_empty() {
+            return Err(format!("fit: no .gguf or .safetensors files in {dir}"));
+        }
+        if crate::flag(m, "json") {
+            let rows: Vec<serde_json::Value> = reports
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "target": r.target,
+                        "weights": r.weights,
+                        "kv_cache": r.kv,
+                        "total": r.total,
+                        "fits": r.fits,
+                        "max_context": r.max_context,
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_default());
+            return Ok(());
+        }
+        println!("{dir} at {ctx} tokens, kv {}{}", precision.label(), match vram {
+            Some(v) => format!(", budget {:.1} GB", v as f64 / 1_073_741_824.0),
+            None => String::new(),
+        });
+        for r in &reports {
+            let mark = match r.fits {
+                Some(true) => "✓",
+                Some(false) => "✗",
+                None => " ",
+            };
+            let name = r
+                .target
+                .rsplit('/')
+                .next()
+                .unwrap_or(&r.target)
+                .to_string();
+            println!(
+                "  {mark} {:<44} {:>9}{}",
+                name,
+                gb(r.total),
+                r.max_context
+                    .map(|c| format!("  up to {c} tokens"))
+                    .unwrap_or_default()
+            );
+        }
+        return Ok(());
+    }
+
+    let Some(target) = target else {
+        return Err("fit: give a model, or --all <dir> to sweep a directory".to_string());
+    };
     let root = std::path::Path::new(".");
-    let r = crate::status_view::fit_target(root, target, vram, ctx, batch)?;
+    let r = crate::status_view::fit_target_with(root, target, vram, ctx, batch, precision)?;
 
     if crate::flag(m, "json") {
         let quants: Vec<serde_json::Value> = r
@@ -43,6 +108,7 @@ pub fn run(m: &ArgMatches) -> Result<(), String> {
                     "weights": q.weights,
                     "total": q.total,
                     "fits": q.fits,
+                    "max_context": q.max_context,
                 })
             })
             .collect();
@@ -69,6 +135,8 @@ pub fn run(m: &ArgMatches) -> Result<(), String> {
             "missing_meta": r.missing_meta,
             "quants": quants,
             "recommend": r.recommend,
+            "kv_precision": r.kv_precision.label(),
+            "max_context": r.max_context,
             "bytes_read": r.bytes_read,
             "requests": r.requests,
         });
@@ -88,10 +156,11 @@ pub fn run(m: &ArgMatches) -> Result<(), String> {
     println!("  weights        {:>9}", gb(r.weights));
     if r.kv > 0 {
         println!(
-            "  kv cache       {:>9}   {} tokens, batch {}",
+            "  kv cache       {:>9}   {} tokens, batch {}, {}",
             gb(r.kv),
             r.ctx,
-            r.batch
+            r.batch,
+            r.kv_precision.label()
         );
     } else if !r.missing_meta.is_empty() {
         println!(
@@ -112,6 +181,13 @@ pub fn run(m: &ArgMatches) -> Result<(), String> {
         }
         _ => println!("  verdict        pass --vram <GB> to compare against a machine"),
     }
+    if let Some(max_ctx) = r.max_context {
+        println!(
+            "  context        {:>9}   tokens fit in this budget at {}",
+            max_ctx,
+            r.kv_precision.label()
+        );
+    }
     if !r.quants.is_empty() {
         println!();
         println!("  quants at {}-token context", r.ctx);
@@ -121,11 +197,34 @@ pub fn run(m: &ArgMatches) -> Result<(), String> {
                 Some(false) => "✗",
                 None => " ",
             };
-            println!("    {mark} {:<38} {:>9}", q.name, gb(q.total));
+            println!(
+                "    {mark} {:<38} {:>9}{}",
+                q.name,
+                gb(q.total),
+                if explain {
+                    q.max_context
+                        .map(|c| format!("  up to {c} tokens"))
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                }
+            );
         }
         if let Some(best) = &r.recommend {
             println!();
             println!("  recommend      {best} — the largest quant that still fits");
+        } else if r.vram.is_some() {
+            println!();
+            println!("  recommend      nothing fits this budget at {} tokens", r.ctx);
+        }
+        if explain {
+            println!();
+            println!("  at this budget, longest context that still fits:");
+            for q in r.quants.iter().filter(|q| q.fits == Some(true)).take(3) {
+                if let Some(c) = q.max_context {
+                    println!("    {:<38} {:>9} tokens", q.name, c);
+                }
+            }
         }
     }
     println!();

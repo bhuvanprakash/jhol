@@ -8815,7 +8815,7 @@ fn cli_command() -> Command {
                          jhol fit hf://Qwen/Qwen3-8B-GGUF --vram 24 --ctx 8192\n  \
                          jhol fit models/llama-3-8b --vram 16 --json",
                     )
-                    .arg(Arg::new("target").required(true))
+                    .arg(Arg::new("target").required(false))
                     .arg(
                         Arg::new("vram")
                             .long("vram")
@@ -8835,6 +8835,25 @@ fn cli_command() -> Command {
                             .value_name("N")
                             .default_value("1")
                             .help("Concurrent sequences"),
+                    )
+                    .arg(
+                        Arg::new("kv")
+                            .long("kv")
+                            .value_name("PRECISION")
+                            .default_value("f16")
+                            .help("KV cache precision: f16, q8 or q4 (GGML block ratios)"),
+                    )
+                    .arg(
+                        Arg::new("all")
+                            .long("all")
+                            .value_name("DIR")
+                            .help("Sweep every model file in a directory and rank them"),
+                    )
+                    .arg(
+                        Arg::new("explain")
+                            .long("explain")
+                            .action(ArgAction::SetTrue)
+                            .help("Also show the longest context each quant can hold"),
                     )
                     .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
             )

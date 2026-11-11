@@ -191,6 +191,7 @@ pub fn tool_catalog() -> Vec<ToolInfo> {
         row("jhol_plan_model", "bytes and time for a model plan", "network"),
         row("jhol_plan_python", "bytes and time for a wheel plan", "network"),
         row("jhol_audit_report", "licences and known vulnerabilities", "read"),
+        row("jhol_fit", "size a model into a memory budget from its header", "read"),
         row("jhol_plan_readonly", "a plan with no writes and no network", "read"),
         row("jhol_sync_lock", "rewrite the lockfile to match the manifest", "write"),
     ]

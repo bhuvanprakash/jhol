@@ -24,6 +24,7 @@ pub mod error_handling;
 pub mod exec;
 pub mod fast_stream;
 pub mod file_lock;
+pub mod fit;
 pub mod git_lifecycle;
 pub mod global_cache;
 pub mod global_install;

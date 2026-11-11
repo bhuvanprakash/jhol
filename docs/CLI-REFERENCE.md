@@ -270,6 +270,12 @@ A **directory** is read through every shard (`model-0000N-of-0000M.safetensors`)
 `config.json` / `tokenizer.json` / `tokenizer.model` / `generation_config.json` presence. Reading
 one shard under-reports parameters by the shard count.
 
+`jhol fit <target> --vram 24 --ctx 8192 [--kv f16|q8|q4] [--batch N] [--explain] [--json]` sizes
+a model against a budget: weights from the header, KV cache from `block_count` × `kv_heads` ×
+`head_dim` (GGML block ratios for quantised caches), 15 % overhead. `--explain` adds the longest
+context each quant affords, clamped by the model's own training context. `--all <dir>` sweeps every
+model file and ranks them.
+
 `--top N` lists the N heaviest tensors (default 5, `0` hides them), because the answer to
 "what is inside?" is usually "one big matrix and a lot of small ones".
 

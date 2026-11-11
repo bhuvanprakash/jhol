@@ -4168,3 +4168,27 @@ Measured: local fit **8 ms**; repository cold **5.6 s** (16 MB header), then **1
 further budgets because header reads are cached per target.
 
 bin 25 (KV maths and the unknown-metadata case), jhol-core 732.
+
+## Fit grows up: KV precision, max context, directory sweeps, and an MCP tool
+
+**KV precision.** `--kv f16|q8|q4` sizes the cache the way loaders actually run it. The figures
+are the GGML block ratios — q8_0 is 34 bytes per 32 elements, q4_0 is 18 per 32 — and a test pins
+both against f16 rather than assuming halves.
+
+**Longest context that fits.** `--explain` turns a verdict into advice: at a budget, how many
+tokens each quant affords. The number is clamped by the model's own training context, because
+quoting 135k for a 40k model is a number that cannot happen.
+
+**Directory sweep.** `jhol fit --all <dir>` sizes every `.gguf`/`.safetensors` and ranks them,
+fitting first then largest. The web Fit panel has the same behind one button, remembers budget,
+context, precision and directory in `localStorage`, and shows per-quant max context.
+
+**One implementation of the arithmetic.** It now lives in `jhol_core::fit` (with `jhol-ai` for
+headers); the CLI, web, TUI and the new **`jhol_fit`** MCP tool all call it. The MCP tool is
+local-file only by design — a network fetch inside a tool call would hide a 16 MB download inside
+an agent's turn.
+
+Measured: local fit 8 ms; sweep of a directory 38 ms over HTTP; repository fit 5.6 s cold and
+11–17 ms per further budget (headers cached).
+
+jhol-core 736 (4 fit tests), bin 25.

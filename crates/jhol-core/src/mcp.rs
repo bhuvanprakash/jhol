@@ -193,6 +193,20 @@ pub fn handle_mcp_request(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                         }
                     },
                     {
+                        "name": "jhol_fit",
+                        "description": "Size a model against a memory budget from its header alone: weights + KV cache + 15% overhead, and the longest context each quant can hold. No weights are downloaded. Args: target (path, pinned model or hf://org/repo), vram_gb, context, kv_precision (f16|q8|q4).",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "target": {"type": "string", "description": "Model path, pinned model name, or hf://org/repo[/file.gguf]"},
+                                "vram_gb": {"type": "number", "description": "Memory budget in GB"},
+                                "context": {"type": "number", "description": "Context length in tokens (default 8192)"},
+                                "kv_precision": {"type": "string", "enum": ["f16", "q8", "q4"]}
+                            },
+                            "required": ["target"]
+                        }
+                    },
+                    {
                         "name": "jhol_audit_report",
                         "description": "Get security vulnerability audit report and SBOM summary for the project.",
                         "inputSchema": {
@@ -432,6 +446,44 @@ fn execute_tool(name: &str, args: &Value) -> Value {
                     })).unwrap_or_default()
                 }]
             })
+        }
+        "jhol_fit" => {
+            let target = args.get("target").and_then(|v| v.as_str()).unwrap_or("");
+            if target.is_empty() {
+                return json!({"content": [{"type": "text", "text": "target is required (a model file or directory on disk)"}]});
+            }
+            // Local files only: the MCP server runs where the project is, and a network fetch
+            // inside a tool call would hide a 16 MB download inside an agent's turn.
+            let vram = args
+                .get("vram_gb")
+                .and_then(|v| v.as_f64())
+                .map(|gb| (gb * 1_073_741_824.0) as u64);
+            let ctx = args.get("context").and_then(|v| v.as_u64()).unwrap_or(8192);
+            let precision = args
+                .get("kv_precision")
+                .and_then(|v| v.as_str())
+                .and_then(crate::fit::parse_precision)
+                .unwrap_or_default();
+            match crate::fit::fit_local(Path::new(target), ctx, 1, precision, vram) {
+                Ok(f) => json!({"content": [{"type": "text", "text": serde_json::to_string_pretty(&json!({
+                    "target": target,
+                    "weights": f.weights,
+                    "kv_cache": f.kv,
+                    "overhead": f.overhead,
+                    "total": f.total,
+                    "context": f.ctx,
+                    "kv_precision": f.precision.label(),
+                    "vram": f.vram,
+                    "fits": f.fits,
+                    "headroom": f.headroom,
+                    "max_context": f.max_context,
+                    "layers": f.meta.layers,
+                    "kv_heads": f.meta.kv_heads,
+                    "head_dim": f.meta.head_dim,
+                    "missing_meta": f.missing_meta,
+                })).unwrap_or_default()}]}),
+                Err(e) => json!({"content": [{"type": "text", "text": e}]}),
+            }
         }
         "jhol_why_not" => {
             let package = args.get("package").and_then(|v| v.as_str()).unwrap_or("");

@@ -140,6 +140,10 @@ pub struct FitReport {
     pub quants: Vec<QuantFit>,
     /// The largest quant that still fits: the best quality that runs here.
     pub recommend: Option<String>,
+    /// Cache precision used for the KV estimate.
+    pub kv_precision: jhol_ai::gguf::KvPrecision,
+    /// Tokens that fit in the budget at this precision, when a budget was given.
+    pub max_context: Option<u64>,
     pub bytes_read: u64,
     pub requests: u32,
 }
@@ -150,6 +154,8 @@ pub struct QuantFit {
     pub weights: u64,
     pub total: u64,
     pub fits: Option<bool>,
+    /// How many tokens this quant could hold at the same budget.
+    pub max_context: Option<u64>,
 }
 
 fn overhead(weights: u64) -> u64 {
@@ -166,25 +172,28 @@ fn assemble(
     ctx: u64,
     batch: u64,
     vram: Option<u64>,
+    precision: jhol_ai::gguf::KvPrecision,
 ) -> FitReport {
-    let kv = meta.kv_bytes(ctx, batch).unwrap_or(0);
-    let ov = overhead(weights);
-    let total = weights + kv + ov;
+    // One implementation of the arithmetic, in `jhol_core::fit`; this only adds what the
+    // surfaces need on top (a target name and per-quant rows).
+    let f = jhol_core::fit::compute(&meta, weights, ctx, batch, precision, vram, missing_meta);
     FitReport {
         target,
-        weights,
-        kv,
-        overhead: ov,
-        total,
-        ctx,
-        batch,
-        vram,
-        fits: vram.map(|v| total <= v),
-        headroom: vram.map(|v| v as i64 - total as i64),
-        meta,
-        missing_meta,
+        weights: f.weights,
+        kv: f.kv,
+        overhead: f.overhead,
+        total: f.total,
+        ctx: f.ctx,
+        batch: f.batch,
+        vram: f.vram,
+        fits: f.fits,
+        headroom: f.headroom,
+        meta: f.meta,
+        missing_meta: f.missing_meta,
         quants: Vec::new(),
         recommend: None,
+        kv_precision: f.precision,
+        max_context: f.max_context,
         bytes_read: 0,
         requests: 0,
     }
@@ -199,6 +208,51 @@ pub fn fit_target(
     vram: Option<u64>,
     ctx: u64,
     batch: u64,
+) -> Result<FitReport, String> {
+    fit_target_with(root, target, vram, ctx, batch, Default::default())
+}
+
+/// Size every model file in `dir` at one budget and context, best-fitting first.
+pub fn fit_sweep(
+    dir: &Path,
+    vram: Option<u64>,
+    ctx: u64,
+    batch: u64,
+    precision: jhol_ai::gguf::KvPrecision,
+) -> Vec<FitReport> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<std::path::PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension()
+                .map(|e| e.eq_ignore_ascii_case("gguf") || e.eq_ignore_ascii_case("safetensors"))
+                .unwrap_or(false)
+        })
+        .collect();
+    files.sort();
+    let mut out: Vec<FitReport> = files
+        .iter()
+        .filter_map(|f| {
+            fit_target_with(dir, f.to_str()?, vram, ctx, batch, precision).ok()
+        })
+        .collect();
+    // Fitting first, then largest: "what can I actually run" is the question.
+    out.sort_by(|a, b| {
+        a.fits.cmp(&b.fits).reverse().then_with(|| b.total.cmp(&a.total))
+    });
+    out
+}
+
+pub fn fit_target_with(
+    root: &Path,
+    target: &str,
+    vram: Option<u64>,
+    ctx: u64,
+    batch: u64,
+    precision: jhol_ai::gguf::KvPrecision,
 ) -> Result<FitReport, String> {
     // A repository: size every quant from the listing, read metadata from the *smallest* file
     // (one header fetch, and the smallest is enough — metadata is the same for all quants).
@@ -221,17 +275,19 @@ pub fn fit_target(
             ctx,
             batch,
             vram,
+            precision,
         );
         report.bytes_read = probe.bytes_read;
         report.requests = probe.requests;
         for (name, bytes) in files {
-            let kv = report.meta.kv_bytes(ctx, batch).unwrap_or(0);
+            let kv = report.meta.kv_bytes_at(ctx, batch, precision).unwrap_or(0);
             let total = bytes + kv + overhead(bytes);
             report.quants.push(QuantFit {
                 name,
                 weights: bytes,
                 total,
                 fits: vram.map(|v| total <= v),
+                max_context: vram.and_then(|v| report.meta.max_context(v, bytes, precision)),
             });
         }
         report
@@ -254,6 +310,7 @@ pub fn fit_target(
         ctx,
         batch,
         vram,
+        precision,
     );
     report.bytes_read = probe.bytes_read;
     report.requests = probe.requests;

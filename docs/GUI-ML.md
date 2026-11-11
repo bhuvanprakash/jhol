@@ -469,6 +469,46 @@ Measured: local file **8 ms**; repository cold **5.6 s** (16 MB header with a 15
 vocabulary), then **17 ms / 11 ms** for further budgets — header reads are cached per target for
 five minutes, which is what makes the slider feel instant.
 
+### KV precision: what loaders actually do
+
+`--kv f16|q8|q4` sizes the cache at the precision people really run. The quantised figures are
+the GGML block ratios, not round halves: **q8_0 is 34 bytes per 32 elements, q4_0 is 18 per 32** —
+a test pins both against f16.
+
+### The longest context that still fits
+
+`--explain` answers the follow-up question: given the budget, how many tokens does each quant
+afford?
+
+```
+  at this budget, longest context that still fits:
+    Qwen3-8B-Q8_0.gguf                        40960 tokens
+    Qwen3-8B-Q6_K.gguf                        40960 tokens
+```
+
+The number is **clamped by the model's own training context** — quoting 135k tokens for a 40k
+model would be a number that cannot happen without rope scaling, so the ceiling is stated as the
+model's limit, not arithmetic we like the look of.
+
+### Sweeping a directory
+
+`jhol fit --all <dir> --vram 24 --ctx 8192` sizes every `.gguf`/`.safetensors` file and ranks
+them: fitting first, then largest. The web Fit panel has the same sweep behind one button
+(`GET /fit/sweep`), and remembers your budget, context, precision and directory in
+`localStorage` so a reload does not reset the question.
+
+### `jhol_fit` as an MCP tool
+
+An agent can ask the same question:
+
+```json
+{"name": "jhol_fit", "arguments": {"target": "models/llama.gguf", "vram_gb": 24, "kv_precision": "q8"}}
+```
+
+Local files only — a network fetch inside a tool call would hide a 16 MB download inside an
+agent's turn. The tool returns weights, KV, overhead, total, verdict, max context and any missing
+metadata keys.
+
 ## Model card, shard map, and the agent surface
 
 - The inspect result now carries the loader metadata it read: layers, heads (and kv heads),
