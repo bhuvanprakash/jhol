@@ -407,3 +407,20 @@ for all nine (sequential was 27.8 s). Two defects surfaced on the way in, both n
 tests: the split branch ignored paths inside a repository (`Q4_K_M/model-…`), and the sibling
 filter compared the directory prefix as part of the shard base, so every sibling was rejected
 and the result silently fell back to shard 1 — the failure mode that looks like success.
+
+## When the tab is stale
+
+A server restart mints a new session token, so an old tab's `/inspect` gets **403**. That used to
+fall through the page's error branch and paint the *file* template with `—` values and `NaN%`,
+which reads as "the model has no data" instead of "this tab is out of date".
+
+Now every reply goes through one helper: `403` raises a page-level banner saying the tab predates
+a restart and to reopen the printed URL; non-`2xx` says which status; an unreadable body says so;
+and an unexpected shape never reaches the figure template. The percentages are computed from a
+guarded base (`0` rather than `NaN`).
+
+## Repository listings are cached
+
+A repository lookup is one Hugging Face API call. Clicking the same repo twice used to pay for it
+twice: **381 ms → 17 ms** on the second call, cached for five minutes per `(org, repo)`. Split
+GGUF sibling discovery uses the same cache, so inspecting a nine-shard model costs one listing.

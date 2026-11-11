@@ -148,6 +148,10 @@ pub fn resolve_weight_target(root: &Path, target: &str) -> Result<PathBuf, Strin
 
 /// A Hugging Face **repository** URL, in any of the shapes people paste:
 /// `hf://org/repo`, `https://huggingface.co/org/repo`, with or without a trailing slash.
+pub fn repo_ref_parts(target: &str) -> Option<(String, String)> {
+    repo_ref(target)
+}
+
 fn repo_ref(target: &str) -> Option<(String, String)> {
     let rest = target
         .strip_prefix("hf://")

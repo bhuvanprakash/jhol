@@ -11,8 +11,9 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Refuse to read a body larger than this. The UI posts small JSON objects; anything bigger
 /// is either a mistake or an attempt to make the server allocate.
@@ -416,6 +417,19 @@ fn stream_argv(stream: &mut TcpStream, argv: Option<Vec<String>>) {
 /// costs one ranged request per probe step.
 fn inspect_json(root: &Path, target: &str) -> serde_json::Value {
     let mut target = target.to_string();
+    if let Some((org, repo)) = crate::status_view::repo_ref_parts(&target) {
+        let files = match cached_repo_weights(&org, &repo) {
+            Ok(f) => f,
+            Err(e) => return serde_json::json!({ "error": e }),
+        };
+        if files.len() != 1 {
+            return serde_json::json!({
+                "repository": target,
+                "files": files.iter().map(|(n, b)| serde_json::json!({"name": n, "bytes": b})).collect::<Vec<_>>(),
+            });
+        }
+        target = format!("hf://{org}/{repo}/{}", files[0].0);
+    }
     if let Some(resolved) = crate::status_view::resolve_repo(&target) {
         match resolved {
             Ok(crate::status_view::RepoTarget::File(url)) => target = url,
@@ -500,6 +514,31 @@ fn percent_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).to_string()
+}
+
+/// Repository listings change rarely; a browser click should not pay for the API each time.
+static REPO_CACHE: Mutex<Option<HashMap<(String, String), (Instant, Vec<(String, u64)>)>>> =
+    Mutex::new(None);
+const REPO_TTL: Duration = Duration::from_secs(300);
+
+fn cached_repo_weights(org: &str, repo: &str) -> Result<Vec<(String, u64)>, String> {
+    let key = (org.to_string(), repo.to_string());
+    {
+        let guard = REPO_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(map) = guard.as_ref() {
+            if let Some((at, files)) = map.get(&key) {
+                if at.elapsed() < REPO_TTL {
+                    return Ok(files.clone());
+                }
+            }
+        }
+    }
+    let files = crate::status_view::repo_weights(org, repo)?;
+    let mut guard = REPO_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .get_or_insert_with(HashMap::new)
+        .insert(key, (Instant::now(), files.clone()));
+    Ok(files)
 }
 
 fn page_html() -> String {
@@ -676,6 +715,11 @@ const PAGE: &str = r##"<!doctype html>
    <div class="who"><b id="name">…</b><span id="version"></span></div>
    <div class="pills" id="pills"></div>
  </header>
+
+ <p id="stale" hidden style="margin:0 0 14px;padding:10px 12px;border-radius:8px;
+    border:1px solid color-mix(in srgb, var(--warn) 45%, var(--line2));
+    background:color-mix(in srgb, var(--warn) 12%, var(--card));color:var(--warn);
+    font-size:12.5px"></p>
 
  <nav class="tabs" id="nav"></nav>
 
@@ -961,6 +1005,15 @@ function renderAgent(s) {
 /* ── inspect ─────────────────────────────────────────────── */
 function renderDetail(j) {
   const host = document.getElementById("detail-host");
+  if (!j || typeof j !== "object" || (!j.error && !j.files && !j.path)) {
+    // A 403 (stale token), a 404 or an empty body used to fall through to the file template
+    // and paint "— / NaN%" as if that were a model. Say what happened instead.
+    const why = j && (j.stderr || j.error) ? (j.stderr || j.error) : "no usable reply";
+    host.innerHTML = `<div class="result"><div class="error">${esc(why)}</div>
+      <p class="note">If this says <span class="mono">bad token</span>, the tab predates a server
+      restart — reopen the URL printed by <span class="mono">jhol gui --web</span>.</p></div>`;
+    return;
+  }
   if (j.error) { host.innerHTML = `<div class="result"><div class="error">${esc(j.error)}</div></div>`; return; }
   if (j.files) {
     host.innerHTML = `<div class="result"><div class="path">${esc(j.repository)}</div>
@@ -977,7 +1030,8 @@ function renderDetail(j) {
     return;
   }
   const dtypes = (j.dtypes || []).map(d => `${d.dtype}×${d.tensors}`).join("  ");
-  const readPct = ((j.bytes_read/(j.bytes_read+(j.data_bytes||1)))*100).toFixed(3);
+  const readBase = (j.bytes_read || 0) + (j.data_bytes || 0);
+  const readPct = readBase ? ((j.bytes_read / readBase) * 100).toFixed(3) : "0";
   host.innerHTML = `<div class="result">
     <div class="path">${esc(j.path)}</div>
     <div>
@@ -1002,17 +1056,32 @@ function renderDetail(j) {
     <p class="note">${esc(dtypes)} · header is ${readPct}% of the file</p></div>`;
 }
 
+function staleNotice(text) {
+  const el = document.getElementById("stale");
+  if (!el) return;
+  el.hidden = false;
+  el.textContent = text;
+}
+
+async function jsonOrError(url, init) {
+  const r = await fetch(url, init);
+  if (r.status === 403) {
+    const hint = "This tab is stale: its token no longer matches the running server. Reopen the URL printed by `jhol gui --web`.";
+    staleNotice(hint);
+    return { error: hint };
+  }
+  if (!r.ok) return { error: `request failed (${r.status})` };
+  if (r.status === 204) return {};
+  try { return await r.json(); } catch (e) { return { error: "unreadable reply from server" }; }
+}
+
 document.getElementById("go").onclick = async () => {
   const p = document.getElementById("path").value.trim();
   if (!p) return;
   const host = document.getElementById("detail-host");
   host.innerHTML = `<div class="result"><div class="empty">Reading the header…</div></div>`;
-  try {
-    const r = await fetch(`/inspect?t=${encodeURIComponent(token)}&path=${encodeURIComponent(p)}`);
-    renderDetail(await r.json());
-  } catch (e) {
-    host.innerHTML = `<div class="result"><div class="error">${esc(e.message)}</div></div>`;
-  }
+  const j = await jsonOrError(`/inspect?t=${encodeURIComponent(token)}&path=${encodeURIComponent(p)}`);
+  renderDetail(j);
 };
 document.getElementById("path").addEventListener("keydown", e => {
   if (e.key === "Enter") document.getElementById("go").click();

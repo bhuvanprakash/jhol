@@ -4052,3 +4052,18 @@ Also fixed: an empty tab count rendered as an empty bordered box.
 Verified in a real browser at 1400, 1200, 1000, 900, 700 and 420 px against a project with a
 pinned 8 B-parameter model: `scrollWidth === innerWidth` at every width, no clipped columns,
 console clean.
+
+## Stale tabs no longer render as empty models, and repo lookups are cached
+
+Inspecting `https://huggingface.co/Qwen/Qwen3-8B-GGUF` in an old tab showed `safetensors fit
+unknown`, `—` parameters and `NaN% of the file`. The cause was not the header reader: after a
+server restart the tab's token was stale, `/inspect` answered **403**, and the page fell through
+its error branch into the *file* template, painting missing fields as an empty model.
+
+One reply helper now handles it: 403 raises a banner ("this tab is stale — reopen the URL printed
+by `jhol gui --web`"), other statuses name themselves, an unreadable body says so, and an
+unexpected payload can never reach the figure template. Percentages use a guarded base, so no
+`NaN` is possible.
+
+Repository listings are cached per `(org, repo)` for five minutes: **381 ms → 17 ms** on repeat,
+and split GGUF sibling discovery shares the cache.
