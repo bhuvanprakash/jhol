@@ -429,6 +429,58 @@ uses, and copies the equivalent command:
 The walk is the only expensive read in the server (one pass over each package directory), so it is
 cached by fingerprint: **82 ms cold, 7 ms cached** on a 100-package tree.
 
+## Fit: will it run on the machine I have — or the one I am about to rent?
+
+The question that decides a download. `jhol fit` answers it from the header, with no weights:
+
+```
+$ jhol fit hf://Qwen/Qwen3-8B-GGUF --vram 24 --ctx 8192
+https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf
+  36 layers · 32 heads (8 kv) · head_dim 128 · native context 40960
+  weights          4.68 GB
+  kv cache         1.12 GB   8192 tokens, batch 1
+  overhead         0.70 GB   15% of weights
+  ─────────────────────────
+  total            6.50 GB
+  verdict        fits, 17.50 GB to spare
+```
+
+**KV cache is computed, not guessed**: `2 × layers × kv_heads × head_dim × 2 bytes × ctx ×
+batch`. GQA matters — 8 kv heads instead of 32 is a 4× difference, and it is the reason a
+`Q4_K_M` 8B model fits in 8 GB while `Q8_0` does not. If a header lacks `block_count` or the
+attention keys, the cache is reported as unknown **with the missing key named**, never invented.
+
+A repository gets every quant sized with the same KV, and the recommendation is the *largest*
+quant that still fits:
+
+```
+  quants at 4096-token context
+    ✗ Qwen3-8B-Q8_0.gguf                       9.89 GB
+    ✗ Qwen3-8B-Q5_K_M.gguf                     6.83 GB
+    ✓ Qwen3-8B-Q4_K_M.gguf                     5.95 GB
+  recommend      Qwen3-8B-Q4_K_M.gguf — the largest quant that still fits
+```
+
+Surfaces: `jhol fit` (text + `--json`), the **Fit** panel in the web page (budget, context,
+verdict, quant table, one-click "size it" from an inspect result), and the TUI's **3. Fit** tab
+(`+`/`-` budget, `c` cycles context, `Enter` sizes the selected model).
+
+Measured: local file **8 ms**; repository cold **5.6 s** (16 MB header with a 150k-token
+vocabulary), then **17 ms / 11 ms** for further budgets — header reads are cached per target for
+five minutes, which is what makes the slider feel instant.
+
+## Model card, shard map, and the agent surface
+
+- The inspect result now carries the loader metadata it read: layers, heads (and kv heads),
+  head_dim, native context, vocab, rope theta — from the file, not from a README.
+- A split model shows its **shard map** with each shard's data size.
+- **Try a tool**: every MCP tool in the Agent tab runs against `POST /mcp` and prints the real
+  JSON reply.
+- **Copy MCP config** puts the client block on the clipboard:
+  `{"mcpServers":{"jhol":{"command":"jhol","args":["mcp","--stdio"],"cwd":…}}}`.
+- **Weights fleet** lists each pinned model with size, shard count, source@revision, and whether
+  its files are all present.
+
 ## What the page does for you
 
 - **Says which directory it is serving** — `…/j/jhol` beside the project name, full path in the

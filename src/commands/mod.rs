@@ -7,6 +7,7 @@
 pub mod attest;
 pub mod cache;
 pub mod gui_web;
+pub mod fit;
 pub mod inspect;
 pub mod status;
 pub mod env;

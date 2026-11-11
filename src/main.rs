@@ -4187,6 +4187,9 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    if let Some(("fit", sub_m)) = matches.subcommand() {
+        return commands::fit::run(sub_m);
+    }
     if let Some(("inspect", sub_m)) = matches.subcommand() {
         return commands::inspect::run(sub_m);
     }
@@ -8797,6 +8800,43 @@ fn cli_command() -> Command {
                             .default_value("500")
                             .help("Refresh interval with --watch"),
                     ),
+            )
+            .subcommand(
+                Command::new("fit")
+                    .about("Will this model run here? Weights + KV cache + overhead, from the header")
+                    .long_about(
+                        "Size a model against a memory budget without downloading the weights.\n\n\
+                         weights come from the tensor descriptors; the KV cache is computed from\n\
+                         block_count, attention.head_count_kv and head_dim at the context you\n\
+                         ask for; overhead is a stated 15% of weights.\n\n\
+                         For a repository every quant is sized with the same KV and the largest\n\
+                         one that fits is recommended.\n\n\
+                         Examples:\n  \
+                         jhol fit hf://Qwen/Qwen3-8B-GGUF --vram 24 --ctx 8192\n  \
+                         jhol fit models/llama-3-8b --vram 16 --json",
+                    )
+                    .arg(Arg::new("target").required(true))
+                    .arg(
+                        Arg::new("vram")
+                            .long("vram")
+                            .value_name("GB")
+                            .help("Memory budget in GB (e.g. 24)"),
+                    )
+                    .arg(
+                        Arg::new("ctx")
+                            .long("ctx")
+                            .value_name("TOKENS")
+                            .default_value("8192")
+                            .help("Context length to size the KV cache for"),
+                    )
+                    .arg(
+                        Arg::new("batch")
+                            .long("batch")
+                            .value_name("N")
+                            .default_value("1")
+                            .help("Concurrent sequences"),
+                    )
+                    .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
             )
             .subcommand(
                 Command::new("inspect")

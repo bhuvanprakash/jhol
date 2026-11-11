@@ -4127,3 +4127,44 @@ direct-only toggle, and a header line — *100 of 100 packages · 11.1 MB on dis
 
 The walk is cached by fingerprint: **82 ms cold, 7 ms cached**. `GET /packages.json` and
 `GET /why?pkg=` are read-only, so they need no token.
+
+## Fit: will it run, at what quant, at what context — from the header alone
+
+We could say "9.73 GB resident". We could not answer the question that decides a 5 GB download:
+*will this run at 8k context on the card I am about to rent, and which quant should I take?*
+
+**`jhol fit <target> --vram 24 --ctx 8192 [--batch N] [--json]`** now computes:
+
+| term | how |
+|---|---|
+| weights | tensor descriptors (quantised sizes, exact) |
+| KV cache | `2 × layers × kv_heads × head_dim × 2 B × ctx × batch` |
+| overhead | a stated 15 % of weights |
+
+For `Qwen3-8B-Q4_K_M` at 8192: 4.68 GB weights + **1.12 GB KV** + 0.70 GB overhead = **6.50 GB**,
+fits in 24 GB with 17.5 GB spare. GQA is the difference between fitting and not: 8 kv heads
+instead of 32.
+
+**No guessing.** A header missing `block_count` or the attention keys yields KV = unknown with
+the missing key named — a test pins that it cannot fabricate a cache size.
+
+**Quant recommendation.** A repository is sized quant-by-quant from the cached listing with the
+same KV, and the recommendation is the largest that fits: at 6 GB / 4096 tokens that is
+`Q4_K_M` (5.95 GB), where `Q5_K_M` (6.83 GB) and everything above do not.
+
+Surfaces: the CLI, the web **Fit** panel (budget, context, verdict, quant table), and a TUI
+**3. Fit** tab (`+`/`-`, `c` for context, `Enter` to size).
+
+Also this pass:
+
+- **Model card from bytes** — layers, heads (kv), head_dim, native context, vocab, rope theta,
+  read from the GGUF metadata table.
+- **Shard map** for split models, with per-shard data sizes.
+- **Try a tool** in the Agent tab: each MCP tool runs against `POST /mcp` and prints its real
+  reply; **Copy MCP config** yields the client block.
+- **Weights fleet**: pinned models with size, shards, source@revision and missing files.
+
+Measured: local fit **8 ms**; repository cold **5.6 s** (16 MB header), then **11–17 ms** for
+further budgets because header reads are cached per target.
+
+bin 25 (KV maths and the unknown-metadata case), jhol-core 732.

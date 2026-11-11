@@ -120,6 +120,146 @@ pub fn enrich(mut status: Status, root: &Path) -> Status {
     status
 }
 
+/// Sizing for a machine that may not exist yet: the question a developer asks before renting
+/// a GPU or downloading 5 GB.
+#[derive(Debug, Clone)]
+pub struct FitReport {
+    pub target: String,
+    pub weights: u64,
+    pub kv: u64,
+    pub overhead: u64,
+    pub total: u64,
+    pub ctx: u64,
+    pub batch: u64,
+    pub vram: Option<u64>,
+    pub fits: Option<bool>,
+    pub headroom: Option<i64>,
+    pub meta: jhol_ai::gguf::ModelMeta,
+    pub missing_meta: Vec<String>,
+    /// Every quant in the repository, sized with the same KV and overhead.
+    pub quants: Vec<QuantFit>,
+    /// The largest quant that still fits: the best quality that runs here.
+    pub recommend: Option<String>,
+    pub bytes_read: u64,
+    pub requests: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct QuantFit {
+    pub name: String,
+    pub weights: u64,
+    pub total: u64,
+    pub fits: Option<bool>,
+}
+
+fn overhead(weights: u64) -> u64 {
+    // 15% for the allocator, the compute graph and the runtime's own buffers. Deliberately
+    // generous: under-quoting this is an out-of-memory at the worst moment.
+    weights * 15 / 100
+}
+
+fn assemble(
+    target: String,
+    weights: u64,
+    meta: jhol_ai::gguf::ModelMeta,
+    missing_meta: Vec<String>,
+    ctx: u64,
+    batch: u64,
+    vram: Option<u64>,
+) -> FitReport {
+    let kv = meta.kv_bytes(ctx, batch).unwrap_or(0);
+    let ov = overhead(weights);
+    let total = weights + kv + ov;
+    FitReport {
+        target,
+        weights,
+        kv,
+        overhead: ov,
+        total,
+        ctx,
+        batch,
+        vram,
+        fits: vram.map(|v| total <= v),
+        headroom: vram.map(|v| v as i64 - total as i64),
+        meta,
+        missing_meta,
+        quants: Vec::new(),
+        recommend: None,
+        bytes_read: 0,
+        requests: 0,
+    }
+}
+
+/// Fit `target` into `vram` bytes at `ctx` tokens. For a repository, every quant is sized and
+/// the largest one that fits is recommended — quality you can actually run beats quality you
+/// cannot.
+pub fn fit_target(
+    root: &Path,
+    target: &str,
+    vram: Option<u64>,
+    ctx: u64,
+    batch: u64,
+) -> Result<FitReport, String> {
+    // A repository: size every quant from the listing, read metadata from the *smallest* file
+    // (one header fetch, and the smallest is enough — metadata is the same for all quants).
+    if let Some((org, repo)) = repo_ref(target) {
+        let files = repo_weights(&org, &repo)?;
+        if files.is_empty() {
+            return Err(format!("{org}/{repo}: no .gguf or .safetensors files"));
+        }
+        let mut weights: Vec<(String, u64)> = files.clone();
+        weights.sort_by_key(|(_, b)| *b);
+        let (smallest, _) = &weights[0];
+        let probe = inspect_target(root, &format!("hf://{org}/{repo}/{smallest}"))?;
+        let meta = probe.meta.clone();
+        let missing = probe.missing_meta.clone();
+        let mut report = assemble(
+            format!("{org}/{repo}"),
+            probe.data_bytes,
+            meta,
+            missing,
+            ctx,
+            batch,
+            vram,
+        );
+        report.bytes_read = probe.bytes_read;
+        report.requests = probe.requests;
+        for (name, bytes) in files {
+            let kv = report.meta.kv_bytes(ctx, batch).unwrap_or(0);
+            let total = bytes + kv + overhead(bytes);
+            report.quants.push(QuantFit {
+                name,
+                weights: bytes,
+                total,
+                fits: vram.map(|v| total <= v),
+            });
+        }
+        report
+            .quants
+            .sort_by(|a, b| b.total.cmp(&a.total));
+        report.recommend = report
+            .quants
+            .iter()
+            .find(|q| q.fits == Some(true))
+            .map(|q| q.name.clone());
+        return Ok(report);
+    }
+
+    let probe = inspect_target(root, target)?;
+    let mut report = assemble(
+        probe.display.clone(),
+        probe.data_bytes,
+        probe.meta.clone(),
+        probe.missing_meta.clone(),
+        ctx,
+        batch,
+        vram,
+    );
+    report.bytes_read = probe.bytes_read;
+    report.requests = probe.requests;
+    Ok(report)
+}
+
 /// `jhol inspect` and the dashboards resolve a model by name or by path with this.
 pub fn resolve_weight_target(root: &Path, target: &str) -> Result<PathBuf, String> {
     let direct = Path::new(target);
@@ -222,7 +362,7 @@ pub fn resolve_repo(target: &str) -> Option<Result<RepoTarget, String>> {
 
 /// What `inspect` reports, however it was reached — one file, a sharded directory, or a
 /// ranged fetch.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InspectReport {
     pub display: String,
     /// `safetensors` | `gguf`
@@ -241,6 +381,10 @@ pub struct InspectReport {
     pub shards: Vec<(String, u64)>,
     /// Which loader sidecars are present.
     pub sidecars: Vec<(String, bool)>,
+    /// Loader metadata read from a GGUF header (empty for safetensors).
+    pub meta: jhol_ai::gguf::ModelMeta,
+    /// Fitness keys that were absent, so "unknown" can say why.
+    pub missing_meta: Vec<String>,
     pub bytes_read: u64,
     pub requests: u32,
 }
@@ -261,6 +405,8 @@ impl InspectReport {
             largest: Vec::new(),
             shards: Vec::new(),
             sidecars: Vec::new(),
+            meta: Default::default(),
+            missing_meta: Vec::new(),
             bytes_read,
             requests,
         }
@@ -341,6 +487,8 @@ fn from_file(display: String, s: &jhol_ai::safetensors::WeightSummary, read: u64
         largest: s.largest.clone(),
         shards: Vec::new(),
         sidecars: Vec::new(),
+        meta: Default::default(),
+        missing_meta: Vec::new(),
         bytes_read: read,
         requests: reqs,
     }
@@ -392,6 +540,10 @@ fn gguf_report(display: String, dir: &Path) -> Result<InspectReport, String> {
         report.largest.extend(m.largest);
         if report.architecture.is_none() {
             report.architecture = m.architecture;
+        if report.meta.layers.is_none() {
+            report.meta = m.meta;
+            report.missing_meta = m.missing_meta;
+        }
         }
         data_bytes = match (data_bytes, m.data_bytes) {
             (Some(a), Some(b)) => Some(a + b),
@@ -435,6 +587,8 @@ fn from_dir(dir: &Path) -> Result<InspectReport, String> {
         display: dir.display().to_string(),
         format: "safetensors".to_string(),
         architecture: None,
+        meta: Default::default(),
+        missing_meta: Vec::new(),
         tensors: m.shards.iter().map(|(_, s)| s.tensors).sum(),
         params: m.params,
         data_bytes: m.data_bytes,
@@ -524,9 +678,35 @@ fn merge_shards(mut acc: InspectReport, r: InspectReport) -> InspectReport {
     acc
 }
 
+/// Header reads are the expensive part of `inspect` and `fit` (16 MB for a GGUF with a 150k
+/// token vocabulary). Results are cached per target for five minutes, so sizing the same model
+/// against three budgets costs one fetch, not three.
+static INSPECT_CACHE: std::sync::Mutex<Option<std::collections::HashMap<String, (std::time::Instant, InspectReport)>>> =
+    std::sync::Mutex::new(None);
+const INSPECT_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// Describe a weight file or a sharded model directory from headers alone, fetching only the
 /// header when the file is remote. A 7 GB checkpoint costs one 128 KB range request.
 pub fn inspect_target(root: &Path, target: &str) -> Result<InspectReport, String> {
+    {
+        let guard = INSPECT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(map) = guard.as_ref() {
+            if let Some((at, hit)) = map.get(target) {
+                if at.elapsed() < INSPECT_TTL {
+                    return Ok(hit.clone());
+                }
+            }
+        }
+    }
+    let report = uncached_inspect_target(root, target)?;
+    let mut guard = INSPECT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .get_or_insert_with(std::collections::HashMap::new)
+        .insert(target.to_string(), (std::time::Instant::now(), report.clone()));
+    Ok(report)
+}
+
+fn uncached_inspect_target(root: &Path, target: &str) -> Result<InspectReport, String> {
     if target.starts_with("hf://") && remote_url(target).is_none() {
         let rest = target.trim_start_matches("hf://");
         return Err(format!(
@@ -663,6 +843,8 @@ fn inspect_remote_url(url: &str) -> Result<InspectReport, String> {
                     let mut r = InspectReport::new(url.to_string(), bytes.len() as u64, requests);
                     r.format = "gguf".to_string();
                     r.architecture = m.architecture;
+                    r.meta = m.meta;
+                    r.missing_meta = m.missing_meta;
                     r.tensors = m.tensors;
                     r.params = m.params;
                     r.dtypes = m.quants;
@@ -796,6 +978,74 @@ mod tests {
         assert_eq!(m.largest[0].0, "x");
         assert_eq!(m.bytes_read, 15);
         assert_eq!(m.requests, 2);
+    }
+
+    /// GGUF with loader metadata: the keys that decide whether a model fits.
+    fn write_gguf_meta(path: &Path, arch: &str, meta: &[(&str, u64)], tensors: &[(&str, &[u64], u32)]) {
+        let mut out = Vec::new();
+        out.extend_from_slice(&jhol_ai::gguf::MAGIC.to_le_bytes());
+        out.extend_from_slice(&3u32.to_le_bytes());
+        out.extend_from_slice(&(tensors.len() as u64).to_le_bytes());
+        out.extend_from_slice(&((meta.len() + 1) as u64).to_le_bytes());
+        let push_str = |out: &mut Vec<u8>, k: &str, v: &str| {
+            out.extend_from_slice(&(k.len() as u64).to_le_bytes());
+            out.extend_from_slice(k.as_bytes());
+            out.extend_from_slice(&8u32.to_le_bytes());
+            out.extend_from_slice(&(v.len() as u64).to_le_bytes());
+            out.extend_from_slice(v.as_bytes());
+        };
+        push_str(&mut out, "general.architecture", arch);
+        for (suffix, value) in meta {
+            let key = format!("{arch}.{suffix}");
+            out.extend_from_slice(&(key.len() as u64).to_le_bytes());
+            out.extend_from_slice(key.as_bytes());
+            out.extend_from_slice(&4u32.to_le_bytes()); // UINT32
+            out.extend_from_slice(&(*value as u32).to_le_bytes());
+        }
+        for (name, dims, ttype) in tensors {
+            out.extend_from_slice(&(name.len() as u64).to_le_bytes());
+            out.extend_from_slice(name.as_bytes());
+            out.extend_from_slice(&(dims.len() as u32).to_le_bytes());
+            for d in *dims {
+                out.extend_from_slice(&d.to_le_bytes());
+            }
+            out.extend_from_slice(&ttype.to_le_bytes());
+            out.extend_from_slice(&0u64.to_le_bytes());
+        }
+        std::fs::write(path, out).unwrap();
+    }
+
+    #[test]
+    fn fitness_counts_kv_cache_from_the_header_and_never_guesses_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("m.gguf");
+        write_gguf_meta(
+            &file,
+            "llama",
+            &[
+                ("block_count", 32),
+                ("attention.head_count", 32),
+                ("attention.head_count_kv", 8),
+                ("attention.key_length", 128),
+                ("context_length", 8192),
+            ],
+            &[("w", &[1024], 0)],
+        );
+        // 2 * 32 layers * 8 kv heads * 128 dim * 2 bytes * 4096 tokens = 536,870,912
+        let r = fit_target(dir.path(), file.to_str().unwrap(), Some(8 * 1_073_741_824), 4096, 1).unwrap();
+        assert_eq!(r.meta.layers, Some(32));
+        assert_eq!(r.meta.kv_heads, Some(8));
+        assert_eq!(r.kv, 2 * 32 * 8 * 128 * 2 * 4096);
+        assert_eq!(r.total, r.weights + r.kv + r.overhead);
+        assert_eq!(r.fits, Some(true));
+        assert!(r.missing_meta.is_empty(), "{:?}", r.missing_meta);
+
+        // A header without the attention keys must degrade, not invent a cache size.
+        let bare = dir.path().join("bare.gguf");
+        write_gguf_meta(&bare, "llama", &[("block_count", 32)], &[("w", &[16], 0)]);
+        let b = fit_target(dir.path(), bare.to_str().unwrap(), Some(1), 4096, 1).unwrap();
+        assert_eq!(b.kv, 0, "missing metadata must not produce a fabricated KV size");
+        assert!(b.missing_meta.iter().any(|m| m == "attention.head_count"));
     }
 
     #[test]

@@ -26,11 +26,12 @@ use std::{
 enum ActiveTab {
     Status = 0,
     Artifacts = 1,
-    Budget = 2,
-    Proof = 3,
-    Actions = 4,
-    Dependencies = 5,
-    Doctor = 6,
+    Fit = 2,
+    Budget = 3,
+    Proof = 4,
+    Actions = 5,
+    Dependencies = 6,
+    Doctor = 7,
 }
 
 impl ActiveTab {
@@ -38,18 +39,20 @@ impl ActiveTab {
         match self {
             ActiveTab::Status => " 1. Status ",
             ActiveTab::Artifacts => " 2. Artifacts ",
-            ActiveTab::Budget => " 3. Budget ",
-            ActiveTab::Proof => " 4. Proof ",
-            ActiveTab::Actions => " 5. Actions ",
-            ActiveTab::Dependencies => " 6. Packages ",
-            ActiveTab::Doctor => " 7. Health ",
+            ActiveTab::Fit => " 3. Fit ",
+            ActiveTab::Budget => " 4. Budget ",
+            ActiveTab::Proof => " 5. Proof ",
+            ActiveTab::Actions => " 6. Actions ",
+            ActiveTab::Dependencies => " 7. Packages ",
+            ActiveTab::Doctor => " 8. Health ",
         }
     }
 
     fn next(&self) -> Self {
         match self {
             ActiveTab::Status => ActiveTab::Artifacts,
-            ActiveTab::Artifacts => ActiveTab::Budget,
+            ActiveTab::Artifacts => ActiveTab::Fit,
+            ActiveTab::Fit => ActiveTab::Budget,
             ActiveTab::Budget => ActiveTab::Proof,
             ActiveTab::Proof => ActiveTab::Actions,
             ActiveTab::Actions => ActiveTab::Dependencies,
@@ -62,7 +65,8 @@ impl ActiveTab {
         match self {
             ActiveTab::Status => ActiveTab::Doctor,
             ActiveTab::Artifacts => ActiveTab::Status,
-            ActiveTab::Budget => ActiveTab::Artifacts,
+            ActiveTab::Fit => ActiveTab::Artifacts,
+            ActiveTab::Budget => ActiveTab::Fit,
             ActiveTab::Proof => ActiveTab::Budget,
             ActiveTab::Actions => ActiveTab::Proof,
             ActiveTab::Dependencies => ActiveTab::Actions,
@@ -271,6 +275,10 @@ struct AppState {
     action_out: String,
     /// Show only artifacts that do not fit, so a failing wheel cannot hide in a list.
     only_unfit: bool,
+    /// Fit tab: the budget and context the user is sizing against.
+    fit_vram_gb: u64,
+    fit_ctx: u64,
+    fit_out: String,
     /// An action waiting for its second Enter: what was armed, and when.
     pending_action: Option<(usize, Instant)>,
     /// Live chunks from the action currently running, so a download reports progress
@@ -314,6 +322,9 @@ impl AppState {
             status: None,
             action_out: String::new(),
             only_unfit: false,
+            fit_vram_gb: 24,
+            fit_ctx: 8192,
+            fit_out: String::new(),
             pending_action: None,
             stream: None,
             direct_deps: Vec::new(),
@@ -505,6 +516,64 @@ impl AppState {
             Some(true) => 2,
         });
         rows
+    }
+
+    /// Enter on the Fit tab: size the selected model against the budget and context on screen.
+    fn size_selected_model(&mut self) {
+        let Some(s) = &self.status else { return };
+        let target = s
+            .artifacts
+            .iter()
+            .filter(|a| a.kind == "model")
+            .nth(self.list_state.selected().unwrap_or(0))
+            .or_else(|| s.artifacts.iter().find(|a| a.kind == "model"))
+            .and_then(|a| a.path.clone());
+        let Some(target) = target else {
+            self.fit_out = "no pinned model to size — pin one with `jhol ai pin`".to_string();
+            return;
+        };
+        let vram = self.fit_vram_gb * 1_073_741_824;
+        match crate::status_view::fit_target(
+            std::path::Path::new("."),
+            &target,
+            Some(vram),
+            self.fit_ctx,
+            1,
+        ) {
+            Ok(r) => {
+                let gb = |b: u64| b as f64 / 1_073_741_824.0;
+                let verdict = match (r.fits, r.headroom) {
+                    (Some(true), Some(h)) => {
+                        format!("fits — {:.2} GB spare", gb(h.max(0) as u64))
+                    }
+                    (Some(false), Some(h)) => {
+                        format!("does not fit — {:.2} GB over", gb((-h) as u64))
+                    }
+                    _ => "no budget".to_string(),
+                };
+                let meta = &r.meta;
+                self.fit_out = format!(
+                    "{}\n  {} layers · {} heads ({} kv) · head_dim {}\n  weights {:>7.2} GB\n  kv {:>7.2} GB at {} tokens\n  overhead {:>7.2} GB\n  total {:>7.2} GB\n  {}\n{}",
+                    r.target,
+                    meta.layers.unwrap_or(0),
+                    meta.heads.unwrap_or(0),
+                    meta.kv_heads.or(meta.heads).unwrap_or(0),
+                    meta.head_dim.unwrap_or(0),
+                    gb(r.weights),
+                    gb(r.kv),
+                    r.ctx,
+                    gb(r.overhead),
+                    gb(r.total),
+                    verdict,
+                    if r.missing_meta.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  header lacks {} — KV not guessed\n", r.missing_meta.join(", "))
+                    }
+                );
+            }
+            Err(e) => self.fit_out = format!("fit: {e}"),
+        }
     }
 
     /// Enter on an action. Read-only actions run at once; anything that writes is armed
@@ -1060,14 +1129,30 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut AppState) -> Result
                         app.dirty = true;
                     }
                     KeyCode::Char('5') => {
+                        app.tab = ActiveTab::Proof;
+                        app.dirty = true;
+                    }
+                    KeyCode::Char('4') => {
+                        app.tab = ActiveTab::Budget;
+                        app.dirty = true;
+                    }
+                    KeyCode::Char('3') => {
+                        app.tab = ActiveTab::Fit;
+                        app.dirty = true;
+                    }
+                    KeyCode::Char('a') => {
                         app.tab = ActiveTab::Actions;
                         app.dirty = true;
                     }
                     KeyCode::Char('6') => {
-                        app.tab = ActiveTab::Dependencies;
+                        app.tab = ActiveTab::Actions;
                         app.dirty = true;
                     }
                     KeyCode::Char('7') => {
+                        app.tab = ActiveTab::Dependencies;
+                        app.dirty = true;
+                    }
+                    KeyCode::Char('8') => {
                         app.tab = ActiveTab::Doctor;
                         app.dirty = true;
                     }
@@ -1087,6 +1172,31 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut AppState) -> Result
                             "showing all artifacts".to_string()
                         };
                         app.list_state.select(Some(0));
+                        app.dirty = true;
+                    }
+                    KeyCode::Char('+') | KeyCode::Char('=') if app.tab == ActiveTab::Fit => {
+                        app.fit_vram_gb += 1;
+                        app.fit_out.clear();
+                        app.dirty = true;
+                    }
+                    KeyCode::Char('-') if app.tab == ActiveTab::Fit => {
+                        app.fit_vram_gb = app.fit_vram_gb.saturating_sub(1).max(1);
+                        app.fit_out.clear();
+                        app.dirty = true;
+                    }
+                    KeyCode::Char('c') if app.tab == ActiveTab::Fit => {
+                        app.fit_ctx = match app.fit_ctx {
+                            2048 => 4096,
+                            4096 => 8192,
+                            8192 => 16384,
+                            16384 => 32768,
+                            _ => 2048,
+                        };
+                        app.fit_out.clear();
+                        app.dirty = true;
+                    }
+                    KeyCode::Enter if app.tab == ActiveTab::Fit => {
+                        app.size_selected_model();
                         app.dirty = true;
                     }
                     KeyCode::Enter if app.tab == ActiveTab::Artifacts => {
@@ -1254,6 +1364,7 @@ fn ui(f: &mut Frame, app: &mut AppState) {
     let tab_titles = vec![
         ActiveTab::Status.title(),
         ActiveTab::Artifacts.title(),
+        ActiveTab::Fit.title(),
         ActiveTab::Budget.title(),
         ActiveTab::Proof.title(),
         ActiveTab::Actions.title(),
@@ -1271,6 +1382,7 @@ fn ui(f: &mut Frame, app: &mut AppState) {
     match app.tab {
         ActiveTab::Status => render_overview(f, app, chunks[2]),
         ActiveTab::Artifacts => render_artifacts(f, app, chunks[2]),
+        ActiveTab::Fit => render_fit(f, app, chunks[2]),
         ActiveTab::Budget => render_budget(f, app, chunks[2]),
         ActiveTab::Proof => render_proof(f, app, chunks[2]),
         ActiveTab::Actions => render_actions(f, app, chunks[2]),
@@ -1887,6 +1999,42 @@ fn render_artifacts(f: &mut Frame, app: &AppState, area: Rect) {
         )
         .wrap(Wrap { trim: false });
     f.render_widget(pane, chunks[1]);
+}
+
+fn render_fit(f: &mut Frame, app: &AppState, area: Rect) {
+    let mut lines: Vec<Line> = vec![
+        Line::from(vec![
+            Span::styled("budget  ", Style::default().fg(Color::Cyan)),
+            Span::raw(format!("{} GB ", app.fit_vram_gb)),
+            Span::styled("[+/-]", Style::default().fg(Color::DarkGray)),
+            Span::raw("   "),
+            Span::styled("context  ", Style::default().fg(Color::Cyan)),
+            Span::raw(format!("{} tokens ", app.fit_ctx)),
+            Span::styled("[c]", Style::default().fg(Color::DarkGray)),
+            Span::raw("   "),
+            Span::styled("[Enter] size the selected model", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(""),
+    ];
+    if app.fit_out.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  press Enter: weights + KV cache + 15% overhead, from the header alone",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        for line in app.fit_out.lines() {
+            lines.push(Line::from(line.to_string()));
+        }
+    }
+    let block = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Fit — will it run here? ")
+                .borders(Borders::ALL)
+                .style(Style::default().fg(Color::Cyan)),
+        )
+        .wrap(Wrap { trim: false });
+    f.render_widget(block, area);
 }
 
 fn render_proof(f: &mut Frame, app: &AppState, area: Rect) {

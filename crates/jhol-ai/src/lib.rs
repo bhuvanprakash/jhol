@@ -1398,7 +1398,7 @@ pub mod gguf {
     /// beyond it is corrupt or hostile.
     pub const MAX_HEADER_BYTES: u64 = 64 * 1024 * 1024;
 
-    #[derive(Debug, Clone, Default, PartialEq, Eq)]
+    #[derive(Debug, Clone, Default, PartialEq)]
     pub struct GgufSummary {
         pub version: u32,
         pub tensors: usize,
@@ -1413,6 +1413,41 @@ pub mod gguf {
         pub data_bytes: Option<u64>,
         /// The heaviest tensors, largest first.
         pub largest: Vec<(String, u64)>,
+        /// Loader metadata (layers, heads, context, vocabulary).
+        pub meta: ModelMeta,
+        /// Keys that decide fitness and were **absent** — an honest "unknown" reason.
+        pub missing_meta: Vec<String>,
+    }
+
+    /// The loader metadata that decides whether a model fits — read from the header, not
+    /// from a README.
+    #[derive(Debug, Clone, Default, PartialEq)]
+    pub struct ModelMeta {
+        pub layers: Option<u64>,
+        pub heads: Option<u64>,
+        pub kv_heads: Option<u64>,
+        pub head_dim: Option<u64>,
+        pub context: Option<u64>,
+        pub vocab: Option<u64>,
+        pub rope_theta: Option<f64>,
+    }
+
+    impl ModelMeta {
+        /// Bytes of K and V for one sequence at `ctx` tokens, in f16 (2 bytes), which is what
+        /// every loader uses by default.
+        pub fn kv_bytes(&self, ctx: u64, batch: u64) -> Option<u64> {
+            let layers = self.layers?;
+            let heads = self.kv_heads.or(self.heads)?;
+            let dim = self.head_dim?;
+            Some(2 * layers * heads * dim * 2 * ctx * batch.max(1))
+        }
+
+        /// What a loader has to hold beyond the weights: KV cache plus a 15% allowance for the
+        /// allocator, the graph and the runtime's own buffers.
+        pub fn total_bytes(&self, weights: u64, ctx: u64, batch: u64) -> Option<u64> {
+            let kv = self.kv_bytes(ctx, batch)?;
+            Some(weights + kv + weights * 15 / 100)
+        }
     }
 
     impl GgufSummary {
@@ -1440,6 +1475,14 @@ pub mod gguf {
             15 => (292, 256), // Q8_K
             _ => return None,
         })
+    }
+
+    /// One captured metadata value: the three shapes that matter for fitness.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Cap {
+        Str(String),
+        Num(u64),
+        Arr(u64),
     }
 
     fn type_name(kind: u32) -> String {
@@ -1489,37 +1532,51 @@ pub mod gguf {
             let raw = self.take(n)?;
             Ok(String::from_utf8_lossy(raw).to_string())
         }
-        /// Skip a metadata value; strings inside are returned in case a caller wants them.
-        fn value(&mut self, kind: u32, out: &mut Vec<String>) -> Result<(), AiError> {
+        /// Read a metadata value far enough to keep what a loader would use: a string, a
+        /// number, or the length of an array (a tokenizer vocabulary is 150k strings long and
+        /// we want its size, not its contents).
+        fn value(&mut self, kind: u32, out: &mut Option<Cap>) -> Result<(), AiError> {
             match kind {
-                0 | 1 | 7 => {
-                    self.take(1)?;
+                0 => *out = Some(Cap::Num(self.take(1)?[0] as u64)),
+                1 => *out = Some(Cap::Num(self.take(1)?[0] as i8 as u64)),
+                2 => {
+                    let b = self.take(2)?;
+                    *out = Some(Cap::Num(u16::from_le_bytes([b[0], b[1]]) as u64));
                 }
-                2 | 3 => {
-                    self.take(2)?;
+                3 => {
+                    let b = self.take(2)?;
+                    *out = Some(Cap::Num(i16::from_le_bytes([b[0], b[1]]) as i64 as u64));
                 }
                 4..=6 => {
-                    self.take(4)?;
+                    let v = self.u32()?;
+                    *out = Some(Cap::Num(v as u64));
+                }
+                7 => {
+                    let b = self.take(1)?;
+                    *out = Some(Cap::Num((b[0] != 0) as u64));
                 }
                 10..=12 => {
-                    self.take(8)?;
+                    let v = self.u64()?;
+                    *out = Some(Cap::Num(v));
                 }
                 8 => {
                     let s = self.string()?;
-                    out.push(s);
+                    *out = Some(Cap::Str(s));
                 }
                 9 => {
                     let inner = self.u32()?;
                     let n = self.u64()?;
                     // A hostile count would let a 40-byte file drive a billion iterations.
-                    if n > 1_000_000 {
+                    if n > 100_000_000 {
                         return Err(AiError::InvalidManifest(
                             "gguf: implausible array length".to_string(),
                         ));
                     }
                     for _ in 0..n {
-                        self.value(inner, out)?;
+                        let mut skipped = None;
+                        self.value(inner, &mut skipped)?;
                     }
+                    *out = Some(Cap::Arr(n));
                 }
                 other => {
                     return Err(AiError::InvalidManifest(format!(
@@ -1548,17 +1605,81 @@ pub mod gguf {
             tensors: tensor_count,
             ..Default::default()
         };
+        // Collected first, interpreted after: keys are namespaced by `general.architecture`,
+        // which may appear anywhere in the table.
+        let mut kvs: Vec<(String, Option<Cap>)> = Vec::new();
         for _ in 0..kv_count {
             let key = r.string()?;
             let kind = r.u32()?;
-            let mut strings = Vec::new();
-            r.value(kind, &mut strings)?;
-            match key.as_str() {
-                "general.architecture" => out.architecture = strings.first().cloned(),
-                "general.name" => out.name = strings.first().cloned(),
-                _ => {}
+            let mut cap = None;
+            r.value(kind, &mut cap)?;
+            kvs.push((key, cap));
+        }
+        for (key, cap) in &kvs {
+            if let Some(Cap::Str(v)) = cap {
+                match key.as_str() {
+                    "general.architecture" => out.architecture = Some(v.clone()),
+                    "general.name" => out.name = Some(v.clone()),
+                    _ => {}
+                }
             }
         }
+        let arch = out.architecture.clone().unwrap_or_default();
+        let get = |suffix: &str| -> Option<&Cap> {
+            let full = format!("{arch}.{suffix}");
+            kvs.iter().find(|(k, _)| *k == full).and_then(|(_, c)| c.as_ref())
+        };
+        let num = |suffix: &str| -> Option<u64> {
+            match get(suffix) {
+                Some(Cap::Num(n)) => Some(*n),
+                _ => None,
+            }
+        };
+        let mut meta = ModelMeta {
+            layers: num("block_count"),
+            heads: num("attention.head_count"),
+            kv_heads: num("attention.head_count_kv"),
+            head_dim: None,
+            context: num("context_length"),
+            vocab: None,
+            rope_theta: None,
+        };
+        meta.head_dim = num("attention.key_length")
+            .or_else(|| match (num("embedding_length"), meta.heads) {
+                (Some(embed), Some(heads)) if heads > 0 => Some(embed / heads),
+                _ => None,
+            });
+        meta.vocab = match kvs
+            .iter()
+            .find(|(k, _)| k == "tokenizer.ggml.tokens")
+            .and_then(|(_, c)| c.as_ref())
+        {
+            Some(Cap::Arr(n)) => Some(*n),
+            _ => num("vocab_size"),
+        };
+        // `attention.head_count_kv` is sometimes a per-layer array; for GQA the first entry is
+        // the one every layer shares.
+        if meta.kv_heads.is_none() {
+            if let Some(Cap::Arr(n)) = get("attention.head_count_kv") {
+                let _ = n;
+            }
+        }
+        if let Some(key) = kvs.iter().find(|(k, _)| k.ends_with(".rope.freq_base")) {
+            if let Some(Cap::Num(v)) = &key.1 {
+                meta.rope_theta = Some(*v as f64);
+            }
+        }
+        for (field, present) in [
+            ("block_count", meta.layers.is_some()),
+            ("attention.head_count", meta.heads.is_some()),
+            ("head_dim", meta.head_dim.is_some()),
+            ("context_length", meta.context.is_some()),
+        ] {
+            if !present {
+                out.missing_meta.push(field.to_string());
+            }
+        }
+        out.meta = meta;
         let mut known_bytes = true;
         for _ in 0..tensor_count {
             let name = r.string()?;

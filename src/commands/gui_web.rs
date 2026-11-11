@@ -188,6 +188,47 @@ fn handle(mut stream: TcpStream, shared: &Shared) -> std::io::Result<()> {
         );
     }
 
+    if path.starts_with("/fleet.json") {
+        return respond(&mut stream, 200, "application/json", &fleet_json(), &[]);
+    }
+
+    if path.starts_with("/fit") {
+        let target = query_param(&path, "path");
+        let vram = query_param(&path, "vram")
+            .parse::<f64>()
+            .ok()
+            .map(|g| (g * 1_073_741_824.0) as u64);
+        let ctx = query_param(&path, "ctx").parse::<u64>().unwrap_or(8192).max(128);
+        let body = match crate::status_view::fit_target(Path::new("."), &target, vram, ctx, 1) {
+            Ok(r) => serde_json::json!({
+                "target": r.target,
+                "weights": r.weights,
+                "kv_cache": r.kv,
+                "overhead": r.overhead,
+                "total": r.total,
+                "context": r.ctx,
+                "vram": r.vram,
+                "fits": r.fits,
+                "headroom": r.headroom,
+                "layers": r.meta.layers,
+                "heads": r.meta.heads,
+                "kv_heads": r.meta.kv_heads,
+                "head_dim": r.meta.head_dim,
+                "native_context": r.meta.context,
+                "vocab": r.meta.vocab,
+                "missing_meta": r.missing_meta,
+                "quants": r.quants.iter().map(|q| serde_json::json!({
+                    "name": q.name, "weights": q.weights, "total": q.total, "fits": q.fits,
+                })).collect::<Vec<_>>(),
+                "recommend": r.recommend,
+                "bytes_read": r.bytes_read,
+                "requests": r.requests,
+            }),
+            Err(e) => serde_json::json!({ "error": e }),
+        };
+        return respond(&mut stream, 200, "application/json", &body.to_string(), &[]);
+    }
+
     if path.starts_with("/packages.json") {
         return respond(
             &mut stream,
@@ -252,6 +293,45 @@ fn status_json(shared: &Shared, tag: &str) -> String {
     let body = serde_json::to_string(&status).unwrap_or_else(|e| e.to_string());
     *cache = (tag.to_string(), body.clone(), Some(status));
     body
+}
+
+/// Pinned weights across the project: what is on disk, what is shared, what is missing.
+fn fleet_json() -> String {
+    let root = Path::new(".");
+    let lock = jhol_core::model_lock::ModelLock::load(root).unwrap_or_default();
+    let mut models = Vec::new();
+    let mut digests: HashMap<String, Vec<String>> = HashMap::new();
+    for (name, entry) in &lock.models {
+        let mut total = 0u64;
+        let mut missing = 0usize;
+        for file in &entry.files {
+            total += file.size;
+            if !root.join(&entry.dir).join(&file.path).is_file() {
+                missing += 1;
+            }
+            digests
+                .entry(file.sha256.clone())
+                .or_default()
+                .push(name.clone());
+        }
+        models.push(serde_json::json!({
+            "name": name,
+            "source": entry.source,
+            "revision": entry.revision,
+            "bytes": total,
+            "files": entry.files.len(),
+            "missing": missing,
+            "sharded": entry.files.len() > 1,
+        }));
+    }
+    models.sort_by(|a, b| b["bytes"].as_u64().cmp(&a["bytes"].as_u64()));
+    let shared_files = digests.values().filter(|v| v.len() > 1).count();
+    serde_json::json!({
+        "models": models,
+        "total_bytes": models.iter().filter_map(|m| m["bytes"].as_u64()).sum::<u64>(),
+        "shared_files": shared_files,
+    })
+    .to_string()
 }
 
 fn dir_bytes(path: &Path, cap: usize) -> u64 {
@@ -613,6 +693,14 @@ fn inspect_json(root: &Path, target: &str) -> serde_json::Value {
         "largest": r.largest.iter().map(|(n, b)| serde_json::json!({"name": n, "bytes": b})).collect::<Vec<_>>(),
         "shards": r.shards.iter().map(|(n, b)| serde_json::json!({"name": n, "bytes": b})).collect::<Vec<_>>(),
         "sidecars": r.sidecars.iter().map(|(n, ok)| serde_json::json!({"name": n, "present": ok})).collect::<Vec<_>>(),
+        "layers": r.meta.layers,
+        "heads": r.meta.heads,
+        "kv_heads": r.meta.kv_heads,
+        "head_dim": r.meta.head_dim,
+        "native_context": r.meta.context,
+        "vocab": r.meta.vocab,
+        "rope_theta": r.meta.rope_theta,
+        "missing_meta": r.missing_meta,
         "gpu_mem_mb": host.gpu_mem_mb,
         "fits": host.gpu_mem_mb.map(|m| r.vram_bytes.div_ceil(1024 * 1024) <= m),
     })
@@ -964,6 +1052,26 @@ const PAGE: &str = r##"<!doctype html>
    </div>
  </section>
 
+ <section id="s-fit">
+   <div class="card">
+     <h2>Will it run?</h2>
+     <div class="toolbar">
+       <div class="grow"><label class="sr-only" for="fitpath">Model to size</label>
+         <input id="fitpath" class="mono" placeholder="hf://org/repo · path · pinned model">
+       </div>
+       <label class="check" for="fitvram">VRAM</label>
+       <input id="fitvram" class="mono" value="24" style="width:70px" inputmode="decimal">
+       <span class="dim mono" style="font-size:11.5px">GB</span>
+       <label class="check" for="fitctx">context</label>
+       <input id="fitctx" class="mono" value="8192" style="width:86px" inputmode="numeric">
+       <button class="btn primary" id="fitgo" type="button">Size it</button>
+     </div>
+     <div id="fitout"></div>
+     <p class="note">weights from the header, KV cache from layers × kv-heads × head-dim,
+       overhead a stated 15 % of weights. Nothing is downloaded beyond the header.</p>
+   </div>
+ </section>
+
  <section id="s-budget">
    <div class="card"><h2>Download plan</h2><div id="budget"></div></div>
    <div class="card"><h2>Forks</h2><div id="forks"></div></div>
@@ -975,10 +1083,16 @@ const PAGE: &str = r##"<!doctype html>
      <div class="card"><h2>Attestation</h2><dl class="kv" id="proof-kv2"></dl></div>
    </div>
    <div class="card"><h2>Provenance</h2><div id="provenance"></div></div>
+   <div class="card"><h2>Weights fleet</h2><div id="fleet"><div class="empty">reading…</div></div></div>
  </section>
 
  <section id="s-agent">
    <div class="card"><h2>Tools an agent can call</h2><div id="agent"></div>
+     <div class="toolbar" style="margin-top:12px">
+       <button class="btn" id="mcp-config" type="button">Copy MCP config</button>
+       <span class="dim mono" id="mcp-hint" style="font-size:11.5px"></span>
+     </div>
+     <pre id="tool-out" style="min-height:0;max-height:18rem"></pre>
      <p class="note">Answered over <span class="mono">jhol mcp --stdio</span> and
      <span class="mono">POST /mcp</span> on this page.</p></div>
  </section>
@@ -995,16 +1109,16 @@ const PAGE: &str = r##"<!doctype html>
    same data as <span class="mono">jhol status --json</span> ·
    <span class="mono">jhol status --watch</span> ·
    MCP on <span class="mono">POST /mcp</span> ·
-   <span class="kbd">1</span>–<span class="kbd">7</span> sections ·
+   <span class="kbd">1</span>–<span class="kbd">8</span> sections ·
    <span class="kbd">/</span> filter
  </footer>
 </div>
 
 <script>
 const token = new URLSearchParams(location.search).get("t") || "";
-const SECTIONS = ["status","packages","artifacts","budget","proof","agent","actions"];
-const LABEL = {status:"Status",packages:"Packages",artifacts:"Artefacts",budget:"Budget",
-               proof:"Proof",agent:"Agent",actions:"Actions"};
+const SECTIONS = ["status","packages","fit","artifacts","budget","proof","agent","actions"];
+const LABEL = {status:"Status",packages:"Packages",fit:"Fit",artifacts:"Artefacts",
+               budget:"Budget",proof:"Proof",agent:"Agent",actions:"Actions"};
 const nav = document.getElementById("nav");
 SECTIONS.forEach((s, i) => {
   const b = document.createElement("button");
@@ -1018,6 +1132,7 @@ function show(s) {
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x.dataset.section === s));
   document.querySelectorAll("section").forEach(x => x.classList.toggle("on", x.id === "s-" + s));
   if (s === "packages") loadPackages();
+  if (s === "proof") loadFleet();
 }
 
 let packageRows = [];
@@ -1045,6 +1160,25 @@ function renderPackages() {
   document.getElementById("psort").textContent = sortBySize ? "By size" : "By name";
 }
 
+async function loadFleet() {
+  const el = document.getElementById("fleet");
+  const j = await jsonOrError("/fleet.json");
+  if (j.error) { el.innerHTML = `<div class="empty">${esc(j.error)}</div>`; return; }
+  if (!(j.models || []).length) {
+    el.innerHTML = `<div class="empty">No weights pinned. <span class="mono">jhol ai pin &lt;dir&gt;</span>
+      records digests so the fleet shows up here.</div>`;
+    return;
+  }
+  el.innerHTML = j.models.map(m => `<div class="lrow">
+      <span class="t">${esc(m.name)}${m.sharded ? ` <span class="dim" style="font-size:11px">${m.files} shards</span>` : ""}</span>
+      <span class="v">${bytes(m.bytes)}</span>
+      <span class="d">${esc(m.source)} @ <span class="mono">${esc((m.revision || "").slice(0, 12))}</span>
+        ${m.missing ? `· <span style="color:var(--bad)">${m.missing} file(s) missing</span>` : "· all files present"}</span>
+    </div>`).join("") +
+    `<p class="note">${bytes(j.total_bytes)} pinned across ${j.models.length} model(s)` +
+    (j.shared_files ? ` · ${j.shared_files} file(s) share a digest` : "") + `</p>`;
+}
+
 async function loadPackages() {
   if (packageRows.length) { renderPackages(); return; }
   const el = document.getElementById("packages");
@@ -1070,7 +1204,51 @@ async function explainPackage(name) {
   card.scrollIntoView({behavior: "smooth", block: "nearest"});
 }
 
+async function runFit() {
+  const target = document.getElementById("fitpath").value.trim();
+  const vram = parseFloat(document.getElementById("fitvram").value) || 0;
+  const ctx = parseInt(document.getElementById("fitctx").value, 10) || 8192;
+  const out = document.getElementById("fitout");
+  if (!target) { out.innerHTML = `<div class="empty">Give a model: a repo, a path, or a pinned name.</div>`; return; }
+  out.innerHTML = `<div class="empty">Sizing from the header…</div>`;
+  const j = await jsonOrError(
+    `/fit?path=${encodeURIComponent(target)}&vram=${vram || ""}&ctx=${ctx}`);
+  if (j.error) { out.innerHTML = `<div class="result"><div class="error">${esc(j.error)}</div></div>`; return; }
+  const kvUnknown = !j.kv_cache;
+  out.innerHTML = `<div class="result">
+    <div class="path">${esc(j.target)}</div>
+    ${j.layers ? `<p class="note" style="margin:8px 0 0">${j.layers} layers ·
+      ${j.heads} heads (${j.kv_heads ?? j.heads} kv) · head_dim ${j.head_dim ?? "?"} ·
+      native context ${j.native_context ?? "?"}</p>` : ""}
+    <div class="figures" style="margin-top:12px">
+      <div class="fig"><b>${bytes(j.weights)}</b><span>weights</span></div>
+      <div class="fig"><b>${kvUnknown ? "—" : bytes(j.kv_cache)}</b>
+        <span>kv cache · ${j.context} tokens</span></div>
+      <div class="fig"><b>${bytes(j.overhead)}</b><span>overhead · 15%</span></div>
+      <div class="fig"><b>${bytes(j.total)}</b><span>total</span></div>
+      <div class="fig"><b style="color:${j.fits === true ? "var(--ok)" : j.fits === false ? "var(--bad)" : "var(--warn)"}">
+        ${j.fits === true ? "fits" : j.fits === false ? "does not fit" : "no budget"}</b>
+        <span>${j.headroom != null ? (j.headroom >= 0 ? bytes(j.headroom) + " spare" : bytes(-j.headroom) + " over") : "vs " + bytes(j.vram || 0)}</span></div>
+    </div>
+    ${kvUnknown && (j.missing_meta || []).length ? `<p class="note">KV cache unknown: the header
+      lacks <span class="mono">${esc(j.missing_meta.join(", "))}</span> — not guessed.</p>` : ""}
+    ${(j.quants || []).length ? `<div style="margin-top:16px">
+      <div class="rowhead"><span style="grid-column:1/3">Quant</span>
+        <span>Total</span><span style="grid-column:5;text-align:right">Verdict</span></div>
+      ${j.quants.map(q => `<div class="lrow"><span class="t">${esc(q.name)}</span>
+        <span class="v">${bytes(q.total)}</span>
+        <span class="d" style="text-align:right;color:${q.fits === false ? "var(--bad)" : q.fits === true ? "var(--ok)" : "var(--dim)"}">
+          ${q.fits === true ? "fits" : q.fits === false ? "too big" : "—"}</span></div>`).join("")}
+      ${j.recommend ? `<p class="note" style="color:var(--ok)">Recommend
+        <span class="mono">${esc(j.recommend)}</span> — the largest quant that still fits.</p>` : ""}
+    </div>` : ""}
+  </div>`;
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("fitgo").onclick = runFit;
+  document.getElementById("fitpath").addEventListener("keydown",
+    e => { if (e.key === "Enter") runFit(); });
   document.getElementById("pq").oninput = renderPackages;
   document.getElementById("pdirect").onchange = renderPackages;
   document.getElementById("psort").onclick = () => { sortBySize = !sortBySize; renderPackages(); };
@@ -1280,10 +1458,45 @@ function renderForks(s) {
 
 function renderAgent(s) {
   document.getElementById("agent").innerHTML = `<div class="rowhead">
-      <span style="grid-column:1/3">Tool</span><span>Cost</span><span style="grid-column:4/6">Purpose</span></div>` +
+      <span style="grid-column:1/3">Tool</span><span>Cost</span>
+      <span style="grid-column:4/5">Purpose</span><span style="text-align:right">Try</span></div>` +
     s.agent.tools.map(t => `<div class="lrow">
       <span class="t">${esc(t.name)}</span><span class="v">${esc(t.cost)}</span>
-      <span class="d">${esc(t.purpose)}</span></div>`).join("");
+      <span class="d">${esc(t.purpose)}</span>
+      <button class="copy" data-tool="${esc(t.name)}" type="button">try</button></div>`).join("");
+  document.querySelectorAll("button[data-tool]").forEach(b => {
+    b.onclick = () => callTool(b.dataset.tool, b);
+  });
+  document.getElementById("mcp-config").onclick = async () => {
+    const cfg = {
+      mcpServers: {
+        jhol: { command: "jhol", args: ["mcp", "--stdio"], cwd: s.root || "." },
+      },
+    };
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(cfg, null, 2));
+      document.getElementById("mcp-hint").textContent = "copied — paste into your client config";
+    } catch (e) {
+      document.getElementById("mcp-hint").textContent = "copy failed";
+    }
+  };
+}
+
+async function callTool(name, btn) {
+  const out = document.getElementById("tool-out");
+  out.textContent = `${name} …`;
+  const j = await jsonOrError("/mcp", {
+    method: "POST",
+    headers: {"content-type": "application/json"},
+    body: JSON.stringify({jsonrpc: "2.0", id: 1, method: "tools/call",
+                          params: {name, arguments: {}}}),
+  });
+  const text = j.result && j.result.content
+    ? j.result.content.map(c => c.text || "").join("")
+    : (j.error ? (j.error.message || JSON.stringify(j.error)) : JSON.stringify(j));
+  let pretty = text;
+  try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch (e) {}
+  out.textContent = `${name}\n${pretty}`.slice(0, 4000);
 }
 
 /* ── inspect ─────────────────────────────────────────────── */
@@ -1337,7 +1550,24 @@ function renderDetail(j) {
           <span class="bar"><i style="width:${w}%"></i></span>
           <span class="v">${bytes(t.bytes)}</span></div>`; }).join("")}
     </div>
-    <p class="note">${esc(dtypes)} · header is ${readPct}% of the file</p></div>`;
+    ${j.layers ? `<p class="note" style="margin-top:10px">
+      <span class="mono">${j.layers} layers · ${j.heads} heads${j.kv_heads && j.kv_heads !== j.heads ? ` (${j.kv_heads} kv)` : ""} · head_dim ${j.head_dim ?? "?"}${j.native_context ? ` · context ${j.native_context}` : ""}${j.vocab ? ` · vocab ${j.vocab}` : ""}${j.rope_theta ? ` · rope ${j.rope_theta}` : ""}</span>
+      ${(j.missing_meta || []).length ? `<span class="dim"> · no ${esc(j.missing_meta.join(", "))}</span>` : ""}</p>` : ""}
+    ${(j.shards || []).length > 1 ? `<div style="margin-top:14px">
+      <div class="rowhead"><span style="grid-column:1/4">Shard</span>
+        <span class="num" style="grid-column:5">Data</span></div>
+      ${j.shards.map(sh => `<div class="lrow"><span class="t">${esc(sh.name)}</span>
+        <span class="v">${bytes(sh.bytes)}</span></div>`).join("")}</div>` : ""}
+    <p class="note">${esc(dtypes)} · header is ${readPct}% of the file ·
+      <button class="copy" id="to-fit" type="button">size it</button></p></div>`;
+  const toFit = document.getElementById("to-fit");
+  if (toFit) {
+    toFit.onclick = () => {
+      document.getElementById("fitpath").value = j.path;
+      show("fit");
+      runFit();
+    };
+  }
 }
 
 function staleNotice(text) {
