@@ -4094,3 +4094,16 @@ token answer `403`. A test pins reuse, rotation and the `0600` mode.
   the provenance list, `←`/`→` move between sections.
 - Layout: cards at `minmax(420px, 1fr)` so two or three fit per row and values stop breaking
   mid-token; verified at 1400/1000/700 px with `scrollWidth === innerWidth` at every width.
+
+## A stale tab can no longer break the page: token *or* same-origin attestation
+
+Repeatedly, an open dashboard went dead after a restart or a token rotation and rendered the
+inspector as a stale-token banner — the user's own tab, refused by its own server.
+
+The server now accepts exactly two credentials: the session token (scripts, `curl`), or a browser
+attesting `Sec-Fetch-Site: same-origin`, which a page on another origin cannot forge. `cross-site`
+and `same-site` are refused, and so is a bare request with no token.
+
+Verified by rotating the token under a live tab: old-token curl → `403`, `Sec-Fetch-Site:
+cross-site` → `403`, `same-origin` → `200`, and the tab that was open **before** rotation still
+listed the repository and inspected a 4.68 GB checkpoint. A test pins the three cases.

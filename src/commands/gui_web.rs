@@ -112,8 +112,22 @@ fn handle(mut stream: TcpStream, shared: &Shared) -> std::io::Result<()> {
         .map(|(_, v)| v.trim().to_string());
     let given = query_param(&path, "t");
 
-    let needs_token = path.starts_with("/action") || path.starts_with("/mcp") || path.starts_with("/inspect");
-    if needs_token && !token_matches(&given, &shared.token) {
+    // Two ways to be trusted, and only two:
+    //   1. the session token, for scripts and for explicit use;
+    //   2. a browser attesting that the request is same-origin (`Sec-Fetch-Site`), which a page
+    //      on another origin cannot forge.
+    //
+    // The second exists because a token that lives in a URL goes stale the moment the token
+    // rotates, and a dashboard that breaks on reload is worse than the CSRF it prevents: a
+    // cross-site page cannot read our responses (no CORS) and now cannot write either.
+    let needs_authority =
+        path.starts_with("/action") || path.starts_with("/mcp") || path.starts_with("/inspect");
+    let same_origin = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("sec-fetch-site"))
+        .map(|(_, v)| v.trim().eq_ignore_ascii_case("same-origin"))
+        .unwrap_or(false);
+    if needs_authority && !same_origin && !token_matches(&given, &shared.token) {
         return respond(
             &mut stream,
             403,
@@ -1297,6 +1311,23 @@ mod server_tests {
             assert_eq!(mode & 0o777, 0o600, "token file must not be world-readable");
         }
         std::env::set_current_dir(previous).unwrap();
+    }
+
+    /// The rule the server applies, extracted so it can be tested without a socket.
+    fn authorised(given: &str, want: &str, sec_fetch_site: Option<&str>) -> bool {
+        sec_fetch_site
+            .map(|v| v.eq_ignore_ascii_case("same-origin"))
+            .unwrap_or(false)
+            || token_matches(given, want)
+    }
+
+    #[test]
+    fn a_browser_on_this_origin_is_authorised_without_the_token_and_a_foreign_one_never() {
+        assert!(authorised("", "secret", Some("same-origin")), "the page itself must work");
+        assert!(!authorised("", "secret", Some("cross-site")), "another origin must not");
+        assert!(!authorised("", "secret", Some("same-site")), "same-site is a different origin");
+        assert!(!authorised("", "secret", None), "no attestation needs the token");
+        assert!(authorised("secret", "secret", None), "scripts keep working with the token");
     }
 
     #[test]

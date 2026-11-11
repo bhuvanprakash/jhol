@@ -427,6 +427,25 @@ and the result silently fell back to shard 1 — the failure mode that looks lik
 though its command begins with `verify`; treating it as read-only once let a dashboard button
 remove a tree without asking.
 
+## Authorisation: token *or* browser-attested origin
+
+A token in a URL goes stale the moment it rotates, and a dashboard that breaks after a restart is
+worse than the thing it prevents. So the server accepts two credentials and only two:
+
+| caller | how it is trusted |
+|---|---|
+| the page in this browser | `Sec-Fetch-Site: same-origin`, which another origin **cannot forge** |
+| a script, or `curl` | the token from `.jhol/gui-token` |
+| anything else | `403` |
+
+Cross-site requests carry `Sec-Fetch-Site: cross-site` and are refused; so is `same-site` (a
+different origin on the same registrable domain) and a request with no attestation and no token.
+
+Measured: after rotating the token with `--new-token`, a curl using the **old** token got `403`,
+a request with `Sec-Fetch-Site: cross-site` got `403`, one with `same-origin` got `200`, and the
+browser tab that had been open **before** the rotation still inspects models. That is the point:
+rotation no longer punishes the open dashboard.
+
 ## The token survives restarts
 
 A new token per run meant every restart invalidated every open tab — rebuilt binary, stale
