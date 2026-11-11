@@ -258,6 +258,10 @@ count, and a resident estimate from GGML packet sizes. The probe starts at 128 K
 by fetching only the delta, because a GGUF header carries the tokenizer vocabulary (16 MB for
 Qwen3's 151k tokens, out of a 9.4 GB file).
 
+A **repository** (`hf://org/repo` or `https://huggingface.co/org/repo`) has no header to read:
+`inspect` asks the Hugging Face API for its weights and prints them by size, or inspects the
+file directly when the repository holds exactly one.
+
 A **directory** is read through every shard (`model-0000N-of-0000M.safetensors`) and reports
 `config.json` / `tokenizer.json` / `tokenizer.model` / `generation_config.json` presence. Reading
 one shard under-reports parameters by the shard count.

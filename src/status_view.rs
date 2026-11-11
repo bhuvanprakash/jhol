@@ -145,6 +145,77 @@ pub fn resolve_weight_target(root: &Path, target: &str) -> Result<PathBuf, Strin
 }
 
 
+
+/// A Hugging Face **repository** URL, in any of the shapes people paste:
+/// `hf://org/repo`, `https://huggingface.co/org/repo`, with or without a trailing slash.
+fn repo_ref(target: &str) -> Option<(String, String)> {
+    let rest = target
+        .strip_prefix("hf://")
+        .or_else(|| target.strip_prefix("https://huggingface.co/"))
+        .or_else(|| target.strip_prefix("http://huggingface.co/"))?;
+    let rest = rest.trim_end_matches('/');
+    if rest.contains("/resolve/") || rest.is_empty() {
+        return None;
+    }
+    let mut parts = rest.split('/');
+    let org = parts.next()?;
+    let repo = parts.next()?;
+    if parts.next().is_some() {
+        // `org/repo/tree/main` and friends are pages, not repos we can resolve.
+        return None;
+    }
+    Some((org.to_string(), repo.to_string()))
+}
+
+/// Weights listed by the Hugging Face API: `(file name, bytes)`.
+///
+/// A repository page has no header to read, so the honest answer to "inspect this repo" is
+/// the file list, or the file itself when only one exists. Fetching the page and then
+/// blaming the server for answering 200 was neither.
+pub fn repo_weights(org: &str, repo: &str) -> Result<Vec<(String, u64)>, String> {
+    let url = format!("https://huggingface.co/api/models/{org}/{repo}?blobs=true");
+    let body = jhol_core::http_client::get(&url).map_err(|e| format!("{url}: {e}"))?;
+    let v: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|e| format!("{url}: {e}"))?;
+    let mut out: Vec<(String, u64)> = v
+        .get("siblings")
+        .and_then(|s| s.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|f| {
+                    let name = f.get("rfilename")?.as_str()?.to_string();
+                    let lower = name.to_ascii_lowercase();
+                    if !(lower.ends_with(".gguf") || lower.ends_with(".safetensors")) {
+                        return None;
+                    }
+                    let size = f.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
+                    Some((name, size))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    Ok(out)
+}
+
+/// What `inspect` should do with a repository reference.
+pub enum RepoTarget {
+    /// One weight file: inspect it, no question asked.
+    File(String),
+    /// Several: show them and let the caller choose.
+    Listing(Vec<(String, u64)>),
+}
+
+pub fn resolve_repo(target: &str) -> Option<Result<RepoTarget, String>> {
+    let (org, repo) = repo_ref(target)?;
+    Some(
+        repo_weights(&org, &repo).map(|files| match files.len() {
+            1 => RepoTarget::File(format!("hf://{org}/{repo}/{}", files[0].0)),
+            _ => RepoTarget::Listing(files),
+        }),
+    )
+}
+
 /// What `inspect` reports, however it was reached — one file, a sharded directory, or a
 /// ranged fetch.
 #[derive(Debug)]
@@ -519,6 +590,29 @@ mod tests {
         // F32 = 512 * 4 = 2048 bytes.
         assert_eq!(r.data_bytes, 34816 + 2048);
         assert_eq!(r.largest[0].0, "token_embd.weight");
+    }
+
+    #[test]
+    fn repository_urls_are_recognised_in_every_shape_people_paste() {
+        assert_eq!(
+            repo_ref("hf://Qwen/Qwen3-8B-GGUF"),
+            Some(("Qwen".into(), "Qwen3-8B-GGUF".into()))
+        );
+        assert_eq!(
+            repo_ref("https://huggingface.co/Qwen/Qwen3-8B-GGUF"),
+            Some(("Qwen".into(), "Qwen3-8B-GGUF".into()))
+        );
+        assert_eq!(
+            repo_ref("https://huggingface.co/Qwen/Qwen3-8B-GGUF/"),
+            Some(("Qwen".into(), "Qwen3-8B-GGUF".into()))
+        );
+        // A file resolve URL is a file, not a repository.
+        assert_eq!(
+            repo_ref("https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/x.gguf"),
+            None
+        );
+        assert_eq!(repo_ref("https://huggingface.co/Qwen/Qwen3-8B-GGUF/tree/main"), None);
+        assert_eq!(repo_ref("./local.safetensors"), None);
     }
 
     #[test]

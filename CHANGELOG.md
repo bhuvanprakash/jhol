@@ -3883,3 +3883,27 @@ Two defects found while testing on a real repository:
 
 Tests: a synthetic GGUF asserts parameter count, quant mix and quantised size (Q8_0 packet
 maths), and a repository URL asserts the refusal names the file form. bin 14, jhol-core 731.
+
+## A repository URL answers the question instead of refusing it
+
+Pasting `https://huggingface.co/Qwen/Qwen3-8B-GGUF` into `inspect` still failed, because the
+refusal only covered the `hf://` spelling and a plain `https://` repository was resolved like a
+file: an HTML page fetched, a range "ignored", the server blamed.
+
+Now a repository reference is recognised in every shape (`hf://org/repo`,
+`https://huggingface.co/org/repo`, with or without a trailing slash) and answered properly: one
+API call lists the weights by size, and a repository holding exactly one weight file is
+inspected directly with no question asked.
+
+```
+https://huggingface.co/Qwen/Qwen3-8B-GGUF — 5 weight file(s)
+     8.11 GB  Qwen3-8B-Q8_0.gguf
+     ...
+  pick one: jhol inspect https://huggingface.co/Qwen/Qwen3-8B-GGUF/Qwen3-8B-Q8_0.gguf
+```
+
+In the web page the list is clickable: choosing a file fills the inspect box and reads only its
+header. The page's raw HTML string also had to change delimiter — `href="#"` contains the
+sequence that ended the previous one, which is a reminder that raw strings are not free.
+
+bin 15 (two new: URL shapes, and the repo-listing path), jhol-core 731.

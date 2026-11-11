@@ -16,7 +16,31 @@ pub fn run(m: &ArgMatches) -> Result<(), String> {
         .map(|s| s.as_str())
         .ok_or_else(|| "inspect: missing target".to_string())?;
     let root = std::path::Path::new(".");
-    let report = crate::status_view::inspect_target(root, target)?;
+    // A repository is not a file: inspect the only weight if there is one, otherwise list
+    // them. Better than refusing, and far better than blaming the server for a 200.
+    let mut target = target.to_string();
+    if let Some(resolved) = crate::status_view::resolve_repo(&target) {
+        match resolved? {
+            crate::status_view::RepoTarget::File(url) => target = url,
+            crate::status_view::RepoTarget::Listing(files) => {
+                if files.is_empty() {
+                    return Err(format!("{target}: no .gguf or .safetensors files"));
+                }
+                println!("{target} — {} weight file(s)", files.len());
+                for (name, bytes) in &files {
+                    println!("  {:>10}  {}", human(*bytes), name);
+                }
+                println!();
+                println!(
+                    "  pick one: jhol inspect {}/{}",
+                    target.trim_end_matches('/'),
+                    files[0].0
+                );
+                return Ok(());
+            }
+        }
+    }
+    let report = crate::status_view::inspect_target(root, &target)?;
     let top = m
         .get_one::<String>("top")
         .and_then(|t| t.parse::<usize>().ok())

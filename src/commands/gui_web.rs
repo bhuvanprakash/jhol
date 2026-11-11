@@ -334,13 +334,29 @@ fn stream_argv(stream: &mut std::net::TcpStream, argv: Option<Vec<String>>) {
 /// `jhol inspect`, in-process: a header read is cheap enough that shelling out would cost
 /// more than the work, and a remote target costs one ranged request.
 fn inspect_json(root: &Path, target: &str) -> serde_json::Value {
-    let r = match crate::status_view::inspect_target(root, target) {
+    // A repository has no header; list its weights (or inspect the only one).
+    let mut target = target.to_string();
+    if let Some(resolved) = crate::status_view::resolve_repo(&target) {
+        match resolved {
+            Ok(crate::status_view::RepoTarget::File(url)) => target = url,
+            Ok(crate::status_view::RepoTarget::Listing(files)) => {
+                return serde_json::json!({
+                    "repository": target,
+                    "files": files.iter().map(|(n, b)| serde_json::json!({"name": n, "bytes": b})).collect::<Vec<_>>(),
+                })
+            }
+            Err(e) => return serde_json::json!({ "error": e }),
+        }
+    }
+    let r = match crate::status_view::inspect_target(root, &target) {
         Ok(i) => i,
         Err(e) => return serde_json::json!({ "error": e }),
     };
     let host = jhol_core::axes::HostAxes::detect();
     serde_json::json!({
         "path": r.display,
+        "format": r.format,
+        "architecture": r.architecture,
         "tensors": r.tensors,
         "params": r.params,
         "params_human": r.params.to_string(),
@@ -409,7 +425,7 @@ fn page_html() -> String {
     PAGE.to_string()
 }
 
-const PAGE: &str = r#"<!doctype html>
+const PAGE: &str = r##"<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>jhol</title>
@@ -647,6 +663,20 @@ document.getElementById("go").onclick = async () => {
     const r = await fetch(`/inspect?t=${encodeURIComponent(token)}&path=${encodeURIComponent(p)}`);
     const j = await r.json();
     if (j.error) { detail.textContent = "error: " + j.error; return; }
+    if (j.files) {
+      detail.innerHTML = `<div class="muted">${esc(j.repository)} — ${j.files.length} weight file(s); click one</div>` +
+        j.files.map(f => `<div class="row"><span class="k" style="width:7rem">${mb(f.bytes)}</span>` +
+          `<a href="#" data-repo="${esc(j.repository)}" data-file="${esc(f.name)}">${esc(f.name)}</a></div>`).join("");
+      detail.querySelectorAll("a[data-file]").forEach(a => {
+        a.onclick = (e) => {
+          e.preventDefault();
+          document.getElementById("path").value =
+            `${a.dataset.repo.replace(/\/$/, "")}/${a.dataset.file}`;
+          document.getElementById("go").click();
+        };
+      });
+      return;
+    }
     const dtypes = (j.dtypes || []).map(d => `${d.dtype}×${d.tensors}`).join(" ");
     detail.textContent =
       `${j.path}\n  ${j.format}${j.architecture ? " · " + j.architecture : ""}` +
@@ -663,7 +693,7 @@ document.getElementById("go").onclick = async () => {
 
 tick(); setInterval(tick, 1500);
 </script></body></html>
-"#;
+"##;
 
 #[cfg(test)]
 mod bridge_tests {

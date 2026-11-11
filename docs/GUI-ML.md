@@ -291,6 +291,28 @@ quantisation mix come from the tensor descriptors; the resident estimate uses GG
 (Q8_0 = 34 bytes per 32 elements, Q4_K = 144 per 256, …) and is withheld for a type it does not
 know, rather than guessed.
 
+### A repository URL now answers the question instead of refusing it
+
+`https://huggingface.co/Qwen/Qwen3-8B-GGUF` (and `hf://Qwen/Qwen3-8B-GGUF`) is a *repository*.
+Asking it for a byte range gets an HTML page, so the honest answer is the file list — or the
+file itself when there is only one:
+
+```
+$ jhol inspect https://huggingface.co/Qwen/Qwen3-8B-GGUF
+https://huggingface.co/Qwen/Qwen3-8B-GGUF — 5 weight file(s)
+     8.11 GB  Qwen3-8B-Q8_0.gguf
+     6.26 GB  Qwen3-8B-Q6_K.gguf
+     5.45 GB  Qwen3-8B-Q5_K_M.gguf
+     5.33 GB  Qwen3-8B-Q5_0.gguf
+     4.68 GB  Qwen3-8B-Q4_K_M.gguf
+
+  pick one: jhol inspect https://huggingface.co/Qwen/Qwen3-8B-GGUF/Qwen3-8B-Q8_0.gguf
+```
+
+One API call (`/api/models/<org>/<repo>?blobs=true`), sorted by size, weights only. A
+repository with a single `.safetensors` is inspected directly, no question asked. In the web
+page the same list is clickable: choosing a file fills the box and inspects it.
+
 Two defects this exposed, both fixed:
 
 1. **A `200` answer to a range request was treated as an error.** Some servers ignore `Range`
