@@ -2587,7 +2587,7 @@ fn run() -> Result<(), String> {
                 .get_one::<String>("port")
                 .and_then(|p| p.parse::<u16>().ok())
                 .unwrap_or(0);
-            return commands::gui_web::serve(port, !flag(m, "no-open"));
+            return commands::gui_web::serve(port, !flag(m, "no-open"), flag(m, "new-token"));
         }
         return tui::run_tui();
     }
@@ -9248,6 +9248,12 @@ fn cli_command() -> Command {
                         .long("no-open")
                         .action(ArgAction::SetTrue)
                         .help("Do not launch a browser (for headless or remote use)"),
+                )
+                .arg(
+                    Arg::new("new-token")
+                        .long("new-token")
+                        .action(ArgAction::SetTrue)
+                        .help("Mint a new access token instead of reusing .jhol/gui-token"),
                 )
                 .long_about(
                     "Launches the jhol Terminal GUI (TUI). \

@@ -21,7 +21,38 @@ const MAX_BODY: usize = 8 * 1024;
 /// A connection that cannot produce a request line in this long is not a browser.
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
 
-pub fn serve(port: u16, open: bool) -> Result<(), String> {
+/// A token that survives restarts, so an open dashboard does not become stale every time the
+/// binary is rebuilt.
+///
+/// It lives in `.jhol/gui-token` mode 0600 — the same protection any file in the project has —
+/// and it only guards against *other origins* reaching loopback, so a per-project credential is
+/// the right lifetime. `--new-token` rotates it when a token has been seen or copied.
+fn project_token(rotate: bool) -> String {
+    let path = Path::new(".jhol/gui-token");
+    if !rotate {
+        if let Ok(existing) = std::fs::read_to_string(path) {
+            let t = existing.trim().to_string();
+            if t.len() >= 16 && t.chars().all(|c| c.is_ascii_hexdigit()) {
+                return t;
+            }
+        }
+    }
+    let token = session_token();
+    if std::fs::create_dir_all(".jhol").is_ok() {
+        let tmp = Path::new(".jhol/gui-token.tmp");
+        if std::fs::write(tmp, format!("{token}\n")).is_ok() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(tmp, std::fs::Permissions::from_mode(0o600));
+            }
+            let _ = std::fs::rename(tmp, path);
+        }
+    }
+    token
+}
+
+pub fn serve(port: u16, open: bool, rotate: bool) -> Result<(), String> {
     let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|e| match e.kind() {
         std::io::ErrorKind::AddrInUse => format!(
             "gui --web: port {port} is already in use — pass --port 0 for a free one"
@@ -30,12 +61,14 @@ pub fn serve(port: u16, open: bool) -> Result<(), String> {
     })?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
     let shared = Arc::new(Shared {
-        token: session_token(),
+        token: project_token(rotate),
         cache: Mutex::new((String::new(), String::new(), None)),
     });
     let url = format!("http://{addr}/?t={}", shared.token);
     println!("jhol gui --web on {url}");
-    println!("  stop with Ctrl-C · loopback only · requests need the token in the URL");
+    println!(
+        "  stop with Ctrl-C · loopback only · token kept in .jhol/gui-token (rotate with --new-token)"
+    );
     if open {
         open_browser(&url);
     }
@@ -1195,6 +1228,26 @@ tick(); setInterval(tick, 2000);
 #[cfg(test)]
 mod server_tests {
     use super::*;
+
+    #[test]
+    fn the_token_survives_a_restart_and_rotates_on_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let first = project_token(false);
+        let again = project_token(false);
+        assert_eq!(first, again, "a restart must reuse the token so tabs stay valid");
+        let rotated = project_token(true);
+        assert_ne!(first, rotated, "--new-token must mint a fresh one");
+        assert_eq!(project_token(false), rotated, "and persist the new one");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(".jhol/gui-token").unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "token file must not be world-readable");
+        }
+        std::env::set_current_dir(previous).unwrap();
+    }
 
     #[test]
     fn the_token_is_compared_without_short_circuits_or_prefix_matches() {

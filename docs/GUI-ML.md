@@ -408,6 +408,23 @@ tests: the split branch ignored paths inside a repository (`Q4_K_M/model-…`), 
 filter compared the directory prefix as part of the shard base, so every sibling was rejected
 and the result silently fell back to shard 1 — the failure mode that looks like success.
 
+## The token survives restarts
+
+A new token per run meant every restart invalidated every open tab — rebuilt binary, stale
+dashboard, a `403` that looked like a data problem. The token now lives in `.jhol/gui-token`
+(mode `0600`) and is reused:
+
+| action | token |
+|---|---|
+| first `jhol gui --web` | minted and written |
+| restart, rebuild, second tab | **reused** — open tabs keep working |
+| `--new-token` | rotated; the old one answers `403` |
+
+A per-project credential is the right lifetime here: it only guards against *other origins*
+reaching loopback, and it is protected the same way any file in the project is. Verified: two
+consecutive starts printed the same URL, the first tab's `/inspect` answered `200` after the
+restart, `--new-token` produced a different URL and the previous token answered `403`.
+
 ## When the tab is stale
 
 A server restart mints a new session token, so an old tab's `/inspect` gets **403**. That used to

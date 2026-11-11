@@ -4067,3 +4067,14 @@ unexpected payload can never reach the figure template. Percentages use a guarde
 
 Repository listings are cached per `(org, repo)` for five minutes: **381 ms → 17 ms** on repeat,
 and split GGUF sibling discovery shares the cache.
+
+## The dashboard token survives restarts
+
+Every `jhol gui --web` minted a fresh token, so each rebuild invalidated every open tab and the
+page showed "this tab is stale" — a self-inflicted 403 that users experience as a broken
+inspector.
+
+The token is now stored in `.jhol/gui-token` with mode `0600` and reused across restarts, with
+`--new-token` to rotate deliberately. Verified: two consecutive starts printed the same URL, the
+tab opened before the restart still answered `200` afterwards, and rotation made the previous
+token answer `403`. A test pins reuse, rotation and the `0600` mode.
