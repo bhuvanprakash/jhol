@@ -634,7 +634,7 @@ impl AppState {
             a.bytes.map(|b| b.to_string()).unwrap_or_else(|| "unknown".into())
         ));
         if let Some(p) = a.params {
-            text.push_str(&format!("parameters: {p}\n"));
+            text.push_str(&format!("parameters: {}\n", human_params(p)));
         }
         if let Some(v) = a.vram_bytes {
             text.push_str(&format!("resident: {:.2} GB\n", v as f64 / 1_073_741_824.0));
@@ -1400,10 +1400,53 @@ fn ui(f: &mut Frame, app: &mut AppState) {
     }
 }
 
+fn human_params(p: u64) -> String {
+    let f = p as f64;
+    if f >= 1e9 {
+        format!("{:.2} B", f / 1e9)
+    } else if f >= 1e6 {
+        format!("{:.1} M", f / 1e6)
+    } else if f >= 1e3 {
+        format!("{:.1} K", f / 1e3)
+    } else {
+        format!("{p}")
+    }
+}
+
 fn status_lines(app: &AppState) -> Vec<Line<'static>> {
     let Some(s) = &app.status else {
         return vec![Line::from("  collecting…")];
     };
+    if !s.has_manifest {
+        let dim = Style::default().fg(Color::DarkGray);
+        return vec![
+            Line::from(Span::styled(
+                "  no project here",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from("  This directory has no package.json, so there is nothing to verify."),
+            Line::from("  The dashboard is read-only until a project exists."),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  start one  ", dim),
+                Span::raw("jhol install express"),
+            ]),
+            Line::from(vec![
+                Span::styled("  weights    ", dim),
+                Span::raw("jhol ai pull hf://org/repo/model.safetensors"),
+            ]),
+            Line::from(vec![
+                Span::styled("  watch      ", dim),
+                Span::raw("jhol status --watch"),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  press r to re-read the directory",
+                dim,
+            )),
+        ];
+    }
     let ok = Style::default().fg(Color::Green);
     let bad = Style::default().fg(Color::Red);
     let key = |k: &'static str| {
@@ -1807,7 +1850,7 @@ fn render_artifacts(f: &mut Frame, app: &AppState, area: Rect) {
                 Style::default().add_modifier(Modifier::BOLD),
             ))];
             if let Some(p) = a.params {
-                out.push(Line::from(format!("  {p} parameters")));
+                out.push(Line::from(format!("  {} parameters", human_params(p))));
             }
             if let Some(v) = a.vram_bytes {
                 out.push(Line::from(format!(

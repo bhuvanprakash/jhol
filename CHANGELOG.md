@@ -3993,3 +3993,25 @@ whatever directory it is started in.
 
 bin 19 (four new: token comparison, whitelist and name validation, query decoding, bridge),
 jhol-core 731.
+
+## Split GGUFs report the model, not one ninth of it
+
+`inspect` on `…-00001-of-00009.gguf` described that shard and called it the model: DeepSeek-R1
+Q4_K_M read as **76.61 B** parameters instead of **671.03 B**.
+
+It now recognises the split naming (including inside a per-quant directory), asks the API for the
+sibling set, and reads all nine shard headers four at a time: 1025 tensors, 671.03 B parameters,
+404 GB of tensor data, F32×361 Q4_K×606 Q6_K×58 — in 15.8–19.6 s, against 27.8 s sequential.
+
+Two defects on the way in, both pinned by tests:
+
+1. The split branch ignored paths inside a repository (`Q4_K_M/model-…`), so a subdirectory
+   upload never matched.
+2. The sibling filter compared the directory prefix as part of the shard base, which rejected
+   every sibling and silently fell back to shard 1 — a failure that looks exactly like success.
+
+Also: the TUI now says "no project here" with the three commands that would create one, instead
+of an empty dashboard, and humanises parameters (`671.03 B`) the way the web view does.
+
+bin 22 (three new: split-name parsing, URL-shape parsing with subdirectories, shard merging),
+jhol-core 731.

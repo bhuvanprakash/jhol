@@ -384,3 +384,26 @@ Two defects this exposed, both fixed:
    truncated to the request and the caller decides whether the content makes sense.
 2. **A repository URL was resolved as if it were a file**, fetching an HTML page and then
    blaming the server. `hf://org/repo` is refused with the file form to use.
+
+## Split GGUF: one model, nine files
+
+A quantised checkpoint above a few GB is uploaded as `…-00001-of-00009.gguf` siblings, usually
+inside a per-quant directory. Describing shard 1 alone under-reports the model by the shard
+count — exactly the class of bug the safetensors directory path already fixed.
+
+`inspect` now recognises the split naming, asks the API for the sibling set, and reads every
+shard header (four at a time):
+
+```
+$ jhol inspect hf://unsloth/DeepSeek-R1-GGUF/DeepSeek-R1-Q4_K_M/DeepSeek-R1-Q4_K_M-00001-of-00009.gguf
+hf://…/DeepSeek-R1-Q4_K_M-00001-of-00009.gguf (9 shards)
+  1025 tensors · 671.03 B params · 404424884224 bytes of tensor data
+  dtypes     F32×361 Q4_K×606 Q6_K×58
+  format     gguf · architecture deepseek2
+```
+
+**671.03 B parameters across nine header reads**, not 76.61 B from one. Wall time 15.8–19.6 s
+for all nine (sequential was 27.8 s). Two defects surfaced on the way in, both now pinned by
+tests: the split branch ignored paths inside a repository (`Q4_K_M/model-…`), and the sibling
+filter compared the directory prefix as part of the shard base, so every sibling was rejected
+and the result silently fell back to shard 1 — the failure mode that looks like success.

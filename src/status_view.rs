@@ -447,6 +447,79 @@ fn from_dir(dir: &Path) -> Result<InspectReport, String> {
     })
 }
 
+/// `model-00001-of-00008.gguf` -> `("model", 1, 8)`.
+fn split_shard(file: &str) -> Option<(String, u32, u32)> {
+    let stem = file.strip_suffix(".gguf")?;
+    let (head, total) = stem.rsplit_once("-of-")?;
+    let total: u32 = total.parse().ok()?;
+    let (base, index) = head.rsplit_once('-')?;
+    let index: u32 = index.parse().ok()?;
+    if index == 0 || total < 2 || index > total {
+        return None;
+    }
+    Some((base.to_string(), index, total))
+}
+
+/// `org`, `repo` and file name from any accepted shape. `hf://o/r/f@rev` loses the rev here;
+/// shard siblings are fetched from `main`, which is what a split model's index points at.
+fn hf_parts(target: &str) -> Option<(String, String, String)> {
+    let rest = target
+        .strip_prefix("hf://")
+        .or_else(|| target.strip_prefix("https://huggingface.co/"))
+        .or_else(|| target.strip_prefix("http://huggingface.co/"))?;
+    let rest = rest.split_once('@').map(|(p, _)| p).unwrap_or(rest);
+    let rest = rest.trim_end_matches('/');
+    let mut parts = rest.split('/');
+    let org = parts.next()?.to_string();
+    let repo = parts.next()?.to_string();
+    let rest: Vec<&str> = parts.collect();
+    // `org/repo` alone is a repository, not a file. Files may live in subdirectories, which
+    // split GGUF uploads routinely do (`Q4_K_M/model-Q4_K_M-00001-of-00009.gguf`).
+    let path = match rest.as_slice() {
+        [] => return None,
+        ["blob" | "raw" | "resolve", _rev, tail @ ..] if !tail.is_empty() => tail.join("/"),
+        other => other.join("/"),
+    };
+    let file = path.rsplit('/').next()?.to_string();
+    if file.is_empty() {
+        return None;
+    }
+    if org.is_empty() || repo.is_empty() {
+        return None;
+    }
+    let dir = path
+        .rsplit_once('/')
+        .map(|(d, _)| d.to_string())
+        .unwrap_or_default();
+    Some((org, repo, if dir.is_empty() { file } else { format!("{dir}/{file}") }))
+}
+
+fn merge_shards(mut acc: InspectReport, r: InspectReport) -> InspectReport {
+    acc.tensors += r.tensors;
+    acc.params += r.params;
+    acc.data_bytes += r.data_bytes;
+    acc.vram_bytes += r.vram_bytes;
+    acc.header_bytes += r.header_bytes;
+    acc.bytes_read += r.bytes_read;
+    acc.requests += r.requests;
+    for (d, n) in r.dtypes {
+        *acc.dtypes.entry(d).or_default() += n;
+    }
+    for d in r.unknown_dtypes {
+        if !acc.unknown_dtypes.contains(&d) {
+            acc.unknown_dtypes.push(d);
+        }
+    }
+    acc.largest.extend(r.largest);
+    acc.largest.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    acc.largest.truncate(10);
+    acc.shards.extend(r.shards);
+    if acc.architecture.is_none() {
+        acc.architecture = r.architecture;
+    }
+    acc
+}
+
 /// Describe a weight file or a sharded model directory from headers alone, fetching only the
 /// header when the file is remote. A 7 GB checkpoint costs one 128 KB range request.
 pub fn inspect_target(root: &Path, target: &str) -> Result<InspectReport, String> {
@@ -477,8 +550,81 @@ pub fn inspect_target(root: &Path, target: &str) -> Result<InspectReport, String
         return Ok(from_file(path.display().to_string(), &summary, read, 0));
     };
 
+    // A split GGUF is one model in N files. Describing shard 1 alone under-reports the model
+    // by the shard count — the same class of bug the safetensors directory path fixed.
+    if let Some((org, repo, file)) = hf_parts(target) {
+        let (dir, name) = match file.rsplit_once('/') {
+            Some((d, n)) => (format!("{d}/"), n.to_string()),
+            None => (String::new(), file.clone()),
+        };
+        if let Some((base, _, total)) = split_shard(&name) {
+            let siblings = repo_weights(&org, &repo)?;
+            let matching: Vec<String> = siblings
+                .into_iter()
+                .map(|(n, _)| n)
+                .filter(|n| {
+                    if !dir.is_empty() && !n.starts_with(&dir) {
+                        return false;
+                    }
+                    // Compare on the bare file name: the directory prefix would otherwise
+                    // read as part of the shard base and every sibling would be filtered out.
+                    let bare = n.strip_prefix(&dir).unwrap_or(n);
+                    bare.strip_suffix(".gguf")
+                        .and_then(|s| s.rsplit_once("-of-"))
+                        .map(|(head, rest)| {
+                            rest.parse::<u32>().map(|t| t == total).unwrap_or(false)
+                                && head.rsplit_once('-').map(|(b, _)| b) == Some(base.as_str())
+                        })
+                        .unwrap_or(false)
+                })
+                .collect();
+            if matching.len() > 1 {
+                // Shard headers are independent, and nine sequential fetches cost ~28 s.
+                // Four at a time keeps the peer honest without opening a socket per shard.
+                let mut reports: Vec<Result<InspectReport, String>> = Vec::new();
+                for group in matching.chunks(4) {
+                    let mut batch: Vec<Result<InspectReport, String>> = std::thread::scope(|scope| {
+                        let handles: Vec<_> = group
+                            .iter()
+                            .map(|name| {
+                                let url =
+                                    format!("https://huggingface.co/{org}/{repo}/resolve/main/{name}");
+                                scope.spawn(move || inspect_remote_url(&url))
+                            })
+                            .collect();
+                        handles
+                            .into_iter()
+                            .map(|h| {
+                                h.join().unwrap_or_else(|_| {
+                                    Err("shard thread panicked".to_string())
+                                })
+                            })
+                            .collect()
+                    });
+                    reports.append(&mut batch);
+                }
+                let mut report: Option<InspectReport> = None;
+                for one in reports {
+                    let one = one?;
+                    report = Some(match report {
+                        Some(a) => merge_shards(a, one),
+                        None => one,
+                    });
+                }
+                let mut report = report.expect("at least one shard");
+                report.display = format!("hf://{org}/{repo}/{file} ({total} shards)");
+                return Ok(report);
+            }
+        }
+    }
+
+    inspect_remote_url(&url)
+}
+
+/// Fetch and describe one remote file, escalating the probe until a GGUF header fits.
+fn inspect_remote_url(url: &str) -> Result<InspectReport, String> {
     let mut probe = HEADER_PROBE_BYTES;
-    let mut bytes = jhol_core::http_client::get_range(&url, 0, probe - 1).map_err(|e| {
+    let mut bytes = jhol_core::http_client::get_range(url, 0, probe - 1).map_err(|e| {
         if e.contains("404") {
             format!(
                 "{url}: not found (HTTP 404). Check the file name, or list a repository's\
@@ -510,7 +656,7 @@ pub fn inspect_target(root: &Path, target: &str) -> Result<InspectReport, String
             match jhol_ai::gguf::summarise_bytes(&bytes) {
                 Ok(m) => {
                     let vram = m.vram_bytes().unwrap_or(0);
-                    let mut r = InspectReport::new(url.clone(), bytes.len() as u64, requests);
+                    let mut r = InspectReport::new(url.to_string(), bytes.len() as u64, requests);
                     r.format = "gguf".to_string();
                     r.architecture = m.architecture;
                     r.tensors = m.tensors;
@@ -548,7 +694,7 @@ pub fn inspect_target(root: &Path, target: &str) -> Result<InspectReport, String
     }
     let summary =
         jhol_ai::safetensors::summarise_bytes(&bytes).map_err(|e| format!("{url}: {e}"))?;
-    Ok(from_file(url, &summary, bytes.len() as u64, requests))
+    Ok(from_file(url.to_string(), &summary, bytes.len() as u64, requests))
 }
 
 #[cfg(test)]
@@ -607,6 +753,45 @@ mod tests {
             out.extend_from_slice(&0u64.to_le_bytes()); // offset
         }
         std::fs::write(path, out).unwrap();
+    }
+
+    #[test]
+    fn split_gguf_names_are_parsed_and_ordinary_names_are_not() {
+        assert_eq!(split_shard("model-00001-of-00008.gguf"), Some(("model".into(), 1, 8)));
+        assert_eq!(split_shard("Qwen3-8B-Q4_K_M.gguf"), None);
+        assert_eq!(split_shard("model-of-00008.gguf"), None);
+        assert_eq!(split_shard("model-00009-of-00008.gguf"), None);
+        assert_eq!(split_shard("model-00000-of-00008.gguf"), None);
+    }
+
+    #[test]
+    fn hf_parts_reads_every_accepted_shape_and_rejects_a_bare_repo() {
+        let want = Some(("o".to_string(), "r".to_string(), "f.gguf".to_string()));
+        assert_eq!(hf_parts("hf://o/r/f.gguf"), want);
+        assert_eq!(hf_parts("https://huggingface.co/o/r/f.gguf"), want);
+        assert_eq!(hf_parts("https://huggingface.co/o/r/blob/main/f.gguf"), want);
+        assert_eq!(hf_parts("https://huggingface.co/o/r/resolve/main/f.gguf"), want);
+        assert_eq!(hf_parts("hf://o/r"), None);
+        assert_eq!(hf_parts("./local.gguf"), None);
+    }
+
+    #[test]
+    fn merging_shards_sums_what_matters_and_keeps_the_heaviest() {
+        let mut a = InspectReport::new("a".into(), 10, 1);
+        a.params = 100; a.data_bytes = 200; a.vram_bytes = 240; a.tensors = 2;
+        a.dtypes.insert("Q8_0".into(), 2);
+        a.largest = vec![("x".into(), 150)];
+        let mut b = InspectReport::new("b".into(), 5, 1);
+        b.params = 50; b.data_bytes = 100; b.vram_bytes = 120; b.tensors = 1;
+        b.dtypes.insert("F32".into(), 1);
+        b.largest = vec![("y".into(), 90)];
+        let m = merge_shards(a, b);
+        assert_eq!((m.params, m.data_bytes, m.tensors), (150, 300, 3));
+        assert_eq!(m.dtypes.get("Q8_0"), Some(&2));
+        assert_eq!(m.dtypes.get("F32"), Some(&1));
+        assert_eq!(m.largest[0].0, "x");
+        assert_eq!(m.bytes_read, 15);
+        assert_eq!(m.requests, 2);
     }
 
     #[test]

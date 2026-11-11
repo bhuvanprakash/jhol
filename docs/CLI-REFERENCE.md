@@ -252,6 +252,10 @@ jhol inspect hf://meta-llama/Llama-3-8B/model.safetensors@5f2bc1d  # a pinned re
 jhol inspect hf://openai-community/gpt2/model.safetensors --top 8  # heaviest tensors
 ```
 
+Split GGUFs (`…-00001-of-00009.gguf`, including inside a per-quant directory) are detected and
+summed across siblings — nine shard headers, four fetched at a time, reporting the whole model
+(671.03 B parameters for DeepSeek-R1 Q4_K_M) rather than one ninth of it.
+
 `.gguf` files are read too — magic, metadata table and tensor descriptors — reporting
 `format gguf`, `general.architecture`, the quantisation mix (`Q8_0×254 F32×145`), parameter
 count, and a resident estimate from GGML packet sizes. The probe starts at 128 KB and doubles
