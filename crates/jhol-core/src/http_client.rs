@@ -301,10 +301,11 @@ impl HttpClient {
             .read_to_end(&mut body)
             .map_err(|e| format!("range read: {e}"))?;
         if status == 200 && body.len() > want {
-            return Err(format!(
-                "server ignored the byte range for {url} (200 with {} bytes)",
-                body.len()
-            ));
+            // Some servers ignore `Range` and send the whole body, or send an HTML page with
+            // 200. The bytes we asked for are still at the front, so take them and let the
+            // caller decide whether they mean anything — refusing here turned "this server
+            // does not support ranges" into "inspection is broken".
+            body.truncate(want as usize);
         }
         if body.len() < want {
             return Err(format!(

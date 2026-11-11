@@ -252,6 +252,12 @@ jhol inspect hf://meta-llama/Llama-3-8B/model.safetensors@5f2bc1d  # a pinned re
 jhol inspect hf://openai-community/gpt2/model.safetensors --top 8  # heaviest tensors
 ```
 
+`.gguf` files are read too — magic, metadata table and tensor descriptors — reporting
+`format gguf`, `general.architecture`, the quantisation mix (`Q8_0×254 F32×145`), parameter
+count, and a resident estimate from GGML packet sizes. The probe starts at 128 KB and doubles
+by fetching only the delta, because a GGUF header carries the tokenizer vocabulary (16 MB for
+Qwen3's 151k tokens, out of a 9.4 GB file).
+
 A **directory** is read through every shard (`model-0000N-of-0000M.safetensors`) and reports
 `config.json` / `tokenizer.json` / `tokenizer.model` / `generation_config.json` presence. Reading
 one shard under-reports parameters by the shard count.

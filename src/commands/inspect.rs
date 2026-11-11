@@ -30,6 +30,8 @@ pub fn run(m: &ArgMatches) -> Result<(), String> {
             .collect();
         let out = serde_json::json!({
             "path": report.display,
+            "format": report.format,
+            "architecture": report.architecture,
             "tensors": report.tensors,
             "params": report.params,
             "data_bytes": report.data_bytes,
@@ -66,6 +68,16 @@ pub fn run(m: &ArgMatches) -> Result<(), String> {
         .map(|(d, n)| format!("{d}×{n}"))
         .collect();
     println!("  dtypes     {}", dtypes.join(" "));
+    if report.format == "gguf" {
+        println!(
+            "  format     gguf{}",
+            report
+                .architecture
+                .as_deref()
+                .map(|a| format!(" · architecture {a}"))
+                .unwrap_or_default()
+        );
+    }
     if !report.unknown_dtypes.is_empty() {
         println!("  unknown    {}", report.unknown_dtypes.join(", "));
     }

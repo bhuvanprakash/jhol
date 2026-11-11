@@ -649,7 +649,8 @@ document.getElementById("go").onclick = async () => {
     if (j.error) { detail.textContent = "error: " + j.error; return; }
     const dtypes = (j.dtypes || []).map(d => `${d.dtype}×${d.tensors}`).join(" ");
     detail.textContent =
-      `${j.path}\n  ${j.tensors} tensors · ${j.params_human} params · ${j.data_bytes} bytes of tensor data` +
+      `${j.path}\n  ${j.format}${j.architecture ? " · " + j.architecture : ""}` +
+      `\n  ${j.tensors} tensors · ${j.params_human} params · ${j.data_bytes} bytes of tensor data` +
       `\n  dtypes ${dtypes}` +
       `\n  resident ${gb(j.vram_bytes)}` +
       (j.gpu_mem_mb ? ` — host GPU ${j.gpu_mem_mb} MB → ${j.fits ? "fits" : "does not fit"}`

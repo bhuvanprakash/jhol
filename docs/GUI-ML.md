@@ -261,3 +261,40 @@ assumed.
   failures → unknowns → fits, because the question is "what is wrong", not "what is here".
 - **Web**: a filter box (name, kind, or reason) and an "only what does not fit" checkbox; the
   table carries `data-fit` so filtering is a CSS toggle, not a re-render.
+
+## GGUF: the format single-file checkpoints actually ship in
+
+`Qwen3-8B-GGUF` is a **repository**, not a file, and a `.gguf` is not a safetensors. Both are
+now handled honestly:
+
+```
+$ jhol inspect hf://Qwen/Qwen3-8B-GGUF
+Error: hf://Qwen/Qwen3-8B-GGUF names a repository, not a file. Give the file:
+       hf://Qwen/Qwen3-8B-GGUF/<file.gguf>  (or hf://Qwen/Qwen3-8B-GGUF/model.safetensors)
+
+$ jhol inspect hf://Qwen/Qwen3-8B-GGUF/Qwen3-8B-Q8_0.gguf
+https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q8_0.gguf
+  399 tensors · 8.19 B params · 8703561728 bytes of tensor data
+  dtypes     F32×145 Q8_0×254
+  format     gguf · architecture qwen3
+  heaviest tensors
+    output.weight                              630.6 MB
+    token_embd.weight                          630.6 MB
+    blk.0.ffn_down.weight                       51.0 MB
+  resident   9.7 GB — no GPU memory detected, fit unknown
+```
+
+**16 MB read of a 9.4 GB file, 3 range requests** — the header is large because the tokenizer
+vocabulary lives in it (151k tokens), so the probe starts at 128 KB and **doubles by fetching
+only the delta** rather than re-downloading what it already proved. Parameter count and
+quantisation mix come from the tensor descriptors; the resident estimate uses GGML packet sizes
+(Q8_0 = 34 bytes per 32 elements, Q4_K = 144 per 256, …) and is withheld for a type it does not
+know, rather than guessed.
+
+Two defects this exposed, both fixed:
+
+1. **A `200` answer to a range request was treated as an error.** Some servers ignore `Range`
+   and send the whole body; the bytes we asked for are still at the front. Now the body is
+   truncated to the request and the caller decides whether the content makes sense.
+2. **A repository URL was resolved as if it were a file**, fetching an HTML page and then
+   blaming the server. `hf://org/repo` is refused with the file form to use.

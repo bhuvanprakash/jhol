@@ -1382,6 +1382,234 @@ pub mod safetensors {
     }
 }
 
+
+// ── GGUF introspection ──────────────────────────────────────────────────────
+//
+// GGUF is the format single-file checkpoints ship in: a magic number, a metadata
+// key/value table, then one descriptor per tensor. Like safetensors, the *structure* —
+// architecture, parameter count, quantisation mix — is readable from the head of the file,
+// so a 5 GB quantised model answers "how big, in what precision?" in one range request.
+pub mod gguf {
+    use super::{AiError, Path};
+    use std::collections::BTreeMap;
+
+    pub const MAGIC: u32 = 0x4655_4747; // "GGUF" little-endian
+    /// A header plus tensor descriptors. Real files are well under this; a claimed size
+    /// beyond it is corrupt or hostile.
+    pub const MAX_HEADER_BYTES: u64 = 64 * 1024 * 1024;
+
+    #[derive(Debug, Clone, Default, PartialEq, Eq)]
+    pub struct GgufSummary {
+        pub version: u32,
+        pub tensors: usize,
+        pub params: u64,
+        /// `general.architecture`, when present.
+        pub architecture: Option<String>,
+        /// `general.name`, when present.
+        pub name: Option<String>,
+        /// quant type name -> tensor count.
+        pub quants: BTreeMap<String, usize>,
+        /// Tensor bytes for types whose packet size is known; `None` when any type is not.
+        pub data_bytes: Option<u64>,
+        /// The heaviest tensors, largest first.
+        pub largest: Vec<(String, u64)>,
+    }
+
+    impl GgufSummary {
+        pub fn vram_bytes(&self) -> Option<u64> {
+            self.data_bytes.map(|b| b + b / 5)
+        }
+    }
+
+    /// GGML tensor type -> (bytes per packet, elements per packet).
+    fn packet(kind: u32) -> Option<(u64, u64)> {
+        Some(match kind {
+            0 => (4, 1),      // F32
+            1 => (2, 1),      // F16
+            2 => (18, 32),    // Q4_0
+            3 => (20, 32),    // Q4_1
+            6 => (22, 32),    // Q5_0
+            7 => (24, 32),    // Q5_1
+            8 => (34, 32),    // Q8_0
+            9 => (36, 32),    // Q8_1
+            10 => (84, 256),  // Q2_K
+            11 => (110, 256), // Q3_K
+            12 => (144, 256), // Q4_K
+            13 => (176, 256), // Q5_K
+            14 => (210, 256), // Q6_K
+            15 => (292, 256), // Q8_K
+            _ => return None,
+        })
+    }
+
+    fn type_name(kind: u32) -> String {
+        match kind {
+            0 => "F32".into(),
+            1 => "F16".into(),
+            2 => "Q4_0".into(),
+            3 => "Q4_1".into(),
+            6 => "Q5_0".into(),
+            7 => "Q5_1".into(),
+            8 => "Q8_0".into(),
+            9 => "Q8_1".into(),
+            10 => "Q2_K".into(),
+            11 => "Q3_K".into(),
+            12 => "Q4_K".into(),
+            13 => "Q5_K".into(),
+            14 => "Q6_K".into(),
+            15 => "Q8_K".into(),
+            other => format!("type{other}"),
+        }
+    }
+
+    struct Reader<'a> {
+        bytes: &'a [u8],
+        at: usize,
+    }
+
+    impl<'a> Reader<'a> {
+        fn take(&mut self, n: usize) -> Result<&'a [u8], AiError> {
+            if self.at + n > self.bytes.len() {
+                return Err(AiError::InvalidManifest(
+                    "gguf: header truncated".to_string(),
+                ));
+            }
+            let out = &self.bytes[self.at..self.at + n];
+            self.at += n;
+            Ok(out)
+        }
+        fn u32(&mut self) -> Result<u32, AiError> {
+            Ok(u32::from_le_bytes(self.take(4)?.try_into().expect("4")))
+        }
+        fn u64(&mut self) -> Result<u64, AiError> {
+            Ok(u64::from_le_bytes(self.take(8)?.try_into().expect("8")))
+        }
+        fn string(&mut self) -> Result<String, AiError> {
+            let n = self.u64()? as usize;
+            let raw = self.take(n)?;
+            Ok(String::from_utf8_lossy(raw).to_string())
+        }
+        /// Skip a metadata value; strings inside are returned in case a caller wants them.
+        fn value(&mut self, kind: u32, out: &mut Vec<String>) -> Result<(), AiError> {
+            match kind {
+                0 | 1 | 7 => {
+                    self.take(1)?;
+                }
+                2 | 3 => {
+                    self.take(2)?;
+                }
+                4..=6 => {
+                    self.take(4)?;
+                }
+                10..=12 => {
+                    self.take(8)?;
+                }
+                8 => {
+                    let s = self.string()?;
+                    out.push(s);
+                }
+                9 => {
+                    let inner = self.u32()?;
+                    let n = self.u64()?;
+                    // A hostile count would let a 40-byte file drive a billion iterations.
+                    if n > 1_000_000 {
+                        return Err(AiError::InvalidManifest(
+                            "gguf: implausible array length".to_string(),
+                        ));
+                    }
+                    for _ in 0..n {
+                        self.value(inner, out)?;
+                    }
+                }
+                other => {
+                    return Err(AiError::InvalidManifest(format!(
+                        "gguf: unknown metadata value type {other}"
+                    )))
+                }
+            }
+            Ok(())
+        }
+    }
+
+    /// Parse a GGUF header from bytes that begin at offset 0.
+    pub fn summarise_bytes(bytes: &[u8]) -> Result<GgufSummary, AiError> {
+        let mut r = Reader { bytes, at: 0 };
+        let magic = r.u32()?;
+        if magic != MAGIC {
+            return Err(AiError::InvalidManifest(format!(
+                "gguf: bad magic 0x{magic:08x}"
+            )));
+        }
+        let version = r.u32()?;
+        let tensor_count = r.u64()? as usize;
+        let kv_count = r.u64()? as usize;
+        let mut out = GgufSummary {
+            version,
+            tensors: tensor_count,
+            ..Default::default()
+        };
+        for _ in 0..kv_count {
+            let key = r.string()?;
+            let kind = r.u32()?;
+            let mut strings = Vec::new();
+            r.value(kind, &mut strings)?;
+            match key.as_str() {
+                "general.architecture" => out.architecture = strings.first().cloned(),
+                "general.name" => out.name = strings.first().cloned(),
+                _ => {}
+            }
+        }
+        let mut known_bytes = true;
+        for _ in 0..tensor_count {
+            let name = r.string()?;
+            let n_dims = r.u32()?;
+            let mut elems: u64 = 1;
+            for _ in 0..n_dims {
+                elems = elems.saturating_mul(r.u64()?);
+            }
+            let ttype = r.u32()?;
+            let _offset = r.u64()?;
+            out.params = out.params.saturating_add(elems);
+            *out.quants.entry(type_name(ttype)).or_default() += 1;
+            match packet(ttype) {
+                Some((bytes_per_packet, elements_per_packet)) => {
+                    let packets = elems.div_ceil(elements_per_packet);
+                    let b = packets.saturating_mul(bytes_per_packet);
+                    out.largest.push((name, b));
+                    match out.data_bytes.as_mut() {
+                        Some(total) => *total = total.saturating_add(b),
+                        None => out.data_bytes = Some(b),
+                    }
+                }
+                None => known_bytes = false,
+            }
+        }
+        if !known_bytes {
+            out.data_bytes = None;
+        }
+        out.largest.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        out.largest.truncate(10);
+        Ok(out)
+    }
+
+    pub fn summarise(path: &Path) -> Result<GgufSummary, AiError> {
+        use std::io::Read;
+        let mut f = std::fs::File::open(path)?;
+        let meta = f.metadata()?;
+        let want = meta.len().min(MAX_HEADER_BYTES) as usize;
+        let mut buf = vec![0u8; want];
+        let mut got = 0usize;
+        while got < want {
+            match f.read(&mut buf[got..])? {
+                0 => break,
+                n => got += n,
+            }
+        }
+        buf.truncate(got);
+        summarise_bytes(&buf)
+    }
+}
+
 // ── Content-addressed model store ────────────────────────────────────────────
 //
 // Weights are the reason a "package cache" is not enough: 7 GB shared by six

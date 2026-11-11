@@ -147,8 +147,13 @@ pub fn resolve_weight_target(root: &Path, target: &str) -> Result<PathBuf, Strin
 
 /// What `inspect` reports, however it was reached — one file, a sharded directory, or a
 /// ranged fetch.
+#[derive(Debug)]
 pub struct InspectReport {
     pub display: String,
+    /// `safetensors` | `gguf`
+    pub format: String,
+    /// `general.architecture` for GGUF, `None` otherwise.
+    pub architecture: Option<String>,
     pub tensors: usize,
     pub params: u64,
     pub data_bytes: u64,
@@ -169,6 +174,8 @@ impl InspectReport {
     fn new(display: String, bytes_read: u64, requests: u32) -> Self {
         InspectReport {
             display,
+            format: "safetensors".to_string(),
+            architecture: None,
             tensors: 0,
             params: 0,
             data_bytes: 0,
@@ -195,7 +202,11 @@ fn remote_url(target: &str) -> Option<String> {
         let mut parts = path.splitn(3, '/');
         let org = parts.next()?;
         let repo = parts.next()?;
-        let file = parts.next()?;
+        let Some(file) = parts.next() else {
+            // `hf://org/repo` names a *repository*. Turning that into a resolve URL asks for
+            // an HTML page and then blames the server for answering 200.
+            return None;
+        };
         return Some(format!(
             "https://huggingface.co/{org}/{repo}/resolve/{rev}/{file}"
         ));
@@ -213,6 +224,8 @@ const HEADER_PROBE_BYTES: u64 = 128 * 1024;
 fn from_file(display: String, s: &jhol_ai::safetensors::WeightSummary, read: u64, reqs: u32) -> InspectReport {
     InspectReport {
         display,
+        format: "safetensors".to_string(),
+        architecture: None,
         tensors: s.tensors,
         params: s.params,
         data_bytes: s.data_bytes,
@@ -228,7 +241,84 @@ fn from_file(display: String, s: &jhol_ai::safetensors::WeightSummary, read: u64
     }
 }
 
+fn is_gguf(path: &Path) -> bool {
+    if path
+        .extension()
+        .map(|e| e.eq_ignore_ascii_case("gguf"))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    // Trust the bytes over the name: a GGUF renamed to `.bin` is still a GGUF.
+    std::fs::File::open(path)
+        .ok()
+        .and_then(|mut f| {
+            use std::io::Read;
+            let mut magic = [0u8; 4];
+            f.read_exact(&mut magic).ok().map(|_| {
+                u32::from_le_bytes(magic) == jhol_ai::gguf::MAGIC
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn gguf_report(display: String, dir: &Path) -> Result<InspectReport, String> {
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .map_err(|e| format!("{}: {e}", dir.display()))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().map(|e| e.eq_ignore_ascii_case("gguf")).unwrap_or(false))
+        .collect();
+    files.sort();
+    if files.is_empty() {
+        return Err(format!("{}: no .gguf file", dir.display()));
+    }
+    let mut report = InspectReport::new(display, 0, 0);
+    report.format = "gguf".to_string();
+    let mut data_bytes = Some(0u64);
+    for file in &files {
+        let m = jhol_ai::gguf::summarise(file).map_err(|e| format!("{}: {e}", file.display()))?;
+        report.tensors += m.tensors;
+        report.params += m.params;
+        report.header_bytes += std::fs::metadata(file).map(|x| x.len().min(1 << 20)).unwrap_or(0);
+        for (q, n) in &m.quants {
+            *report.dtypes.entry(q.clone()).or_default() += n;
+        }
+        report.largest.extend(m.largest);
+        if report.architecture.is_none() {
+            report.architecture = m.architecture;
+        }
+        data_bytes = match (data_bytes, m.data_bytes) {
+            (Some(a), Some(b)) => Some(a + b),
+            _ => None,
+        };
+        report
+            .sidecars
+            .push((file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), true));
+    }
+    report.largest.sort_by(|a, b| b.1.cmp(&a.1));
+    report.largest.truncate(10);
+    if let Some(b) = data_bytes {
+        report.data_bytes = b;
+        report.vram_bytes = b + b / 5;
+    }
+    Ok(report)
+}
+
 fn from_dir(dir: &Path) -> Result<InspectReport, String> {
+    let has_gguf = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten().any(|e| {
+                e.path()
+                    .extension()
+                    .map(|x| x.eq_ignore_ascii_case("gguf"))
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
+    if has_gguf {
+        return gguf_report(dir.display().to_string(), dir);
+    }
     let m = jhol_ai::safetensors::summarise_dir(dir)
         .map_err(|e| format!("{}: {e}", dir.display()))?;
     let shards: Vec<(String, u64)> = m
@@ -238,6 +328,8 @@ fn from_dir(dir: &Path) -> Result<InspectReport, String> {
         .collect();
     Ok(InspectReport {
         display: dir.display().to_string(),
+        format: "safetensors".to_string(),
+        architecture: None,
         tensors: m.shards.iter().map(|(_, s)| s.tensors).sum(),
         params: m.params,
         data_bytes: m.data_bytes,
@@ -257,10 +349,26 @@ fn from_dir(dir: &Path) -> Result<InspectReport, String> {
 /// Describe a weight file or a sharded model directory from headers alone, fetching only the
 /// header when the file is remote. A 7 GB checkpoint costs one 128 KB range request.
 pub fn inspect_target(root: &Path, target: &str) -> Result<InspectReport, String> {
+    if target.starts_with("hf://") && remote_url(target).is_none() {
+        let rest = target.trim_start_matches("hf://");
+        return Err(format!(
+            "hf://{rest} names a repository, not a file. \
+             Give the file: hf://{rest}/<file.gguf>  (or hf://{rest}/model.safetensors)"
+        ));
+    }
     let Some(url) = remote_url(target) else {
         let path = resolve_weight_target(root, target)?;
         if path.is_dir() {
             return from_dir(&path);
+        }
+        if is_gguf(&path) {
+            let dir = path.parent().unwrap_or(Path::new("."));
+            let mut report = gguf_report(path.display().to_string(), dir)?;
+            // Narrow to the requested file when its siblings are not this model's shards.
+            if report.sidecars.len() > 1 {
+                report = gguf_report(path.display().to_string(), dir)?;
+            }
+            return Ok(report);
         }
         let summary = jhol_ai::safetensors::summarise(&path)
             .map_err(|e| format!("{}: {e}", path.display()))?;
@@ -268,9 +376,50 @@ pub fn inspect_target(root: &Path, target: &str) -> Result<InspectReport, String
         return Ok(from_file(path.display().to_string(), &summary, read, 0));
     };
 
-    let mut bytes = jhol_core::http_client::get_range(&url, 0, HEADER_PROBE_BYTES - 1)
+    let mut probe = HEADER_PROBE_BYTES;
+    let mut bytes = jhol_core::http_client::get_range(&url, 0, probe - 1)
         .map_err(|e| format!("{url}: {e}"))?;
     let mut requests = 1;
+    if bytes.len() >= 4 && u32::from_le_bytes(bytes[..4].try_into().expect("4")) == jhol_ai::gguf::MAGIC {
+        // A GGUF header carries the tokenizer table, so it can run to megabytes. Ask again
+        // with a larger probe rather than calling a truncated header a corrupt model.
+        let mut report = None;
+        for cap in [4 * 1024 * 1024u64, 16 * 1024 * 1024, 64 * 1024 * 1024] {
+            if bytes.len() as u64 >= cap {
+                break;
+            }
+            // Fetch only the delta. Restarting at byte 0 would re-download everything the
+            // previous probe already proved, and a GGUF header with a 150k-token vocabulary
+            // is megabytes.
+            let from = bytes.len() as u64;
+            let more = jhol_core::http_client::get_range(&url, from, cap - 1)
+                .map_err(|e| format!("{url}: {e}"))?;
+            bytes.extend_from_slice(&more);
+            requests += 1;
+            probe = cap;
+            let _ = probe;
+            match jhol_ai::gguf::summarise_bytes(&bytes) {
+                Ok(m) => {
+                    let vram = m.vram_bytes().unwrap_or(0);
+                    let mut r = InspectReport::new(url.clone(), bytes.len() as u64, requests);
+                    r.format = "gguf".to_string();
+                    r.architecture = m.architecture;
+                    r.tensors = m.tensors;
+                    r.params = m.params;
+                    r.dtypes = m.quants;
+                    r.largest = m.largest;
+                    r.data_bytes = m.data_bytes.unwrap_or(0);
+                    r.vram_bytes = vram;
+                    r.header_bytes = bytes.len() as u64;
+                    report = Some(r);
+                    break;
+                }
+                Err(_) if cap < 64 * 1024 * 1024 => continue,
+                Err(e) => return Err(format!("{url}: {e}")),
+            }
+        }
+        return report.ok_or_else(|| format!("{url}: gguf header did not fit in 64 MB"));
+    }
     let need = jhol_ai::safetensors::header_len(&bytes[..8.min(bytes.len())])
         .map_err(|e| format!("{url}: {e}"))?
         + 8;
@@ -321,6 +470,62 @@ mod tests {
         bytes.extend_from_slice(header.as_bytes());
         bytes.extend(std::iter::repeat(0u8).take((n * 4) as usize));
         std::fs::write(path, bytes).unwrap();
+    }
+
+    /// Build a minimal GGUF: `[magic][version][tensors][kvs]`, one architecture string, then
+    /// descriptors. `Q8_0` means 34 bytes per 32 elements, which is how a quantised size is
+    /// computed without the weights.
+    fn write_gguf(path: &Path, arch: &str, tensors: &[(&str, &[u64], u32)]) {
+        let mut out = Vec::new();
+        out.extend_from_slice(&jhol_ai::gguf::MAGIC.to_le_bytes());
+        out.extend_from_slice(&3u32.to_le_bytes());
+        out.extend_from_slice(&(tensors.len() as u64).to_le_bytes());
+        out.extend_from_slice(&1u64.to_le_bytes()); // one metadata pair
+        let key = "general.architecture";
+        out.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        out.extend_from_slice(key.as_bytes());
+        out.extend_from_slice(&8u32.to_le_bytes()); // STRING
+        out.extend_from_slice(&(arch.len() as u64).to_le_bytes());
+        out.extend_from_slice(arch.as_bytes());
+        for (name, dims, ttype) in tensors {
+            out.extend_from_slice(&(name.len() as u64).to_le_bytes());
+            out.extend_from_slice(name.as_bytes());
+            out.extend_from_slice(&(dims.len() as u32).to_le_bytes());
+            for d in *dims {
+                out.extend_from_slice(&d.to_le_bytes());
+            }
+            out.extend_from_slice(&ttype.to_le_bytes());
+            out.extend_from_slice(&0u64.to_le_bytes()); // offset
+        }
+        std::fs::write(path, out).unwrap();
+    }
+
+    #[test]
+    fn a_gguf_reports_params_and_quantised_size_from_its_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("tiny.gguf");
+        write_gguf(
+            &file,
+            "qwen3",
+            &[("token_embd.weight", &[1024, 32], 8), ("blk.0.ffn.weight", &[512], 0)],
+        );
+        let r = inspect_target(dir.path(), file.to_str().unwrap()).unwrap();
+        assert_eq!(r.format, "gguf");
+        assert_eq!(r.architecture.as_deref(), Some("qwen3"));
+        assert_eq!(r.tensors, 2);
+        assert_eq!(r.params, 1024 * 32 + 512);
+        assert_eq!(r.dtypes.get("Q8_0"), Some(&1));
+        // Q8_0 = 34 bytes per 32 elements -> 32768 elements = 1024 packets = 34816 bytes;
+        // F32 = 512 * 4 = 2048 bytes.
+        assert_eq!(r.data_bytes, 34816 + 2048);
+        assert_eq!(r.largest[0].0, "token_embd.weight");
+    }
+
+    #[test]
+    fn a_repository_url_is_refused_with_the_file_form() {
+        let e = inspect_target(Path::new("."), "hf://Qwen/Qwen3-8B-GGUF").unwrap_err();
+        assert!(e.contains("repository, not a file"), "{e}");
+        assert!(e.contains("hf://Qwen/Qwen3-8B-GGUF/<file.gguf>"), "{e}");
     }
 
     #[test]

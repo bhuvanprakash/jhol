@@ -3858,3 +3858,28 @@ one-shot run. `touch package.json` mid-watch produces exactly one new line.
 gets a filter box and an "only what does not fit" checkbox over the same rows.
 
 jhol-core 731 tests (3 new), bin 12, CLI suite 30/30, treecheck 15/15, VERIFY-ALL: PASS.
+
+## GGUF inspection, and two range-request defects it exposed
+
+`jhol inspect` reads `.gguf` as well as `.safetensors`: magic, metadata table, tensor
+descriptors. It reports `format gguf`, `general.architecture`, the quantisation mix, parameter
+count, and a resident estimate from GGML packet sizes (Q8_0 = 34 bytes per 32 elements, Q4_K =
+144 per 256), withheld when a type is unknown rather than guessed.
+
+Measured on `Qwen/Qwen3-8B-GGUF`'s `Qwen3-8B-Q8_0.gguf`: **399 tensors · 8.19 B params ·
+F32×145 Q8_0×254 · resident 9.7 GB**, from **16 MB read of 9.4 GB** in 3 range requests. The
+probe starts at 128 KB and doubles **by fetching only the delta** — a GGUF header carries the
+tokenizer vocabulary (151k tokens), so it is megabytes, and re-fetching from byte 0 would pay
+for it twice.
+
+Two defects found while testing on a real repository:
+
+1. **A `200` answer to a range request was an error.** Servers that ignore `Range` send the
+   whole body; the bytes asked for are still at the front. The body is now truncated to the
+   request and the caller judges the content.
+2. **`hf://org/repo` was resolved as if a repository were a file**, fetching an HTML page and
+   blaming the server. It is now refused with the form to use:
+   `hf://org/repo/<file.gguf>`.
+
+Tests: a synthetic GGUF asserts parameter count, quant mix and quantised size (Q8_0 packet
+maths), and a repository URL asserts the refusal names the file form. bin 14, jhol-core 731.
