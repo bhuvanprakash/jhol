@@ -86,6 +86,25 @@ pub fn serve() -> Result<(), String> {
             continue;
         }
 
+        if path.starts_with("/plan") {
+            let action = path
+                .split("action=")
+                .nth(1)
+                .map(|a| percent_decode(a.split('&').next().unwrap_or(a)))
+                .unwrap_or_default();
+            let status = crate::status_view::enrich(
+                jhol_core::status::collect(Path::new(".")),
+                Path::new("."),
+            );
+            let preview = jhol_core::status::action_preview(&action, &status);
+            respond(
+                &mut stream,
+                "application/json",
+                &serde_json::to_string(&preview).unwrap_or_else(|e| e.to_string()),
+            );
+            continue;
+        }
+
         if path.starts_with("/inspect") {
             if given != token {
                 respond(&mut stream, "application/json", "{\"error\":\"bad token\"}");
@@ -104,7 +123,7 @@ pub fn serve() -> Result<(), String> {
             // A dashboard polls once a second. Collecting a status costs milliseconds; a
             // fingerprint of the files a status depends on costs microseconds. When the
             // fingerprint matches, the answer is 304 and **no collection happens at all**.
-            let tag = status_fingerprint(Path::new("."));
+            let tag = jhol_core::status::fingerprint(Path::new("."));
             if if_none_match.as_deref() == Some(tag.as_str()) {
                 let _ = write!(
                     stream,
@@ -164,36 +183,6 @@ fn read_body(reader: &mut BufReader<std::net::TcpStream>, length: usize) -> Vec<
     let mut raw = vec![0u8; length.min(8192)];
     let _ = reader.read_exact(&mut raw);
     raw
-}
-
-/// Everything a status depends on. `node_modules` mtime and `.jhol/envs` mtime capture
-/// installs, promotions and fork creation without walking either directory.
-fn status_fingerprint(root: &Path) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    for rel in [
-        "package.json",
-        "package-lock.json",
-        "jhol-lock.json",
-        ".jhol/models.lock.json",
-        ".jhol/py/lock.json",
-        "node_modules",
-        ".jhol/envs",
-    ] {
-        rel.hash(&mut h);
-        match std::fs::metadata(root.join(rel)) {
-            Ok(m) => {
-                m.len().hash(&mut h);
-                m.modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_nanos())
-                    .hash(&mut h);
-            }
-            Err(_) => 0u8.hash(&mut h),
-        }
-    }
-    format!("{:016x}", h.finish())
 }
 
 fn respond_etag(stream: &mut std::net::TcpStream, kind: &str, body: &str, tag: &str) {
@@ -345,26 +334,27 @@ fn stream_argv(stream: &mut std::net::TcpStream, argv: Option<Vec<String>>) {
 /// `jhol inspect`, in-process: a header read is cheap enough that shelling out would cost
 /// more than the work, and a remote target costs one ranged request.
 fn inspect_json(root: &Path, target: &str) -> serde_json::Value {
-    let inspected = match crate::status_view::inspect_target(root, target) {
+    let r = match crate::status_view::inspect_target(root, target) {
         Ok(i) => i,
         Err(e) => return serde_json::json!({ "error": e }),
     };
-    let s = &inspected.summary;
     let host = jhol_core::axes::HostAxes::detect();
     serde_json::json!({
-        "path": inspected.display,
-        "tensors": s.tensors,
-        "params": s.params,
-        "params_human": s.params_human(),
-        "data_bytes": s.data_bytes,
-        "vram_bytes": s.vram_bytes(),
-        "header_bytes": s.header_bytes,
-        "bytes_read": inspected.bytes_read,
-        "requests": inspected.requests,
-        "dtypes": s.dtypes.iter().map(|(d, n)| serde_json::json!({"dtype": d, "tensors": n})).collect::<Vec<_>>(),
-        "largest": s.largest.iter().map(|(n, b)| serde_json::json!({"name": n, "bytes": b})).collect::<Vec<_>>(),
+        "path": r.display,
+        "tensors": r.tensors,
+        "params": r.params,
+        "params_human": r.params.to_string(),
+        "data_bytes": r.data_bytes,
+        "vram_bytes": r.vram_bytes,
+        "header_bytes": r.header_bytes,
+        "bytes_read": r.bytes_read,
+        "requests": r.requests,
+        "dtypes": r.dtypes.iter().map(|(d, n)| serde_json::json!({"dtype": d, "tensors": n})).collect::<Vec<_>>(),
+        "largest": r.largest.iter().map(|(n, b)| serde_json::json!({"name": n, "bytes": b})).collect::<Vec<_>>(),
+        "shards": r.shards.iter().map(|(n, b)| serde_json::json!({"name": n, "bytes": b})).collect::<Vec<_>>(),
+        "sidecars": r.sidecars.iter().map(|(n, ok)| serde_json::json!({"name": n, "present": ok})).collect::<Vec<_>>(),
         "gpu_mem_mb": host.gpu_mem_mb,
-        "fits": host.gpu_mem_mb.map(|m| s.vram_bytes().div_ceil(1024 * 1024) <= m),
+        "fits": host.gpu_mem_mb.map(|m| r.vram_bytes.div_ceil(1024 * 1024) <= m),
     })
 }
 
@@ -458,6 +448,8 @@ const PAGE: &str = r#"<!doctype html>
 
 <section id="s-status" class="on"></section>
 <section id="s-artifacts">
+  <p><input id="q" placeholder="filter by name, kind or reason">
+     <label class="muted"><input type="checkbox" id="unfit"> only what does not fit</label></p>
   <table><thead><tr><th>fit</th><th>kind</th><th>name</th><th>size</th><th>resident</th><th>why</th></tr></thead>
   <tbody id="artifacts"></tbody></table>
   <p><input id="path" placeholder="path, directory, pinned model name, or hf://org/repo/file">
@@ -529,10 +521,11 @@ function render(s) {
     const mark = a.fits === true ? '<span class="ok">✓</span>'
                : a.fits === false ? '<span class="bad">✗</span>'
                : '<span class="unk">?</span>';
-    return `<tr><td>${mark}</td><td class="muted">${a.kind}</td><td>${esc(a.name)}</td>
+    return `<tr data-fit="${a.fits}"><td>${mark}</td><td class="muted">${a.kind}</td><td>${esc(a.name)}</td>
       <td>${a.bytes ? mb(a.bytes) : "—"}</td><td>${a.vram_bytes ? gb(a.vram_bytes) : "—"}</td>
-      <td class="muted">${esc(a.reasons[0] || "")}</td></tr>`;
+      <td class="muted">${esc(a.reasons.join("; "))}</td></tr>`;
   }).join("") || '<tr><td colspan="6" class="muted">no wheels pinned, no weights locked</td></tr>';
+  applyFilter();
 
   const missing = s.plan.items.filter(i => !i.present);
   document.getElementById("s-budget").innerHTML =
@@ -567,6 +560,16 @@ function render(s) {
   });
 }
 
+function applyFilter() {
+  const q = (document.getElementById("q").value || "").toLowerCase();
+  const unfitOnly = document.getElementById("unfit").checked;
+  document.querySelectorAll('#artifacts tr').forEach(row => {
+    const text = row.textContent.toLowerCase();
+    const isUnfit = row.dataset.fit === "false";
+    row.style.display = (!q || text.includes(q)) && (!unfitOnly || isUnfit) ? "" : "none";
+  });
+}
+
 async function tick() {
   try {
     const r = await fetch("/status.json");
@@ -577,16 +580,22 @@ async function tick() {
 // Look before you leap: writes are armed on the first click and only run on the second,
 // with the plan they were armed against shown in the output pane.
 const armed = {action: null, at: 0, plan: ""};
-function armOrRun(action, name, stream, label) {
-  const writes = ["install", "ci", "policy", "fork", "promote"].includes(action);
+async function armOrRun(action, name, stream, label) {
   const fresh = armed.action === action + ":" + name && Date.now() - armed.at < 10000;
-  if (writes && !fresh) {
-    armed.action = action + ":" + name;
-    armed.at = Date.now();
-    document.getElementById("out").textContent =
-      `${label}\n  ${armed.plan}\n\n  click again within 10 s to run`;
-    document.querySelector("nav button:nth-child(7)").click();
-    return;
+  if (!fresh) {
+    let preview = {writes: true, summary: armed.plan};
+    try {
+      const r = await fetch(`/plan?action=${encodeURIComponent(action)}`);
+      preview = await r.json();
+    } catch (e) { /* keep the local line */ }
+    if (preview.writes) {
+      armed.action = action + ":" + name;
+      armed.at = Date.now();
+      document.getElementById("out").textContent =
+        `${label}\n  ${preview.summary}\n\n  click again within 10 s to run`;
+      document.querySelector("nav button:nth-child(7)").click();
+      return;
+    }
   }
   armed.action = null;
   run(action, name, stream);
@@ -625,6 +634,9 @@ async function run(action, name, stream) {
 document.querySelectorAll("button[data-a]").forEach(b => {
   b.onclick = () => armOrRun(b.dataset.a, "", true, "jhol " + b.dataset.a);
 });
+
+document.getElementById("q").oninput = applyFilter;
+document.getElementById("unfit").onchange = applyFilter;
 
 document.getElementById("go").onclick = async () => {
   const p = document.getElementById("path").value.trim();

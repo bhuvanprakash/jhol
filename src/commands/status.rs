@@ -19,6 +19,14 @@ fn human(n: u64) -> String {
 
 pub fn run(m: &ArgMatches) -> Result<(), String> {
     let root = std::path::Path::new(".");
+    if crate::flag(m, "watch") {
+        let interval = m
+            .get_one::<String>("interval")
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(500)
+            .max(100);
+        return watch(root, interval, crate::flag(m, "json"));
+    }
     let status = crate::status_view::enrich(jhol_core::status::collect(root), root);
     if crate::flag(m, "json") {
         println!(
@@ -158,4 +166,62 @@ pub fn run(m: &ArgMatches) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Live status from **one** process, so the per-refresh cost is collection and not process
+/// start. In a terminal it rewrites one line; piped, it emits one line per refresh so
+/// `jhol status --watch | grep -v 'match'` is a usable alarm.
+fn watch(root: &std::path::Path, interval_ms: u64, json: bool) -> Result<(), String> {
+    use std::io::{IsTerminal, Write};
+    let tty = std::io::stdout().is_terminal();
+    let mut last = String::new();
+    loop {
+        // The same trick the dashboard's ETag uses: if nothing a status depends on has
+        // changed, collecting again would produce the same answer for milliseconds on end.
+        let tag = jhol_core::status::fingerprint(root);
+        if tag == last {
+            std::thread::sleep(std::time::Duration::from_millis(interval_ms));
+            continue;
+        }
+        last = tag;
+        let status = crate::status_view::enrich(jhol_core::status::collect(root), root);
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string(&status).unwrap_or_else(|e| e.to_string())
+            );
+        } else {
+            let unfit = status
+                .artifacts
+                .iter()
+                .filter(|a| a.fits == Some(false))
+                .count();
+            let unknown = status
+                .artifacts
+                .iter()
+                .filter(|a| a.fits.is_none())
+                .count();
+            let line = format!(
+                "{} {} · tree {} · {} pkgs · lock {} · {:.1} MB missing (~{} s) · artifacts {} unfit {} · unknown {} · forks {}",
+                if status.project.is_empty() { "(unnamed)" } else { &status.project },
+                status.version,
+                status.tree.state,
+                status.tree.packages,
+                if status.manifest_matches_lockfile { "ok" } else { "DRIFTED" },
+                status.plan.missing_bytes as f64 / 1_048_576.0,
+                status.plan.eta_seconds,
+                status.artifacts.len(),
+                unfit,
+                unknown,
+                status.forks.len()
+            );
+            if tty {
+                print!("\r{line:<100}");
+            } else {
+                println!("{line}");
+            }
+            let _ = std::io::stdout().flush();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(interval_ms));
+    }
 }

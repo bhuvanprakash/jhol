@@ -8771,7 +8771,28 @@ fn cli_command() -> Command {
             .subcommand(
                 Command::new("status")
                     .about("One screen: tree verdict, policy in force, artifacts, axes, proof")
-                    .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
+                    .long_about(
+                        "One screen of truth: the tree verdict with its reason, lockfile drift,\n\
+                         policy in force, artifacts with fit verdicts, the byte plan, forks, and\n\
+                         proof state.\n\n\
+                         --watch keeps one process alive and rewrites a single line, so a\n\
+                         refresh costs collection (~4 ms) instead of process start (~8 ms).\n\
+                         Piped, it prints one line per refresh.",
+                    )
+                    .arg(Arg::new("json").long("json").action(ArgAction::SetTrue))
+                    .arg(
+                        Arg::new("watch")
+                            .long("watch")
+                            .action(ArgAction::SetTrue)
+                            .help("Refresh continuously in one process"),
+                    )
+                    .arg(
+                        Arg::new("interval")
+                            .long("interval")
+                            .value_name("MS")
+                            .default_value("500")
+                            .help("Refresh interval with --watch"),
+                    ),
             )
             .subcommand(
                 Command::new("inspect")

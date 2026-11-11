@@ -20,6 +20,17 @@ fn first_safetensors(dir: &Path) -> Option<PathBuf> {
     files.into_iter().next()
 }
 
+fn human_params(p: u64) -> String {
+    let f = p as f64;
+    if f >= 1e9 {
+        format!("{:.2} B", f / 1e9)
+    } else if f >= 1e6 {
+        format!("{:.1} M", f / 1e6)
+    } else {
+        format!("{p}")
+    }
+}
+
 fn human_bytes(n: u64) -> String {
     let gb = 1024.0 * 1024.0 * 1024.0;
     let mb = 1024.0 * 1024.0;
@@ -44,18 +55,10 @@ pub fn enrich(mut status: Status, root: &Path) -> Status {
             continue;
         };
         let dir = root.join(dir);
-        let Some(file) = first_safetensors(&dir) else {
-            artifact
-                .reasons
-                .push("no .safetensors file in the pinned directory".into());
-            continue;
-        };
-        let summary = match jhol_ai::safetensors::summarise(&file) {
+        let summary = match jhol_ai::safetensors::summarise_dir(&dir) {
             Ok(s) => s,
             Err(e) => {
-                artifact
-                    .reasons
-                    .push(format!("header unreadable: {e}"));
+                artifact.reasons.push(format!("header unreadable: {e}"));
                 continue;
             }
         };
@@ -63,9 +66,29 @@ pub fn enrich(mut status: Status, root: &Path) -> Status {
         artifact.vram_bytes = Some(summary.vram_bytes());
         artifact.dtypes = summary.dtypes.clone();
         artifact.top_tensors = summary.largest.clone();
-        artifact
-            .reasons
-            .insert(0, format!("{} parameters", summary.params_human()));
+        let missing: Vec<String> = summary
+            .sidecars
+            .iter()
+            .filter(|(_, ok)| !ok)
+            .map(|(n, _)| n.clone())
+            .collect();
+        artifact.reasons.insert(
+            0,
+            format!(
+                "{} parameters{}",
+                human_params(summary.params),
+                if summary.shards.len() > 1 {
+                    format!(" across {} shards", summary.shards.len())
+                } else {
+                    String::new()
+                }
+            ),
+        );
+        if !missing.is_empty() {
+            artifact
+                .reasons
+                .push(format!("sidecars missing: {}", missing.join(", ")));
+        }
         if !summary.unknown_dtypes.is_empty() {
             artifact.reasons.push(format!(
                 "unknown dtype width: {}",
@@ -104,8 +127,9 @@ pub fn resolve_weight_target(root: &Path, target: &str) -> Result<PathBuf, Strin
         return Ok(direct.to_path_buf());
     }
     if direct.is_dir() {
-        return first_safetensors(direct)
-            .ok_or_else(|| format!("{}: no .safetensors file", direct.display()));
+        // Return the directory, not its first shard: a sharded model summarised from one
+        // shard under-reports parameters by the number of shards.
+        return Ok(direct.to_path_buf());
     }
     let lock = jhol_core::model_lock::ModelLock::load(root)
         .ok_or_else(|| format!("{target}: no models.lock.json to resolve a name against"))?;
@@ -113,19 +137,52 @@ pub fn resolve_weight_target(root: &Path, target: &str) -> Result<PathBuf, Strin
         .models
         .get(target)
         .ok_or_else(|| format!("{target}: not a path and not a pinned model"))?;
-    first_safetensors(&root.join(&entry.dir))
-        .ok_or_else(|| format!("{target}: pinned, but no .safetensors file on disk"))
+    let dir = root.join(&entry.dir);
+    if !dir.is_dir() {
+        return Err(format!("{target}: pinned, but {} is not on disk", dir.display()));
+    }
+    Ok(dir)
 }
 
 
-/// What `inspect` reports, however it was reached — a local file or a ranged fetch.
-pub struct Inspected {
+/// What `inspect` reports, however it was reached — one file, a sharded directory, or a
+/// ranged fetch.
+pub struct InspectReport {
     pub display: String,
-    pub summary: jhol_ai::safetensors::WeightSummary,
-    /// Bytes actually read. For a remote checkpoint this is the proof that we read the
-    /// header and not the weights.
+    pub tensors: usize,
+    pub params: u64,
+    pub data_bytes: u64,
+    pub vram_bytes: u64,
+    pub header_bytes: u64,
+    pub dtypes: std::collections::BTreeMap<String, usize>,
+    pub unknown_dtypes: Vec<String>,
+    pub largest: Vec<(String, u64)>,
+    /// Shard file name -> its data bytes. One entry for an unsharded model.
+    pub shards: Vec<(String, u64)>,
+    /// Which loader sidecars are present.
+    pub sidecars: Vec<(String, bool)>,
     pub bytes_read: u64,
     pub requests: u32,
+}
+
+impl InspectReport {
+    fn new(display: String, bytes_read: u64, requests: u32) -> Self {
+        InspectReport {
+            display,
+            tensors: 0,
+            params: 0,
+            data_bytes: 0,
+            vram_bytes: 0,
+            header_bytes: 0,
+            dtypes: Default::default(),
+            unknown_dtypes: Vec::new(),
+            largest: Vec::new(),
+            shards: Vec::new(),
+            sidecars: Vec::new(),
+            bytes_read,
+            requests,
+        }
+    }
 }
 
 /// `hf://org/repo/file[@rev]` and bare URLs become an HTTP URL; anything else is a path.
@@ -153,20 +210,62 @@ fn remote_url(target: &str) -> Option<String> {
 /// one request; the rare larger header gets a second range for the remainder.
 const HEADER_PROBE_BYTES: u64 = 128 * 1024;
 
-/// Describe a weight file from its header, fetching only the header when the file is
-/// remote. A 7 GB checkpoint costs one 128 KB range request.
-pub fn inspect_target(root: &Path, target: &str) -> Result<Inspected, String> {
+fn from_file(display: String, s: &jhol_ai::safetensors::WeightSummary, read: u64, reqs: u32) -> InspectReport {
+    InspectReport {
+        display,
+        tensors: s.tensors,
+        params: s.params,
+        data_bytes: s.data_bytes,
+        vram_bytes: s.vram_bytes(),
+        header_bytes: s.header_bytes as u64,
+        dtypes: s.dtypes.clone(),
+        unknown_dtypes: s.unknown_dtypes.clone(),
+        largest: s.largest.clone(),
+        shards: Vec::new(),
+        sidecars: Vec::new(),
+        bytes_read: read,
+        requests: reqs,
+    }
+}
+
+fn from_dir(dir: &Path) -> Result<InspectReport, String> {
+    let m = jhol_ai::safetensors::summarise_dir(dir)
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
+    let shards: Vec<(String, u64)> = m
+        .shards
+        .iter()
+        .map(|(name, s)| (name.clone(), s.data_bytes))
+        .collect();
+    Ok(InspectReport {
+        display: dir.display().to_string(),
+        tensors: m.shards.iter().map(|(_, s)| s.tensors).sum(),
+        params: m.params,
+        data_bytes: m.data_bytes,
+        vram_bytes: m.vram_bytes(),
+        header_bytes: m.header_bytes,
+        dtypes: m.dtypes,
+        unknown_dtypes: m.unknown_dtypes,
+        largest: m.largest,
+        shards,
+        sidecars: m.sidecars,
+        // A local directory costs one header read per shard, and no requests.
+        bytes_read: m.header_bytes + 8 * m.shards.len() as u64,
+        requests: 0,
+    })
+}
+
+/// Describe a weight file or a sharded model directory from headers alone, fetching only the
+/// header when the file is remote. A 7 GB checkpoint costs one 128 KB range request.
+pub fn inspect_target(root: &Path, target: &str) -> Result<InspectReport, String> {
     let Some(url) = remote_url(target) else {
-        let file = resolve_weight_target(root, target)?;
-        let summary = jhol_ai::safetensors::summarise(&file)
-            .map_err(|e| format!("{}: {e}", file.display()))?;
-        let bytes_read = 8 + summary.header_bytes as u64;
-        return Ok(Inspected {
-            display: file.display().to_string(),
-            summary,
-            bytes_read,
-            requests: 0,
-        });
+        let path = resolve_weight_target(root, target)?;
+        if path.is_dir() {
+            return from_dir(&path);
+        }
+        let summary = jhol_ai::safetensors::summarise(&path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let read = 8 + summary.header_bytes as u64;
+        return Ok(from_file(path.display().to_string(), &summary, read, 0));
     };
 
     let mut bytes = jhol_core::http_client::get_range(&url, 0, HEADER_PROBE_BYTES - 1)
@@ -180,7 +279,6 @@ pub fn inspect_target(root: &Path, target: &str) -> Result<Inspected, String> {
     } else {
         let more = jhol_core::http_client::get_range(&url, bytes.len() as u64, need - 1)
             .map_err(|e| format!("{url}: {e}"))?;
-        let had = bytes.len() as u64;
         bytes.extend_from_slice(&more);
         requests += 1;
         if (bytes.len() as u64) < need {
@@ -189,16 +287,10 @@ pub fn inspect_target(root: &Path, target: &str) -> Result<Inspected, String> {
                 bytes.len()
             ));
         }
-        let _ = had;
     }
     let summary =
         jhol_ai::safetensors::summarise_bytes(&bytes).map_err(|e| format!("{url}: {e}"))?;
-    Ok(Inspected {
-        display: url,
-        summary,
-        bytes_read: bytes.len() as u64,
-        requests,
-    })
+    Ok(from_file(url, &summary, bytes.len() as u64, requests))
 }
 
 #[cfg(test)]

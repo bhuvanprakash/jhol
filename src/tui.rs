@@ -73,12 +73,12 @@ impl ActiveTab {
 
 /// The write surface, identical to `jhol gui --web`: each entry is a CLI invocation of this
 /// same binary, so verification, policy and exit codes are the ones already tested.
-const ACTIONS: [(&str, &[&str]); 5] = [
-    ("verify  — tree vs lockfile", &["verify"]),
-    ("prune   — verify and remove unauthorised", &["verify", "--prune"]),
-    ("install — from package.json", &["install"]),
-    ("ci      — reproduce the lockfile", &["ci"]),
-    ("policy  — install, exclude known CVEs", &["install", "--exclude-vuln"]),
+const ACTIONS: [(&str, &str, &[&str]); 5] = [
+    ("verify", "verify  — tree vs lockfile", &["verify"]),
+    ("prune", "prune   — verify and remove unauthorised", &["verify", "--prune"]),
+    ("install", "install — from package.json", &["install"]),
+    ("ci", "ci      — reproduce the lockfile", &["ci"]),
+    ("policy", "policy  — install, exclude known CVEs", &["install", "--exclude-vuln"]),
 ];
 
 /// Hidden extras. Each is free until the user triggers it: the sequence buffer is a
@@ -269,6 +269,8 @@ struct AppState {
     status: Option<jhol_core::status::Status>,
     /// Output of the last action run from tab 5.
     action_out: String,
+    /// Show only artifacts that do not fit, so a failing wheel cannot hide in a list.
+    only_unfit: bool,
     /// An action waiting for its second Enter: what was armed, and when.
     pending_action: Option<(usize, Instant)>,
     /// Live chunks from the action currently running, so a download reports progress
@@ -311,6 +313,7 @@ impl AppState {
             pkg_version: "1.0.0".to_string(),
             status: None,
             action_out: String::new(),
+            only_unfit: false,
             pending_action: None,
             stream: None,
             direct_deps: Vec::new(),
@@ -485,37 +488,49 @@ impl AppState {
         self.dev_deps.get(j).map(|(n, _)| n.clone())
     }
 
+    /// Artifacts after the unfit filter, in a stable order: failures first, then unknowns,
+    /// then what fits — the question is "what is wrong", not "what is here".
+    fn visible_artifacts(&self) -> Vec<&jhol_core::status::Artifact> {
+        let Some(s) = &self.status else {
+            return Vec::new();
+        };
+        let mut rows: Vec<&jhol_core::status::Artifact> = s
+            .artifacts
+            .iter()
+            .filter(|a| !self.only_unfit || a.fits == Some(false))
+            .collect();
+        rows.sort_by_key(|a| match a.fits {
+            Some(false) => 0,
+            None => 1,
+            Some(true) => 2,
+        });
+        rows
+    }
+
     /// Enter on an action. Read-only actions run at once; anything that writes is armed
     /// first and shows what it would cost, because a download is expensive and the default
     /// must be *look before you leap*.
     fn confirm_or_run_action(&mut self, index: usize) {
-        let writes = matches!(index, 2..=4);
+        let Some((key, label, _)) = ACTIONS.get(index).map(|(k, l, a)| (k.to_string(), l.to_string(), *a)) else {
+            return;
+        };
         let armed = self
             .pending_action
             .map(|(i, at)| i == index && at.elapsed().as_secs() < 20)
             .unwrap_or(false);
-        let label = ACTIONS.get(index).map(|(l, _)| l.to_string()).unwrap_or_default();
+        // The sentence a user confirms against comes from jhol-core, the same function the
+        // web page calls. Two surfaces, one description of one download.
+        let preview = self
+            .status
+            .as_ref()
+            .map(|s| jhol_core::status::action_preview(&key, s));
+        let writes = preview.as_ref().map(|p| p.writes).unwrap_or(true);
         if writes && !armed {
-            let (bytes, eta) = self
-                .status
-                .as_ref()
-                .map(|s| (s.plan.missing_bytes, s.plan.eta_seconds))
-                .unwrap_or((0, 0));
-            let cost = if bytes > 0 {
-                format!(
-                    "would fetch {:.1} MB — ~{} s at {} MB/s",
-                    bytes as f64 / 1_048_576.0,
-                    eta,
-                    self.status
-                        .as_ref()
-                        .map(|s| s.plan.throughput_bytes_per_sec / 1_048_576)
-                        .unwrap_or(5)
-                )
-            } else {
-                "nothing to download; this re-materialises from the lockfile".to_string()
-            };
+            let summary = preview
+                .map(|p| p.summary)
+                .unwrap_or_else(|| "no status yet — run r to refresh".to_string());
             self.action_out = format!(
-                "{label}\n  {cost}\n\n  Enter again within 20 s to run · anything else cancels"
+                "{label}\n  {summary}\n\n  Enter again within 20 s to run · anything else cancels"
             );
             self.pending_action = Some((index, Instant::now()));
             return;
@@ -528,7 +543,7 @@ impl AppState {
     /// output into the Actions pane as it arrives. No logic is reimplemented here: the
     /// exit code and the text are the CLI's.
     fn run_action(&mut self, index: usize) {
-        let Some((label, argv)) = ACTIONS.get(index).map(|(l, a)| (l.to_string(), *a)) else {
+        let Some((_, label, argv)) = ACTIONS.get(index).map(|(k, l, a)| (k.to_string(), l.to_string(), *a)) else {
             return;
         };
         if self.busy() {
@@ -851,7 +866,7 @@ impl AppState {
     fn next_item(&mut self) {
         let count = match self.tab {
             ActiveTab::Dependencies => self.direct_deps.len() + self.dev_deps.len(),
-            ActiveTab::Artifacts => self.status.as_ref().map(|s| s.artifacts.len()).unwrap_or(0),
+            ActiveTab::Artifacts => self.visible_artifacts().len(),
             ActiveTab::Actions => ACTIONS.len(),
             _ => 0,
         };
@@ -1062,6 +1077,16 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut AppState) -> Result
                     }
                     KeyCode::Up | KeyCode::Char('k') => {
                         app.prev_item();
+                        app.dirty = true;
+                    }
+                    KeyCode::Char('u') if app.tab == ActiveTab::Artifacts => {
+                        app.only_unfit = !app.only_unfit;
+                        app.status_msg = if app.only_unfit {
+                            "showing only artifacts that do not fit (u to show all)".to_string()
+                        } else {
+                            "showing all artifacts".to_string()
+                        };
+                        app.list_state.select(Some(0));
                         app.dirty = true;
                     }
                     KeyCode::Enter if app.tab == ActiveTab::Artifacts => {
@@ -1739,8 +1764,8 @@ fn render_artifacts(f: &mut Frame, app: &AppState, area: Rect) {
         .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
         .split(area);
 
-    let items: Vec<ListItem> = s
-        .artifacts
+    let rows = app.visible_artifacts();
+    let items: Vec<ListItem> = rows
         .iter()
         .map(|a| {
             let (mark, style) = match a.fits {
@@ -1758,7 +1783,10 @@ fn render_artifacts(f: &mut Frame, app: &AppState, area: Rect) {
     let list = List::new(items)
         .block(
             Block::default()
-                .title(" Artifacts — will it run here? (Enter describes) ")
+                .title(format!(
+                    " Artifacts — will it run here? (Enter describes, u {}unfit only) ",
+                    if app.only_unfit { "shows " } else { "hides " }
+                ))
                 .borders(Borders::ALL)
                 .style(Style::default().fg(Color::Cyan)),
         )
@@ -1772,7 +1800,7 @@ fn render_artifacts(f: &mut Frame, app: &AppState, area: Rect) {
     f.render_stateful_widget(list, chunks[0], &mut app.list_state.clone());
 
     let selected = app.list_state.selected().unwrap_or(0);
-    let lines: Vec<Line> = match s.artifacts.get(selected) {
+    let lines: Vec<Line> = match rows.get(selected).copied() {
         Some(a) => {
             let mut out = vec![Line::from(Span::styled(
                 format!("{} {}", a.name, a.version),
@@ -1913,7 +1941,7 @@ fn render_actions(f: &mut Frame, app: &AppState, area: Rect) {
 
     let items: Vec<ListItem> = ACTIONS
         .iter()
-        .map(|(label, _)| ListItem::new(Line::from(format!("  {label}"))))
+        .map(|(_, label, _)| ListItem::new(Line::from(format!("  {label}"))))
         .collect();
     let list = List::new(items)
         .block(
@@ -1958,7 +1986,7 @@ mod action_tests {
     /// other does not, the two surfaces disagree about what the tool can do.
     #[test]
     fn tui_actions_match_the_web_surface() {
-        let mut argv: Vec<Vec<&str>> = ACTIONS.iter().map(|(_, a)| a.to_vec()).collect();
+        let mut argv: Vec<Vec<&str>> = ACTIONS.iter().map(|(_, _, a)| a.to_vec()).collect();
         argv.sort();
         let mut web: Vec<Vec<&str>> = vec![
             vec!["verify"],

@@ -200,3 +200,64 @@ Same data in `--json` (`largest`), the TUI artifact detail pane, and the web ins
 counter calling `std::env::var` per entry. `jhol_treecheck::inspect_tree` now returns the
 verdict **and** the count from one walk. Collection dropped from ~5 ms to ~4 ms on 71
 packages and the count is the same number the verifier saw, not a second opinion.
+
+## Sharded models are read as a whole
+
+Real checkpoints are sharded: `model-00001-of-00008.safetensors`… Describing one shard and
+calling that the model under-reports parameters by the **shard count** — the kind of wrong
+that looks right. `jhol_ai::safetensors::summarise_dir` reads every shard, sums parameters and
+dtype counts, and reports which loader sidecars are present:
+
+```
+models/sharded
+  3 tensors · 2000 params · 4000 bytes of tensor data across 2 shards
+  dtypes     BF16×3
+  sidecars   config.json ✓  tokenizer.json ✓  tokenizer.model ✗  generation_config.json ✗
+```
+
+Fixture: two 1000-parameter shards reported as **2000** parameters; the single-shard reading
+(1500) was the bug this replaced. The dashboard's enricher uses the same function, so the
+Artifacts tab and `jhol inspect` cannot disagree about a model's size.
+
+## One description of one download
+
+The confirmation sentence is produced by `jhol_core::status::action_preview`, and the TUI and
+the web page both print **that**. The web asks the server (`GET /plan?action=…`); the TUI calls
+the function directly. Before this, each surface composed its own sentence — the exact failure
+mode that later becomes "the terminal said 40 MB and the browser said 3 MB".
+
+```
+verify  → reads 71 packages and compares versions with the lockfile — no writes
+prune   → nothing to prune; the tree holds only authorised packages
+install → nothing to download; this re-materialises from the lockfile
+ci      → …; ci refuses to write a lockfile that would drift
+policy  → …; policy in force: as-of 2023-06-01 · licences MIT,ISC
+```
+
+Three tests pin it: reads never ask for confirmation, writes always do, and the estimate names
+its throughput and scales with the plan.
+
+## `jhol status --watch`: refresh for the price of a fingerprint
+
+One process, one line, rewritten in place on a terminal and printed per change when piped.
+Each tick compares `jhol_core::status::fingerprint` — the same tag the dashboard's `ETag` uses —
+and **skips collection entirely when nothing changed**.
+
+| | per refresh |
+|---|---|
+| `--watch`, nothing changed | **~0.2 ms of CPU** (user 0.00 s, sys 0.02 s over ~100 ticks) |
+| `jhol status` one-shot | 7–8 ms wall, ~18 ms CPU per run |
+
+```
+fp 1.0.0 · tree match · 71 pkgs · lock ok · 0.0 MB missing (~0 s) · artifacts 0 unfit 0 · unknown 0 · forks 1
+```
+
+`touch package.json` mid-watch produces exactly one new line — the change is detected, not
+assumed.
+
+## Filtering, because a list of 71 things is not a dashboard
+
+- **TUI**: `u` on the Artifacts tab shows only what does not fit; rows are ordered
+  failures → unknowns → fits, because the question is "what is wrong", not "what is here".
+- **Web**: a filter box (name, kind, or reason) and an "only what does not fit" checkbox; the
+  table carries `data-fit` so filtering is a CSS toggle, not a re-render.

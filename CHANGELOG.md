@@ -3834,3 +3834,27 @@ for projects with no native packages — a platform constraint cannot exist with
 `cpu` or `libc` key, so the guard is exact, not a heuristic.
 
 jhol-core 728 tests, bin 12, CLI suite 30/30, treecheck 15/15, VERIFY-ALL: PASS.
+
+## Sharded models, one preview, `status --watch`, and filters that answer "what is wrong"
+
+**Sharded models.** `inspect` on a directory read only the first shard. Real checkpoints are
+sharded, so parameters were under-reported by the shard count — wrong in the direction that
+looks right. `summarise_dir` now reads every shard, sums parameters and dtypes, and reports
+which loader sidecars exist. Fixture: two 1000-parameter shards → **2000** (was 1500). The
+dashboard's enricher uses the same function, so no surface can disagree.
+
+**One description of one download.** `jhol_core::status::action_preview` produces the
+confirmation sentence; the TUI calls it, the web page asks `/plan?action=…`. Before, each
+composed its own — the failure mode that becomes "the terminal said 40 MB and the browser said
+3 MB". Three tests pin it: reads never confirm, writes always do, and the estimate names its
+throughput.
+
+**`jhol status --watch`.** One process, one line, rewritten on a terminal and printed per
+change when piped. Each tick compares the same fingerprint the dashboard's `ETag` uses and
+**collects nothing when nothing changed**: ~0.2 ms of CPU per idle tick against 7–8 ms for a
+one-shot run. `touch package.json` mid-watch produces exactly one new line.
+
+**Filters.** TUI `u` shows only what does not fit, ordered failures → unknowns → fits; the web
+gets a filter box and an "only what does not fit" checkbox over the same rows.
+
+jhol-core 731 tests (3 new), bin 12, CLI suite 30/30, treecheck 15/15, VERIFY-ALL: PASS.

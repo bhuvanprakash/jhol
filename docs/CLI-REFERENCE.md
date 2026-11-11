@@ -252,6 +252,10 @@ jhol inspect hf://meta-llama/Llama-3-8B/model.safetensors@5f2bc1d  # a pinned re
 jhol inspect hf://openai-community/gpt2/model.safetensors --top 8  # heaviest tensors
 ```
 
+A **directory** is read through every shard (`model-0000N-of-0000M.safetensors`) and reports
+`config.json` / `tokenizer.json` / `tokenizer.model` / `generation_config.json` presence. Reading
+one shard under-reports parameters by the shard count.
+
 `--top N` lists the N heaviest tensors (default 5, `0` hides them), because the answer to
 "what is inside?" is usually "one big matrix and a lot of small ones".
 
@@ -293,3 +297,20 @@ promoted trial2 in 37 ms — tree matches the lockfile
 See `docs/GUI-ML.md`: seven tabs / six web sections, all rendered from the same status struct,
 with an artifact fitness table, a byte budget that states its throughput assumption, a proof
 tab, streaming actions, and header-only weight inspection.
+
+## Watching: `jhol status --watch [--interval MS] [--json]`
+
+```
+fp 1.0.0 · tree match · 71 pkgs · lock ok · 0.0 MB missing (~0 s) · artifacts 3 unfit 1 · unknown 1 · forks 1
+```
+
+Rewrites one line on a terminal and prints one line per change when piped, so
+`jhol status --watch | grep -v 'tree match'` is an alarm. A tick compares
+`jhol_core::status::fingerprint` first and **collects nothing when nothing changed** —
+~0.2 ms of CPU per idle tick against 7–8 ms for a one-shot run.
+
+## `/plan?action=…`
+
+Returns `{action, writes, summary}` — the same sentence the TUI shows before it runs an
+action, from the same function (`jhol_core::status::action_preview`). `writes: false` means the
+action needs no confirmation.

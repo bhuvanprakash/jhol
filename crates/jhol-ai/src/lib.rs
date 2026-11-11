@@ -1293,6 +1293,82 @@ pub mod safetensors {
         Ok(out)
     }
 
+    /// A whole model on disk: every safetensors shard, summed, plus the sidecars a loader
+    /// actually needs.
+    ///
+    /// Real checkpoints are sharded (`model-00001-of-00008.safetensors`…). Reading one shard
+    /// and calling that the model under-reports parameters by the number of shards, which is
+    /// the kind of wrong that looks right — so a directory is always read as a whole.
+    #[derive(Debug, Clone, Default, PartialEq, Eq)]
+    pub struct ModelSummary {
+        pub shards: Vec<(String, WeightSummary)>,
+        pub params: u64,
+        pub data_bytes: u64,
+        pub header_bytes: u64,
+        pub dtypes: BTreeMap<String, usize>,
+        pub largest: Vec<(String, u64)>,
+        pub unknown_dtypes: Vec<String>,
+        /// `config.json`, `tokenizer.json`, … present or absent, in a fixed order.
+        pub sidecars: Vec<(String, bool)>,
+    }
+
+    pub const SIDECARS: [&str; 4] = [
+        "config.json",
+        "tokenizer.json",
+        "tokenizer.model",
+        "generation_config.json",
+    ];
+
+    impl ModelSummary {
+        pub fn vram_bytes(&self) -> u64 {
+            self.data_bytes + self.data_bytes / 5
+        }
+    }
+
+    pub fn summarise_dir(dir: &Path) -> Result<ModelSummary, AiError> {
+        let mut shards: Vec<std::path::PathBuf> = std::fs::read_dir(dir)?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().map(|e| e == "safetensors").unwrap_or(false))
+            .collect();
+        shards.sort();
+        if shards.is_empty() {
+            return Err(AiError::InvalidManifest(format!(
+                "{}: no .safetensors file",
+                dir.display()
+            )));
+        }
+        let mut out = ModelSummary::default();
+        for path in shards {
+            let summary = summarise(&path)?;
+            out.params = out.params.saturating_add(summary.params);
+            out.data_bytes = out.data_bytes.saturating_add(summary.data_bytes);
+            out.header_bytes = out.header_bytes.saturating_add(summary.header_bytes as u64);
+            for (dtype, n) in &summary.dtypes {
+                *out.dtypes.entry(dtype.clone()).or_default() += n;
+            }
+            for dtype in &summary.unknown_dtypes {
+                if !out.unknown_dtypes.contains(dtype) {
+                    out.unknown_dtypes.push(dtype.clone());
+                }
+            }
+            out.largest.extend(summary.largest.iter().cloned());
+            out.shards.push((
+                path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                summary,
+            ));
+        }
+        out.largest.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        out.largest.truncate(10);
+        out.sidecars = SIDECARS
+            .iter()
+            .map(|n| (n.to_string(), dir.join(n).is_file()))
+            .collect();
+        Ok(out)
+    }
+
     pub fn parse_file(path: &Path) -> Result<Header, AiError> {
         use std::io::Read;
         let mut f = std::fs::File::open(path)?;

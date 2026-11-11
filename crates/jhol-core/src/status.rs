@@ -455,6 +455,40 @@ fn forks(root: &Path) -> Vec<ForkRow> {
     out
 }
 
+/// Everything a status depends on, as one opaque tag: file sizes and mtimes for the
+/// manifests, the lockfiles, `node_modules` and `.jhol/envs`.
+///
+/// A caller that polls can compare tags and skip `collect` entirely — which is what the web
+/// dashboard's `ETag` and the CLI's `--watch` both do. One definition, so "has anything
+/// changed?" cannot mean two different things in two places.
+pub fn fingerprint(root: &Path) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for rel in [
+        "package.json",
+        "package-lock.json",
+        "jhol-lock.json",
+        ".jhol/models.lock.json",
+        ".jhol/py/lock.json",
+        "node_modules",
+        ".jhol/envs",
+    ] {
+        rel.hash(&mut h);
+        match std::fs::metadata(root.join(rel)) {
+            Ok(m) => {
+                m.len().hash(&mut h);
+                m.modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_nanos())
+                    .hash(&mut h);
+            }
+            Err(_) => 0u8.hash(&mut h),
+        }
+    }
+    format!("{:016x}", h.finish())
+}
+
 /// Collect everything, cheaply. No network, no resolution: one lockfile parse, one tree
 /// walk, and the files the artifact layers already keep.
 pub fn collect(root: &Path) -> Status {
@@ -558,6 +592,130 @@ pub fn collect(root: &Path) -> Status {
         agent: Agent {
             tools: tool_catalog(),
         },
+    }
+}
+
+
+/// What an action would do, as one sentence. The TUI and the web page both print **this**
+/// text; before it existed each built its own, which is how two surfaces start telling a
+/// user two different things about the same download.
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct ActionPreview {
+    pub action: String,
+    /// Does it change the tree? Read-only actions need no confirmation.
+    pub writes: bool,
+    pub summary: String,
+}
+
+pub fn action_preview(action: &str, status: &Status) -> ActionPreview {
+    let throughput = status.plan.throughput_bytes_per_sec.max(1);
+    let cost = if status.plan.missing_bytes > 0 {
+        format!(
+            "would fetch {:.1} MB — ~{} s at {} MB/s",
+            status.plan.missing_bytes as f64 / 1_048_576.0,
+            status.plan.missing_bytes.div_ceil(throughput),
+            throughput / 1_048_576
+        )
+    } else {
+        "nothing to download; this re-materialises from the lockfile".to_string()
+    };
+    let (writes, summary) = match action {
+        "verify" => (
+            false,
+            format!(
+                "reads {} packages and compares versions with the lockfile — no writes",
+                status.tree.packages
+            ),
+        ),
+        "prune" => (
+            false,
+            match status.tree.state.as_str() {
+                "extraneous" => format!("would remove what the lockfile does not authorise: {}", status.tree.detail),
+                _ => "nothing to prune; the tree holds only authorised packages".to_string(),
+            },
+        ),
+        "install" => (true, cost),
+        "ci" => (
+            true,
+            format!("{cost}; ci refuses to write a lockfile that would drift"),
+        ),
+        "policy" => (
+            true,
+            format!("{cost}; policy in force: {}", policy_line(&status.policy)),
+        ),
+        "fork" => (
+            true,
+            "forks the environment; most files share inodes, so it costs milliseconds".to_string(),
+        ),
+        "promote" => (
+            true,
+            "makes the fork the project's tree — two renames, no copying".to_string(),
+        ),
+        other => (true, format!("{other}: no preview available")),
+    };
+    ActionPreview {
+        action: action.to_string(),
+        writes,
+        summary,
+    }
+}
+
+fn policy_line(p: &Policy) -> String {
+    let mut parts = Vec::new();
+    if let Some(at) = &p.as_of {
+        parts.push(format!("as-of {at}"));
+    }
+    if let Some(lic) = &p.allowed_licenses {
+        parts.push(format!("licences {}", lic.join(",")));
+    }
+    if p.exclude_vulnerable {
+        parts.push("known CVEs excluded".to_string());
+    }
+    if parts.is_empty() {
+        "latest, any licence".to_string()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    fn status(missing: u64, state: &str) -> Status {
+        let mut s = Status::default();
+        s.tree.packages = 71;
+        s.tree.state = state.to_string();
+        s.plan.missing_bytes = missing;
+        s.plan.throughput_bytes_per_sec = 5 * 1_048_576;
+        s
+    }
+
+    #[test]
+    fn reads_never_ask_for_confirmation_and_writes_always_do() {
+        assert!(!action_preview("verify", &status(0, "match")).writes);
+        assert!(!action_preview("prune", &status(0, "match")).writes);
+        for a in ["install", "ci", "policy", "fork", "promote"] {
+            assert!(action_preview(a, &status(0, "match")).writes, "{a} must confirm");
+        }
+    }
+
+    #[test]
+    fn the_estimate_states_its_throughput_and_scales_with_the_plan() {
+        let p = action_preview("install", &status(10 * 1_048_576, "match"));
+        assert!(p.summary.contains("10.0 MB"), "{}", p.summary);
+        assert!(p.summary.contains("2 s"), "{}", p.summary);
+        assert!(p.summary.contains("5 MB/s"), "{}", p.summary);
+        let free = action_preview("install", &status(0, "match"));
+        assert!(free.summary.contains("nothing to download"));
+    }
+
+    #[test]
+    fn prune_names_what_it_would_remove() {
+        let mut s = status(0, "extraneous");
+        s.tree.detail = "node_modules/x is not in the lockfile".into();
+        let p = action_preview("prune", &s);
+        assert!(p.summary.contains("node_modules/x"), "{}", p.summary);
     }
 }
 
