@@ -269,6 +269,8 @@ struct AppState {
     status: Option<jhol_core::status::Status>,
     /// Output of the last action run from tab 5.
     action_out: String,
+    /// An action waiting for its second Enter: what was armed, and when.
+    pending_action: Option<(usize, Instant)>,
     /// Live chunks from the action currently running, so a download reports progress
     /// instead of leaving the pane silent for a minute.
     stream: Option<mpsc::Receiver<String>>,
@@ -309,6 +311,7 @@ impl AppState {
             pkg_version: "1.0.0".to_string(),
             status: None,
             action_out: String::new(),
+            pending_action: None,
             stream: None,
             direct_deps: Vec::new(),
             dev_deps: Vec::new(),
@@ -482,6 +485,45 @@ impl AppState {
         self.dev_deps.get(j).map(|(n, _)| n.clone())
     }
 
+    /// Enter on an action. Read-only actions run at once; anything that writes is armed
+    /// first and shows what it would cost, because a download is expensive and the default
+    /// must be *look before you leap*.
+    fn confirm_or_run_action(&mut self, index: usize) {
+        let writes = matches!(index, 2..=4);
+        let armed = self
+            .pending_action
+            .map(|(i, at)| i == index && at.elapsed().as_secs() < 20)
+            .unwrap_or(false);
+        let label = ACTIONS.get(index).map(|(l, _)| l.to_string()).unwrap_or_default();
+        if writes && !armed {
+            let (bytes, eta) = self
+                .status
+                .as_ref()
+                .map(|s| (s.plan.missing_bytes, s.plan.eta_seconds))
+                .unwrap_or((0, 0));
+            let cost = if bytes > 0 {
+                format!(
+                    "would fetch {:.1} MB — ~{} s at {} MB/s",
+                    bytes as f64 / 1_048_576.0,
+                    eta,
+                    self.status
+                        .as_ref()
+                        .map(|s| s.plan.throughput_bytes_per_sec / 1_048_576)
+                        .unwrap_or(5)
+                )
+            } else {
+                "nothing to download; this re-materialises from the lockfile".to_string()
+            };
+            self.action_out = format!(
+                "{label}\n  {cost}\n\n  Enter again within 20 s to run · anything else cancels"
+            );
+            self.pending_action = Some((index, Instant::now()));
+            return;
+        }
+        self.pending_action = None;
+        self.run_action(index);
+    }
+
     /// Run one of the whitelisted actions by shelling this same binary, streaming its
     /// output into the Actions pane as it arrives. No logic is reimplemented here: the
     /// exit code and the text are the CLI's.
@@ -585,6 +627,12 @@ impl AppState {
         if !a.dtypes.is_empty() {
             let d: Vec<String> = a.dtypes.iter().map(|(k, n)| format!("{k}x{n}")).collect();
             text.push_str(&format!("dtypes: {}\n", d.join(" ")));
+        }
+        if !a.top_tensors.is_empty() {
+            text.push_str("heaviest tensors:\n");
+            for (name, bytes) in a.top_tensors.iter().take(5) {
+                text.push_str(&format!("  {:<38} {:>8} KB\n", name, (bytes / 1024).max(1)));
+            }
         }
         text.push_str(&format!(
             "fit: {}\n",
@@ -1021,7 +1069,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut AppState) -> Result
                         app.dirty = true;
                     }
                     KeyCode::Enter if app.tab == ActiveTab::Actions => {
-                        app.run_action(app.list_state.selected().unwrap_or(0));
+                        app.confirm_or_run_action(app.list_state.selected().unwrap_or(0));
                         app.dirty = true;
                     }
                     KeyCode::Char('r') => {

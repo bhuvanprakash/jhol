@@ -1231,6 +1231,8 @@ pub mod safetensors {
         pub dtypes: BTreeMap<String, usize>,
         /// dtypes with no known width, so a caller can refuse to quote a size.
         pub unknown_dtypes: Vec<String>,
+        /// The heaviest tensors, largest first — where the bytes actually are.
+        pub largest: Vec<(String, u64)>,
     }
 
     impl WeightSummary {
@@ -1274,6 +1276,14 @@ pub mod safetensors {
         for tensor in &header.tensors {
             out.data_bytes += tensor.end.saturating_sub(tensor.begin);
         }
+        let mut weighed: Vec<(String, u64)> = header
+            .tensors
+            .iter()
+            .map(|t| (t.name.clone(), t.end.saturating_sub(t.begin)))
+            .collect();
+        weighed.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        weighed.truncate(10);
+        out.largest = weighed;
         out.unknown_dtypes = out
             .dtypes
             .keys()

@@ -117,6 +117,8 @@ pub struct Artifact {
     pub vram_bytes: Option<u64>,
     /// For weights: dtype -> tensor count.
     pub dtypes: BTreeMap<String, usize>,
+    /// For weights: the heaviest tensors, largest first.
+    pub top_tensors: Vec<(String, u64)>,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -264,6 +266,7 @@ fn wheel_artifacts(host: &crate::axes::HostAxes, lock: &crate::pyinstall::PyLock
                 params: None,
                 vram_bytes: None,
                 dtypes: BTreeMap::new(),
+                top_tensors: Vec::new(),
             }
         })
         .collect()
@@ -332,6 +335,7 @@ fn model_artifacts(root: &Path, lock: &crate::model_lock::ModelLock) -> (Vec<Art
             params: None,
             vram_bytes: None,
             dtypes: BTreeMap::new(),
+            top_tensors: Vec::new(),
         });
     }
     (out, plan)
@@ -362,6 +366,12 @@ fn npm_artifacts(root: &Path, host: &crate::axes::HostAxes) -> Vec<Artifact> {
     let Ok(text) = std::fs::read_to_string(root.join("package-lock.json")) else {
         return Vec::new();
     };
+    // Most projects declare no native packages at all. A substring check over the raw
+    // text costs microseconds; parsing 172 KB of lockfile costs milliseconds. The guard is
+    // not a heuristic — a platform constraint cannot exist without one of these keys.
+    if !text.contains("\"os\"") && !text.contains("\"cpu\"") && !text.contains("\"libc\"") {
+        return Vec::new();
+    }
     let Ok(lock) = serde_json::from_str::<serde_json::Value>(&text) else {
         return Vec::new();
     };
@@ -421,6 +431,7 @@ fn npm_artifacts(root: &Path, host: &crate::axes::HostAxes) -> Vec<Artifact> {
             params: None,
             vram_bytes: None,
             dtypes: BTreeMap::new(),
+            top_tensors: Vec::new(),
         });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -447,9 +458,21 @@ fn forks(root: &Path) -> Vec<ForkRow> {
 /// Collect everything, cheaply. No network, no resolution: one lockfile parse, one tree
 /// walk, and the files the artifact layers already keep.
 pub fn collect(root: &Path) -> Status {
+    let prof = std::env::var_os("JHOL_PROFILE_STATUS").is_some();
+    let mut t = std::time::Instant::now();
+    let mut mark = |label: &str, t: &mut std::time::Instant| {
+        if prof {
+            eprintln!("[status] {label}: {:.2} ms", t.elapsed().as_secs_f64() * 1000.0);
+            *t = std::time::Instant::now();
+        }
+    };
+    let _ = &mut mark;
     let (project, version) = read_manifest(root);
 
-    let state = crate::tree_state::verify_tree(root);
+    // One walk answers both "is it right?" and "how many packages?".
+    let report = crate::tree_state::inspect_tree(root);
+    mark("tree", &mut t);
+    let state = report.state.clone();
     let (label, detail) = match &state {
         crate::tree_state::TreeState::Match => ("match", String::new()),
         crate::tree_state::TreeState::Missing { path } => ("missing", format!("{path} is missing")),
@@ -469,6 +492,7 @@ pub fn collect(root: &Path) -> Status {
         names: model_lock.models.keys().cloned().collect(),
     };
 
+    mark("lockfile+models", &mut t);
     let py_lock: Option<crate::pyinstall::PyLock> =
         std::fs::read_to_string(root.join(crate::pyinstall::PY_LOCK_PATH))
             .ok()
@@ -481,6 +505,7 @@ pub fn collect(root: &Path) -> Status {
         .unwrap_or((0, 0));
 
     let mut artifacts = npm_artifacts(root, &host);
+    mark("npm rows", &mut t);
     if let Some(lock) = &py_lock {
         artifacts.extend(wheel_artifacts(&host, lock));
     }
@@ -491,14 +516,16 @@ pub fn collect(root: &Path) -> Status {
         .missing_bytes
         .div_ceil(plan.throughput_bytes_per_sec.max(1));
 
+    mark("pylock+axes+attest+plan", &mut t);
     Status {
         project,
         version,
         manifest_matches_lockfile: crate::install::lockfile_matches_manifest(root),
+        // (timed below)
         tree: Tree {
             state: label.to_string(),
             detail,
-            packages: crate::count_installed_packages(root),
+        packages: report.installed,
         },
         policy: Policy {
             as_of: std::env::var("JHOL_AS_OF").ok(),

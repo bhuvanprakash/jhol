@@ -3805,3 +3805,32 @@ which immediately found two tools the dashboard was hiding: `jhol_plan_readonly`
 `jhol_sync_lock`.
 
 jhol-core 728 tests (2 new), bin 12 (3 new), CLI suite 30/30.
+
+## Faster collection, free polling, careful actions, and a look at the biggest tensors
+
+**One walk instead of two.** `status` verified the tree and then counted it with a second
+walk whose inner loop called `std::env::var` per entry. `jhol_treecheck::inspect_tree` now
+returns the verdict and the installed count from a single walk — the count is the number the
+verifier saw, not a second opinion. `verify_tree` keeps its old signature as a wrapper, so no
+caller changed. Collection: ~5 ms → ~4 ms on 71 packages; wall time stays 7–8 ms because
+process start dominates, and that is stated rather than dressed up.
+
+**Free polling for the dashboard.** `/status.json` now carries an `ETag` built from the seven
+files a status depends on. A matching `If-None-Match` returns **304 without collecting
+anything**. Measured over 20 polls (curl included): 15.2 ms → **6.7 ms** per poll, and the
+6.7 ms is curl's own startup. A fork changes `.jhol/envs` mtime, so the next poll correctly
+returns 200 rather than a stale 304.
+
+**Look before you leap.** Writes are armed on the first Enter (TUI, 20 s) or click (web, 10 s)
+with the plan they were armed against printed in the output pane. `verify` and
+`verify --prune` still run at once — confirmation on a question is friction, confirmation on a
+download is care.
+
+**Heaviest tensors.** `inspect --top N` (default 5) names where the bytes are, in text, in
+`--json` (`largest`), in the TUI artifact detail pane and in the web inspect box.
+
+**npm fitness guard.** A substring check over the lockfile's raw text skips parsing entirely
+for projects with no native packages — a platform constraint cannot exist without an `os`,
+`cpu` or `libc` key, so the guard is exact, not a heuristic.
+
+jhol-core 728 tests, bin 12, CLI suite 30/30, treecheck 15/15, VERIFY-ALL: PASS.

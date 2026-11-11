@@ -351,16 +351,52 @@ fn lockfile_is_complete(project_dir: &Path) -> bool {
 /// *first* discrepancy in a stable order (missing, then wrong, then extraneous)
 /// so callers can report something specific and tests can pin it.
 pub fn verify_tree(project_dir: &Path) -> TreeState {
+    inspect_tree(project_dir).state
+}
+
+/// A tree verdict together with the counts that decided it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeReport {
+    pub state: TreeState,
+    /// Directories found under `node_modules`: the installed package count.
+    pub installed: usize,
+}
+
+/// Verdict *and* installed count from **one** walk.
+///
+/// A dashboard that shows both used to walk the tree twice: once here and once in a
+/// counter that also called `std::env::var` per entry. The walk is the expensive part of
+/// a status refresh, so it happens once and reports both facts.
+pub fn inspect_tree(project_dir: &Path) -> TreeReport {
     let Some(locked) = locked_paths(project_dir) else {
-        return TreeState::Unverified {
-            reason: "no readable lockfile".to_string(),
+        return TreeReport {
+            state: TreeState::Unverified {
+                reason: "no readable lockfile".to_string(),
+            },
+            installed: 0,
         };
     };
     let Some(installed) = installed_paths(project_dir) else {
-        return TreeState::Unverified {
-            reason: format!("tree larger than {} entries", MAX_INSPECT),
+        return TreeReport {
+            state: TreeState::Unverified {
+                reason: format!("tree larger than {} entries", MAX_INSPECT),
+            },
+            installed: 0,
         };
     };
+    let installed_count = installed.len();
+    let state = verify_against(project_dir, &locked, &installed);
+    TreeReport {
+        state,
+        installed: installed_count,
+    }
+}
+
+fn verify_against(
+    project_dir: &Path,
+    locked: &std::collections::HashMap<String, String>,
+    installed: &[String],
+) -> TreeState {
     let installed_set: std::collections::HashSet<&str> =
         installed.iter().map(|s| s.as_str()).collect();
 
@@ -435,7 +471,7 @@ pub fn verify_tree(project_dir: &Path) -> TreeState {
             }
         }
     }
-    let mut installed_sorted = installed.clone();
+    let mut installed_sorted = installed.to_vec();
     installed_sorted.sort();
     let has_extras = installed_sorted
         .iter()
@@ -450,7 +486,7 @@ pub fn verify_tree(project_dir: &Path) -> TreeState {
     }
     for path in installed_sorted {
         if !locked.contains_key(&path) && !links.iter().any(|l| l == &path) {
-            return TreeState::Extraneous { path };
+            return TreeState::Extraneous { path: path.clone() };
         }
     }
     TreeState::Match

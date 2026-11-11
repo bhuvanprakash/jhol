@@ -36,6 +36,7 @@ pub fn run(m: &ArgMatches) -> Result<(), String> {
             "header_bytes": summary.header_bytes,
             "dtypes": dtypes,
             "unknown_dtypes": summary.unknown_dtypes,
+            "largest": summary.largest.iter().map(|(n, b)| serde_json::json!({"name": n, "bytes": b})).collect::<Vec<_>>(),
         });
         println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
         return Ok(());
@@ -57,6 +58,16 @@ pub fn run(m: &ArgMatches) -> Result<(), String> {
     println!("  dtypes     {}", dtypes.join(" "));
     if !summary.unknown_dtypes.is_empty() {
         println!("  unknown    {}", summary.unknown_dtypes.join(", "));
+    }
+    let top = m
+        .get_one::<String>("top")
+        .and_then(|t| t.parse::<usize>().ok())
+        .unwrap_or(5);
+    if top > 0 && !summary.largest.is_empty() {
+        println!("  heaviest tensors");
+        for (name, bytes) in summary.largest.iter().take(top) {
+            println!("    {:<40} {:>10}", name, human(*bytes));
+        }
     }
     let need = summary.vram_bytes();
     match host.gpu_mem_mb {
@@ -84,6 +95,18 @@ pub fn run(m: &ArgMatches) -> Result<(), String> {
         }
     );
     Ok(())
+}
+
+fn human(n: u64) -> String {
+    let gb = 1024.0 * 1024.0 * 1024.0;
+    let mb = 1024.0 * 1024.0;
+    if n as f64 >= gb {
+        format!("{:.2} GB", n as f64 / gb)
+    } else if n as f64 >= mb {
+        format!("{:.1} MB", n as f64 / mb)
+    } else {
+        format!("{} KB", (n / 1024).max(1))
+    }
 }
 
 fn percent(header: u64, data: u64) -> String {

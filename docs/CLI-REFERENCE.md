@@ -249,7 +249,11 @@ jhol inspect ./model.safetensors --json   # one file
 jhol inspect llama-tiny                   # a name pinned in .jhol/models.lock.json
 jhol inspect hf://openai-community/gpt2/model.safetensors   # remote, header only
 jhol inspect hf://meta-llama/Llama-3-8B/model.safetensors@5f2bc1d  # a pinned revision
+jhol inspect hf://openai-community/gpt2/model.safetensors --top 8  # heaviest tensors
 ```
+
+`--top N` lists the N heaviest tensors (default 5, `0` hides them), because the answer to
+"what is inside?" is usually "one big matrix and a lot of small ones".
 
 A remote target costs one HTTP `Range` request for the first 128 KB (a second only if the
 header is larger). Measured on the 548 MB GPT-2 checkpoint: **14,291 bytes read, 1 request,

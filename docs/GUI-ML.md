@@ -147,3 +147,56 @@ both directions, after this work found two tools the dashboard was hiding
 
 Verified over HTTP: `tools/list` → 12 tools; `tools/call jhol_axes` → the host axes JSON; a bad
 token → `-32001`; malformed JSON → `-32700`; a notification → no response, per JSON-RPC.
+
+## Conditional polling: an idle dashboard costs nothing
+
+A dashboard polls once a second. Collecting a status walks `node_modules`, reads three
+lockfiles and enriches weights; a fingerprint of the seven files a status depends on
+(`package.json`, the lockfiles, `node_modules`, `.jhol/envs` mtimes and sizes) costs
+microseconds. When the fingerprint matches the request's `If-None-Match`, the server answers
+**304 and collects nothing at all**.
+
+Measured over 20 polls of a 71-package project, curl included:
+
+| | per poll |
+|---|---|
+| full `200` (collect + enrich) | **15.2 ms** |
+| `304` (fingerprint only) | **6.7 ms** |
+
+The 6.7 ms is curl process startup — the server's share of that is under a millisecond.
+Verified that the fingerprint is honest: creating a fork changes `.jhol/envs` mtime and the
+next revalidation returns `200`, not a stale `304`.
+
+## Look before you leap
+
+Anything that writes is armed on the first `Enter` (TUI, 20 s window) or click (web, 10 s),
+with the plan it was armed against shown in the output pane:
+
+```
+install — from package.json
+  nothing to download; this re-materialises from the lockfile
+
+  Enter again within 20 s to run · anything else cancels
+```
+
+Read-only actions (`verify`, `verify --prune`) run immediately: confirmation on a question is
+friction, confirmation on a download is care. The rule is the plan's bytes, not a policy list.
+
+## Heaviest tensors
+
+`jhol inspect --top N` (default 5) and the detail pane name where the bytes actually are:
+
+```
+  heaviest tensors
+    transformer.h.11.attn.c_attn.weight         6.4 MB
+    transformer.h.11.mlp.c_fc.weight            6.3 MB
+```
+
+Same data in `--json` (`largest`), the TUI artifact detail pane, and the web inspect box.
+
+## One walk, not two
+
+`status` used to walk the tree twice — once to verify it, once to count packages, the second
+counter calling `std::env::var` per entry. `jhol_treecheck::inspect_tree` now returns the
+verdict **and** the count from one walk. Collection dropped from ~5 ms to ~4 ms on 71
+packages and the count is the same number the verifier saw, not a second opinion.

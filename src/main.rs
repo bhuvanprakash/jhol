@@ -8790,6 +8790,12 @@ fn cli_command() -> Command {
                          jhol inspect ./model.safetensors --json",
                     )
                     .arg(Arg::new("target").required(true))
+                    .arg(
+                        Arg::new("top")
+                            .long("top")
+                            .value_name("N")
+                            .help("Show the N heaviest tensors (default 5, 0 to hide)"),
+                    )
                     .arg(Arg::new("json").long("json").action(ArgAction::SetTrue)),
             )
             .subcommand(

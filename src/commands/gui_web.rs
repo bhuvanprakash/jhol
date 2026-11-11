@@ -39,13 +39,18 @@ pub fn serve() -> Result<(), String> {
             .nth(1)
             .unwrap_or("/")
             .to_string();
+        let (headers, content_length) = read_headers(&mut reader);
+        let if_none_match = headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("if-none-match"))
+            .map(|(_, v)| v.trim().to_string());
         let given = path
             .split_once("t=")
             .map(|(_, t)| t.split('&').next().unwrap_or(t).to_string())
             .unwrap_or_default();
 
         if path.starts_with("/action") {
-            let body = read_body(&mut reader);
+            let body = read_body(&mut reader, content_length);
             if given != token {
                 respond(&mut stream, "application/json", &serde_json::json!({
                     "ok": false, "code": 403, "stderr": "bad token"
@@ -64,7 +69,7 @@ pub fn serve() -> Result<(), String> {
         }
 
         if path.starts_with("/mcp") {
-            let body = read_body(&mut reader);
+            let body = read_body(&mut reader, content_length);
             if given != token {
                 respond(&mut stream, "application/json", &serde_json::json!({
                     "jsonrpc": "2.0", "id": null,
@@ -96,14 +101,27 @@ pub fn serve() -> Result<(), String> {
         }
 
         if path.starts_with("/status.json") {
+            // A dashboard polls once a second. Collecting a status costs milliseconds; a
+            // fingerprint of the files a status depends on costs microseconds. When the
+            // fingerprint matches, the answer is 304 and **no collection happens at all**.
+            let tag = status_fingerprint(Path::new("."));
+            if if_none_match.as_deref() == Some(tag.as_str()) {
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 304 Not Modified\r\nETag: {tag}\r\n\
+                     Cache-Control: no-store\r\nConnection: close\r\n\r\n"
+                );
+                continue;
+            }
             let status = crate::status_view::enrich(
                 jhol_core::status::collect(Path::new(".")),
                 Path::new("."),
             );
-            respond(
+            respond_etag(
                 &mut stream,
                 "application/json",
                 &serde_json::to_string(&status).unwrap_or_else(|e| e.to_string()),
+                &tag,
             );
             continue;
         }
@@ -124,20 +142,67 @@ fn session_token() -> String {
     format!("{:x}{:x}", std::process::id(), nanos)
 }
 
-fn read_body(reader: &mut BufReader<std::net::TcpStream>) -> Vec<u8> {
+fn read_headers(reader: &mut BufReader<std::net::TcpStream>) -> (Vec<(String, String)>, usize) {
+    let mut out = Vec::new();
     let mut length = 0usize;
     loop {
-        let mut header = String::new();
-        if reader.read_line(&mut header).unwrap_or(0) == 0 || header == "\r\n" {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" || line == "\n" {
             break;
         }
-        if let Some(v) = header.to_ascii_lowercase().strip_prefix("content-length:") {
-            length = v.trim().parse().unwrap_or(0);
+        if let Some((k, v)) = line.split_once(':') {
+            if k.eq_ignore_ascii_case("content-length") {
+                length = v.trim().parse().unwrap_or(0);
+            }
+            out.push((k.trim().to_string(), v.trim().to_string()));
         }
     }
+    (out, length)
+}
+
+fn read_body(reader: &mut BufReader<std::net::TcpStream>, length: usize) -> Vec<u8> {
     let mut raw = vec![0u8; length.min(8192)];
     let _ = reader.read_exact(&mut raw);
     raw
+}
+
+/// Everything a status depends on. `node_modules` mtime and `.jhol/envs` mtime capture
+/// installs, promotions and fork creation without walking either directory.
+fn status_fingerprint(root: &Path) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for rel in [
+        "package.json",
+        "package-lock.json",
+        "jhol-lock.json",
+        ".jhol/models.lock.json",
+        ".jhol/py/lock.json",
+        "node_modules",
+        ".jhol/envs",
+    ] {
+        rel.hash(&mut h);
+        match std::fs::metadata(root.join(rel)) {
+            Ok(m) => {
+                m.len().hash(&mut h);
+                m.modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_nanos())
+                    .hash(&mut h);
+            }
+            Err(_) => 0u8.hash(&mut h),
+        }
+    }
+    format!("{:016x}", h.finish())
+}
+
+fn respond_etag(stream: &mut std::net::TcpStream, kind: &str, body: &str, tag: &str) {
+    let _ = write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nETag: {tag}\r\n\
+         Cache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
 }
 
 fn respond(stream: &mut std::net::TcpStream, kind: &str, body: &str) {
@@ -297,6 +362,7 @@ fn inspect_json(root: &Path, target: &str) -> serde_json::Value {
         "bytes_read": inspected.bytes_read,
         "requests": inspected.requests,
         "dtypes": s.dtypes.iter().map(|(d, n)| serde_json::json!({"dtype": d, "tensors": n})).collect::<Vec<_>>(),
+        "largest": s.largest.iter().map(|(n, b)| serde_json::json!({"name": n, "bytes": b})).collect::<Vec<_>>(),
         "gpu_mem_mb": host.gpu_mem_mb,
         "fits": host.gpu_mem_mb.map(|m| s.vram_bytes().div_ceil(1024 * 1024) <= m),
     })
@@ -443,6 +509,10 @@ function render(s) {
   document.getElementById("version").textContent =
     `tree ${s.tree.state} · ${s.artifacts.length} artifacts · ${s.plan.items.length} plan items`;
 
+  armed.plan = s.plan.missing_bytes
+    ? `would fetch ${mb(s.plan.missing_bytes)} — ~${s.plan.eta_seconds} s at ${(s.plan.throughput_bytes_per_sec/1048576)|0} MB/s`
+    : "nothing to download; this re-materialises from the lockfile";
+
   document.getElementById("s-status").innerHTML =
     row("tree", s.tree.state === "match" ? `match — ${s.tree.packages} packages` : `${esc(s.tree.state)} — ${esc(s.tree.detail)}`,
         s.tree.state === "match" ? "ok" : "bad") +
@@ -493,7 +563,7 @@ function render(s) {
       <td>${esc(t.purpose)}</td></tr>`).join("") + `</tbody></table>`;
 
   document.querySelectorAll("button[data-p]").forEach(b => {
-    b.onclick = () => run("promote", b.dataset.p, true);
+    b.onclick = () => armOrRun("promote", b.dataset.p, true, "jhol env promote " + b.dataset.p);
   });
 }
 
@@ -502,6 +572,24 @@ async function tick() {
     const r = await fetch("/status.json");
     render(await r.json());
   } catch (e) { /* server restarting */ }
+}
+
+// Look before you leap: writes are armed on the first click and only run on the second,
+// with the plan they were armed against shown in the output pane.
+const armed = {action: null, at: 0, plan: ""};
+function armOrRun(action, name, stream, label) {
+  const writes = ["install", "ci", "policy", "fork", "promote"].includes(action);
+  const fresh = armed.action === action + ":" + name && Date.now() - armed.at < 10000;
+  if (writes && !fresh) {
+    armed.action = action + ":" + name;
+    armed.at = Date.now();
+    document.getElementById("out").textContent =
+      `${label}\n  ${armed.plan}\n\n  click again within 10 s to run`;
+    document.querySelector("nav button:nth-child(7)").click();
+    return;
+  }
+  armed.action = null;
+  run(action, name, stream);
 }
 
 async function run(action, name, stream) {
@@ -535,7 +623,7 @@ async function run(action, name, stream) {
 }
 
 document.querySelectorAll("button[data-a]").forEach(b => {
-  b.onclick = () => run(b.dataset.a, "", true);
+  b.onclick = () => armOrRun(b.dataset.a, "", true, "jhol " + b.dataset.a);
 });
 
 document.getElementById("go").onclick = async () => {
@@ -554,6 +642,7 @@ document.getElementById("go").onclick = async () => {
       `\n  resident ${gb(j.vram_bytes)}` +
       (j.gpu_mem_mb ? ` — host GPU ${j.gpu_mem_mb} MB → ${j.fits ? "fits" : "does not fit"}`
                     : " — no GPU memory detected, fit unknown") +
+      ((j.largest || []).length ? `\n  heaviest: ` + j.largest.slice(0, 5).map(t => `${t.name} (${mb(t.bytes)})`).join(", ") : "") +
       `\n  header ${j.bytes_read} bytes read (${(100 * j.bytes_read / (j.bytes_read + j.data_bytes)).toFixed(4)}% of the file)` +
       (j.requests ? ` over ${j.requests} range request(s)` : "");
   } catch (e) { detail.textContent = "error: " + e.message; }

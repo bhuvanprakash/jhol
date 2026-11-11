@@ -62,6 +62,7 @@ pub fn enrich(mut status: Status, root: &Path) -> Status {
         artifact.params = Some(summary.params);
         artifact.vram_bytes = Some(summary.vram_bytes());
         artifact.dtypes = summary.dtypes.clone();
+        artifact.top_tensors = summary.largest.clone();
         artifact
             .reasons
             .insert(0, format!("{} parameters", summary.params_human()));
