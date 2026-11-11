@@ -1112,48 +1112,19 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut AppState) -> Result
                         app.tab = app.tab.prev();
                         app.dirty = true;
                     }
-                    KeyCode::Char('1') => {
-                        app.tab = ActiveTab::Status;
-                        app.dirty = true;
-                    }
-                    KeyCode::Char('2') => {
-                        app.tab = ActiveTab::Artifacts;
-                        app.dirty = true;
-                    }
-                    KeyCode::Char('3') => {
-                        app.tab = ActiveTab::Budget;
-                        app.dirty = true;
-                    }
-                    KeyCode::Char('4') => {
-                        app.tab = ActiveTab::Proof;
-                        app.dirty = true;
-                    }
-                    KeyCode::Char('5') => {
-                        app.tab = ActiveTab::Proof;
-                        app.dirty = true;
-                    }
-                    KeyCode::Char('4') => {
-                        app.tab = ActiveTab::Budget;
-                        app.dirty = true;
-                    }
-                    KeyCode::Char('3') => {
-                        app.tab = ActiveTab::Fit;
-                        app.dirty = true;
-                    }
-                    KeyCode::Char('a') => {
-                        app.tab = ActiveTab::Actions;
-                        app.dirty = true;
-                    }
-                    KeyCode::Char('6') => {
-                        app.tab = ActiveTab::Actions;
-                        app.dirty = true;
-                    }
-                    KeyCode::Char('7') => {
-                        app.tab = ActiveTab::Dependencies;
-                        app.dirty = true;
-                    }
-                    KeyCode::Char('8') => {
-                        app.tab = ActiveTab::Doctor;
+                    // One mapping, in tab order. Duplicate arms here are how a key ends up
+                    // bound to two tabs and the later one silently wins.
+                    KeyCode::Char(c @ '1'..='8') => {
+                        app.tab = match c {
+                            '1' => ActiveTab::Status,
+                            '2' => ActiveTab::Artifacts,
+                            '3' => ActiveTab::Fit,
+                            '4' => ActiveTab::Budget,
+                            '5' => ActiveTab::Proof,
+                            '6' => ActiveTab::Actions,
+                            '7' => ActiveTab::Dependencies,
+                            _ => ActiveTab::Doctor,
+                        };
                         app.dirty = true;
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
