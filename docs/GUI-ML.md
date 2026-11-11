@@ -408,6 +408,25 @@ tests: the split branch ignored paths inside a repository (`Q4_K_M/model-…`), 
 filter compared the directory prefix as part of the shard base, so every sibling was rejected
 and the result silently fell back to shard 1 — the failure mode that looks like success.
 
+## What the page does for you
+
+- **Says which directory it is serving** — `…/j/jhol` beside the project name, full path in the
+  tooltip. A dashboard that hides its working directory invites the wrong-project mistake.
+- **Offers the fix, not just the verdict.** When the tree is `extraneous` the Project card grows a
+  button *"Remove what is not locked"* (`jhol verify --prune`); when it is `missing`/`wrong` it
+  offers *"Bring the tree back to the lockfile"* (`jhol install`). The button arms first, like
+  every write, and the description becomes the exact preview — on the test project it read
+  *"would remove what the lockfile does not authorise — node_modules/rogue is not in the
+  lockfile"* before anything moved.
+- **Shows elapsed time while an action runs**, and clears the buttons so a second click cannot
+  start a second run.
+- **Copies digests** from the provenance list with one click.
+- **Keyboard**: `1`–`6` or `←`/`→` between sections, `/` focuses the filter, `Esc` leaves an input.
+
+`prune` is classified as a **write** (`writes: true` in the preview). It deletes directories even
+though its command begins with `verify`; treating it as read-only once let a dashboard button
+remove a tree without asking.
+
 ## The token survives restarts
 
 A new token per run meant every restart invalidated every open tab — rebuilt binary, stale

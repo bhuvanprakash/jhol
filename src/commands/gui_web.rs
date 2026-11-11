@@ -614,6 +614,8 @@ const PAGE: &str = r##"<!doctype html>
  .who b{font-size:15px;font-weight:600;overflow:hidden;text-overflow:ellipsis;
         white-space:nowrap;max-width:46ch}
  .who span{font:12px/1 var(--mono);color:var(--mut)}
+ .rootpath{font:11.5px/1.4 var(--mono);color:var(--dim);max-width:26ch;overflow:hidden;
+           text-overflow:ellipsis;white-space:nowrap}
  .pills{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
  .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:999px;
        font-size:11.5px;line-height:1.35;border:1px solid var(--line2);background:var(--card2);
@@ -640,12 +642,14 @@ const PAGE: &str = r##"<!doctype html>
  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
        padding:16px 18px;min-width:0}
  .card+.card,.grid+.card{margin-top:14px}
- .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));
+ .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));
        gap:14px;align-items:start}
  h2{font:600 11.5px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;
     color:var(--dim);margin:0 0 13px}
- .kv{display:grid;grid-template-columns:minmax(78px,104px) minmax(0,1fr);gap:9px 14px;
+ .kv{display:grid;grid-template-columns:minmax(72px,96px) minmax(0,1fr);gap:9px 14px;
      margin:0;align-items:baseline}
+ .split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 22px}
+ @media (max-width:520px){ .split{grid-template-columns:minmax(0,1fr);gap:0} }
  .kv dt{color:var(--mut);font-size:12.5px}
  .kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
  .mono{font-family:var(--mono);font-size:12.5px;font-variant-numeric:tabular-nums}
@@ -718,6 +722,11 @@ const PAGE: &str = r##"<!doctype html>
             font-variant-numeric:tabular-nums;white-space:nowrap}
  .result{margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
  .result .path{font:12px/1.5 var(--mono);color:var(--mut);overflow-wrap:anywhere}
+ .fixrow{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+ .fixrow .dim{white-space:nowrap}
+ .copy{background:none;border:0;color:var(--dim);font:11.5px/1 var(--mono);cursor:pointer;
+       padding:0 2px;border-bottom:1px dotted var(--line2)}
+ .copy:hover{color:var(--acc)}
  .tag{display:inline-block;font:11px/1 var(--mono);color:var(--dim);
       border:1px solid var(--line2);border-radius:4px;padding:2px 5px;margin:0 4px 4px 0}
  .error{border-left:2px solid var(--bad);padding:8px 0 8px 12px;color:var(--bad);
@@ -745,7 +754,10 @@ const PAGE: &str = r##"<!doctype html>
 
  <header class="top">
    <div class="logo">jhol</div>
-   <div class="who"><b id="name">…</b><span id="version"></span></div>
+   <div class="who">
+     <b id="name">…</b><span id="version"></span>
+     <span id="root" class="rootpath" title=""></span>
+   </div>
    <div class="pills" id="pills"></div>
  </header>
 
@@ -769,12 +781,11 @@ const PAGE: &str = r##"<!doctype html>
      </dl>
    </div>
    <div class="grid status-block">
-     <div class="card"><h2>Project</h2><dl class="kv" id="k-project"></dl></div>
+     <div class="card"><h2>Project</h2><dl class="kv" id="k-project"></dl>
+       <div id="k-fix" class="fixrow"></div></div>
      <div class="card"><h2>Artefacts</h2><div id="k-artefacts"></div></div>
      <div class="card"><h2>Host</h2><dl class="kv" id="k-host"></dl></div>
-   </div>
-   <div class="card status-block" style="margin-top:14px">
-     <h2>Policy</h2><dl class="kv" id="k-policy"></dl>
+     <div class="card"><h2>Policy</h2><dl class="kv" id="k-policy"></dl></div>
    </div>
  </section>
 
@@ -859,6 +870,9 @@ document.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT") { if (e.key === "Escape") e.target.blur(); return; }
   const i = parseInt(e.key, 10);
   if (i >= 1 && i <= SECTIONS.length) show(SECTIONS[i - 1]);
+  const active = SECTIONS.findIndex(s => document.getElementById("s-" + s).classList.contains("on"));
+  if (e.key === "ArrowRight") { e.preventDefault(); show(SECTIONS[(active + 1) % SECTIONS.length]); }
+  if (e.key === "ArrowLeft") { e.preventDefault(); show(SECTIONS[(active - 1 + SECTIONS.length) % SECTIONS.length]); }
   if (e.key === "/") { e.preventDefault(); show("artifacts"); document.getElementById("q").focus(); }
 });
 
@@ -890,6 +904,10 @@ function render(s) {
   document.querySelectorAll(".status-block").forEach(el => { el.hidden = !hasManifest; });
   document.getElementById("name").textContent = hasManifest ? (s.project || "(unnamed)") : "no project";
   document.getElementById("version").textContent = s.version || "";
+  const rootEl = document.getElementById("root");
+  const segs = (s.root || "").split("/").filter(Boolean);
+  rootEl.textContent = segs.length ? "…/" + segs.slice(-2).join("/") : "";
+  rootEl.title = s.root || "";
 
   const unfit = s.artifacts.filter(a => a.fits === false).length;
   const unknown = s.artifacts.filter(a => a.fits === null || a.fits === undefined).length;
@@ -919,6 +937,21 @@ function render(s) {
     ["attested", `<span class="mono">${s.proof.attested_packages}</span> packages ·
                   <span class="mono">${s.proof.attested_models}</span> models`],
   ]);
+
+  const fix = document.getElementById("k-fix");
+  if (hasManifest && s.tree.state !== "match") {
+    const want = s.tree.state === "extraneous"
+      ? { a: "prune", label: "Remove what is not locked", why: "verify --prune" }
+      : { a: "install", label: "Bring the tree back to the lockfile", why: "install" };
+    fix.innerHTML = `<button class="btn" data-fix="${want.a}" type="button">${esc(want.label)}</button>
+      <span class="dim mono" style="font-size:11.5px;margin-left:8px">jhol ${esc(want.why)}</span>`;
+    fix.querySelector("[data-fix]").onclick = (e) => {
+      armOrRun(want.a, "", true, "jhol " + want.why, e.currentTarget);
+    };
+    fix.dataset.action = want.a;
+  } else {
+    fix.innerHTML = "";
+  }
 
   document.getElementById("k-artefacts").innerHTML = total ? `
     <div class="figures">
@@ -1005,9 +1038,17 @@ function renderProof(s) {
     ? s.artifacts.map(a => `<div class="lrow">
         <span class="t">${esc(a.name)}</span>
         <span class="v">${bytes(a.bytes)}</span>
-        <span class="d">${esc(a.kind)}${a.digest ? ` · <span class="mono">${esc(a.digest.slice(0,24))}</span>` : ""}</span>
+        <span class="d">${esc(a.kind)}${a.digest ? ` · <span class="mono">${esc(a.digest.slice(0,24))}</span>
+          <button class="copy" data-copy="${esc(a.digest)}" type="button">copy</button>` : ""}</span>
       </div>`).join("")
     : `<div class="empty">No artefacts pinned.</div>`;
+  document.querySelectorAll("button[data-copy]").forEach(b => {
+    b.onclick = async () => {
+      try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "copied"; }
+      catch (e) { b.textContent = "ctrl-c"; }
+      setTimeout(() => { b.textContent = "copy"; }, 1500);
+    };
+  });
 }
 
 function renderForks(s) {
@@ -1180,7 +1221,13 @@ async function run(action, name, stream, label) {
   show("actions");
   const out = document.getElementById("out");
   document.querySelectorAll(".btn").forEach(x => x.disabled = true);
-  out.textContent = `$ jhol ${action}${name ? " " + name : ""}\n`;
+  const shown = label || `jhol ${action}${name ? " " + name : ""}`;
+  out.textContent = `$ ${shown}\n`;
+  const hint = document.getElementById("arm-hint");
+  const started = Date.now();
+  const ticker = setInterval(() => {
+    hint.textContent = `Running ${label || action} — ${Math.round((Date.now() - started) / 1000)} s`;
+  }, 1000);
   try {
     const r = await fetch(`/action?t=${encodeURIComponent(token)}${stream ? "&stream=1" : ""}`, {
       method: "POST", headers: {"content-type": "application/json"},
@@ -1202,6 +1249,9 @@ async function run(action, name, stream, label) {
   } catch (e) {
     out.textContent += `\nerror: ${e.message}`;
   } finally {
+    clearInterval(ticker);
+    document.getElementById("arm-hint").textContent =
+      "Writes ask once: the first click states what would happen.";
     document.querySelectorAll(".btn").forEach(x => x.disabled = false);
     document.querySelectorAll("[data-a]").forEach(x => x.textContent = "Run");
   }

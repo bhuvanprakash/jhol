@@ -4078,3 +4078,19 @@ The token is now stored in `.jhol/gui-token` with mode `0600` and reused across 
 `--new-token` to rotate deliberately. Verified: two consecutive starts printed the same URL, the
 tab opened before the restart still answered `200` afterwards, and rotation made the previous
 token answer `403`. A test pins reuse, rotation and the `0600` mode.
+
+## The page says where it is, offers the fix, and times its runs
+
+- **Directory identity.** The masthead shows `…/j/jhol` with the full path in the tooltip, and
+  `status --json` gained `root`, so no surface can quietly describe the wrong project.
+- **One-click fix.** An `extraneous` tree grows a *"Remove what is not locked"* button; a
+  `missing`/`wrong` tree offers *"Bring the tree back to the lockfile"*. It arms first and the
+  description becomes the preview — *"would remove what the lockfile does not authorise —
+  node_modules/rogue is not in the lockfile"* — before anything moves.
+- **`prune` is a write.** It was classified read-only because its command starts with `verify`,
+  which let a dashboard button delete a tree without confirmation. The preview now reports
+  `writes: true`, and a test pins that every write asks.
+- **Elapsed time** while an action runs, buttons disabled for the duration, digests copyable from
+  the provenance list, `←`/`→` move between sections.
+- Layout: cards at `minmax(420px, 1fr)` so two or three fit per row and values stop breaking
+  mid-token; verified at 1400/1000/700 px with `scrollWidth === innerWidth` at every width.

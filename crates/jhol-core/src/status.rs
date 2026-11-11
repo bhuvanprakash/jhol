@@ -26,6 +26,9 @@ use serde::Serialize;
 pub struct Status {
     pub project: String,
     pub version: String,
+    /// Absolute path of the project this status describes. A dashboard that does not say
+    /// *which* directory it is showing invites the wrong-project mistake.
+    pub root: String,
     /// Is there a `package.json` here at all? An unnamed project and no project are
     /// different screens.
     pub has_manifest: bool,
@@ -555,6 +558,10 @@ pub fn collect(root: &Path) -> Status {
 
     mark("pylock+axes+attest+plan", &mut t);
     Status {
+        root: std::fs::canonicalize(root)
+            .unwrap_or_else(|_| root.to_path_buf())
+            .display()
+            .to_string(),
         has_manifest: root.join("package.json").is_file(),
         project,
         version,
@@ -631,10 +638,15 @@ pub fn action_preview(action: &str, status: &Status) -> ActionPreview {
                 status.tree.packages
             ),
         ),
+        // `prune` deletes directories: it is a write, and it must ask even though `verify`
+        // inside it is a read. Treating it as read-only let a dashboard button delete a tree.
         "prune" => (
-            false,
+            true,
             match status.tree.state.as_str() {
-                "extraneous" => format!("would remove what the lockfile does not authorise: {}", status.tree.detail),
+                "extraneous" => format!(
+                    "would remove what the lockfile does not authorise — {}",
+                    status.tree.detail
+                ),
                 _ => "nothing to prune; the tree holds only authorised packages".to_string(),
             },
         ),
@@ -698,8 +710,8 @@ mod preview_tests {
     #[test]
     fn reads_never_ask_for_confirmation_and_writes_always_do() {
         assert!(!action_preview("verify", &status(0, "match")).writes);
-        assert!(!action_preview("prune", &status(0, "match")).writes);
-        for a in ["install", "ci", "policy", "fork", "promote"] {
+        // prune removes directories, so it is a write even though its name starts with `verify`.
+        for a in ["prune", "install", "ci", "policy", "fork", "promote"] {
             assert!(action_preview(a, &status(0, "match")).writes, "{a} must confirm");
         }
     }
@@ -832,6 +844,19 @@ mod tests {
         assert!(rows[0].present, "dir-qualified path must resolve once");
         assert_eq!(plan.cached_bytes, 1);
         assert_eq!(plan.missing_bytes, 0);
+    }
+
+    #[test]
+    fn the_status_says_which_directory_it_describes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"here"}"#).unwrap();
+        let s = collect(dir.path());
+        assert!(s.has_manifest);
+        assert!(
+            s.root.ends_with(dir.path().file_name().unwrap().to_str().unwrap()),
+            "root must name the project: {}",
+            s.root
+        );
     }
 
     #[test]
