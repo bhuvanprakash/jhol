@@ -3907,3 +3907,16 @@ header. The page's raw HTML string also had to change delimiter — `href="#"` c
 sequence that ended the previous one, which is a reminder that raw strings are not free.
 
 bin 15 (two new: URL shapes, and the repo-listing path), jhol-core 731.
+
+## Every Hugging Face file shape resolves, and a 404 says what it means
+
+`https://huggingface.co/Qwen/Qwen3-8B-GGUF/Qwen3-8B-Q8_0.gguf` returned HTTP 404, because only
+`/resolve/<rev>/<file>` serves bytes on Hugging Face and the browser-style link was passed
+straight through.
+
+Now `…/org/repo/<file>`, `…/org/repo/blob/<rev>/<file>`, `…/org/repo/raw/<rev>/<file>` and the
+canonical `…/org/repo/resolve/<rev>/<file>` all normalise to one resolve URL, trailing slash or
+not (five shapes pinned by a test). A genuine 404 is reported as *not found*, with the hint to
+run `jhol inspect <repo>` for the file list — instead of surfacing as a server fault.
+
+bin 16, jhol-core 731.

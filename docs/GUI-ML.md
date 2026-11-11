@@ -291,7 +291,15 @@ quantisation mix come from the tensor descriptors; the resident estimate uses GG
 (Q8_0 = 34 bytes per 32 elements, Q4_K = 144 per 256, …) and is withheld for a type it does not
 know, rather than guessed.
 
-### A repository URL now answers the question instead of refusing it
+### Every Hugging Face file shape resolves to `/resolve/`
+
+Browsers show file links as `…/org/repo/file.gguf`, `…/org/repo/blob/main/file.gguf`, or
+`…/org/repo/raw/main/file.gguf`. Only `…/resolve/<rev>/file.gguf` serves bytes; the others 404,
+and a 404 read as a broken server teaches the wrong lesson. All four shapes — trailing slash or
+not — normalise to one resolve URL, and a genuine 404 now says so and points at
+`jhol inspect <repo>` for the file list.
+
+### A repository URL answers the question instead of refusing it
 
 `https://huggingface.co/Qwen/Qwen3-8B-GGUF` (and `hf://Qwen/Qwen3-8B-GGUF`) is a *repository*.
 Asking it for a byte range gets an HTML page, so the honest answer is the file list — or the

@@ -263,6 +263,32 @@ impl InspectReport {
     }
 }
 
+/// Normalise every shape of a Hugging Face **file** reference into a `/resolve/` URL.
+///
+/// People paste what their browser shows:
+/// `…/org/repo/file.gguf`, `…/org/repo/blob/main/file.gguf`, or the canonical
+/// `…/org/repo/resolve/main/file.gguf`. Only the last one serves bytes; the others 404, and a
+/// 404 read as "the server is broken" is the wrong lesson to teach a user.
+fn hf_file_url(rest: &str) -> Option<String> {
+    let rest = rest.trim_end_matches('/');
+    let mut parts = rest.splitn(3, '/');
+    let org = parts.next().filter(|s| !s.is_empty())?;
+    let repo = parts.next().filter(|s| !s.is_empty())?;
+    let tail = parts.next()?;
+    let mut tail_parts = tail.split('/');
+    let first = tail_parts.next()?;
+    let rest_of_tail: Vec<&str> = tail_parts.collect();
+    let path = match first {
+        "resolve" => tail.to_string(),
+        "blob" | "raw" | "tree" if !rest_of_tail.is_empty() => {
+            // `blob/<rev>/<file>` and `raw/<rev>/<file>` serve the same bytes as resolve.
+            format!("resolve/{}", rest_of_tail.join("/"))
+        }
+        _ => format!("resolve/main/{tail}"),
+    };
+    Some(format!("https://huggingface.co/{org}/{repo}/{path}"))
+}
+
 /// `hf://org/repo/file[@rev]` and bare URLs become an HTTP URL; anything else is a path.
 fn remote_url(target: &str) -> Option<String> {
     if let Some(rest) = target.strip_prefix("hf://") {
@@ -274,13 +300,17 @@ fn remote_url(target: &str) -> Option<String> {
         let org = parts.next()?;
         let repo = parts.next()?;
         let Some(file) = parts.next() else {
-            // `hf://org/repo` names a *repository*. Turning that into a resolve URL asks for
-            // an HTML page and then blames the server for answering 200.
+            // `hf://org/repo` names a *repository*; `repo_ref` handles that before we get here.
             return None;
         };
         return Some(format!(
             "https://huggingface.co/{org}/{repo}/resolve/{rev}/{file}"
         ));
+    }
+    for prefix in ["https://huggingface.co/", "http://huggingface.co/"] {
+        if let Some(rest) = target.strip_prefix(prefix) {
+            return hf_file_url(rest);
+        }
     }
     if target.starts_with("https://") || target.starts_with("http://") {
         return Some(target.to_string());
@@ -448,8 +478,16 @@ pub fn inspect_target(root: &Path, target: &str) -> Result<InspectReport, String
     };
 
     let mut probe = HEADER_PROBE_BYTES;
-    let mut bytes = jhol_core::http_client::get_range(&url, 0, probe - 1)
-        .map_err(|e| format!("{url}: {e}"))?;
+    let mut bytes = jhol_core::http_client::get_range(&url, 0, probe - 1).map_err(|e| {
+        if e.contains("404") {
+            format!(
+                "{url}: not found (HTTP 404). Check the file name, or list a repository's\
+                 weights with `jhol inspect <repo>`"
+            )
+        } else {
+            format!("{url}: {e}")
+        }
+    })?;
     let mut requests = 1;
     if bytes.len() >= 4 && u32::from_le_bytes(bytes[..4].try_into().expect("4")) == jhol_ai::gguf::MAGIC {
         // A GGUF header carries the tokenizer table, so it can run to megabytes. Ask again
@@ -620,6 +658,25 @@ mod tests {
         let e = inspect_target(Path::new("."), "hf://Qwen/Qwen3-8B-GGUF").unwrap_err();
         assert!(e.contains("repository, not a file"), "{e}");
         assert!(e.contains("hf://Qwen/Qwen3-8B-GGUF/<file.gguf>"), "{e}");
+    }
+
+    #[test]
+    fn every_huggingface_file_shape_normalises_to_resolve() {
+        let want = "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q8_0.gguf";
+        for pasted in [
+            "https://huggingface.co/Qwen/Qwen3-8B-GGUF/Qwen3-8B-Q8_0.gguf",
+            "https://huggingface.co/Qwen/Qwen3-8B-GGUF/blob/main/Qwen3-8B-Q8_0.gguf",
+            "https://huggingface.co/Qwen/Qwen3-8B-GGUF/raw/main/Qwen3-8B-Q8_0.gguf",
+            "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q8_0.gguf",
+            "https://huggingface.co/Qwen/Qwen3-8B-GGUF/Qwen3-8B-Q8_0.gguf/",
+        ] {
+            assert_eq!(remote_url(pasted).as_deref(), Some(want), "{pasted}");
+        }
+        // A two-segment repository URL is not a file URL; `repo_ref` owns that case.
+        assert!(matches!(
+            repo_ref("https://huggingface.co/o/r"),
+            Some(_)
+        ));
     }
 
     #[test]
