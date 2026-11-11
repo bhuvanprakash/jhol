@@ -32,38 +32,38 @@ Artifacts and Actions are the only tabs with new logic; the rest render fields.
 
 ## How it looks
 
-Editorial, not dashboard-template. The tells of generated UI — emoji ticks, gradient bars,
-pill-shaped badges for everything, glass headers, uppercase letter-spaced micro-labels, three
-competing accent colours — are all gone. What is left is typography doing the work:
+Cards on a dark slate ground, one accent per meaning, and — the part that matters — **rows that
+cannot overflow**, because they are CSS grid rows rather than tables.
 
-- **Serif title, sans prose, mono numbers.** Three faces, each with one job. A number is
-  monospaced and tabular so columns line up without a single striped background.
-- **Hairlines, not boxes.** One-pixel rules separate sections and rows; there are no nested
-  cards, no shadows, no rounded containers inside rounded containers.
-- **One accent.** Sage (`#8fc7a5`) marks "this is fine"; rust marks "this will not run"; ochre
-  marks "we do not know". Nothing else is coloured — including the amber `?`, which must never
-  read as green.
-- **Status is a sentence.** The masthead says *"Tree matches the lockfile · 73 packages ·
-  lockfile current · nothing to fetch · all fit"* and greys out what is unremarkable, so the
-  eye only stops at a problem.
-- **Nav is text with a rule under the active item**, counts inline and dim (`Status 73`), not
-  a row of boxes.
-- **Numbers are human** — `8.19 B` parameters, `8.11 GB` tensor data, `16.0 MB` read — with the
-  full figure in `--json` for anything that needs it.
-- **Tables answer in one line per row**: a status word, the kind, the name in mono, right-aligned
-  sizes, and the reasons joined by a middot at 12.5px.
-- **Hierarchy by weight, not by colour**: section labels are the same 12px as body, just
-  dimmer. Nothing shouts.
-- **Light or dark** follows the OS (`prefers-color-scheme`), both on the same neutral scale.
-- **Motion is one 160 ms fade** when a section appears. That is the entire animation budget.
+- **Cards** hold one question each (Project · Artefacts · Host · Policy), two or three per row
+  on a wide screen, one per row on a phone.
+- **Grid rows, not `<table>`.** Each artefact is
+  `grid-template-columns: 78px 74px minmax(0,1fr) 74px 84px`, so the name column is the only
+  flexible one and the reasons wrap onto their own full-width line. A fixed table column cannot
+  be squeezed and a long package name cannot push the layout sideways; a browser layout does
+  both. This was the actual bug in the previous pass: `Resident` and `Why` collided, and long
+  reasons ran off the right edge.
+- **Numbers are humanised** (`8.19 B` parameters, `196 KB`, `16.0 MB read`) and tabular, so
+  columns line up without stripes.
+- **Pills in the masthead** answer "is anything wrong?" before you click: tree verdict, lockfile,
+  what is missing, how many will not run, fork count.
+- **Tabs carry counts** inline and dim; an empty count renders nothing rather than an empty box.
+- **Unknown is amber, never green.** A `?` that reads as a pass is the one failure a dashboard
+  must not have.
+- **Two faces**: sans for prose and labels, mono only for identifiers and numbers.
+- **Light and dark** follow the OS on one neutral scale.
+- **One animation**: a 160 ms fade when a section appears.
 
-Interaction stays quiet: the armed state of a write lives **inside its own row** (the
-description turns to the plan, the button becomes `Confirm`, and both revert after ten seconds),
-so the page never moves under the cursor. `1`–`6` switch sections, `/` focuses the filter, `Esc`
-leaves an input.
+Interaction: writes are armed inside their own row (the description becomes the plan, the button
+becomes `Confirm`, both revert after ten seconds), so nothing moves under the cursor. `1`–`6`
+switch sections, `/` focuses the filter, `Esc` leaves an input.
 
-Verified in a real browser (agent-browser, 1400×900): console clean, arm → confirm → run works,
-GGUF inspection renders, ETag polling leaves the network tab quiet.
+### Checked, not eyeballed
+
+Rendered in a real browser (agent-browser) at **1400, 1200, 1000, 900, 700 and 420 px** with a
+pinned 8 B-parameter model in the project, and at every width
+`document.documentElement.scrollWidth === innerWidth` — no horizontal overflow, long names and
+long reasons wrapping instead. Console clean.
 
 ## Production behaviour
 

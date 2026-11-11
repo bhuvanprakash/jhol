@@ -4034,3 +4034,21 @@ code changed. **0 failures in 30 full-suite rounds** afterwards, and `VERIFY-ALL
 Written up in `docs/DEFECT-LOG.md`: a test that re-executes itself is a small distributed system,
 and its timing assumptions are defects — "flaky" is the word we use instead of "the fixture lies
 under load".
+
+## Back to cards, with overflow made impossible
+
+The editorial pass traded cards for hairlines and moved the artefact list onto a fixed-width
+table, which collided its headers (`Resident` against `Why`) and let long reasons run off the
+right edge. The card layout was the better structure; the overflow was the defect.
+
+So: cards are back (Project · Artefacts · Host · Policy, auto-fit two or three per row), and the
+artefact list is a **CSS grid row** rather than a table —
+`78px 74px minmax(0,1fr) 74px 84px` with the reasons on their own full-width line. Only the name
+column flexes, so nothing can be pushed sideways; identifiers use `overflow-wrap: anywhere`
+instead of overflowing.
+
+Also fixed: an empty tab count rendered as an empty bordered box.
+
+Verified in a real browser at 1400, 1200, 1000, 900, 700 and 420 px against a project with a
+pinned 8 B-parameter model: `scrollWidth === innerWidth` at every width, no clipped columns,
+console clean.

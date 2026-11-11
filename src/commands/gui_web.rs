@@ -512,256 +512,252 @@ const PAGE: &str = r##"<!doctype html>
 <title>jhol</title>
 <style>
  :root{
-   --bg:#0b0b0c; --ink:#ececf0; --mut:#9b9ba4; --dim:#6a6a72;
-   --hair:#1c1c20; --hair2:#27272c; --panel:#0f0f11;
-   --accent:#8fc7a5; --bad:#d9918f; --warn:#c9b47c; --link:#a9c7e8;
-   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
-   --serif:ui-serif,"New York",Iowan,Georgia,serif;
-   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
    color-scheme:dark;
+   --bg:#0b0c0e; --card:#12141a; --card2:#171a21; --line:#232733; --line2:#2f3542;
+   --ink:#e9ecf2; --mut:#98a0ae; --dim:#6b7280;
+   --ok:#62c98a; --bad:#e08a8a; --warn:#d8bb74; --acc:#7aa7e0;
+   --sans:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",system-ui,sans-serif;
+   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
  }
- @media (prefers-color-scheme: light){
-   :root{
-     --bg:#fcfcfa; --ink:#171719; --mut:#5e5e67; --dim:#8d8d95;
-     --hair:#e7e6e1; --hair2:#d8d7d1; --panel:#f7f7f4;
-     --accent:#2e6b4b; --bad:#9c3b38; --warn:#7c6118; --link:#2c5f96;
-     color-scheme:light;
-   }
+ @media (prefers-color-scheme:light){
+   :root{ --bg:#f7f7f5; --card:#fff; --card2:#f1f1ee; --line:#e3e2dd; --line2:#d5d4ce;
+          --ink:#191a1d; --mut:#5b6169; --dim:#8a8f97; --ok:#2f7d52; --bad:#a03f3f;
+          --warn:#7d6119; --acc:#2f5f99; color-scheme:light }
  }
  *{box-sizing:border-box}
  html,body{margin:0}
- body{background:var(--bg);color:var(--ink);font:13.5px/1.6 var(--sans);
-      -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
- ::selection{background:var(--accent);color:var(--bg)}
- .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);
-          white-space:nowrap;border:0}
- :focus-visible{outline:1px solid var(--accent);outline-offset:2px}
- a{color:inherit;text-decoration:none;border-bottom:1px solid var(--hair2)}
- a:hover{border-bottom-color:var(--accent)}
- .wrap{max-width:1080px;margin:0 auto;padding:0 32px 96px}
+ body{background:var(--bg);color:var(--ink);font:14px/1.55 var(--sans);
+      -webkit-font-smoothing:antialiased}
+ ::selection{background:var(--acc);color:var(--bg)}
+ a{color:var(--acc);text-decoration:none} a:hover{text-decoration:underline}
+ .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);border:0}
+ :focus-visible{outline:2px solid var(--acc);outline-offset:2px;border-radius:4px}
+ .shell{max-width:1180px;margin:0 auto;padding:20px 22px 64px}
 
- /* ── masthead ───────────────────────────────────────────── */
- header.top{max-width:1080px;margin:0 auto;padding:38px 32px 0;
-   display:grid;grid-template-columns:1fr auto;gap:8px 28px;align-items:end}
- .brand{font:400 15px/1 var(--mono);letter-spacing:.14em;text-transform:lowercase;
-   color:var(--mut)}
- .title{font:400 26px/1.15 var(--serif);letter-spacing:-.015em;margin:6px 0 0;
-   color:var(--ink)}
- .title .ver{font:12px/1 var(--mono);color:var(--dim);letter-spacing:0;margin-left:8px}
- .lede{grid-column:1/-1;color:var(--mut);font-size:13px;margin:14px 0 0;max-width:70ch}
- .lede .sep{color:var(--dim);padding:0 7px}
- .state-ok{color:var(--accent)} .state-bad{color:var(--bad)}
+ /* ── top bar ───────────────────────────────────────────── */
+ .top{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:6px 0 16px}
+ .logo{font:600 14px/1 var(--mono);letter-spacing:-.02em;padding:6px 9px;
+       border:1px solid var(--line2);border-radius:7px;background:var(--card2)}
+ .who{display:flex;align-items:baseline;gap:8px;min-width:0}
+ .who b{font-size:15px;font-weight:600;overflow:hidden;text-overflow:ellipsis;
+        white-space:nowrap;max-width:46ch}
+ .who span{font:12px/1 var(--mono);color:var(--mut)}
+ .pills{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+ .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:999px;
+       font-size:11.5px;line-height:1.35;border:1px solid var(--line2);background:var(--card2);
+       color:var(--mut);white-space:nowrap;max-width:100%}
+ .pill i{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+ .pill.ok{color:var(--ok);border-color:color-mix(in srgb, var(--ok) 35%, var(--line2))}
+ .pill.bad{color:var(--bad);border-color:color-mix(in srgb, var(--bad) 35%, var(--line2))}
+ .pill.warn{color:var(--warn);border-color:color-mix(in srgb, var(--warn) 35%, var(--line2))}
 
- /* ── nav ────────────────────────────────────────────────── */
- nav{border-bottom:1px solid var(--hair);margin-top:26px}
- .wrap nav{display:flex;gap:22px;overflow-x:auto;scrollbar-width:none}
- nav button{appearance:none;background:none;border:0;border-bottom:1px solid transparent;
-   color:var(--mut);font:inherit;font-size:13px;padding:11px 0 12px;cursor:pointer;
-   white-space:nowrap;display:inline-flex;align-items:baseline;gap:6px;margin-bottom:-1px}
- nav button:hover{color:var(--ink)}
- nav button.on{color:var(--ink);border-bottom-color:var(--ink)}
- nav .n{font:11px/1 var(--mono);color:var(--dim);font-variant-numeric:tabular-nums}
+ /* ── tabs ──────────────────────────────────────────────── */
+ .tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:18px}
+ .tabs button{appearance:none;border:1px solid transparent;background:transparent;
+   color:var(--mut);font:inherit;font-size:13px;padding:7px 11px;border-radius:8px;
+   cursor:pointer;display:inline-flex;align-items:center;gap:7px;max-width:100%}
+ .tabs button:hover{background:var(--card);color:var(--ink)}
+ .tabs button.on{background:var(--card2);border-color:var(--line2);color:var(--ink)}
+ .tabs .n{font:11px/1 var(--mono);color:var(--dim);background:var(--bg);
+   border:1px solid var(--line);border-radius:5px;padding:2px 5px}
+ .tabs .n:empty{display:none}
+ .tabs button.on .n{color:var(--acc);border-color:var(--line2)}
 
- /* ── sections + type ────────────────────────────────────── */
+ /* ── cards ─────────────────────────────────────────────── */
  section{display:none} section.on{display:block}
- h2{font:400 12px/1 var(--sans);color:var(--dim);margin:0 0 14px;letter-spacing:.01em}
- .block{padding:30px 0 6px;border-bottom:1px solid var(--hair)}
- .block:last-child{border-bottom:0}
- .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
-       gap:0 56px}
- .kv{display:grid;grid-template-columns:96px 1fr;gap:9px 16px;align-items:baseline;margin:0}
- .kv dt{color:var(--dim);font-size:12.5px}
- .kv dd{margin:0;min-width:0}
- .mono{font-family:var(--mono);font-size:12.5px;font-variant-numeric:tabular-nums;
-       letter-spacing:-.01em}
+ .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+       padding:16px 18px;min-width:0}
+ .card+.card,.grid+.card{margin-top:14px}
+ .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));
+       gap:14px;align-items:start}
+ h2{font:600 11.5px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;
+    color:var(--dim);margin:0 0 13px}
+ .kv{display:grid;grid-template-columns:minmax(78px,104px) minmax(0,1fr);gap:9px 14px;
+     margin:0;align-items:baseline}
+ .kv dt{color:var(--mut);font-size:12.5px}
+ .kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+ .mono{font-family:var(--mono);font-size:12.5px;font-variant-numeric:tabular-nums}
  .muted{color:var(--mut)} .dim{color:var(--dim)}
- .empty{color:var(--dim);padding:26px 0;font-size:13px}
- .note{color:var(--dim);font-size:12.5px;margin:12px 0 0}
-
- /* ── status marks: a word, not a sticker ────────────────── */
- .mark{display:inline-flex;align-items:center;gap:7px}
+ .empty{color:var(--dim);font-size:13px;padding:10px 0}
+ .note{color:var(--dim);font-size:12.5px;margin:12px 0 0;overflow-wrap:anywhere}
+ .mark{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
  .mark::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--dim);
    flex:none;transform:translateY(-1px)}
- .mark.ok{color:var(--accent)} .mark.ok::before{background:var(--accent)}
+ .mark.ok{color:var(--ok)} .mark.ok::before{background:var(--ok)}
  .mark.bad{color:var(--bad)} .mark.bad::before{background:var(--bad)}
  .mark.warn{color:var(--warn)} .mark.warn::before{background:var(--warn)}
- .tag{font:11px/1 var(--mono);color:var(--dim);border:1px solid var(--hair2);
-   border-radius:3px;padding:2px 5px;letter-spacing:0}
 
- /* ── tables ─────────────────────────────────────────────── */
- table{width:100%;border-collapse:collapse;table-layout:fixed}
- th{font:400 12px/1 var(--sans);color:var(--dim);text-align:left;
-    padding:0 16px 10px 0;border-bottom:1px solid var(--hair2)}
- td{padding:13px 16px 13px 0;border-bottom:1px solid var(--hair);vertical-align:baseline}
- tr:last-child td{border-bottom:0}
- td.num,th.num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;
-   padding-right:16px;white-space:nowrap}
- th:last-child,td:last-child{padding-right:0}
- td.name{font-family:var(--mono);font-size:12.5px;overflow-wrap:anywhere}
- td .sub{color:var(--dim);font:11.5px/1.5 var(--mono)}
- .why{color:var(--mut);font-size:12.5px}
- .why span+span::before{content:" · ";color:var(--dim)}
+ /* ── rows (never tables: a fixed column cannot overflow if it is a grid) ── */
+ .rowhead,.arow{display:grid;
+   grid-template-columns:minmax(64px,78px) minmax(56px,74px) minmax(0,1fr) 74px 84px;
+   gap:6px 14px;padding:11px 0;border-top:1px solid var(--line);align-items:baseline}
+ .rowhead{color:var(--dim);font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+          padding-top:2px;border-top:0}
+ .rowhead span:nth-child(4),.rowhead span:nth-child(5),
+ .arow .num{text-align:right}
+ .arow .num{font-family:var(--mono);font-size:12.5px;font-variant-numeric:tabular-nums;
+            white-space:nowrap}
+ .arow .name{font-family:var(--mono);font-size:12.5px;overflow-wrap:anywhere;min-width:0}
+ .arow .kind{color:var(--dim);font-size:12px;white-space:nowrap;overflow:hidden;
+             text-overflow:ellipsis}
+ .arow .why{grid-column:1/-1;color:var(--mut);font-size:12.5px;overflow-wrap:anywhere}
+ .arow .why span+span::before{content:" · ";color:var(--dim)}
+ .arow .sub{color:var(--dim);font:11.5px/1.5 var(--mono);overflow-wrap:anywhere}
+ .list{display:block}
+ .lrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 14px;
+       padding:11px 0;border-top:1px solid var(--line);align-items:baseline}
+ .lrow .t{font-family:var(--mono);font-size:12.5px;overflow-wrap:anywhere}
+ .lrow .d{grid-column:1/-1;color:var(--mut);font-size:12.5px;overflow-wrap:anywhere}
+ .lrow .v{font-family:var(--mono);font-size:12.5px;color:var(--mut);text-align:right;
+          white-space:nowrap;font-variant-numeric:tabular-nums}
 
- /* ── controls ───────────────────────────────────────────── */
- input{background:transparent;border:0;border-bottom:1px solid var(--hair2);
-   color:var(--ink);font:13px/1.5 var(--sans);padding:9px 2px;width:100%;outline:none}
- input:focus{border-bottom-color:var(--accent)}
- input::placeholder{color:var(--dim)}
+ /* ── controls ──────────────────────────────────────────── */
+ input{background:var(--bg);border:1px solid var(--line2);color:var(--ink);
+   border-radius:8px;padding:9px 11px;font:13px/1.4 var(--sans);width:100%;min-width:0;
+   outline:none}
+ input:focus{border-color:var(--acc)}
  input.mono{font-family:var(--mono);font-size:12.5px}
- .field{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
- .field .grow{flex:1;min-width:240px}
- .link{appearance:none;background:none;border:0;border-bottom:1px solid var(--hair2);
-   color:var(--ink);font:inherit;font-size:13px;padding:0 0 2px;cursor:pointer}
- .link:hover{border-bottom-color:var(--accent);color:var(--accent)}
- .link[disabled]{color:var(--dim);border-bottom-color:transparent;cursor:progress}
+ .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+ .toolbar .grow{flex:1 1 240px;min-width:0}
+ .btn{appearance:none;font:500 13px/1 var(--sans);color:var(--ink);background:var(--card2);
+   border:1px solid var(--line2);border-radius:8px;padding:9px 14px;cursor:pointer;
+   white-space:nowrap}
+ .btn:hover{border-color:var(--acc)}
+ .btn.primary{background:color-mix(in srgb, var(--acc) 18%, var(--card2));
+   border-color:color-mix(in srgb, var(--acc) 45%, var(--line2))}
+ .btn[disabled]{opacity:.5;cursor:progress}
  .check{display:inline-flex;align-items:center;gap:8px;color:var(--mut);font-size:12.5px;
-   cursor:pointer;user-select:none;white-space:nowrap}
- .check input{width:auto;border:0;accent-color:var(--accent)}
+        cursor:pointer;white-space:nowrap}
+ .check input{width:auto;accent-color:var(--acc)}
 
- /* ── inspect result ─────────────────────────────────────── */
- .result{margin-top:26px}
- .result .path{font:12px/1.5 var(--mono);color:var(--mut);overflow-wrap:anywhere}
- .figures{display:flex;flex-wrap:wrap;gap:0 40px;margin:14px 0 4px}
- .fig{display:flex;flex-direction:column;gap:3px;padding:6px 0}
- .fig b{font:400 19px/1.15 var(--serif);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+ /* ── figures + bars ────────────────────────────────────── */
+ .figures{display:flex;flex-wrap:wrap;gap:10px 34px;margin:0}
+ .fig{display:flex;flex-direction:column;gap:2px;min-width:0}
+ .fig b{font-size:19px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
  .fig span{font-size:11.5px;color:var(--dim)}
- .bars{margin-top:18px;display:grid;gap:9px}
- .barrow{display:grid;grid-template-columns:minmax(0,1fr) 132px 74px;gap:16px;
-         align-items:center}
+ .bars{margin-top:14px;display:grid;gap:8px}
+ .barrow{display:grid;grid-template-columns:minmax(0,1fr) minmax(60px,180px) 78px;
+         gap:12px;align-items:center}
  .barrow .nm{font:12px/1.4 var(--mono);color:var(--mut);overflow:hidden;
              text-overflow:ellipsis;white-space:nowrap}
- .bar{height:2px;background:var(--hair2);position:relative}
- .bar>i{position:absolute;inset:0 auto 0 0;background:var(--accent);opacity:.9}
+ .bar{height:6px;background:var(--card2);border-radius:99px;overflow:hidden}
+ .bar>i{display:block;height:100%;background:var(--acc);opacity:.85;border-radius:99px}
  .barrow .v{text-align:right;font:12px/1 var(--mono);color:var(--mut);
-            font-variant-numeric:tabular-nums}
- .error{border-left:2px solid var(--bad);padding:10px 0 10px 14px;color:var(--bad);
-        font:12.5px/1.6 var(--mono);white-space:pre-wrap}
-
- /* ── actions ────────────────────────────────────────────── */
- .act{display:grid;grid-template-columns:230px 1fr auto;gap:20px;align-items:baseline;
-      padding:15px 0;border-bottom:1px solid var(--hair)}
- .act:first-of-type{border-top:1px solid var(--hair)}
- .act .cmd{font:12.5px/1.5 var(--mono);color:var(--ink)}
- .act .d{color:var(--mut);font-size:12.5px}
- .act .armed{color:var(--warn)}
- pre{font:12.5px/1.65 var(--mono);color:var(--mut);white-space:pre-wrap;
-     overflow:auto;max-height:24rem;margin:0;padding:16px 0 0;
-     border-top:1px solid var(--hair)}
+            font-variant-numeric:tabular-nums;white-space:nowrap}
+ .result{margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
+ .result .path{font:12px/1.5 var(--mono);color:var(--mut);overflow-wrap:anywhere}
+ .tag{display:inline-block;font:11px/1 var(--mono);color:var(--dim);
+      border:1px solid var(--line2);border-radius:4px;padding:2px 5px;margin:0 4px 4px 0}
+ .error{border-left:2px solid var(--bad);padding:8px 0 8px 12px;color:var(--bad);
+        font:12.5px/1.6 var(--mono);overflow-wrap:anywhere;white-space:pre-wrap}
+ pre{font:12.5px/1.6 var(--mono);color:var(--mut);white-space:pre-wrap;overflow:auto;
+     max-height:24rem;margin:0;padding:12px 0 0;border-top:1px solid var(--line);
+     overflow-wrap:anywhere}
  pre:empty{display:none}
- footer{max-width:1080px;margin:46px auto 0;padding:0 32px;color:var(--dim);
-        font:11.5px/1.9 var(--mono)}
- footer .kbd{border:1px solid var(--hair2);border-radius:3px;padding:1px 4px}
- @media (max-width:720px){
-   .wrap{padding:0 18px 64px} header.top{padding:26px 18px 0}
-   .title{font-size:22px} .act{grid-template-columns:1fr auto;gap:6px 16px}
-   .act .d{grid-column:1/-1} .kv{grid-template-columns:86px 1fr}
+ footer{color:var(--dim);font:11.5px/1.9 var(--mono);margin-top:26px;
+        overflow-wrap:anywhere}
+ footer .kbd{border:1px solid var(--line2);border-radius:3px;padding:1px 4px}
+
+ @media (max-width:760px){
+   .shell{padding:14px 14px 48px}
+   .who b{max-width:60vw}
+   .pills{display:none}
+   .rowhead,.arow{grid-template-columns:70px minmax(0,1fr) 78px}
+   .rowhead span:nth-child(2),.arow .kind{display:none}
+   .rowhead span:nth-child(4),.arow .size{display:none}
+   .barrow{grid-template-columns:minmax(0,1fr) 70px}
+   .barrow .bar{display:none}
  }
 </style></head><body>
+<div class="shell">
 
-<header class="top">
-  <div>
-    <div class="brand">jhol</div>
-    <h1 class="title"><span id="name">…</span><span class="ver" id="version"></span></h1>
-  </div>
-  <div class="dim mono" style="text-align:right" id="stamp"></div>
-  <p class="lede" id="lede" role="status" aria-live="polite"></p>
-</header>
+ <header class="top">
+   <div class="logo">jhol</div>
+   <div class="who"><b id="name">…</b><span id="version"></span></div>
+   <div class="pills" id="pills"></div>
+ </header>
 
-<div class="wrap">
-  <nav id="nav"></nav>
+ <nav class="tabs" id="nav"></nav>
 
-  <section id="s-status" class="on">
-    <div class="block" id="onboard" hidden>
-      <h2>No project here</h2>
-      <p class="muted" style="max-width:60ch;margin:0 0 14px">
-        This directory has no <span class="mono">package.json</span>, so there is nothing to
-        verify yet. Pick one of these and change what you need in the terminal — the dashboard
-        is read-only until a project exists.</p>
-      <dl class="kv">
-        <dt>start one</dt><dd class="mono">jhol install express</dd>
-        <dt>weights</dt><dd class="mono">jhol ai pull hf://org/repo/model.safetensors</dd>
-        <dt>watch</dt><dd class="mono">jhol status --watch</dd>
-      </dl>
-      <p class="note">Once a lockfile exists, this page fills in on its own — it polls the
-      filesystem, not a server cache.</p>
-    </div>
-    <div class="block status-block">
-      <div class="cols">
-        <div><h2>Tree</h2><dl class="kv" id="k-tree"></dl></div>
-        <div><h2>Artefacts</h2><div id="k-artefacts"></div></div>
-      </div>
-    </div>
-    <div class="block status-block">
-      <div class="cols">
-        <div><h2>Host</h2><dl class="kv" id="k-host"></dl></div>
-        <div><h2>Policy</h2><dl class="kv" id="k-policy"></dl></div>
-      </div>
-    </div>
-    </div>
-  </section>
+ <section id="s-status" class="on">
+   <div class="card" id="onboard" hidden>
+     <h2>No project here</h2>
+     <p class="muted" style="margin:0 0 12px;max-width:62ch">
+       This directory has no <span class="mono">package.json</span>, so there is nothing to verify
+       yet. Run one of these in the terminal — the dashboard fills in on its own afterwards.</p>
+     <dl class="kv">
+       <dt>start one</dt><dd class="mono">jhol install express</dd>
+       <dt>weights</dt><dd class="mono">jhol ai pull hf://org/repo/model.safetensors</dd>
+       <dt>watch</dt><dd class="mono">jhol status --watch</dd>
+     </dl>
+   </div>
+   <div class="grid status-block">
+     <div class="card"><h2>Project</h2><dl class="kv" id="k-project"></dl></div>
+     <div class="card"><h2>Artefacts</h2><div id="k-artefacts"></div></div>
+     <div class="card"><h2>Host</h2><dl class="kv" id="k-host"></dl></div>
+   </div>
+   <div class="card status-block" style="margin-top:14px">
+     <h2>Policy</h2><dl class="kv" id="k-policy"></dl>
+   </div>
+ </section>
 
-  <section id="s-artifacts">
-    <div class="block">
-      <div class="field">
-        <div class="grow"><label class="sr-only" for="q">Filter artefacts</label>
-          <input id="q" placeholder="Filter by name, kind or reason" autocomplete="off"></div>
-        <label class="check"><input type="checkbox" id="unfit"> Only what will not run</label>
-      </div>
-    </div>
-    <div class="block">
-      <table>
-        <colgroup><col style="width:86px"><col style="width:64px"><col style="width:27%">
-          <col style="width:88px"><col style="width:92px"><col></colgroup>
-        <thead><tr><th>Fit</th><th>Kind</th><th>Name</th><th class="num">Size</th>
-          <th class="num">Resident</th><th>Why</th></tr></thead>
-        <tbody id="artifacts"></tbody>
-      </table>
-    </div>
-    <div class="block">
-      <h2>Read a header</h2>
-      <div class="field">
-        <div class="grow"><label class="sr-only" for="path">Weight file, pinned model or URL</label>
-          <input id="path" class="mono"
-          placeholder="path, pinned model, hf://org/repo/file.gguf, or a huggingface.co URL"></div>
-        <button class="link" id="go" type="button">Inspect</button>
-      </div>
-      <div id="detail-host"></div>
-    </div>
-  </section>
+ <section id="s-artifacts">
+   <div class="card">
+     <div class="toolbar">
+       <div class="grow"><label class="sr-only" for="q">Filter artefacts</label>
+         <input id="q" placeholder="Filter by name, kind or reason" autocomplete="off"></div>
+       <label class="check"><input type="checkbox" id="unfit"> Only what will not run</label>
+     </div>
+     <div class="rowhead"><span>Fit</span><span>Kind</span><span>Name</span>
+       <span>Size</span><span>Resident</span></div>
+     <div id="artifacts"></div>
+   </div>
+   <div class="card">
+     <h2>Read a header</h2>
+     <div class="toolbar">
+       <div class="grow"><label class="sr-only" for="path">Weight file, model or URL</label>
+         <input id="path" class="mono" placeholder="path · pinned model · hf://org/repo/file.gguf · huggingface.co URL"></div>
+       <button class="btn primary" id="go" type="button">Inspect</button>
+     </div>
+     <div id="detail-host"></div>
+     <p class="note">Reads the header only: parameters, dtypes and resident size without the weights.</p>
+   </div>
+ </section>
 
-  <section id="s-budget">
-    <div class="block"><h2>Download plan</h2><div id="budget"></div></div>
-    <div class="block"><h2>Forks</h2><div id="forks"></div></div>
-  </section>
+ <section id="s-budget">
+   <div class="card"><h2>Download plan</h2><div id="budget"></div></div>
+   <div class="card"><h2>Forks</h2><div id="forks"></div></div>
+ </section>
 
-  <section id="s-proof">
-    <div class="block"><div class="cols">
-      <div><h2>Reproducibility</h2><dl class="kv" id="proof-kv"></dl></div>
-      <div><h2>Attestation</h2><dl class="kv" id="proof-kv2"></dl></div>
-    </div></div>
-    <div class="block"><h2>Artefact provenance</h2><div id="provenance"></div></div>
-  </section>
+ <section id="s-proof">
+   <div class="grid">
+     <div class="card"><h2>Reproducibility</h2><dl class="kv" id="proof-kv"></dl></div>
+     <div class="card"><h2>Attestation</h2><dl class="kv" id="proof-kv2"></dl></div>
+   </div>
+   <div class="card"><h2>Provenance</h2><div id="provenance"></div></div>
+ </section>
 
-  <section id="s-agent">
-    <div class="block"><h2>Tools an agent can call</h2><div id="agent"></div>
-      <p class="note">Answered over <span class="mono">jhol mcp --stdio</span> and
-      <span class="mono">POST /mcp</span> on this page.</p></div>
-  </section>
+ <section id="s-agent">
+   <div class="card"><h2>Tools an agent can call</h2><div id="agent"></div>
+     <p class="note">Answered over <span class="mono">jhol mcp --stdio</span> and
+     <span class="mono">POST /mcp</span> on this page.</p></div>
+ </section>
 
-  <section id="s-actions">
-    <div class="block"><h2>Run</h2>
-      <div id="acts"></div>
-      <p class="note" id="arm-hint">Writes ask once: the first click states what would happen.</p>
-      <pre id="out" role="log" aria-live="polite"></pre>
-    </div>
-  </section>
+ <section id="s-actions">
+   <div class="card"><h2>Run</h2>
+     <div class="list" id="acts"></div>
+     <p class="note" id="arm-hint">Writes ask once: the first click states what would happen.</p>
+     <pre id="out" role="log" aria-live="polite"></pre>
+   </div>
+ </section>
 
-  <footer>
-    same data as <span class="mono">jhol status --json</span> ·
-    watch with <span class="mono">jhol status --watch</span> ·
-    <span class="kbd">1</span>–<span class="kbd">6</span> sections ·
-    <span class="kbd">/</span> filter
-  </footer>
+ <footer>
+   same data as <span class="mono">jhol status --json</span> ·
+   <span class="mono">jhol status --watch</span> ·
+   MCP on <span class="mono">POST /mcp</span> ·
+   <span class="kbd">1</span>–<span class="kbd">6</span> sections ·
+   <span class="kbd">/</span> filter
+ </footer>
 </div>
 
 <script>
@@ -772,7 +768,7 @@ const LABEL = {status:"Status",artifacts:"Artefacts",budget:"Budget",
 const nav = document.getElementById("nav");
 SECTIONS.forEach((s, i) => {
   const b = document.createElement("button");
-  b.dataset.section = s;
+  b.type = "button"; b.dataset.section = s;
   if (i === 0) b.className = "on";
   b.innerHTML = `${LABEL[s]}<span class="n" id="n-${s}"></span>`;
   b.onclick = () => show(s);
@@ -783,14 +779,10 @@ function show(s) {
   document.querySelectorAll("section").forEach(x => x.classList.toggle("on", x.id === "s-" + s));
 }
 document.addEventListener("keydown", e => {
-  if (e.target.tagName === "INPUT") {
-    if (e.key === "Escape") e.target.blur();
-    return;
-  }
+  if (e.target.tagName === "INPUT") { if (e.key === "Escape") e.target.blur(); return; }
   const i = parseInt(e.key, 10);
   if (i >= 1 && i <= SECTIONS.length) show(SECTIONS[i - 1]);
-  if (e.key === "/") { e.preventDefault(); show("artifacts");
-    document.getElementById("q").focus(); }
+  if (e.key === "/") { e.preventDefault(); show("artifacts"); document.getElementById("q").focus(); }
 });
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -807,61 +799,59 @@ function params(n) {
   if (n >= 1e3) return `${(n/1e3).toFixed(1)} K`;
   return String(n);
 }
-const mark = (kind, text) => `<span class="mark ${kind}">${esc(text)}</span>`;
-const fitMark = f => f === true ? mark("ok", "fits")
-  : f === false ? mark("bad", "will not run") : mark("warn", "unknown");
+const mark = (k, t) => `<span class="mark ${k}">${esc(t)}</span>`;
+const fitMark = f => f === true ? mark("ok","fits")
+  : f === false ? mark("bad","will not run") : mark("warn","unknown");
+const pill = (k, t) => `<span class="pill ${k}"><i></i>${esc(t)}</span>`;
 function kv(el, rows) {
   el.innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("");
 }
 
 function render(s) {
-  const onboard = document.getElementById("onboard");
-  onboard.hidden = !!s.has_manifest;
-  document.querySelectorAll(".status-block").forEach(el => { el.hidden = !s.has_manifest; });
-  document.getElementById("name").textContent = s.has_manifest ? (s.project || "(unnamed)") : "no project";
+  const hasManifest = !!s.has_manifest;
+  document.getElementById("onboard").hidden = hasManifest;
+  document.querySelectorAll(".status-block").forEach(el => { el.hidden = !hasManifest; });
+  document.getElementById("name").textContent = hasManifest ? (s.project || "(unnamed)") : "no project";
   document.getElementById("version").textContent = s.version || "";
+
   const unfit = s.artifacts.filter(a => a.fits === false).length;
   const unknown = s.artifacts.filter(a => a.fits === null || a.fits === undefined).length;
   const total = s.artifacts.length;
 
-  document.getElementById("stamp").textContent =
-    new Date().toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+  document.getElementById("pills").innerHTML = !hasManifest ? "" : [
+    s.tree.state === "match" ? pill("ok", `tree match · ${s.tree.packages}`) : pill("bad", `tree ${s.tree.state}`),
+    s.manifest_matches_lockfile ? pill("ok","lockfile current") : pill("bad","lockfile drifted"),
+    s.plan.missing_bytes ? pill("warn", `${bytes(s.plan.missing_bytes)} to fetch`) : pill("ok","nothing to fetch"),
+    unfit ? pill("bad", `${unfit} will not run`) : pill("ok","all fit"),
+    s.forks.length ? pill("", `${s.forks.length} fork${s.forks.length>1?"s":""}`) : "",
+  ].join("");
 
-  if (!s.has_manifest) {
-    document.getElementById("lede").innerHTML =
-      `No <span class="mono">package.json</span> in this directory<span class="sep">·</span>nothing to verify yet`;
-    ["status","artifacts","budget","proof","agent","actions"].forEach(k => {
-      const n = document.getElementById("n-" + k); if (n) n.textContent = "";
-    });
-    renderArtifacts(s); return;
-  }
-  document.getElementById("lede").innerHTML = s.tree.state === "match"
-    ? `<span class="state-ok">Tree matches the lockfile</span><span class="sep">·</span>${s.tree.packages} packages<span class="sep">·</span>${s.manifest_matches_lockfile ? "lockfile current" : `<span class="state-bad">lockfile drifted</span>`}<span class="sep">·</span>${s.plan.missing_bytes ? `${bytes(s.plan.missing_bytes)} to fetch` : "nothing to fetch"}<span class="sep">·</span>${unfit ? `<span class="state-bad">${unfit} artefact${unfit===1?"":"s"} will not run here</span>` : total ? "all fit" : "no artefacts pinned"}`
-    : `<span class="state-bad">Tree ${esc(s.tree.state)}</span><span class="sep">·</span>${esc(s.tree.detail)}<span class="sep">·</span>${s.tree.packages} packages`;
-
-  document.getElementById("n-status").textContent = s.tree.packages;
+  document.getElementById("n-status").textContent = hasManifest ? s.tree.packages : "";
   document.getElementById("n-artifacts").textContent = total || "";
   document.getElementById("n-budget").textContent = s.plan.items.filter(i => !i.present).length || "";
   document.getElementById("n-proof").textContent = s.proof.attested_packages || "";
   document.getElementById("n-agent").textContent = s.agent.tools.length;
   document.getElementById("n-actions").textContent = "";
+  if (!hasManifest) { renderArtifacts(s); return; }
 
-  kv(document.getElementById("k-tree"), [
-    ["verdict", s.tree.state === "match"
-      ? mark("ok", `match — ${s.tree.packages} packages`) : mark("bad", esc(s.tree.state))],
-    ["detail", `<span class="muted">${esc(s.tree.detail || "every package is at its locked version")}</span>`],
-    ["lockfile", s.manifest_matches_lockfile ? mark("ok","current") : mark("bad","drifted from package.json")],
+  kv(document.getElementById("k-project"), [
+    ["tree", s.tree.state === "match" ? mark("ok", `match — ${s.tree.packages} packages`)
+      : `${mark("bad", s.tree.state)} <span class="muted">${esc(s.tree.detail)}</span>`],
+    ["lockfile", s.manifest_matches_lockfile ? mark("ok","current") : mark("bad","drifted")],
     ["snapshot", s.proof.snapshot_ready ? mark("ok","ready") : mark("warn","absent")],
+    ["attested", `<span class="mono">${s.proof.attested_packages}</span> packages ·
+                  <span class="mono">${s.proof.attested_models}</span> models`],
   ]);
 
   document.getElementById("k-artefacts").innerHTML = total ? `
-    <dl class="kv">
-      <dt>pinned</dt><dd class="mono">${total}</dd>
-      <dt>fit</dt><dd>${total - unfit - unknown ? mark("ok", String(total - unfit - unknown)) : `<span class="dim">0</span>`}</dd>
-      <dt>will not run</dt><dd>${unfit ? mark("bad", String(unfit)) : `<span class="dim">0</span>`}</dd>
-      <dt>unknown</dt><dd>${unknown ? mark("warn", String(unknown)) : `<span class="dim">0</span>`}</dd>
-    </dl>
-    ${unknown ? `<p class="note">Unknown means we cannot decide: no GPU to compare against, or a wheel with no platform tag. It is never counted as a pass.</p>` : ""}`
+    <div class="figures">
+      <div class="fig"><b>${total}</b><span>pinned</span></div>
+      <div class="fig"><b style="color:var(--ok)">${total-unfit-unknown}</b><span>fit</span></div>
+      <div class="fig"><b style="color:var(--bad)">${unfit}</b><span>will not run</span></div>
+      <div class="fig"><b style="color:var(--warn)">${unknown}</b><span>unknown</span></div>
+    </div>
+    ${unknown ? `<p class="note">Unknown means undecidable — no GPU to compare against, or a wheel
+      with no platform tag. Never counted as a pass.</p>` : ""}`
     : `<div class="empty">No wheels pinned and no weights locked yet.</div>`;
 
   kv(document.getElementById("k-host"), [
@@ -882,17 +872,17 @@ function render(s) {
 }
 
 function renderArtifacts(s) {
-  const tb = document.getElementById("artifacts");
-  tb.innerHTML = s.artifacts.map(a => `
-    <tr data-fit="${a.fits}">
-      <td>${fitMark(a.fits)}</td>
-      <td class="dim">${esc(a.kind)}</td>
-      <td class="name">${esc(a.name)}${a.version ? `<div class="sub">${esc(a.version)}</div>` : ""}</td>
-      <td class="num">${bytes(a.bytes)}</td>
-      <td class="num">${bytes(a.vram_bytes)}</td>
-      <td class="why"><span>${(a.reasons||[]).map(esc).join("</span><span>")}</span></td>
-    </tr>`).join("") ||
-    `<tr><td colspan="6"><div class="empty">Nothing pinned. Install npm packages, pin wheels, or pin a model.</div></td></tr>`;
+  const host = document.getElementById("artifacts");
+  host.innerHTML = s.artifacts.map(a => `
+    <div class="arow" data-fit="${a.fits}">
+      <span>${fitMark(a.fits)}</span>
+      <span class="kind">${esc(a.kind)}</span>
+      <span class="name">${esc(a.name)}${a.version ? `<div class="sub">${esc(a.version)}</div>` : ""}</span>
+      <span class="num size">${bytes(a.bytes)}</span>
+      <span class="num">${bytes(a.vram_bytes)}</span>
+      <span class="why">${(a.reasons||[]).map(r => `<span>${esc(r)}</span>`).join("")}</span>
+    </div>`).join("") ||
+    `<div class="empty">Nothing pinned. Install npm packages, pin wheels, or pin a model.</div>`;
   applyFilter();
 }
 
@@ -904,7 +894,7 @@ function renderBudget(s) {
   document.getElementById("budget").innerHTML = `
     <div class="figures">
       <div class="fig"><b>${bytes(missing)}</b><span>to download</span></div>
-      <div class="fig"><b>${bytes(cached)}</b><span>already cached</span></div>
+      <div class="fig"><b>${bytes(cached)}</b><span>cached</span></div>
       <div class="fig"><b>${missing ? s.plan.eta_seconds + " s" : "0 s"}</b>
         <span>at ${Math.round(s.plan.throughput_bytes_per_sec/1048576)} MB/s</span></div>
       <div class="fig"><b>${missingFiles.length}</b>
@@ -912,12 +902,13 @@ function renderBudget(s) {
     </div>
     <div class="bars"><div class="barrow">
       <span class="nm">${pct}% of the plan is already on disk</span>
-      <span class="bar"><i style="width:${Math.max(pct,0.6)}%"></i></span>
+      <span class="bar"><i style="width:${Math.max(pct,1)}%"></i></span>
       <span class="v">${bytes(cached)}</span></div></div>
-    ${missingFiles.length ? `<table style="margin-top:22px">
-      <thead><tr><th>Missing file</th><th class="num" style="width:110px">Bytes</th></tr></thead>
-      <tbody>${missingFiles.map(i => `<tr><td class="name">${esc(i.name)}</td>
-        <td class="num">${bytes(i.bytes)}</td></tr>`).join("")}</tbody></table>`
+    ${missingFiles.length ? `<div style="margin-top:14px">
+      <div class="rowhead"><span style="grid-column:1/3">Missing file</span>
+        <span class="num" style="grid-column:5">Bytes</span></div>
+      ${missingFiles.map(i => `<div class="lrow"><span class="t">${esc(i.name)}</span>
+        <span class="v">${bytes(i.bytes)}</span></div>`).join("")}</div>`
       : `<p class="note">Nothing to fetch — everything the lockfile pins is on disk.</p>`}`;
 }
 
@@ -933,39 +924,38 @@ function renderProof(s) {
     ["models", `<span class="mono">${s.proof.attested_models}</span>`],
     ["command", `<span class="mono">jhol attest</span>`],
   ]);
-  document.getElementById("provenance").innerHTML = s.artifacts.length ? `<table>
-    <thead><tr><th>Artefact</th><th style="width:150px">Kind</th>
-      <th class="num" style="width:110px">Bytes</th><th>Digest</th></tr></thead>
-    <tbody>${s.artifacts.map(a => `<tr>
-      <td class="name">${esc(a.name)}</td><td class="dim">${esc(a.kind)}</td>
-      <td class="num">${bytes(a.bytes)}</td>
-      <td class="mono dim">${esc((a.digest||"").slice(0,24)) || "—"}</td></tr>`).join("")}</tbody></table>`
+  document.getElementById("provenance").innerHTML = s.artifacts.length
+    ? s.artifacts.map(a => `<div class="lrow">
+        <span class="t">${esc(a.name)}</span>
+        <span class="v">${bytes(a.bytes)}</span>
+        <span class="d">${esc(a.kind)}${a.digest ? ` · <span class="mono">${esc(a.digest.slice(0,24))}</span>` : ""}</span>
+      </div>`).join("")
     : `<div class="empty">No artefacts pinned.</div>`;
 }
 
 function renderForks(s) {
   const el = document.getElementById("forks");
   if (!s.forks.length) {
-    el.innerHTML = `<div class="empty">No forks · <span class="mono">jhol env fork &lt;name&gt;</span> copies an environment in milliseconds.</div>`;
+    el.innerHTML = `<div class="empty">No forks · <span class="mono">jhol env fork &lt;name&gt;</span>
+      copies an environment in milliseconds.</div>`;
     return;
   }
-  el.innerHTML = `<table><thead><tr><th>Fork</th>
-    <th class="num" style="width:150px">Beyond base</th><th style="width:100px"></th></tr></thead>
-    <tbody>${s.forks.map(f => `<tr><td class="name">${esc(f.name)}</td>
-      <td class="num">${bytes(f.bytes)}</td>
-      <td style="text-align:right"><button class="link" data-p="${esc(f.name)}" type="button">Promote</button></td></tr>`).join("")}</tbody></table>`;
+  el.innerHTML = s.forks.map(f => `<div class="lrow">
+      <span class="t">${esc(f.name)}</span>
+      <span class="v">${bytes(f.bytes)} beyond base</span>
+      <span class="d"><button class="btn" data-p="${esc(f.name)}" type="button">Promote</button></span>
+    </div>`).join("");
   el.querySelectorAll("button[data-p]").forEach(b => {
     b.onclick = () => armOrRun("promote", b.dataset.p, true, "jhol env promote " + b.dataset.p, b);
   });
 }
 
 function renderAgent(s) {
-  document.getElementById("agent").innerHTML = `<table>
-    <thead><tr><th style="width:250px">Tool</th><th style="width:90px">Cost</th><th>Purpose</th></tr></thead>
-    <tbody>${s.agent.tools.map(t => `<tr>
-      <td class="name">${esc(t.name)}</td>
-      <td class="dim">${esc(t.cost)}</td>
-      <td class="muted">${esc(t.purpose)}</td></tr>`).join("")}</tbody></table>`;
+  document.getElementById("agent").innerHTML = `<div class="rowhead">
+      <span style="grid-column:1/3">Tool</span><span>Cost</span><span style="grid-column:4/6">Purpose</span></div>` +
+    s.agent.tools.map(t => `<div class="lrow">
+      <span class="t">${esc(t.name)}</span><span class="v">${esc(t.cost)}</span>
+      <span class="d">${esc(t.purpose)}</span></div>`).join("");
 }
 
 /* ── inspect ─────────────────────────────────────────────── */
@@ -974,39 +964,42 @@ function renderDetail(j) {
   if (j.error) { host.innerHTML = `<div class="result"><div class="error">${esc(j.error)}</div></div>`; return; }
   if (j.files) {
     host.innerHTML = `<div class="result"><div class="path">${esc(j.repository)}</div>
-      <table style="margin-top:16px"><thead><tr><th>Weight file</th>
-        <th class="num" style="width:120px">Bytes</th></tr></thead>
-      <tbody>${j.files.map(f => `<tr><td class="name"><a href="#" data-file="${esc(f.name)}">${esc(f.name)}</a></td>
-        <td class="num">${bytes(f.bytes)}</td></tr>`).join("")}</tbody></table>
+      ${j.files.map(f => `<div class="lrow">
+        <span class="t"><button class="btn" data-file="${esc(f.name)}" type="button">${esc(f.name)}</button></span>
+        <span class="v">${bytes(f.bytes)}</span></div>`).join("")}
       <p class="note">Click a file to read its header — nothing is downloaded.</p></div>`;
-    host.querySelectorAll("a[data-file]").forEach(a => {
-      a.onclick = e => {
-        e.preventDefault();
-        document.getElementById("path").value = j.repository.replace(/\/$/, "") + "/" + a.dataset.file;
+    host.querySelectorAll("button[data-file]").forEach(b => {
+      b.onclick = () => {
+        document.getElementById("path").value = j.repository.replace(/\/$/, "") + "/" + b.dataset.file;
         document.getElementById("go").click();
       };
     });
     return;
   }
   const dtypes = (j.dtypes || []).map(d => `${d.dtype}×${d.tensors}`).join("  ");
-  const readPct = ((j.bytes_read/(j.bytes_read+j.data_bytes||1))*100).toFixed(3);
+  const readPct = ((j.bytes_read/(j.bytes_read+(j.data_bytes||1)))*100).toFixed(3);
   host.innerHTML = `<div class="result">
     <div class="path">${esc(j.path)}</div>
-    <div class="figures">
+    <div>
+      <span class="tag">${j.format === "gguf" ? "GGUF" : "safetensors"}</span>
+      ${j.architecture ? `<span class="tag">${esc(j.architecture)}</span>` : ""}
+      <span class="tag">${j.fits === true ? "fits this host" : j.fits === false ? "too large for this GPU" : "fit unknown"}</span>
+    </div>
+    <div class="figures" style="margin-top:12px">
       <div class="fig"><b>${params(j.params)}</b><span>parameters</span></div>
       <div class="fig"><b>${bytes(j.data_bytes)}</b><span>tensor data</span></div>
       <div class="fig"><b>${bytes(j.vram_bytes)}</b><span>resident estimate</span></div>
       <div class="fig"><b>${j.tensors}</b><span>tensors</span></div>
       <div class="fig"><b>${bytes(j.bytes_read)}</b><span>read${j.requests ? ` · ${j.requests} request${j.requests===1?"":"s"}` : ""}</span></div>
     </div>
-    <p class="note">${j.format === "gguf" ? "GGUF" : "safetensors"}${j.architecture ? ` · ${esc(j.architecture)}` : ""} · ${esc(dtypes)} · header is ${readPct}% of the file · ${j.fits === true ? mark("ok","fits this host") : j.fits === false ? mark("bad","too large for this GPU") : mark("warn","fit unknown")}</p>
     <div class="bars">
       ${(j.largest||[]).slice(0,6).map(t => {
-        const w = Math.max(0.6, Math.round(t.bytes / j.largest[0].bytes * 100));
+        const w = Math.max(1, Math.round(t.bytes / j.largest[0].bytes * 100));
         return `<div class="barrow"><span class="nm">${esc(t.name)}</span>
           <span class="bar"><i style="width:${w}%"></i></span>
           <span class="v">${bytes(t.bytes)}</span></div>`; }).join("")}
-    </div></div>`;
+    </div>
+    <p class="note">${esc(dtypes)} · header is ${readPct}% of the file</p></div>`;
 }
 
 document.getElementById("go").onclick = async () => {
@@ -1028,7 +1021,7 @@ document.getElementById("path").addEventListener("keydown", e => {
 function applyFilter() {
   const q = (document.getElementById("q").value || "").toLowerCase();
   const unfitOnly = document.getElementById("unfit").checked;
-  document.querySelectorAll("#artifacts tr[data-fit]").forEach(row => {
+  document.querySelectorAll("#artifacts .arow").forEach(row => {
     const text = row.textContent.toLowerCase();
     const isUnfit = row.dataset.fit === "false";
     row.style.display = (!q || text.includes(q)) && (!unfitOnly || isUnfit) ? "" : "none";
@@ -1047,16 +1040,15 @@ const ACTIONS = [
   ["policy", "jhol install --exclude-vuln", "Install with this project's policy in force."],
 ];
 document.getElementById("acts").innerHTML = ACTIONS.map(([k, cmd, why]) => `
-  <div class="act" data-row="${k}">
-    <span class="cmd">${esc(cmd)}</span>
+  <div class="lrow" data-row="${k}">
+    <span class="t">${esc(cmd)}</span>
+    <span class="v"><button class="btn" data-a="${k}" type="button">Run</button></span>
     <span class="d" data-desc="${k}">${esc(why)}</span>
-    <button class="link" data-a="${k}" type="button">Run</button>
   </div>`).join("");
 
 async function armOrRun(action, name, stream, label, btn) {
   const key = action + ":" + name;
-  const fresh = armed.key === key && Date.now() - armed.at < 10000;
-  if (!fresh) {
+  if (armed.key !== key || Date.now() - armed.at > 10000) {
     let preview = {writes: true, summary: ""};
     try { preview = await (await fetch(`/plan?action=${encodeURIComponent(action)}`)).json(); } catch (e) {}
     if (preview.writes) {
@@ -1066,9 +1058,9 @@ async function armOrRun(action, name, stream, label, btn) {
       if (desc) {
         desc.dataset.original = desc.dataset.original || desc.textContent;
         desc.textContent = `${preview.summary} — click Run again to continue.`;
-        desc.className = "d armed";
+        desc.style.color = "var(--warn)";
         setTimeout(() => {
-          if (desc.dataset.original) { desc.textContent = desc.dataset.original; desc.className = "d"; }
+          if (desc.dataset.original) { desc.textContent = desc.dataset.original; desc.style.color = ""; }
         }, 10000);
       }
       document.getElementById("arm-hint").textContent = "Armed. Click Run again within ten seconds.";
@@ -1085,7 +1077,7 @@ async function armOrRun(action, name, stream, label, btn) {
 async function run(action, name, stream, label) {
   show("actions");
   const out = document.getElementById("out");
-  document.querySelectorAll(".act button,.link").forEach(x => x.disabled = true);
+  document.querySelectorAll(".btn").forEach(x => x.disabled = true);
   out.textContent = `$ jhol ${action}${name ? " " + name : ""}\n`;
   try {
     const r = await fetch(`/action?t=${encodeURIComponent(token)}${stream ? "&stream=1" : ""}`, {
@@ -1108,12 +1100,12 @@ async function run(action, name, stream, label) {
   } catch (e) {
     out.textContent += `\nerror: ${e.message}`;
   } finally {
-    document.querySelectorAll(".act button,.link").forEach(x => x.disabled = false);
-    document.querySelectorAll(".act button").forEach(x => x.textContent = "Run");
+    document.querySelectorAll(".btn").forEach(x => x.disabled = false);
+    document.querySelectorAll("[data-a]").forEach(x => x.textContent = "Run");
   }
 }
 
-document.querySelectorAll(".act button[data-a]").forEach(b => {
+document.querySelectorAll("[data-a]").forEach(b => {
   b.onclick = () => armOrRun(b.dataset.a, "", true, "jhol " + b.dataset.a, b);
 });
 
