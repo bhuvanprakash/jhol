@@ -1,0 +1,212 @@
+#!/bin/sh
+# Compatibility scorecard: install the same project with npm and with jhol, compare what a
+# program can observe. See docs/COMPATIBILITY.md for what is compared and why.
+#
+#   sh scripts/scorecard.sh              all scenarios
+#   sh scripts/scorecard.sh --quick      the first four
+#   sh scripts/scorecard.sh --scenario 3 one row
+#
+# The oracle is npm; the implementation under test is ours. No competitor source is read: only
+# observable behaviour is compared.
+
+set -u
+
+JHOL=${JHOL:-$(cd "$(dirname "$0")/.." && pwd)/target/release/jhol}
+NPM=${NPM:-npm}
+QUICK=0
+ONLY=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --quick) QUICK=1; shift ;;
+    --scenario) ONLY="$2"; shift 2 ;;
+    *) echo "scorecard: unknown argument $1" >&2; exit 2 ;;
+  esac
+done
+
+[ -x "$JHOL" ] || { echo "scorecard: no jhol binary at $JHOL (cargo build --release)" >&2; exit 2; }
+command -v "$NPM" >/dev/null 2>&1 || { echo "scorecard: npm not found (it is the oracle)" >&2; exit 2; }
+
+ROOT=$(mktemp -d "${TMPDIR:-/tmp}/jhol-scorecard.XXXXXX")
+trap 'rm -rf "$ROOT"' EXIT INT TERM
+
+OUTDIR=$(cd "$(dirname "$0")/.." && pwd)/docs/scorecard
+mkdir -p "$OUTDIR"
+STAMP=$(date +%Y-%m-%d)
+REPORT="$OUTDIR/$STAMP.md"
+
+# manifest: every name@version reachable under node_modules, deduped and sorted.
+manifest() {
+  python3 - "$1" <<'PY'
+import os, sys, json
+root = os.path.join(sys.argv[1], "node_modules")
+rows = set()
+for dirpath, dirnames, filenames in os.walk(root):
+    if "package.json" in filenames:
+        rel = os.path.relpath(dirpath, root)
+        if rel.count(os.sep) <= 2:  # depth guard: top level and one nesting
+            try:
+                with open(os.path.join(dirpath, "package.json")) as f:
+                    p = json.load(f)
+                if p.get("name") and p.get("version"):
+                    rows.add(f'{p["name"]}@{p["version"]}')
+            except Exception:
+                pass
+    # do not descend into .bin or deep trees
+    dirnames[:] = [d for d in dirnames if d != ".bin"]
+print("\n".join(sorted(rows)))
+PY
+}
+
+bins() {
+  [ -d "$1/node_modules/.bin" ] && ls "$1/node_modules/.bin" | sort | tr '\n' ' ' || true
+}
+
+count_files() {
+  [ -d "$1/node_modules" ] && find "$1/node_modules" -type f | wc -l | tr -d ' ' || echo 0
+}
+
+# scenario <n> <slug> <package.json body> [skip reason]
+run_one() {
+  n=$1; slug=$2; body=$3; skip=${4:-}
+  if [ -n "$ONLY" ] && [ "$ONLY" != "$n" ]; then return 0; fi
+  if [ "$QUICK" = 1 ] && [ "$n" -gt 4 ]; then return 0; fi
+  if [ -n "$skip" ]; then
+    printf '%-26s %s\n' "$slug" "SKIP  ($skip)"
+    echo "| \`$slug\` | SKIP | $skip |" >> "$REPORT"
+    return 0
+  fi
+  work="$ROOT/$n"
+  rm -rf "$work"; mkdir -p "$work/npm" "$work/jhol"
+  printf '%s\n' "$body" > "$work/npm/package.json"
+  cp "$work/npm/package.json" "$work/jhol/package.json"
+
+  printf '  %-25s npm…' "$slug"
+  ( cd "$work/npm" && "$NPM" install --ignore-scripts --no-audit --no-fund --no-progress \
+      >"$work/npm.log" 2>&1 ); npm_exit=$?
+
+  printf '\r  %-25s jhol…' "$slug"
+  ( cd "$work/jhol" && JHOL_NO_PREPARED_SNAPSHOT=1 "$JHOL" install \
+      >"$work/jhol.log" 2>&1 ); jhol_exit=$?
+
+  manifest "$work/npm"  > "$work/npm.manifest"  || true
+  manifest "$work/jhol" > "$work/jhol.manifest" || true
+  npm_files=$(count_files "$work/npm"); jhol_files=$(count_files "$work/jhol")
+  npm_bins=$(bins "$work/npm"); jhol_bins=$(bins "$work/jhol")
+
+  verdict=PASS; class=""; detail=""
+  if [ "$npm_exit" -ne 0 ] && [ "$jhol_exit" -ne 0 ]; then
+    verdict=PASS; class="both-failed"; detail="both exit non-zero (npm $npm_exit, jhol $jhol_exit)"
+  elif [ "$npm_exit" -ne 0 ]; then
+    verdict=FAIL; class=ORACLE; detail="npm failed ($npm_exit), jhol succeeded — oracle unusable"
+  elif [ "$jhol_exit" -ne 0 ]; then
+    verdict=FAIL; class=""; detail="jhol exit $jhol_exit: $(head -1 "$work/jhol.log" | cut -c1-160)"
+    case "$detail" in *"could not resolve"*|*"unsatisf"*) class=RESOLVE ;; esac
+  else
+    if ! diff -q "$work/npm.manifest" "$work/jhol.manifest" >/dev/null 2>&1; then
+      verdict=FAIL
+      if comm -12 "$work/npm.manifest" "$work/jhol.manifest" | grep -q .; then class=RESOLVE; else class=RESOLVE; fi
+      detail=$(diff "$work/npm.manifest" "$work/jhol.manifest" | head -6 | tr '\n' ' ')
+    elif [ "$npm_bins" != "$jhol_bins" ]; then
+      verdict=FAIL; class=BINS; detail="npm bins [$npm_bins] vs jhol [$jhol_bins]"
+    elif [ "$jhol_files" -lt $((npm_files * 95 / 100)) ]; then
+      verdict=FAIL; class=FILES; detail="files npm $npm_files vs jhol $jhol_files"
+    fi
+  fi
+
+  [ -z "$class" ] && class=-
+  printf '\r%-26s %-6s %-8s %s\n' "$slug" "$verdict" "$class" "${detail:0:120}"
+  {
+    printf '| `%s` | %s | %s | %s/%s | %s | %s |\n' \
+      "$slug" "$verdict" "$class" "$jhol_files" "$npm_files" "$jhol_exit" "${detail:-ok}"
+  } >> "$REPORT"
+
+  rm -rf "$work"
+  [ "$verdict" = PASS ] || FAILED=$((FAILED + 1))
+}
+
+FAILED=0
+{
+  echo "# Scorecard $STAMP"
+  echo
+  echo "Generated by \`scripts/scorecard.sh\`. npm is the oracle; only observable behaviour is"
+  echo "compared, never implementation. Method: \`docs/COMPATIBILITY.md\`."
+  echo
+  echo "| scenario | verdict | class | files jhol/npm | exit | notes |"
+  echo "|---|---|---|---|---|---|"
+} > "$REPORT"
+
+echo "scorecard: $(basename "$JHOL") vs $($NPM --version) — report $REPORT"
+echo
+
+# 1 baseline
+run_one 1 express-4.18.2 '{
+  "name": "sc-express", "version": "1.0.0",
+  "dependencies": { "express": "4.18.2" }
+}'
+
+# 2 large graph with duplicate versions at different depths
+run_one 2 jest-29 '{
+  "name": "sc-jest", "version": "1.0.0",
+  "dependencies": { "jest": "29.7.0" }
+}'
+
+# 3 optional platform packages: the wrong host package must not be required
+run_one 3 esbuild-optional '{
+  "name": "sc-esbuild", "version": "1.0.0",
+  "dependencies": { "esbuild": "0.20.0" }
+}'
+
+# 4 native prebuilt binary, os/cpu gating, install script (scripts ignored in pass 1)
+run_one 4 sharp-native '{
+  "name": "sc-sharp", "version": "1.0.0",
+  "dependencies": { "sharp": "0.33.2" }
+}'
+
+# 5 peer dependencies
+run_one 5 react-peers '{
+  "name": "sc-peers", "version": "1.0.0",
+  "dependencies": {
+    "react": "18.2.0", "react-dom": "18.2.0",
+    "@testing-library/react": "14.2.1"
+  }
+}'
+
+# 6 ESM-only packages: exports map, no main fallback
+run_one 6 esm-only '{
+  "name": "sc-esm", "version": "1.0.0",
+  "dependencies": { "chalk": "5.3.0", "execa": "8.0.1" }
+}'
+
+# 7 workspace links, not registry fetches
+run_one 7 workspace-monorepo '{
+  "name": "sc-ws", "version": "1.0.0", "private": true,
+  "workspaces": ["packages/*"],
+  "dependencies": {}
+}'
+
+# 8 overrides must beat the resolver's preference
+run_one 8 overrides '{
+  "name": "sc-overrides", "version": "1.0.0",
+  "dependencies": { "express": "4.18.2" },
+  "overrides": { "qs": "6.11.0" }
+}'
+
+# 9 bin links
+run_one 9 bins-typescript '{
+  "name": "sc-bins", "version": "1.0.0",
+  "devDependencies": { "typescript": "5.3.3" }
+}'
+
+# 10 scoped packages and a deep graph
+run_one 10 babel-scoped '{
+  "name": "sc-babel", "version": "1.0.0",
+  "devDependencies": { "@babel/core": "7.23.9", "@babel/preset-env": "7.23.9" }
+}'
+
+echo
+if [ "$FAILED" -eq 0 ]; then
+  echo "SCORECARD: PASS"
+else
+  echo "SCORECARD: $FAILED failing scenario(s) — see $REPORT"
+fi
+[ "$FAILED" -eq 0 ] || exit 1
