@@ -41,18 +41,16 @@ import os, sys, json
 root = os.path.join(sys.argv[1], "node_modules")
 rows = set()
 for dirpath, dirnames, filenames in os.walk(root):
-    if "package.json" in filenames:
-        rel = os.path.relpath(dirpath, root)
-        if rel.count(os.sep) <= 2:  # depth guard: top level and one nesting
-            try:
-                with open(os.path.join(dirpath, "package.json")) as f:
-                    p = json.load(f)
-                if p.get("name") and p.get("version"):
-                    rows.add(f'{p["name"]}@{p["version"]}')
-            except Exception:
-                pass
-    # do not descend into .bin or deep trees
     dirnames[:] = [d for d in dirnames if d != ".bin"]
+    if "package.json" not in filenames:
+        continue
+    try:
+        with open(os.path.join(dirpath, "package.json")) as f:
+            p = json.load(f)
+        if p.get("name") and p.get("version"):
+            rows.add(f'{p["name"]}@{p["version"]}')
+    except Exception:
+        pass
 print("\n".join(sorted(rows)))
 PY
 }
