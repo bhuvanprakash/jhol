@@ -1990,7 +1990,7 @@ fn expand_with_transitive_dependencies(
             if let Ok(tree) = crate::jagr_infinite::fetch_dep_tree(&direct_map) {
                 for (name, packument) in tree {
                     let arc_meta = std::sync::Arc::new(packument);
-                    metadata_cache.insert(name.clone(), std::sync::Arc::clone(&arc_meta));
+                    metadata_cache.insert(name.clone(), real_metadata_if_synth(&name, std::sync::Arc::clone(&arc_meta)));
                     if transitive_cache_enabled() {
                         if let Ok(mut cache) = transitive_metadata_snapshot().lock() {
                             cache.insert(name.clone(), arc_meta);
@@ -2159,7 +2159,7 @@ fn expand_with_transitive_dependencies(
                     };
 
                     if let Some(hit) = snapshot_hit.or(cached_packument) {
-                        metadata_cache.insert(name.clone(), hit);
+                        metadata_cache.insert(name.clone(), real_metadata_if_synth(&name, hit));
                     } else {
                         // Bundled-index synth is local (no network): insert it and fall
                         // through so it is processed in this iteration.
@@ -2184,7 +2184,7 @@ fn expand_with_transitive_dependencies(
                                     cache.insert(name.clone(), std::sync::Arc::clone(&synth));
                                 }
                             }
-                            metadata_cache.insert(name.clone(), synth);
+                            metadata_cache.insert(name.clone(), real_metadata_if_synth(&name, synth));
                         } else if pending.contains(&name) {
                             // Already being fetched; the result will re-enqueue it.
                             continue;
@@ -2466,7 +2466,7 @@ fn expand_with_transitive_dependencies(
             match result {
                 Ok(meta) => {
                     let meta = std::sync::Arc::new(meta);
-                    metadata_cache.insert(pkg_name.clone(), std::sync::Arc::clone(&meta));
+                    metadata_cache.insert(pkg_name.clone(), real_metadata_if_synth(&pkg_name, std::sync::Arc::clone(&meta)));
                     if transitive_cache_enabled() {
                         if let Ok(mut cache) = transitive_metadata_snapshot().lock() {
                             cache.insert(pkg_name.clone(), meta);
@@ -2524,7 +2524,7 @@ fn expand_with_transitive_dependencies(
                         if let Ok(fresh_meta) = registry::fetch_metadata_fresh(name) {
                             let fresh_arc = std::sync::Arc::new(fresh_meta);
                             metadata = fresh_arc.clone();
-                            metadata_cache.insert(name.to_string(), fresh_arc);
+                            metadata_cache.insert(name.to_string(), real_metadata_if_synth(&name, fresh_arc));
                             if let Some(v) = resolve_preferring_peers(
                                 &metadata,
                                 &pkg_constraints,
@@ -2614,7 +2614,10 @@ fn expand_with_transitive_dependencies(
             };
 
             if snapshot_hit.is_some() {
-                metadata_cache.insert(name.clone(), snapshot_hit.unwrap());
+                metadata_cache.insert(
+                    name.clone(),
+                    real_metadata_if_synth(&name, snapshot_hit.unwrap()),
+                );
             } else {
                 // Defer fetching - collect all needed packages and fetch in parallel
                 continue;
@@ -2639,7 +2642,7 @@ fn expand_with_transitive_dependencies(
             for (pkg_name, result) in fetch_results {
                 match result {
                     Ok(meta) => {
-                        metadata_cache.insert(pkg_name.clone(), std::sync::Arc::new(meta.clone()));
+                        metadata_cache.insert(pkg_name.clone(), real_metadata_if_synth(&pkg_name, std::sync::Arc::new(meta.clone())));
                         if transitive_cache_enabled() {
                             if let Ok(mut cache) = transitive_metadata_snapshot().lock() {
                                 cache.insert(pkg_name, std::sync::Arc::new(meta));
@@ -2675,7 +2678,7 @@ fn expand_with_transitive_dependencies(
                     if let Ok(fresh_meta) = registry::fetch_metadata_fresh(&name) {
                         let fresh_arc = std::sync::Arc::new(fresh_meta);
                         metadata = fresh_arc.clone();
-                        metadata_cache.insert(name.clone(), fresh_arc.clone());
+                        metadata_cache.insert(name.clone(), real_metadata_if_synth(&name, fresh_arc.clone()));
                         if transitive_cache_enabled() {
                             if let Ok(mut cache) = transitive_metadata_snapshot().lock() {
                                 cache.insert(name.clone(), fresh_arc);
@@ -2793,13 +2796,10 @@ fn expand_with_transitive_dependencies(
     // ranges describe: fed full packuments, it currently resolves express to express-5-era
     // dependencies (accepts@2.0.0, array-flatten@3.0.0) — a worse answer than the estimate. The
     // switch exists so the work is measurable, not so it ships.
-    let refresh = matches!(
-        std::env::var("JHOL_SOLVER_FULL_METADATA").as_deref(),
-        Ok("1") | Ok("true")
-    );
-    if !refresh {
-        synthesised.clear();
-    }
+    // Always refresh when online: a single-version snapshot must not decide a version for the
+    // estimate either. Only the unreachable-registry case keeps the snapshot.
+    let refresh = !crate::registry::offline_mode();
+
     if std::env::var_os("JHOL_TRACE_PICK").is_some() {
         eprintln!("[solve] refreshing {} synthesised packument(s)", synthesised.len());
     }
@@ -2810,7 +2810,7 @@ fn expand_with_transitive_dependencies(
             crate::registry::fetch_metadata(name).ok()
         };
         if let Some(real) = real {
-            metadata_cache.insert(name.clone(), std::sync::Arc::new(real));
+            metadata_cache.insert(name.clone(), real_metadata_if_synth(&name, std::sync::Arc::new(real)));
         }
     }
     let packument_values: HashMap<String, serde_json::Value> = metadata_cache
@@ -2821,7 +2821,43 @@ fn expand_with_transitive_dependencies(
         .iter()
         .map(|p| (base_name(p).to_string(), requested_version_spec(p)))
         .collect();
-    let jagr_choice = crate::jagr_infinite::select_versions(&packument_values, &direct_specs);
+    normalise_selection(
+        &mut selected,
+        &constraints,
+        &mut metadata_cache,
+        !crate::registry::offline_mode(),
+    );
+    ensure_peers(
+        &mut selected,
+        &mut metadata_cache,
+        !crate::registry::offline_mode(),
+    );
+    let root_names: Vec<String> = packages
+        .iter()
+        .map(|p| base_name(p).to_string())
+        .collect();
+    prune_unreachable(&mut selected, &root_names, &metadata_cache);
+    let packument_values: HashMap<String, serde_json::Value> = metadata_cache
+        .iter()
+        .map(|(k, v)| (k.clone(), (**v).clone()))
+        .collect();
+    let jagr_choice = crate::jagr_infinite::select_versions(&packument_values, &direct_specs)
+        .filter(|choice| {
+            // The solver's answer has to prove itself before it may override the estimate:
+            // every selected parent's *declared* ranges must be satisfied by the selected child.
+            // Without this check a wrong answer replaced a right one silently — the chart's edge
+            // masks are unions across a package's versions, so an express-4 selection could be
+            // satisfied by express-5-era dependencies (measured: accepts@2.0.0).
+            match selection_satisfies_declared_ranges(choice, &packument_values) {
+                Ok(()) => true,
+                Err(why) => {
+                    if std::env::var_os("JHOL_TRACE_PICK").is_some() {
+                        eprintln!("[solve] rejected: {why}");
+                    }
+                    false
+                }
+            }
+        });
     if let Some(choice) = jagr_choice {
         let mut corrected = 0usize;
         for (name, version) in choice.iter() {
@@ -4225,6 +4261,252 @@ fn tree_key_package_name(raw: &str) -> String {
 }
 
 /// Highest version in `meta` satisfying `range`, or `None`.
+/// Does a proposed selection satisfy every *declared* dependency range of every selected
+/// version?
+///
+/// This is the guard that makes the chart solver safe to trust: its edge masks are unions across
+/// a package's published versions, so a selection can be internally consistent while violating
+/// the ranges the chosen versions actually declare. The check reads the real packuments, so it
+/// cannot be fooled by a snapshot or by a mask built from the wrong version.
+fn selection_satisfies_declared_ranges(
+    choice: &std::collections::HashMap<String, String>,
+    packuments: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    for (name, version) in choice {
+        let Some(meta) = packuments
+            .get(name)
+            .and_then(|p| p.get("versions"))
+            .and_then(|v| v.get(version))
+        else {
+            // A package with no metadata cannot be verified; the caller's estimate already
+            // covers it, so this is not a failure of the selection.
+            continue;
+        };
+        for section in ["dependencies", "optionalDependencies"] {
+            let Some(deps) = meta.get(section).and_then(|d| d.as_object()) else {
+                continue;
+            };
+            for (child, spec) in deps {
+                let spec = spec.as_str().unwrap_or("*").trim();
+                let Some(chosen) = choice.get(child) else {
+                    if section == "optionalDependencies" {
+                        continue;
+                    }
+                    return Err(format!("{name}@{version} needs {child}, absent from selection"));
+                };
+                if !crate::registry::version_satisfies(spec, chosen) {
+                    return Err(format!(
+                        "{name}@{version} declares {child} {spec}, selection has {chosen}"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+
+/// Never let a synthesised (single-version) packument reach the version chooser while the
+/// registry is reachable.
+///
+/// A snapshot may be the only source offline, and that is fine. Online it is not a fact: its one
+/// version per package cannot satisfy dependents that range differently (`mime` at 1.6.0 cannot
+/// serve `~1.2.6` and `0.19.0`), so using it silently produced trees no other tool produces.
+/// Re-derive every selected version from **real** metadata and the accumulated constraints.
+///
+/// The estimate walks a work queue: a package's version is chosen when it is dequeued, using
+/// whatever metadata is in hand at that moment — which may be a synthesised single-version
+/// document, or a lattice hint learned from an older registry state. Both are fine as *hints* and
+/// wrong as *authority*: this pass re-applies one rule (`packuments::pick_for_specs`: the `latest`
+/// tag when it satisfies every incoming constraint, otherwise the highest satisfying release) to
+/// the constraints that actually reached the package.
+///
+/// It runs to a small fixpoint because changing a parent's version can change the requirements it
+/// contributes; two passes suffice for that (a parent's own version never depends on its child).
+/// Keep only packages reachable from the requested roots through the **final** versions.
+///
+/// A selection is built by walking a work queue, so a package can be queued by a version that was
+/// later replaced (`get-intrinsic@1.3.1` pulled `async-function`, then normalisation moved it to
+/// 1.3.0). The stale leaf stayed in the map and was installed — a tree with packages nothing
+/// needs. Reachability is computed from the selected versions' own declared dependencies, so the
+/// answer is a property of the final tree, not of the order it was discovered in.
+/// Install the peers a selected package declares, unless marked optional.
+///
+/// npm 7+ installs required peers automatically; without it a tree can be missing an entire
+/// subtree that npm would have (`@types/react-dom` peers `@types/react`, which brings
+/// `@types/prop-types` and `csstype`). Optional peers stay out, which is what the metadata says.
+fn ensure_peers(
+    selected: &mut HashMap<String, String>,
+    metadata_cache: &mut HashMap<String, std::sync::Arc<serde_json::Value>>,
+    online: bool,
+) {
+    for _ in 0..2 {
+        let mut wanted: Vec<(String, String)> = Vec::new();
+        for (name, version) in selected.clone() {
+            let Some(meta) = metadata_cache.get(&name) else { continue };
+            let Some(ver_meta) = meta.get("versions").and_then(|v| v.get(&version)) else {
+                continue;
+            };
+            let Some(peers) = ver_meta.get("peerDependencies").and_then(|p| p.as_object()) else {
+                continue;
+            };
+            for (peer, spec) in peers {
+                let optional = ver_meta
+                    .get("peerDependenciesMeta")
+                    .and_then(|m| m.get(peer))
+                    .and_then(|m| m.get("optional"))
+                    .and_then(|o| o.as_bool())
+                    .unwrap_or(false);
+                if optional || selected.contains_key(peer) {
+                    continue;
+                }
+                wanted.push((peer.clone(), spec.as_str().unwrap_or("*").trim().to_string()));
+            }
+        }
+        if wanted.is_empty() {
+            break;
+        }
+        for (peer, spec) in wanted {
+            let meta = match metadata_cache.get(&peer) {
+                Some(m) => std::sync::Arc::clone(m),
+                None if online => match crate::registry::fetch_metadata(&peer) {
+                    Ok(real) => {
+                        let real = std::sync::Arc::new(real);
+                        metadata_cache.insert(peer.clone(), std::sync::Arc::clone(&real));
+                        real
+                    }
+                    Err(_) => continue,
+                },
+                None => continue,
+            };
+            let Some(versions) = meta.get("versions").and_then(|v| v.as_object()) else {
+                continue;
+            };
+            let latest = meta
+                .get("dist-tags")
+                .and_then(|t| t.get("latest"))
+                .and_then(|v| v.as_str());
+            let keys: Vec<&str> = versions.keys().map(|k| k.as_str()).collect();
+            if let Some(chosen) = crate::packument::pick_for_specs(latest, &keys, &[spec.as_str()]) {
+                selected.entry(peer).or_insert(chosen);
+            }
+        }
+    }
+}
+
+fn prune_unreachable(
+    selected: &mut HashMap<String, String>,
+    roots: &[String],
+    metadata_cache: &HashMap<String, std::sync::Arc<serde_json::Value>>,
+) {
+    let mut keep: HashSet<String> = HashSet::new();
+    let mut stack: Vec<String> = roots.to_vec();
+    while let Some(name) = stack.pop() {
+        if !keep.insert(name.clone()) {
+            continue;
+        }
+        let Some(version) = selected.get(&name) else { continue };
+        let Some(meta) = metadata_cache
+            .get(&name)
+            .and_then(|m| m.get("versions"))
+            .and_then(|v| v.get(version))
+        else {
+            continue;
+        };
+        for section in ["dependencies", "optionalDependencies", "peerDependencies"] {
+            let Some(deps) = meta.get(section).and_then(|d| d.as_object()) else {
+                continue;
+            };
+            for child in deps.keys() {
+                // Optional peers are not requirements; a missing one is not a reason to keep.
+                let optional_peer = section == "peerDependencies"
+                    && meta
+                        .get("peerDependenciesMeta")
+                        .and_then(|m| m.get(child))
+                        .and_then(|m| m.get("optional"))
+                        .and_then(|o| o.as_bool())
+                        .unwrap_or(false);
+                if optional_peer {
+                    continue;
+                }
+                if selected.contains_key(child) && !keep.contains(child) {
+                    stack.push(child.clone());
+                }
+            }
+        }
+    }
+    selected.retain(|name, _| keep.contains(name));
+}
+
+fn normalise_selection(
+    selected: &mut HashMap<String, String>,
+    constraints: &HashMap<String, Vec<String>>,
+    metadata_cache: &mut HashMap<String, std::sync::Arc<serde_json::Value>>,
+    online: bool,
+) {
+    for _ in 0..2 {
+        let mut changed = false;
+        for (name, specs) in constraints.iter() {
+            let Some(current) = selected.get(name).cloned() else {
+                continue;
+            };
+            let mut meta = metadata_cache.get(name).cloned();
+            let stale = match &meta {
+                Some(m) => {
+                    m.get("_bundled_index_synth").is_some()
+                        || m.get("_vortex_manifest_synth").is_some()
+                        || m.get("versions")
+                            .and_then(|v| v.as_object())
+                            .map(|o| o.len() <= 1)
+                            .unwrap_or(true)
+                }
+                None => true,
+            };
+            if stale && online {
+                if let Ok(real) = crate::registry::fetch_metadata(name) {
+                    let real = std::sync::Arc::new(real);
+                    metadata_cache.insert(name.clone(), std::sync::Arc::clone(&real));
+                    meta = Some(real);
+                }
+            }
+            let Some(meta) = meta else { continue };
+            let Some(versions) = meta.get("versions").and_then(|v| v.as_object()) else {
+                continue;
+            };
+            let latest = meta
+                .get("dist-tags")
+                .and_then(|t| t.get("latest"))
+                .and_then(|v| v.as_str());
+            let keys: Vec<&str> = versions.keys().map(|k| k.as_str()).collect();
+            let refs: Vec<&str> = specs.iter().map(|s| s.as_str()).collect();
+            if let Some(better) = crate::packument::pick_for_specs(latest, &keys, &refs) {
+                if better != current {
+                    selected.insert(name.clone(), better);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
+fn real_metadata_if_synth(
+    name: &str,
+    meta: std::sync::Arc<serde_json::Value>,
+) -> std::sync::Arc<serde_json::Value> {
+    let synth = meta.get("_bundled_index_synth").is_some()
+        || meta.get("_vortex_manifest_synth").is_some();
+    if !synth || crate::registry::offline_mode() {
+        return meta;
+    }
+    match crate::registry::fetch_metadata(name) {
+        Ok(real) => std::sync::Arc::new(real),
+        Err(_) => meta,
+    }
+}
+
 fn highest_satisfying_version(meta: &serde_json::Value, range: &str) -> Option<String> {
     crate::packument::pick_version_json(meta, range)
 }

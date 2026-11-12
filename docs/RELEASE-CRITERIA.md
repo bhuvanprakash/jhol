@@ -1,17 +1,17 @@
-# Releasing 2.0.0
+# Release criteria
 
-This is the checklist that decides whether 2.0.0 is published. It is deliberately mechanical:
+This is the checklist that decides whether a release is published. It is deliberately mechanical:
 each line is something that can be run, not something that can be claimed.
 
-## What 2.0.0 means
+## What a release means
 
 | | rule |
 |---|---|
-| version | `2.0.0` — the CLI surface, the lockfile schema and the status contract are stable from here |
-| semver | from 2.0.0: new flags may be added; existing flags, exit codes and lockfile fields may not change meaning |
+| version | the CLI surface, the lockfile schema and the status contract are stable from here |
+| semver | after the first stable tag: new flags may be added; existing flags, exit codes and lockfile fields may not change meaning |
 | platforms | a platform is supported only when its **scorecard column is green** (`docs/COMPATIBILITY.md`) |
 | artifact kinds | npm packages, Python wheels, model weights — all three are first class and all three appear in `status` |
-| knobs | no new `JHOL_*` variable may be added before 2.0.0; the audit below is part of the release |
+| knobs | no new `JHOL_*` variable may be added before the release; the audit below is part of the release |
 
 ## Definition of done
 
@@ -85,7 +85,7 @@ sh scripts/scorecard.sh                  # must be all PASS/SKIP
 cargo build --release
 ./target/release/jhol --version          # must print 2.0.0
 sh scripts/package-release.sh            # tarball + sha256 + size
-git tag -a v2.0.0 -m "jhol 2.0.0"
+git tag -a vX.Y.Z -m "jhol X.Y.Z"
 # publishing to a registry is a separate, deliberate step
 ```
 
@@ -97,4 +97,4 @@ git tag -a v2.0.0 -m "jhol 2.0.0"
 - Performance numbers with their scenarios and dates.
 - The number of surviving knobs.
 
-A 2.0.0 that lists its own gaps is worth more than one that hides them.
+A release that lists its own gaps is worth more than one that hides them.

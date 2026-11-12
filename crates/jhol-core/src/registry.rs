@@ -826,6 +826,12 @@ pub(crate) fn synthesize_packument_from_bundled_index(
     package: &str,
     constraint: &str,
 ) -> Option<serde_json::Value> {
+    // A snapshot holds one version per package, so it cannot answer a resolution that needs
+    // several (`mime` 1.6.0 cannot serve `~1.2.6` and `0.19.0`). Offline it is the only source
+    // and stays available; online it must not exist, or it silently decides versions.
+    if !offline_mode() && !prefer_bundled() {
+        return None;
+    }
     // STORE FIRST: binary-packages is per-machine curated (fresher, lockfile-
     // derived) — the embedded build-time seed is only a fallback. Prefer order
     // matters for cross-machine determinism: same repo, same picks.
