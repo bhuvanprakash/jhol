@@ -2827,16 +2827,20 @@ fn expand_with_transitive_dependencies(
         &mut metadata_cache,
         !crate::registry::offline_mode(),
     );
-    ensure_peers(
-        &mut selected,
-        &mut metadata_cache,
-        !crate::registry::offline_mode(),
-    );
+
     let root_names: Vec<String> = packages
         .iter()
         .map(|p| base_name(p).to_string())
         .collect();
     close_selection(
+        &mut selected,
+        &mut metadata_cache,
+        !crate::registry::offline_mode(),
+    );
+    // Peers after the selection is closed: a peer of a version chosen during normalisation or
+    // closure is a requirement of *that* version, so adding peers earlier can miss it (react: the
+    // @types/react-dom peer chain vanished when the declaring package settled on a new version).
+    ensure_peers(
         &mut selected,
         &mut metadata_cache,
         !crate::registry::offline_mode(),

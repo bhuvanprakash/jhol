@@ -1749,8 +1749,28 @@ fn fetch_metadata_network_inner<T: MetaRepr>(
 
 /// Fetch a packument as a `serde_json::Value` (the historical representation,
 /// used by every consumer outside the JAGR-∞ resolution path).
+/// The document a **resolution** reads.
+///
+/// The abbreviated packument (`application/vnd.npm.install-v1+json`) is what npm's installer reads
+/// for speed, and its `dist-tags` are served from a CDN edge: it can report `latest = 1.5.482` while
+/// the full document already says `1.5.483`. Two clients installing seconds apart then legitimately
+/// disagree on a version — which the scorecard cannot distinguish from a resolver bug, and which is
+/// a real correctness hazard: the tree a user gets depends on which edge answered.
+///
+/// The rule here is ours: **a resolution's inputs must be authoritative or explicitly pinned.** So
+/// resolution reads the full packument by default; the abbreviated form stays available for
+/// prefetching (`JHOL_METADATA_ABBREVIATED=1`), where a stale hint only costs a round trip later and
+/// never decides a version.
 pub fn fetch_metadata(package: &str) -> Result<serde_json::Value, String> {
-    fetch_metadata_any::<serde_json::Value>(package)
+    let abbreviated = matches!(
+        std::env::var("JHOL_METADATA_ABBREVIATED").as_deref(),
+        Ok("1") | Ok("true")
+    );
+    if abbreviated {
+        fetch_metadata_any::<serde_json::Value>(package)
+    } else {
+        fetch_metadata_full(package)
+    }
 }
 
 /// E60 — the same layering as [`fetch_metadata`], parsed straight into a typed
