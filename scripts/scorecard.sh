@@ -26,6 +26,21 @@ done
 [ -x "$JHOL" ] || { echo "scorecard: no jhol binary at $JHOL (cargo build --release)" >&2; exit 2; }
 command -v "$NPM" >/dev/null 2>&1 || { echo "scorecard: npm not found (it is the oracle)" >&2; exit 2; }
 
+# **Time is the shared input.** Two clients reading a moving registry can never be compared fairly:
+# `electron-to-chromium` publishes several times an hour, and whichever client fetched second wins.
+# Both tools resolve `--as-of` the same instant instead, so the comparison is a function of the
+# manifests and the registry's *history*, not of who ran first.
+# Opt-in, because it changes what is compared: with a cutoff both tools resolve the same registry
+# instant (deterministic, and it exposes an `--as-of` semantics gap: 2 of 10 rows differ); without
+# one they resolve "now" (fast, and exposed to registry motion: a package publishing mid-run can
+# flip a row). `SCORECARD_AS_OF=2026-11-09T00:00:00Z sh scripts/scorecard.sh`.
+SCORECARD_AS_OF=${SCORECARD_AS_OF:-}
+NPM_BEFORE=()
+if [ -n "$SCORECARD_AS_OF" ]; then
+  export JHOL_AS_OF="$SCORECARD_AS_OF"
+  NPM_BEFORE=(--before "$SCORECARD_AS_OF")
+fi
+
 ROOT=$(mktemp -d "${TMPDIR:-/tmp}/jhol-scorecard.XXXXXX")
 trap 'rm -rf "$ROOT"' EXIT INT TERM
 
@@ -79,7 +94,7 @@ run_one() {
   cp "$work/npm/package.json" "$work/jhol/package.json"
 
   printf '  %-25s npm…' "$slug"
-  ( cd "$work/npm" && "$NPM" install --ignore-scripts --no-audit --no-fund --no-progress \
+  ( cd "$work/npm" && "$NPM" install "${NPM_BEFORE[@]}" --ignore-scripts --no-audit --no-fund --no-progress \
       >"$work/npm.log" 2>&1 ); npm_exit=$?
 
   printf '\r  %-25s jhol…' "$slug"
@@ -127,7 +142,7 @@ run_one() {
     rm -rf "$work2"; mkdir -p "$work2/npm" "$work2/jhol"
     printf '%s\n' "$body" > "$work2/npm/package.json"
     cp "$work2/npm/package.json" "$work2/jhol/package.json"
-    ( cd "$work2/npm" && "$NPM" install --ignore-scripts --no-audit --no-fund --no-progress >/dev/null 2>&1 )
+    ( cd "$work2/npm" && "$NPM" install "${NPM_BEFORE[@]}" --ignore-scripts --no-audit --no-fund --no-progress >/dev/null 2>&1 )
     ( cd "$work2/jhol" && JHOL_NO_PREPARED_SNAPSHOT=1 "$JHOL" install >/dev/null 2>&1 )
     manifest "$work2/npm" > "$work2/npm.manifest" 2>/dev/null || true
     manifest "$work2/jhol" > "$work2/jhol.manifest" 2>/dev/null || true
@@ -152,7 +167,7 @@ FAILED=0
   echo "|---|---|---|---|---|---|"
 } > "$REPORT"
 
-echo "scorecard: $(basename "$JHOL") vs $($NPM --version) — report $REPORT"
+echo "scorecard: $(basename "$JHOL") vs $($NPM --version) — as-of $SCORECARD_AS_OF — report $REPORT"
 echo
 
 # 1 baseline
