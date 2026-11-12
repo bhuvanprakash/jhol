@@ -3354,6 +3354,7 @@ pub mod rvm {
                         &strings,
                         &d,
                         &HashMap::new(),
+                        &HashMap::new(),
                     );
                     // Give the packages readable names so explanations are
                     // checkable the way a user would read them.
@@ -6914,6 +6915,7 @@ mod tests {
             &strings,
             &deps,
             &peers,
+            &HashMap::new(),
         );
         for (id, name) in [(0u32, "app"), (1u32, "dep")] {
             if let Some(pkg) = chart.packages.get_mut(&id) {
@@ -6970,6 +6972,7 @@ mod tests {
             &strings,
             &deps,
             &peers,
+            &HashMap::new(),
         );
         for (id, name) in [(0u32, "app"), (1u32, "dep")] {
             if let Some(pkg) = chart.packages.get_mut(&id) {

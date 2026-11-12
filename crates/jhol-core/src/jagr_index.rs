@@ -537,6 +537,7 @@ mod tests {
             &version_strings,
             &deps,
             &peers,
+            &HashMap::new(),
         );
 
         assert_eq!(from_json.packages.len(), from_index.packages.len());

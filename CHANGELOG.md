@@ -4273,3 +4273,7 @@ tree is wrong differently (`accepts@2.0.0`, `array-flatten@3.0.0`: express-5-era
 express-4 manifest). The chart solver has its own defect; until it is fixed, the estimate stays the
 resolver of record. Scorecard unchanged this pass, and the two findings above are recorded in
 `docs/scorecard/NOTES-2026-11-12.md`.
+
+Test updated to the new policy: `online_bundle_answers_nothing_unless_asked` (the old test
+asserted that the bundle answers exact pins while online — the rule that made a snapshot the
+resolver of record). jhol-core 741, bin 25.

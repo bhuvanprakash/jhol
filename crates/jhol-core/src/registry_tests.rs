@@ -778,15 +778,22 @@ mod bundled_freshness_tests {
     }
 
     #[test]
-    fn online_bundle_answers_only_exact_pins() {
+    /// When online and not asked otherwise, the bundle answers **nothing** — not even an exact
+    /// pin. It used to answer pins, and that made a build-time snapshot the resolver of record:
+    /// the greedy estimate pinned `mime@1.6.0` from the bundle, the pin was served from the same
+    /// bundle, and the chart solver — handed a one-version packument — reported a conflict, so the
+    /// estimate stood and jhol installed trees no other tool produces.
+    ///
+    /// A snapshot can be a fallback (registry unreachable) or an explicit preference. It cannot be
+    /// an authority while a registry is reachable.
+    fn online_bundle_answers_nothing_unless_asked() {
         if offline_mode() || std::env::var("JHOL_PREFER_BUNDLED").is_ok() {
-            return; // environment overrides the default policy under test
+            return; // environment sets the policy that is under test
         }
-        assert!(bundled_index_allowed(&s(&["1.11.19"])));
-        assert!(bundled_index_allowed(&s(&["1.11.19", "=1.11.19"])));
+        assert!(!bundled_index_allowed(&s(&["1.11.19"])));
+        assert!(!bundled_index_allowed(&s(&["1.11.19", "=1.11.19"])));
         assert!(!bundled_index_allowed(&s(&["^1.11.13"])));
         assert!(!bundled_index_allowed(&s(&["latest"])));
-        assert!(!bundled_index_allowed(&s(&["1.11.19", "^1.11.0"])));
         assert!(!bundled_index_allowed(&[]));
     }
 }
