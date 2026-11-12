@@ -241,6 +241,9 @@ fn get_cached_packument_with_identity(
 fn get_cached_packument_for_key(key: &str) -> Option<serde_json::Value> {
     let mut cache = get_metadata_cache().lock().ok()?;
     let entry = cache.get(key)?;
+    if !cache_entry_is_fresh(entry) {
+        return None; // the caller fetches; a stale tree is worse than a round trip
+    }
     entry.get_pruned().map(|arc| (*arc).clone())
 }
 
@@ -1127,6 +1130,9 @@ pub struct CachedMetadata {
     lazy: LazyMetadata,
     pruned: Option<Arc<Value>>,
     last_access: std::time::Instant,
+    /// When this document was fetched (or last confirmed current by the registry). Distinct
+    /// from `last_access`: reading a stale document does not make it fresh.
+    fetched_at: std::time::Instant,
 }
 
 impl CachedMetadata {
@@ -1135,6 +1141,7 @@ impl CachedMetadata {
             lazy: LazyMetadata::new(raw_bytes),
             pruned: None,
             last_access: std::time::Instant::now(),
+            fetched_at: std::time::Instant::now(),
         }
     }
 
@@ -1143,6 +1150,7 @@ impl CachedMetadata {
             lazy: LazyMetadata::new(raw_bytes),
             pruned: Some(pruned),
             last_access: std::time::Instant::now(),
+            fetched_at: std::time::Instant::now(),
         }
     }
 
@@ -1206,6 +1214,32 @@ impl MetadataCache {
 /// Global metadata cache
 static METADATA_CACHE: std::sync::OnceLock<std::sync::Mutex<MetadataCache>> =
     std::sync::OnceLock::new();
+
+/// How long a cached packument may decide a version.
+///
+/// A resolver's inputs must be **current or explicitly pinned**. Serving a document fetched an
+/// hour ago silently resolves yesterday's registry: two tools run seconds apart produce different
+/// trees, which is the difference the scorecard found on `electron-to-chromium` (1.5.482 against
+/// 1.5.483 — a package that publishes several times an hour). `--as-of` pins history and is exempt;
+/// offline has no choice and is exempt too.
+///
+/// Sixty seconds is deliberate: long enough that one install reuses one document across hundreds of
+/// edges, short enough that a fresh install cannot resolve a release the registry has already lost.
+fn metadata_freshness() -> std::time::Duration {
+    std::env::var("JHOL_METADATA_FRESHNESS_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(std::time::Duration::from_secs)
+        .unwrap_or(std::time::Duration::from_secs(60))
+}
+
+/// Is this document still allowed to decide a version?
+fn cache_entry_is_fresh(entry: &CachedMetadata) -> bool {
+    if offline_mode() || std::env::var_os("JHOL_AS_OF").is_some() {
+        return true; // pinned history, or no registry to ask
+    }
+    entry.fetched_at.elapsed() < metadata_freshness()
+}
 
 fn get_metadata_cache() -> &'static std::sync::Mutex<MetadataCache> {
     METADATA_CACHE.get_or_init(|| {
@@ -1742,13 +1776,15 @@ fn fetch_metadata_any_with_identity<T: MetaRepr>(
             .lock()
             .expect("metadata_cache: mutex lock failed (poisoned)");
         if let Some(cached) = cache.get(&cache_key) {
-            let bytes = &cached
-                .access()
-                .expect("lazy_metadata: failed to access cached data")
-                .raw_bytes;
-            if let Ok(parsed) = T::parse_cached(bytes) {
-                if parsed.versions_non_empty() {
-                    return Ok(parsed);
+            if cache_entry_is_fresh(cached) {
+                let bytes = &cached
+                    .access()
+                    .expect("lazy_metadata: failed to access cached data")
+                    .raw_bytes;
+                if let Ok(parsed) = T::parse_cached(bytes) {
+                    if parsed.versions_non_empty() {
+                        return Ok(parsed);
+                    }
                 }
             }
         }
