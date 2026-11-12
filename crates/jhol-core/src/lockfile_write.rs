@@ -1915,11 +1915,7 @@ fn resolve_highest_satisfying(meta: &serde_json::Value, specs: &[String]) -> Opt
         .and_then(|v| v.as_str());
     let keys: Vec<&str> = versions.keys().map(|k| k.as_str()).collect();
     let refs: Vec<&str> = specs.iter().map(|s| s.as_str()).collect();
-    let picked = crate::packument::pick_for_specs(latest, &keys, &refs);
-    if std::env::var_os("JHOL_TRACE_PICK").is_some() {
-        eprintln!("[pick] lw:highest {:?} latest={:?} -> {:?}", refs, latest, picked);
-    }
-    picked
+    crate::packument::pick_for_specs(latest, &keys, &refs)
 }
 
 /// Same as resolve_highest_satisfying but takes pre-parsed, sorted (ascending) version list.
@@ -1940,11 +1936,7 @@ fn resolve_highest_satisfying_parsed_with_latest(
 ) -> Option<String> {
     let candidates: Vec<&str> = parsed.iter().map(|(_, s)| s.as_str()).collect();
     let refs: Vec<&str> = specs.iter().map(|s| s.as_str()).collect();
-    let picked = crate::packument::pick_for_specs(latest, &candidates, &refs);
-    if std::env::var_os("JHOL_TRACE_PICK").is_some() {
-        eprintln!("[pick] lw:parsed {:?} latest={:?} -> {:?}", refs, latest, picked);
-    }
-    picked
+    crate::packument::pick_for_specs(latest, &candidates, &refs)
 }
 
 /// Read root package name and version from package.json.

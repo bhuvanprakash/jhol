@@ -827,6 +827,7 @@ pub mod atlas {
         parsed_versions: &HashMap<u32, Vec<Option<semver::Version>>>,
         package_version_strings: &HashMap<u32, Vec<String>>,
         package_versions: &HashMap<u32, Vec<VersionOrdinal>>,
+        preferred: &HashMap<u32, (VersionOrdinal, Option<semver::Version>)>,
     ) -> Option<VersionBitmap> {
         let strings = package_version_strings.get(&target)?;
         let ords = package_versions.get(&target)?;
@@ -856,12 +857,53 @@ pub mod atlas {
             }
         }
         if any {
+            // Cap at the registry's `latest` tag when that release satisfies this very spec.
+            // Measured on four tools: npm, bun, pnpm and yarn all install the tagged version for
+            // an ordinary range even when a published-but-untagged release also satisfies it.
+            // The cap is applied per edge and only when the tag satisfies it, so a range that
+            // genuinely needs a newer release (`^1.3.1` with latest 1.3.0) is untouched.
+            if let Some((cap, Some(cap_version))) = preferred.get(&target) {
+                if compiled.matches(cap_version) && *cap >= lo && *cap <= hi {
+                    let window = VersionBitmap::from_interval(VersionInterval::new(lo, *cap));
+                    mask.intersect(&window);
+                }
+            }
             Some(mask)
         } else {
             // Nothing published satisfies this requirement: leave the mask empty
             // so propagation reports a conflict rather than accepting anything.
             Some(VersionBitmap::empty(lo, hi))
         }
+    }
+
+    /// The `latest` dist-tag of each package, as (ordinal, parsed version).
+    ///
+    /// Edge masks cap at this when the tagged release satisfies the edge's range: measured on
+    /// npm, bun, pnpm and yarn, all four install the tagged version for an ordinary range even
+    /// when a published-but-untagged release also satisfies it.
+    pub(crate) fn preferred_from_tags(
+        packuments: &HashMap<String, serde_json::Value>,
+        name_to_id: &HashMap<String, u32>,
+        versions: &HashMap<u32, Vec<VersionOrdinal>>,
+        version_strings: &HashMap<u32, Vec<String>>,
+    ) -> HashMap<u32, (VersionOrdinal, Option<semver::Version>)> {
+        let mut out = HashMap::new();
+        for (name, packument) in packuments {
+            let Some(id) = name_to_id.get(name) else { continue };
+            let Some(tag) = packument
+                .get("dist-tags")
+                .and_then(|t| t.get("latest"))
+                .and_then(|v| v.as_str())
+            else {
+                continue;
+            };
+            let Some(strings) = version_strings.get(id) else { continue };
+            let Some(list) = versions.get(id) else { continue };
+            let Some(index) = strings.iter().position(|v| v == tag) else { continue };
+            let Some(ord) = list.get(index).copied() else { continue };
+            out.insert(*id, (ord, semver::Version::parse(tag).ok()));
+        }
+        out
     }
 
     /// Build chart from constraint set (for precompute)
@@ -871,6 +913,7 @@ pub mod atlas {
         package_version_strings: &HashMap<u32, Vec<String>>,
         package_deps: &HashMap<u32, Vec<(u32, String, VersionInterval, bool)>>,
         package_peers: &HashMap<u32, Vec<(u32, String, VersionInterval)>>,
+        preferred: &HashMap<u32, (VersionOrdinal, Option<semver::Version>)>,
     ) -> Chart {
         let mut packages = HashMap::new();
         let mut betti = BettiNumbers::default();
@@ -931,6 +974,7 @@ pub mod atlas {
                     &parsed_versions,
                     package_version_strings,
                     package_versions,
+                    preferred,
                 );
                 mask_cache.borrow_mut().insert(key, computed.clone());
                 computed
@@ -1721,8 +1765,16 @@ pub mod precompute {
         }
 
         let t_assemble = std::time::Instant::now();
-        let mut chart =
-            build_chart_from_constraints(&constraints, &versions, &version_strings, &deps, &peers);
+        let preferred =
+            crate::jagr_infinite::atlas::preferred_from_tags(packuments, name_to_id, &versions, &version_strings);
+        let mut chart = build_chart_from_constraints(
+            &constraints,
+            &versions,
+            &version_strings,
+            &deps,
+            &peers,
+            &preferred,
+        );
         if std::env::var_os("JAGR_PROFILE_CHART").is_some() {
             eprintln!(
                 "[chart] assemble (masks) {:.1} ms; total {:.1} ms",
@@ -1944,7 +1996,14 @@ pub mod precompute {
             }
         }
 
-        build_chart_from_constraints(&constraints, &versions, &version_strings, &deps, &peers)
+        build_chart_from_constraints(
+            &constraints,
+            &versions,
+            &version_strings,
+            &deps,
+            &peers,
+            &HashMap::new(),
+        )
     }
 
     /// Extract dependency edges: dep_id + interval over its ordinal domain.
@@ -3711,7 +3770,14 @@ pub fn select_versions(
 ) -> Option<HashMap<String, String>> {
     use crate::jagr_infinite::chart::{VersionBitmap, VersionOrdinal};
 
+    let trace = std::env::var_os("JHOL_TRACE_PICK").is_some();
+    let bail = |why: &str| {
+        if trace {
+            eprintln!("[solve] bail: {why}");
+        }
+    };
     if deps.is_empty() || packuments.is_empty() {
+        bail("no deps or no packuments");
         return None;
     }
 
@@ -3740,10 +3806,14 @@ pub fn select_versions(
     for (name, spec) in deps {
         let id = *name_to_id.get(name)?;
         let pkg = chart.packages.get(&id)?;
-        let (interval, _domain) = candidate_domain_for_package(pkg, spec)?;
+        let Some((interval, _domain)) = candidate_domain_for_package(pkg, spec) else {
+            bail(&format!("no candidate domain for {name} spec {spec}"));
+            return None;
+        };
         constraints.insert(id, interval);
     }
     if constraints.is_empty() {
+        bail("no constraints");
         return None;
     }
 
@@ -3757,6 +3827,7 @@ pub fn select_versions(
             let mut mask = crate::jagr_infinite::chart::VersionBitmap::from_interval(*interval);
             mask.intersect(&pkg.allowed);
             if mask.is_empty() {
+                bail("a direct range matches nothing published");
                 return None; // requested range matches nothing published
             }
             pkg.allowed = mask;
@@ -3766,10 +3837,23 @@ pub fn select_versions(
     let mut atlas = crate::jagr_infinite::atlas::Atlas::new();
     atlas.insert_chart(chart.clone());
 
-    let mut narrowed = crate::jagr_infinite::rvm::exec::RVM::propagate(chart).ok()?;
-    let (selection, _) =
-        crate::jagr_infinite::rvm::exec::RVM::search(narrowed.clone(), 20_000).ok()?;
+    let mut narrowed = match crate::jagr_infinite::rvm::exec::RVM::propagate(chart) {
+        Ok(n) => n,
+        Err(e) => {
+            bail(&format!("propagate: {e}"));
+            return None;
+        }
+    };
+    let (selection, _) = match crate::jagr_infinite::rvm::exec::RVM::search(narrowed.clone(), 20_000)
+    {
+        Ok(s) => s,
+        Err(e) => {
+            bail(&format!("search: {e}"));
+            return None;
+        }
+    };
     if selection.is_empty() {
+        bail("empty selection");
         return None;
     }
 
@@ -4605,6 +4689,27 @@ fn reconcile_versions(
                     .max_by(|a, b| a.0.cmp(&b.0))
             })
             .map(|(_, version)| version.clone());
+        // Prefer the registry's `latest` tag when it satisfies every reaching range.
+        // Measured on four tools: npm, bun, pnpm and yarn all install the tagged version for an
+        // ordinary range even when a published-but-untagged release also satisfies it. Taking the
+        // untagged one made the same manifest produce a different tree here than everywhere else.
+        let mut best = best;
+        if let Some(tag) = packuments
+            .get(&name)
+            .and_then(|d| d.get("dist-tags"))
+            .and_then(|t| t.get("latest"))
+            .and_then(|v| v.as_str())
+        {
+            if let Ok(parsed) = semver::Version::parse(tag) {
+                let satisfies_all = specs
+                    .iter()
+                    .all(|s| crate::registry::version_satisfies_parsed(s, &parsed));
+                let published = versions.iter().any(|(_, v)| v.as_str() == tag);
+                if satisfies_all && published {
+                    best = Some(tag.to_string());
+                }
+            }
+        }
         let Some(best) = best else {
             continue;
         };
@@ -4883,52 +4988,23 @@ const PRUNE_KEEP_NEWEST: usize = 128;
 /// block. `time` is pruned to the kept versions for the same reason.
 fn prune_packument_versions(
     packument: &mut serde_json::Value,
-    constraints: &[String],
-    keep_newest: usize,
+    _constraints: &[String],
+    _keep_newest: usize,
 ) {
-    let Some(versions) = packument
-        .get_mut("versions")
-        .and_then(|v| v.as_object_mut())
-    else {
-        return;
-    };
-    if versions.len() <= keep_newest {
-        return;
-    }
-
-    // Newest first, by semver.
-    let mut ranked: Vec<(semver::Version, String)> = versions
-        .keys()
-        .filter_map(|k| semver::Version::parse(k).ok().map(|v| (v, k.clone())))
-        .collect();
-    ranked.sort_by(|a, b| b.0.cmp(&a.0));
-
-    let mut keep: HashSet<String> = HashSet::new();
-    for (_, key) in ranked.iter().take(keep_newest) {
-        keep.insert(key.clone());
-    }
-    // Non-semver keys (tags, oddities) are always kept — they are cheap and may
-    // be referenced by name.
-    for key in versions.keys() {
-        if semver::Version::parse(key).is_err() {
-            keep.insert(key.clone());
-        }
-    }
-    for (_, key) in &ranked {
-        if constraints.is_empty()
-            || constraints
-                .iter()
-                .any(|c| crate::registry::version_satisfies(c, key))
-        {
-            keep.insert(key.clone());
-        }
-    }
-
-    versions.retain(|key, _| keep.contains(key));
-    if let Some(time) = packument.get_mut("time").and_then(|t| t.as_object_mut()) {
-        time.retain(|key, _| {
-            key == "created" || key == "modified" || key == "unpublished" || keep.contains(key)
-        });
+    // **Versions are kept.** This used to keep only "versions satisfying a constraint seen so
+    // far, plus the newest N", and the scorecard found the price: a constraint discovered later
+    // (express -> mime `~1.2.6` arriving after the frontier had already kept only the newest
+    // `1.6.0`) found no candidates, the chart solver reported a conflict, `select_versions`
+    // returned `None`, and the greedy estimate silently became the resolver of record — which
+    // is why jhol alone installed `get-intrinsic@1.3.1` where npm, bun, pnpm and yarn all install
+    // the `latest`-tagged 1.3.0.
+    //
+    // Memory was the original motive, and the real hog is the `time` map (one entry per
+    // published version, and react has 2896 of them). That map is dropped; version metadata is
+    // already field-pruned by `registry::prune_packument_in_place`. Soundness first: a resolver
+    // that forgets published versions cannot satisfy a dependent it has not seen yet.
+    if let Some(obj) = packument.as_object_mut() {
+        obj.remove("time");
     }
 }
 
@@ -6314,11 +6390,7 @@ fn highest_satisfying(packument: &serde_json::Value, spec: &str) -> Option<Strin
     // One rule, one place: `latest` when it satisfies, otherwise the highest satisfying
     // release. Everything that used to re-implement "highest satisfying" now calls it, so a
     // package cannot resolve differently depending on which code path asked.
-    let picked = crate::packument::pick_version_json(packument, spec);
-    if std::env::var_os("JHOL_TRACE_PICK").is_some() {
-        eprintln!("[pick] jagr {:?} -> {:?}", spec, picked);
-    }
-    picked
+    crate::packument::pick_version_json(packument, spec)
 }
 
 /// Map an ordinal back to its version string via a chart package's list.
@@ -7019,6 +7091,23 @@ mod tests {
                             .max_by(|a, b| a.0.cmp(&b.0))
                     })
                     .map(|(_, v)| (*v).clone());
+                let mut best = best;
+                if let Some(tag) = packuments
+                    .get(name)
+                    .and_then(|d| d.get("dist-tags"))
+                    .and_then(|t| t.get("latest"))
+                    .and_then(|v| v.as_str())
+                {
+                    if let Ok(parsed) = semver::Version::parse(tag) {
+                        let satisfies_all = specs
+                            .iter()
+                            .all(|s| crate::registry::version_satisfies_parsed(s, &parsed));
+                        let published = versions.contains_key(tag);
+                        if satisfies_all && published {
+                            best = Some(tag.to_string());
+                        }
+                    }
+                }
                 let Some(best) = best else {
                     continue;
                 };

@@ -133,12 +133,6 @@ pub fn pick_for_specs(latest: Option<&str>, candidates: &[&str], specs: &[&str])
             .all(|s| crate::registry::version_satisfies(s, v))
             && (allow_prerelease || !is_prerelease(v))
     };
-    if std::env::var_os("JHOL_TRACE_PICK").is_some() {
-        eprintln!(
-            "[pick] pick_for_specs specs={:?} latest={:?} cands={} ",
-            specs, latest, candidates.len()
-        );
-    }
     if let Some(tag) = latest {
         if candidates.iter().any(|c| *c == tag) && eligible(tag) {
             return Some(tag.to_string());

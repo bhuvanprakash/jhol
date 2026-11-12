@@ -2773,6 +2773,46 @@ fn expand_with_transitive_dependencies(
     // the conflict check below still runs. A sole resolver must not be able to
     // turn a working install into a failed one.
     // `metadata_cache` holds `Arc<Value>`s; the solver wants the values.
+    // **Refresh synthesised packuments before solving.** A snapshot (bundled index or a
+    // transitive seed) carries one version per package. The solver needs the published set: with
+    // one version it reports a conflict for any package two dependents range differently
+    // (`mime`: `~1.2.6` and `0.19.0`), returns `None`, and the greedy estimate silently becomes
+    // the resolver — which is how a tree no other tool produces was installed.
+    //
+    // Bounded by the number of synthesised entries, which is small (packages the estimate had
+    // already committed to); everything else is already real metadata.
+    let mut synthesised: Vec<String> = metadata_cache
+        .iter()
+        .filter(|(_, v)| {
+            v.get("_bundled_index_synth").is_some() || v.get("_vortex_manifest_synth").is_some()
+        })
+        .map(|(k, _)| k.clone())
+        .collect();
+    synthesised.sort();
+    // Off by default until the solver can consume real metadata and still return the tree the
+    // ranges describe: fed full packuments, it currently resolves express to express-5-era
+    // dependencies (accepts@2.0.0, array-flatten@3.0.0) — a worse answer than the estimate. The
+    // switch exists so the work is measurable, not so it ships.
+    let refresh = matches!(
+        std::env::var("JHOL_SOLVER_FULL_METADATA").as_deref(),
+        Ok("1") | Ok("true")
+    );
+    if !refresh {
+        synthesised.clear();
+    }
+    if std::env::var_os("JHOL_TRACE_PICK").is_some() {
+        eprintln!("[solve] refreshing {} synthesised packument(s)", synthesised.len());
+    }
+    for name in &synthesised {
+        let real = if crate::registry::offline_mode() {
+            None
+        } else {
+            crate::registry::fetch_metadata(name).ok()
+        };
+        if let Some(real) = real {
+            metadata_cache.insert(name.clone(), std::sync::Arc::new(real));
+        }
+    }
     let packument_values: HashMap<String, serde_json::Value> = metadata_cache
         .iter()
         .map(|(k, v)| (k.clone(), (**v).clone()))

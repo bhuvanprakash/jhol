@@ -304,11 +304,7 @@ fn choose_version(
             }
         }
     }
-    let picked = best.map(|(_, v)| v);
-    if std::env::var_os("JHOL_TRACE_PICK").is_some() {
-        eprintln!("[pick] nest:choose {} {:?} -> {:?}", package, versions_desc.len(), picked);
-    }
-    picked
+    best.map(|(_, v)| v)
 }
 
 /// Inputs beyond "what does the manifest ask for".

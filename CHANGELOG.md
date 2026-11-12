@@ -4243,3 +4243,33 @@ pins in parents' dependency maps, which means the choice may be made before any 
 
 Recorded in `docs/scorecard/NOTES-2026-11-12.md` rather than claimed as fixed: the next step is
 making candidate expansion latest-aware in the one place it happens, not adding a sixth helper.
+
+## Why the solver was not the resolver, and what a snapshot was doing instead
+
+The `latest`-tag rule was implemented (one function, five tests) and changed nothing, because
+`select_versions` returns `None` for an ordinary `express@4.18.2` install. The bail reason, from
+instrumented output:
+
+```
+JAGR-∞ conflict: no version of mime satisfies every dependent (candidates after narrowing: [1.6.0])
+input packuments=70  mime_versions=Some(1)  mime_keys=[_bundled_index_synth, dist-tags, name, versions]
+```
+
+Three compounding defects:
+
+1. **A build-time snapshot answered exact pins online**, so the greedy estimate could confirm its
+   own guess from a stale version set (`mime@1.6.0`).
+2. **Packument versions were pruned by "constraints seen so far"**, so a version a later dependent
+   needed was already gone. Versions are now kept; the `time` map (one entry per published
+   version — the real memory hog) is dropped instead.
+3. **A failed solve was silent**, so the estimate became the resolver of record with no signal.
+
+Fixed: the snapshot answers only when offline or explicitly preferred; version lists are no longer
+pruned; the range rule lives in one place with tests.
+
+**Not shipped:** refreshing synthesised packuments to real metadata (behind
+`JHOL_SOLVER_FULL_METADATA`, default off) makes the solver answer — `get-intrinsic 1.3.0` — but the
+tree is wrong differently (`accepts@2.0.0`, `array-flatten@3.0.0`: express-5-era deps for an
+express-4 manifest). The chart solver has its own defect; until it is fixed, the estimate stays the
+resolver of record. Scorecard unchanged this pass, and the two findings above are recorded in
+`docs/scorecard/NOTES-2026-11-12.md`.

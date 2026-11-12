@@ -377,16 +377,20 @@ pub(crate) fn exact_pin_clean(constraint: &str) -> Option<&str> {
     }
 }
 
-pub fn prune_packument_for_constraint(v: &mut serde_json::Value, constraint: &str) {
+/// Field-prune a packument. **Version keys are kept.**
+///
+/// This used to keep only the exact-pinned version for a single constraint, and that came at a
+/// correctness price the scorecard found: the chart solver received a packument holding one
+/// version, so it reported `no version of <pkg> satisfies every dependent` for ordinary trees
+/// (`mime` at 1.6.0 cannot satisfy `~1.2.6` *and* `0.19.0`), `select_versions` returned `None`,
+/// and the greedy fetch estimate silently became the resolver of record. The estimate then chose
+/// `get-intrinsic@1.3.1` where every other tool chooses the `latest` tag, 1.3.0.
+///
+/// Dropping *version metadata fields* is the memory win; dropping *versions* is what broke the
+/// solver. `clean` is kept in the signature because callers pass it and because a future
+/// constraint-aware prune may use it — but it no longer removes published versions.
+pub fn prune_packument_for_constraint(v: &mut serde_json::Value, _constraint: &str) {
     prune_packument_in_place(v);
-    let Some(clean) = exact_pin_clean(constraint) else {
-        return;
-    };
-    if let Some(versions) = v.get_mut("versions").and_then(|x| x.as_object_mut()) {
-        if versions.contains_key(clean) {
-            versions.retain(|k, _| k == clean);
-        }
-    }
 }
 
 /// Parse registry JSON bytes and prune packuments (see `prune_packument_in_place`).
@@ -1332,14 +1336,19 @@ pub fn synth_satisfies_all(meta: &serde_json::Value, constraints: &[String]) -> 
 ///
 /// `JHOL_PREFER_BUNDLED=1` is the explicit opt-in to trade freshness for zero
 /// metadata traffic (air-gapped-ish CI, reproducible-by-store builds).
-pub(crate) fn bundled_index_allowed(constraints: &[String]) -> bool {
-    if offline_mode() {
-        return true;
-    }
-    if constraints.is_empty() {
-        return false;
-    }
-    prefer_bundled() || constraints.iter().all(|c| is_exact_version_pin(c))
+/// May the bundled snapshot answer this request?
+///
+/// Only when there is no registry to ask (offline), or when the user explicitly prefers it.
+///
+/// It used to also answer whenever every constraint was an exact pin, and that rule made a
+/// *snapshot* the resolver of record: the greedy estimate pinned `mime@1.6.0` from the bundled
+/// index, the pin was then "allowed" to be served from the same index, and the chart solver —
+/// handed a one-version packument — reported a conflict, so the estimate stood. The result was a
+/// tree no other tool produces (`get-intrinsic@1.3.1` where npm, bun, pnpm and yarn take the
+/// `latest`-tagged 1.3.0). A snapshot cannot be an authority during resolution; it can only be a
+/// fallback when the registry is unreachable.
+pub(crate) fn bundled_index_allowed(_constraints: &[String]) -> bool {
+    offline_mode() || prefer_bundled()
 }
 
 fn prefer_bundled() -> bool {
