@@ -4186,20 +4186,7 @@ fn tree_key_package_name(raw: &str) -> String {
 
 /// Highest version in `meta` satisfying `range`, or `None`.
 fn highest_satisfying_version(meta: &serde_json::Value, range: &str) -> Option<String> {
-    let versions = meta.get("versions")?.as_object()?;
-    let mut best: Option<semver::Version> = None;
-    for v in versions.keys() {
-        let Ok(parsed) = semver::Version::parse(v) else {
-            continue;
-        };
-        if !crate::registry::version_satisfies(range, v) {
-            continue;
-        }
-        if best.as_ref().map(|b| parsed > *b).unwrap_or(true) {
-            best = Some(parsed);
-        }
-    }
-    best.map(|v| v.to_string())
+    crate::packument::pick_version_json(meta, range)
 }
 
 /// Record every other-platform variant of an optional dependency (npm parity).

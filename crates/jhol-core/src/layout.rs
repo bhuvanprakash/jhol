@@ -47,18 +47,7 @@ pub(crate) fn visible_dependency<'a, T: 'a>(
 
 /// Highest published version in `packument` satisfying `range`.
 fn highest_satisfying(packument: &serde_json::Value, range: &str) -> Option<String> {
-    let versions = packument.get("versions")?.as_object()?;
-    versions
-        .keys()
-        .filter(|v| crate::registry::version_satisfies(range, v))
-        .max_by(|a, b| {
-            semver::Version::parse(a)
-                .ok()
-                .zip(semver::Version::parse(b).ok())
-                .map(|(x, y)| x.cmp(&y))
-                .unwrap_or_else(|| a.cmp(b))
-        })
-        .cloned()
+    crate::packument::pick_version_json(packument, range)
 }
 
 /// Build a node-keyed layout from a flat resolution.

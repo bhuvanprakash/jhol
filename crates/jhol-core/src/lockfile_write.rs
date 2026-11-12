@@ -94,8 +94,16 @@ impl RegistryProvider {
     }
 
     fn resolve_version(&mut self, name: &str, specs: &[String]) -> Result<String, String> {
+        let latest = self
+            .metadata(name)
+            .ok()
+            .and_then(|m| m.get("dist-tags"))
+            .and_then(|t| t.get("latest"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         let parsed = self.get_parsed_versions(name)?;
-        resolve_highest_satisfying_parsed(parsed, specs).ok_or_else(|| {
+        resolve_highest_satisfying_parsed_with_latest(parsed, specs, latest.as_deref())
+            .ok_or_else(|| {
             format!(
                 "Dependency conflict for {} (specs: {})",
                 name,
@@ -1901,22 +1909,17 @@ fn resolve_full_tree_legacy(
 
 fn resolve_highest_satisfying(meta: &serde_json::Value, specs: &[String]) -> Option<String> {
     let versions = meta.get("versions")?.as_object()?;
-    let mut parsed: Vec<semver::Version> = versions
-        .keys()
-        .filter_map(|v| semver::Version::parse(v).ok())
-        .collect();
-    parsed.sort();
-    parsed.reverse();
-    for ver in parsed {
-        let ver_str = ver.to_string();
-        if specs
-            .iter()
-            .all(|s| registry::version_satisfies(s, &ver_str))
-        {
-            return Some(ver_str);
-        }
+    let latest = meta
+        .get("dist-tags")
+        .and_then(|t| t.get("latest"))
+        .and_then(|v| v.as_str());
+    let keys: Vec<&str> = versions.keys().map(|k| k.as_str()).collect();
+    let refs: Vec<&str> = specs.iter().map(|s| s.as_str()).collect();
+    let picked = crate::packument::pick_for_specs(latest, &keys, &refs);
+    if std::env::var_os("JHOL_TRACE_PICK").is_some() {
+        eprintln!("[pick] lw:highest {:?} latest={:?} -> {:?}", refs, latest, picked);
     }
-    None
+    picked
 }
 
 /// Same as resolve_highest_satisfying but takes pre-parsed, sorted (ascending) version list.
@@ -1925,15 +1928,23 @@ fn resolve_highest_satisfying_parsed(
     parsed: &[(semver::Version, String)],
     specs: &[String],
 ) -> Option<String> {
-    for (_ver, ver_str) in parsed.iter().rev() {
-        if specs
-            .iter()
-            .all(|s| registry::version_satisfies(s, ver_str))
-        {
-            return Some(ver_str.clone());
-        }
+    resolve_highest_satisfying_parsed_with_latest(parsed, specs, None)
+}
+
+/// Same, with the registry's `latest` tag as the incumbent. Coverage/intersection rules are
+/// unchanged: the tag must satisfy every spec to be chosen.
+fn resolve_highest_satisfying_parsed_with_latest(
+    parsed: &[(semver::Version, String)],
+    specs: &[String],
+    latest: Option<&str>,
+) -> Option<String> {
+    let candidates: Vec<&str> = parsed.iter().map(|(_, s)| s.as_str()).collect();
+    let refs: Vec<&str> = specs.iter().map(|s| s.as_str()).collect();
+    let picked = crate::packument::pick_for_specs(latest, &candidates, &refs);
+    if std::env::var_os("JHOL_TRACE_PICK").is_some() {
+        eprintln!("[pick] lw:parsed {:?} latest={:?} -> {:?}", refs, latest, picked);
     }
-    None
+    picked
 }
 
 /// Read root package name and version from package.json.

@@ -253,22 +253,50 @@ fn choose_version(
     pending: &[crate::registry::CompiledSpec],
     options: &ResolveOptions,
 ) -> Option<String> {
-    let mut best: Option<(usize, String)> = None;
-    for v in versions_desc {
-        let Ok(parsed) = semver::Version::parse(v) else {
-            continue;
-        };
+    // Policy first: a version is eligible only if it satisfies the range and every
+    // resolution input (`--as-of`, licences, banned versions).
+    let eligible = |v: &str| -> Option<(usize, semver::Version)> {
+        let parsed = semver::Version::parse(v).ok()?;
         if !compiled.matches(&parsed) || options.is_banned(package, v) {
-            continue;
+            return None;
         }
         let dated = match options.cutoff {
             None => true,
-            Some(t) => published.get(v.as_str()).map(|p| *p <= t).unwrap_or(false),
+            Some(t) => published.get(v).map(|p| *p <= t).unwrap_or(false),
         };
         if !dated || !options.license_allows(doc, v) {
-            continue;
+            return None;
         }
         let covered = pending.iter().filter(|c| c.matches(&parsed)).count();
+        Some((covered, parsed))
+    };
+
+    // **Start from the `latest` tag.** A fresh install should reproduce what the registry
+    // advertises as current: npm, bun, pnpm and yarn all install the `latest`-tagged version
+    // for an ordinary range, even when a published-but-untagged release also satisfies it
+    // (measured: `get-intrinsic@1.3.0` for `^1.2.5`, with 1.3.1 published and untagged). Jho
+    // taking 1.3.1 there made the same `package.json` produce a different tree than every
+    // other tool — the divergence the scorecard exists to catch.
+    //
+    // Coverage still wins over the tag, exactly as before: this only sets the incumbent that
+    // a candidate must strictly beat, so the tie-breaker rule is unchanged.
+    let mut best: Option<(usize, String)> = None;
+    if let Some(tag) = doc
+        .get("dist-tags")
+        .and_then(|t| t.get("latest"))
+        .and_then(|v| v.as_str())
+    {
+        if versions_desc.iter().any(|v| v == tag) {
+            if let Some((covered, _)) = eligible(tag) {
+                best = Some((covered, tag.to_string()));
+            }
+        }
+    }
+
+    for v in versions_desc {
+        let Some((covered, _)) = eligible(v) else {
+            continue;
+        };
         if best.as_ref().map(|(b, _)| covered > *b).unwrap_or(true) {
             best = Some((covered, v.clone()));
             if covered == pending.len() {
@@ -276,7 +304,11 @@ fn choose_version(
             }
         }
     }
-    best.map(|(_, v)| v)
+    let picked = best.map(|(_, v)| v);
+    if std::env::var_os("JHOL_TRACE_PICK").is_some() {
+        eprintln!("[pick] nest:choose {} {:?} -> {:?}", package, versions_desc.len(), picked);
+    }
+    picked
 }
 
 /// Inputs beyond "what does the manifest ask for".

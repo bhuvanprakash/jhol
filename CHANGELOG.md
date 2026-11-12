@@ -4192,3 +4192,54 @@ Measured: local fit 8 ms; sweep of a directory 38 ms over HTTP; repository fit 5
 11–17 ms per further budget (headers cached).
 
 jhol-core 736 (4 fit tests), bin 25.
+
+## Focus returns to the package manager: a compatibility scorecard, and its first three failures
+
+After a long stretch of surface work, the next stretch is the package manager. `docs/RELEASE-2.0.md`
+now defines what 2.0.0 must prove, and `docs/COMPATIBILITY.md` defines how: install the same project
+with npm and with jhol, compare **observable behaviour** only — resolved `name@version` set, bin
+links, file counts, exit codes and error text — never a competitor's implementation.
+
+`scripts/scorecard.sh` runs ten scenarios locally (no CI, no push), writes a dated report and exits
+non-zero on any failure. First run, unedited:
+
+| scenario | verdict | first difference |
+|---|---|---|
+| `express-4.18.2` | FAIL | jhol installs `get-intrinsic@1.3.1`, npm 1.3.0 → two extra packages |
+| `jest-29` | FAIL | jhol lacks `camelcase@5.3.1`, `semver@6.3.2` |
+| `esbuild-optional` | PASS | — |
+| `sharp-native` | FAIL | `@emnapi/runtime`, `color-convert@0.5.3` extra |
+
+**Root cause of the first failure, verified against the registry, not guessed:** `get-intrinsic`
+1.3.1 is published but **not tagged `latest`** (latest is 1.3.0). Every dependent's range is
+satisfied by both. npm takes the `latest` version; jhol takes the highest satisfying. 1.3.1 is what
+pulls `async-function`, which is the entire +19 % file difference.
+
+That points to one rule, derived from the failure rather than from anyone's code:
+
+> When a range is satisfied by the version `latest` points at, prefer it. Only when `latest` does
+> not satisfy the range, take the highest satisfying version.
+
+Why it is right on its own terms: a fresh install should reproduce what the registry's front page
+promises, not an untagged release nobody is pointed at.
+
+Harness limitations are written down too (layout invisible, extra files pass, scripts not yet
+compared), so a green row cannot be mistaken for "no problem".
+
+## The `latest`-tag rule, and why it is not yet the fix
+
+Implemented the rule the scorecard pointed at — *prefer the `latest` dist-tag when it satisfies
+the range, otherwise the highest satisfying release* — as one function,
+`packuments::pick_for_specs`, with five tests (tag preferred; tag cannot satisfy → highest; a
+prerelease range can still reach untagged prereleases; a plain range never takes a prerelease tag;
+no tags → old behaviour). It is used by `jagr_nest::choose_version` and both
+`lockfile_write::resolve_*` helpers, replacing three duplicated "highest satisfying"
+implementations.
+
+**It does not yet change `express`.** Instrumented with `JHOL_TRACE_PICK=1`: 476 version
+decisions during a fresh install, none of them for `get-intrinsic` — its version is chosen by the
+resolver's candidate expansion, not by a range-selection helper. The lockfile also records exact
+pins in parents' dependency maps, which means the choice may be made before any range is consulted.
+
+Recorded in `docs/scorecard/NOTES-2026-11-12.md` rather than claimed as fixed: the next step is
+making candidate expansion latest-aware in the one place it happens, not adding a sixth helper.

@@ -6311,19 +6311,14 @@ fn selection_to_resolved(
 
 /// Highest published version in a packument satisfying the spec.
 fn highest_satisfying(packument: &serde_json::Value, spec: &str) -> Option<String> {
-    let versions = packument.get("versions")?.as_object()?;
-    // Highest satisfying by semver (fall back to textual if unparseable).
-    versions
-        .keys()
-        .filter(|v| crate::registry::version_satisfies(spec, v))
-        .max_by(|a, b| {
-            semver::Version::parse(a)
-                .ok()
-                .zip(semver::Version::parse(b).ok())
-                .map(|(x, y)| x.cmp(&y))
-                .unwrap_or_else(|| a.cmp(b))
-        })
-        .cloned()
+    // One rule, one place: `latest` when it satisfies, otherwise the highest satisfying
+    // release. Everything that used to re-implement "highest satisfying" now calls it, so a
+    // package cannot resolve differently depending on which code path asked.
+    let picked = crate::packument::pick_version_json(packument, spec);
+    if std::env::var_os("JHOL_TRACE_PICK").is_some() {
+        eprintln!("[pick] jagr {:?} -> {:?}", spec, picked);
+    }
+    picked
 }
 
 /// Map an ordinal back to its version string via a chart package's list.

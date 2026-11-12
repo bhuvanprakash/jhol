@@ -97,6 +97,77 @@ impl VersionRecord {
     }
 }
 
+/// Is this version a prerelease (`2.0.0-rc.1`)?
+fn is_prerelease(v: &str) -> bool {
+    semver::Version::parse(v)
+        .map(|p| !p.pre.is_empty())
+        .unwrap_or(false)
+}
+
+/// **The rule**: for an ordinary range, take the `latest` dist-tag when it satisfies; otherwise
+/// take the highest satisfying release.
+///
+/// Measured before adopting, because a rule copied from one tool is a rule we cannot defend:
+/// npm 11.19, bun 1.4.4, pnpm 8.15 and yarn 1.22 all install `get-intrinsic@1.3.0` for
+/// `^1.2.5`, even though `1.3.1` is published and satisfies the range. `latest` points at
+/// 1.3.0; 1.3.1 carries no tag at all.
+///
+/// The justification is ours, not theirs: a fresh install should reproduce what the registry
+/// advertises as current. Choosing a published-but-untagged release means the same
+/// `package.json` produces a different tree here than everywhere else — which is precisely the
+/// class of divergence that makes a package manager untrustworthy.
+///
+/// Prereleases stay reachable when the range itself asks for one, and are never chosen for a
+/// plain range even if `latest` points at one.
+pub fn pick_from(latest: Option<&str>, candidates: &[&str], spec: &str) -> Option<String> {
+    pick_for_specs(latest, candidates, &[spec])
+}
+
+/// The same rule for several constraints at once (the intersection case). `latest` is only
+/// chosen when it satisfies **every** spec.
+pub fn pick_for_specs(latest: Option<&str>, candidates: &[&str], specs: &[&str]) -> Option<String> {
+    let allow_prerelease = specs.iter().any(|s| s.contains('-'));
+    let eligible = |v: &str| {
+        specs
+            .iter()
+            .all(|s| crate::registry::version_satisfies(s, v))
+            && (allow_prerelease || !is_prerelease(v))
+    };
+    if std::env::var_os("JHOL_TRACE_PICK").is_some() {
+        eprintln!(
+            "[pick] pick_for_specs specs={:?} latest={:?} cands={} ",
+            specs, latest, candidates.len()
+        );
+    }
+    if let Some(tag) = latest {
+        if candidates.iter().any(|c| *c == tag) && eligible(tag) {
+            return Some(tag.to_string());
+        }
+    }
+    candidates
+        .iter()
+        .filter(|c| eligible(c))
+        .max_by(|a, b| {
+            semver::Version::parse(a)
+                .ok()
+                .zip(semver::Version::parse(b).ok())
+                .map(|(x, y)| x.cmp(&y))
+                .unwrap_or_else(|| a.cmp(b))
+        })
+        .map(|s| s.to_string())
+}
+
+/// The same rule for callers holding a raw `serde_json::Value` packument.
+pub fn pick_version_json(packument: &serde_json::Value, spec: &str) -> Option<String> {
+    let versions = packument.get("versions")?.as_object()?;
+    let latest = packument
+        .get("dist-tags")
+        .and_then(|t| t.get("latest"))
+        .and_then(|l| l.as_str());
+    let keys: Vec<&str> = versions.keys().map(|s| s.as_str()).collect();
+    pick_from(latest, &keys, spec)
+}
+
 /// A whole packument.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -172,6 +243,19 @@ impl PackumentRecord {
 
     /// Highest published version satisfying one spec.
     pub fn highest_satisfying(&self, spec: &str) -> Option<String> {
+        let keys: Vec<&str> = self.versions().keys().map(|s| s.as_str()).collect();
+        pick_from(self.latest_tag(), &keys, spec)
+    }
+
+    /// The version an ordinary range should install: `latest` when it satisfies, else the
+    /// highest satisfying release. Same rule as [`highest_satisfying`]; named for readers who
+    /// want to know *which* policy they are getting.
+    pub fn chosen_version(&self, spec: &str) -> Option<String> {
+        self.highest_satisfying(spec)
+    }
+
+    #[allow(dead_code)]
+    fn highest_satisfying_by_semver(&self, spec: &str) -> Option<String> {
         self.versions()
             .keys()
             .filter(|v| crate::registry::version_satisfies(spec, v))
@@ -531,5 +615,76 @@ mod tests {
         r.retain_versions(&keep);
         assert_eq!(r.version_count(), 1);
         assert!(r.version("2.0.0").is_some());
+    }
+}
+
+#[cfg(test)]
+mod pick_tests {
+    use super::{pick_from, pick_version_json};
+
+    const VERSIONS: [&str; 4] = ["1.2.7", "1.3.0", "1.3.1", "1.4.0"];
+
+    /// The case the scorecard found: `latest` is 1.3.0, 1.3.1 is published but untagged, and the
+    /// range is satisfied by both.
+    #[test]
+    fn an_ordinary_range_takes_the_latest_tag() {
+        assert_eq!(
+            pick_from(Some("1.3.0"), &VERSIONS, "^1.2.5").as_deref(),
+            Some("1.3.0")
+        );
+    }
+
+    /// When `latest` cannot satisfy the range, the highest satisfying release still wins —
+    /// the rule must not become "always take the tag".
+    #[test]
+    fn a_range_the_tag_cannot_satisfy_still_takes_the_highest() {
+        assert_eq!(
+            pick_from(Some("1.3.0"), &VERSIONS, "^1.3.1").as_deref(),
+            Some("1.4.0")
+        );
+        assert_eq!(
+            pick_from(Some("1.3.0"), &["1.3.1"], "^1.3.1").as_deref(),
+            Some("1.3.1")
+        );
+    }
+
+    /// A prerelease range must still reach untagged prereleases, or the rule breaks semver.
+    /// The common shape: `latest` is a stable release, so it cannot satisfy the range and the
+    /// highest prerelease is chosen.
+    #[test]
+    fn a_prerelease_range_can_reach_untagged_prereleases() {
+        let versions = ["2.0.0-beta.1", "2.0.0-beta.2"];
+        assert_eq!(
+            pick_from(Some("1.9.0"), &versions, ">=2.0.0-beta.1").as_deref(),
+            Some("2.0.0-beta.2")
+        );
+        // When `latest` *is* the prerelease and satisfies, it wins — the rule has no
+        // prerelease special case, which is the whole point of having one rule.
+        assert_eq!(
+            pick_from(Some("2.0.0-beta.1"), &versions, "^2.0.0-beta.1").as_deref(),
+            Some("2.0.0-beta.1")
+        );
+    }
+
+    /// A plain range must never pick a prerelease, even when `latest` points at one.
+    #[test]
+    fn a_plain_range_never_takes_a_prerelease_tag() {
+        let versions = ["1.9.0", "2.0.0-rc.1"];
+        assert_eq!(
+            pick_from(Some("2.0.0-rc.1"), &versions, "^1.0.0").as_deref(),
+            Some("1.9.0")
+        );
+    }
+
+    #[test]
+    fn no_tags_means_the_old_highest_satisfying_behaviour() {
+        assert_eq!(pick_from(None, &VERSIONS, "^1.2.5").as_deref(), Some("1.4.0"));
+        let json = serde_json::json!({"versions": {"1.0.0": {}, "1.1.0": {}}});
+        assert_eq!(pick_version_json(&json, "^1.0.0").as_deref(), Some("1.1.0"));
+        let with_tag = serde_json::json!({
+            "versions": {"1.0.0": {}, "1.1.0": {}},
+            "dist-tags": {"latest": "1.0.0"}
+        });
+        assert_eq!(pick_version_json(&with_tag, "^1.0.0").as_deref(), Some("1.0.0"));
     }
 }
