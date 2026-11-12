@@ -1225,7 +1225,7 @@ static METADATA_CACHE: std::sync::OnceLock<std::sync::Mutex<MetadataCache>> =
 ///
 /// Sixty seconds is deliberate: long enough that one install reuses one document across hundreds of
 /// edges, short enough that a fresh install cannot resolve a release the registry has already lost.
-fn metadata_freshness() -> std::time::Duration {
+pub(crate) fn metadata_freshness() -> std::time::Duration {
     std::env::var("JHOL_METADATA_FRESHNESS_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())

@@ -371,18 +371,28 @@ pub(crate) fn packument_fresh_with_identity(
 /// registry? Single owner of the metadata-age policy, shared by the packument
 /// cache and the resolved-bundle (`.jres`) replay cache so a resolution can
 /// never outlive the metadata it was derived from. Offline: always trusted.
-/// `JHOL_PACKUMENT_TTL_SECS=0`: trusted forever. Default 3600 s.
+/// Is the cached document on disk still allowed to decide a version?
+///
+/// **One freshness policy for both layers.** This reader used to keep its own TTL (3600 s) while
+/// the in-memory cache used another, so a document could be "fresh" on disk and stale in memory at
+/// the same instant — and the disk one won, because it is consulted first. That is how a
+/// resolution was built from a packument fetched before the release it should have chosen existed
+/// (`electron-to-chromium` 1.5.482 where the registry's `latest` was 1.5.483), and it is the same
+/// bug class as the bundled-index snapshot: a cache deciding facts a cache cannot own.
+///
+/// `JHOL_PACKUMENT_TTL_SECS` overrides, `0` trusts forever (explicitly), and offline is exempt —
+/// with no registry to ask, the on-disk document is the only truth available.
 pub(crate) fn within_metadata_ttl(p: &Path) -> bool {
     if !p.exists() {
         return false;
     }
-    if crate::registry::offline_mode() {
+    if crate::registry::offline_mode() || std::env::var_os("JHOL_AS_OF").is_some() {
         return true;
     }
     let ttl = std::env::var("JHOL_PACKUMENT_TTL_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(3600);
+        .unwrap_or_else(|| crate::registry::metadata_freshness().as_secs());
     if ttl == 0 {
         return true;
     }
