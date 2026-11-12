@@ -2837,14 +2837,6 @@ fn expand_with_transitive_dependencies(
         &mut metadata_cache,
         !crate::registry::offline_mode(),
     );
-    // Peers after the selection is closed: a peer of a version chosen during normalisation or
-    // closure is a requirement of *that* version, so adding peers earlier can miss it (react: the
-    // @types/react-dom peer chain vanished when the declaring package settled on a new version).
-    ensure_peers(
-        &mut selected,
-        &mut metadata_cache,
-        !crate::registry::offline_mode(),
-    );
     prune_unreachable(&mut selected, &root_names, &metadata_cache);
     let packument_values: HashMap<String, serde_json::Value> = metadata_cache
         .iter()
@@ -4434,11 +4426,31 @@ fn close_selection(
             let Some(ver_meta) = meta.get("versions").and_then(|v| v.get(version.as_str())) else {
                 continue;
             };
-            let Some(deps) = ver_meta.get("dependencies").and_then(|d| d.as_object()) else {
-                continue;
-            };
-            for (child, spec) in deps.clone() {
-                let spec = spec.as_str().unwrap_or("*").trim().to_string();
+            // Dependencies **and** non-optional peers, in one loop to a fixpoint. Splitting them
+            // (close deps, then peers, then prune) let a peer arrive after its own dependencies
+            // were closed, or a peer of a version chosen during closure go missing -- the react
+            // regression. One edge list cannot have that ordering hazard.
+            let mut edges: Vec<(String, String)> = Vec::new();
+            for section in ["dependencies", "peerDependencies"] {
+                let Some(map) = ver_meta.get(section).and_then(|d| d.as_object()) else {
+                    continue;
+                };
+                for (child, spec) in map {
+                    let optional_peer = section == "peerDependencies"
+                        && ver_meta
+                            .get("peerDependenciesMeta")
+                            .and_then(|m| m.get(child))
+                            .and_then(|m| m.get("optional"))
+                            .and_then(|o| o.as_bool())
+                            .unwrap_or(false);
+                    if optional_peer {
+                        continue;
+                    }
+                    edges.push((child.clone(), spec.as_str().unwrap_or("*").trim().to_string()));
+                }
+            }
+            for (child, spec) in edges {
+                let spec = spec.trim().to_string();
                 // Only **add** what is missing. Replacing a version here would trade one
                 // violation for another when two parents need incompatible majors (chalk wants
                 // ansi-styles ^4, pretty-format wants ^5); that case belongs to the nested layout
