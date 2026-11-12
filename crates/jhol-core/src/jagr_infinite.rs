@@ -5004,8 +5004,14 @@ fn prune_packument_versions(
     // published version, and react has 2896 of them). That map is dropped; version metadata is
     // already field-pruned by `registry::prune_packument_in_place`. Soundness first: a resolver
     // that forgets published versions cannot satisfy a dependent it has not seen yet.
-    if let Some(obj) = packument.as_object_mut() {
-        obj.remove("time");
+    // `time` (one entry per published version) is the memory hog — but it is also the ONLY source
+    // of publish dates, and `--as-of` decides eligibility with them. Dropping it unconditionally
+    // made a dated resolution silently undated: every version looked "not yet published", the
+    // cutoff was ignored, and the tree became today's. Keep it exactly when history is in force.
+    if std::env::var_os("JHOL_AS_OF").is_none() {
+        if let Some(obj) = packument.as_object_mut() {
+            obj.remove("time");
+        }
     }
 }
 
