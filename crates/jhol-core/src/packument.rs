@@ -682,3 +682,4 @@ mod pick_tests {
         assert_eq!(pick_version_json(&with_tag, "^1.0.0").as_deref(), Some("1.0.0"));
     }
 }
+
