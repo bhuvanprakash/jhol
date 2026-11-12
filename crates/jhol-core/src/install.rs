@@ -2836,6 +2836,11 @@ fn expand_with_transitive_dependencies(
         .iter()
         .map(|p| base_name(p).to_string())
         .collect();
+    close_selection(
+        &mut selected,
+        &mut metadata_cache,
+        !crate::registry::offline_mode(),
+    );
     prune_unreachable(&mut selected, &root_names, &metadata_cache);
     let packument_values: HashMap<String, serde_json::Value> = metadata_cache
         .iter()
@@ -4394,11 +4399,83 @@ fn ensure_peers(
     }
 }
 
+/// Make the selection closed under the dependencies its **final** versions declare.
+///
+/// `normalise_selection` and `ensure_peers` can change a version after the estimate walked the
+/// graph, and a different version declares different dependencies: the flat resolution then ends
+/// up missing one (`pretty-format requires ansi-styles ^5.0.0, resolved <missing>`). This pass
+/// re-walks the tree from the finals, adding what they require and correcting a child whose
+/// current version no longer satisfies the parent that points at it.
+fn close_selection(
+    selected: &mut HashMap<String, String>,
+    metadata_cache: &mut HashMap<String, std::sync::Arc<serde_json::Value>>,
+    online: bool,
+) {
+    for _ in 0..4 {
+        let mut changed = false;
+        let snapshot: Vec<(String, String)> = selected.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        for (name, version) in snapshot {
+            let Some(meta) = metadata_cache.get(&name) else { continue };
+            let Some(ver_meta) = meta.get("versions").and_then(|v| v.get(version.as_str())) else {
+                continue;
+            };
+            let Some(deps) = ver_meta.get("dependencies").and_then(|d| d.as_object()) else {
+                continue;
+            };
+            for (child, spec) in deps.clone() {
+                let spec = spec.as_str().unwrap_or("*").trim().to_string();
+                // Only **add** what is missing. Replacing a version here would trade one
+                // violation for another when two parents need incompatible majors (chalk wants
+                // ansi-styles ^4, pretty-format wants ^5); that case belongs to the nested layout
+                // resolver, which can hold both, not to a flat pass that can hold one.
+                if selected.contains_key(&child) {
+                    continue;
+                }
+                let child_meta = match metadata_cache.get(&child) {
+                    Some(m) => Some(std::sync::Arc::clone(m)),
+                    None if online => crate::registry::fetch_metadata(&child).ok().map(|real| {
+                        let real = std::sync::Arc::new(real);
+                        metadata_cache.insert(child.clone(), std::sync::Arc::clone(&real));
+                        real
+                    }),
+                    None => None,
+                };
+                let Some(child_meta) = child_meta else { continue };
+                let Some(versions) = child_meta.get("versions").and_then(|v| v.as_object()) else {
+                    continue;
+                };
+                let latest = child_meta
+                    .get("dist-tags")
+                    .and_then(|t| t.get("latest"))
+                    .and_then(|v| v.as_str());
+                let keys: Vec<&str> = versions.keys().map(|k| k.as_str()).collect();
+                if let Some(chosen) =
+                    crate::packument::pick_for_specs(latest, &keys, &[spec.as_str()])
+                {
+                    if selected.get(&child) != Some(&chosen) {
+                        selected.insert(child, chosen);
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
 fn prune_unreachable(
     selected: &mut HashMap<String, String>,
     roots: &[String],
     metadata_cache: &HashMap<String, std::sync::Arc<serde_json::Value>>,
 ) {
+    // Conservative: pruning needs every selected package's metadata to follow its edges. A
+    // missing document would look like a leaf and its whole subtree would be dropped, which is
+    // exactly the "flat resolution conflict ... resolved <missing>" that broke three rows.
+    if selected.keys().any(|name| metadata_cache.get(name).is_none()) {
+        return;
+    }
     let mut keep: HashSet<String> = HashSet::new();
     let mut stack: Vec<String> = roots.to_vec();
     while let Some(name) = stack.pop() {
@@ -4418,17 +4495,9 @@ fn prune_unreachable(
                 continue;
             };
             for child in deps.keys() {
-                // Optional peers are not requirements; a missing one is not a reason to keep.
-                let optional_peer = section == "peerDependencies"
-                    && meta
-                        .get("peerDependenciesMeta")
-                        .and_then(|m| m.get(child))
-                        .and_then(|m| m.get("optional"))
-                        .and_then(|o| o.as_bool())
-                        .unwrap_or(false);
-                if optional_peer {
-                    continue;
-                }
+                // A peer that is already selected is kept, optional or not: dropping it takes its
+                // own dependencies with it (`@types/react-dom` peers `@types/react`, which brings
+                // `@types/prop-types` and `csstype` — npm's tree has all three, ours did not).
                 if selected.contains_key(child) && !keep.contains(child) {
                     stack.push(child.clone());
                 }
