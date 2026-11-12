@@ -119,6 +119,25 @@ run_one() {
   } >> "$REPORT"
 
   rm -rf "$work"
+  # One retry, recorded. Some packages publish many times an hour (`electron-to-chromium`);
+  # comparing an npm install and a jhol install seconds apart can see different `latest` tags.
+  # A retry that passes is reported as RETRY, never as PASS: the flake is the finding.
+  if [ "$verdict" != PASS ]; then
+    work2="$ROOT/$n-retry"
+    rm -rf "$work2"; mkdir -p "$work2/npm" "$work2/jhol"
+    printf '%s\n' "$body" > "$work2/npm/package.json"
+    cp "$work2/npm/package.json" "$work2/jhol/package.json"
+    ( cd "$work2/npm" && "$NPM" install --ignore-scripts --no-audit --no-fund --no-progress >/dev/null 2>&1 )
+    ( cd "$work2/jhol" && JHOL_NO_PREPARED_SNAPSHOT=1 "$JHOL" install >/dev/null 2>&1 )
+    manifest "$work2/npm" > "$work2/npm.manifest" 2>/dev/null || true
+    manifest "$work2/jhol" > "$work2/jhol.manifest" 2>/dev/null || true
+    if diff -q "$work2/npm.manifest" "$work2/jhol.manifest" >/dev/null 2>&1; then
+      verdict=RETRY; class=REGISTRY-RACE
+      detail="identical on retry; the first comparison spanned a registry publish"
+      printf '%-26s %-6s %-8s %s\n' "$slug" "$verdict" "$class" "$detail"
+    fi
+    rm -rf "$work2"
+  fi
   [ "$verdict" = PASS ] || FAILED=$((FAILED + 1))
 }
 

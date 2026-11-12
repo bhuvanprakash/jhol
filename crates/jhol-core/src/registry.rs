@@ -88,15 +88,23 @@ pub fn is_exact_version_pin(spec: &str) -> bool {
     // when it is spaced like one — a bare `-` also appears in every prerelease
     // (`1.64.0-alpha-2026-09-16`), and treating those as ranges meant a pinned
     // prerelease was never honoured exactly.
-    if bare.contains('x') || bare.contains('*') || bare.contains(" - ") {
+    if bare.contains(" - ") {
+        // A spaced hyphen is a hyphen range (`1.2.3 - 2.0.0`), never a pin.
         return false;
     }
-    if let Ok(v) = semver::Version::parse(bare) {
-        let _ = v;
-        // Reject partial pins like `1.2` or `1` (npm treats those as ranges,
-        // not exact).
-        let parts: Vec<&str> = bare.split('.').collect();
-        return parts.len() >= 3;
+    // Wildcards belong to the **version core**, not to the prerelease. Testing the whole string
+    // meant any prerelease containing the letter `x` was read as a wildcard range:
+    // `0.1.6-no-e**x**ternal-plugins` (a real pin from @babel/preset-env) matched `^0.1.6-…`
+    // instead of the exact release, so we installed `0.1.6` where the publisher pinned the tagged
+    // string. Many prereleases contain `x` (`-next`, `-experimental`, `-external`), so this was
+    // mis-resolving more than one package.
+    let core = bare.split('-').next().unwrap_or(bare);
+    if core.contains('x') || core.contains('X') || core.contains('*') {
+        return false;
+    }
+    if semver::Version::parse(bare).is_ok() {
+        // Reject partial pins like `1.2` or `1` (npm treats those as ranges, not exact).
+        return core.split('.').count() >= 3;
     }
     false
 }

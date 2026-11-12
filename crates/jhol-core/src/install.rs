@@ -4348,7 +4348,18 @@ fn ensure_peers(
     for _ in 0..2 {
         let mut wanted: Vec<(String, String)> = Vec::new();
         for (name, version) in selected.clone() {
-            let Some(meta) = metadata_cache.get(&name) else { continue };
+            let meta = match metadata_cache.get(&name) {
+                Some(m) => std::sync::Arc::clone(m),
+                None if online => match crate::registry::fetch_metadata(&name) {
+                    Ok(real) => {
+                        let real = std::sync::Arc::new(real);
+                        metadata_cache.insert(name.clone(), std::sync::Arc::clone(&real));
+                        real
+                    }
+                    Err(_) => continue,
+                },
+                None => continue,
+            };
             let Some(ver_meta) = meta.get("versions").and_then(|v| v.get(&version)) else {
                 continue;
             };
