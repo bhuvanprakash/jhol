@@ -361,3 +361,14 @@ for `jest-haste-map` — the manifest the pass holds for it does not present
 `optionalDependencies`. Until that answers, the platform gate is correct but unreached, and this is
 recorded as an open defect rather than a fix. `esbuild-optional` and `sharp-native` rows still pass,
 so the gate itself is not yet exercised by the compatibility suite either.
+
+### Follow-up measurement (same day)
+
+Instrumented `close_selection`: it **does** see the edge —
+`jest-haste-map@29.7.0 optDeps={"fsevents":"^2.3.2"}` — and the loop then emits **no** decision line
+for `fsevents`, which means `selected.contains_key("fsevents")` is already true and the edge is
+skipped as "already present". So the package is chosen during the estimate and lost later, not
+missing from the graph. The next stopping point is therefore downstream of selection: either
+`prune_unreachable` (does its walk reach an optional-only dependency?) or the materialisation list
+that decides what to download. Both are one function each; the defect is narrowed from "we never
+see it" to "we see it and then drop it".

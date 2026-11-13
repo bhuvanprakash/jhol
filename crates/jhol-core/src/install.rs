@@ -4537,10 +4537,8 @@ fn close_selection(
                     // check is on the *chosen version's* metadata, because that is where
                     // `os`/`cpu`/`libc` live (fsevents: darwin-only).
                     if optional {
-                        let runs = versions
-                            .get(&chosen)
-                            .map(crate::lockfile::version_runs_on_host)
-                            .unwrap_or(false);
+                        let vmeta = versions.get(&chosen);
+                        let runs = vmeta.map(crate::lockfile::version_runs_on_host).unwrap_or(false);
                         if !runs {
                             continue;
                         }
