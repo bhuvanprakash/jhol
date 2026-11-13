@@ -35,10 +35,13 @@ command -v "$NPM" >/dev/null 2>&1 || { echo "scorecard: npm not found (it is the
 # one they resolve "now" (fast, and exposed to registry motion: a package publishing mid-run can
 # flip a row). `SCORECARD_AS_OF=2026-11-09T00:00:00Z sh scripts/scorecard.sh`.
 SCORECARD_AS_OF=${SCORECARD_AS_OF:-}
-NPM_BEFORE=()
+# One array, always non-empty: under `set -u`, expanding an *empty* array (`"${A[@]}"`) is an
+# unbound-variable error on bash < 4.4, which is exactly what the first run after adding the
+# `--before` flag hit (10 rows "failed" because npm was invoked with no arguments at all).
+NPM_ARGS=(install --ignore-scripts --no-audit --no-fund --no-progress)
 if [ -n "$SCORECARD_AS_OF" ]; then
   export JHOL_AS_OF="$SCORECARD_AS_OF"
-  NPM_BEFORE=(--before "$SCORECARD_AS_OF")
+  NPM_ARGS=(install --before "$SCORECARD_AS_OF" --ignore-scripts --no-audit --no-fund --no-progress)
 fi
 
 ROOT=$(mktemp -d "${TMPDIR:-/tmp}/jhol-scorecard.XXXXXX")
@@ -94,8 +97,7 @@ run_one() {
   cp "$work/npm/package.json" "$work/jhol/package.json"
 
   printf '  %-25s npm…' "$slug"
-  ( cd "$work/npm" && "$NPM" install "${NPM_BEFORE[@]}" --ignore-scripts --no-audit --no-fund --no-progress \
-      >"$work/npm.log" 2>&1 ); npm_exit=$?
+  ( cd "$work/npm" && "$NPM" "${NPM_ARGS[@]}" >"$work/npm.log" 2>&1 ); npm_exit=$?
 
   printf '\r  %-25s jhol…' "$slug"
   ( cd "$work/jhol" && JHOL_NO_PREPARED_SNAPSHOT=1 "$JHOL" install \
@@ -142,7 +144,7 @@ run_one() {
     rm -rf "$work2"; mkdir -p "$work2/npm" "$work2/jhol"
     printf '%s\n' "$body" > "$work2/npm/package.json"
     cp "$work2/npm/package.json" "$work2/jhol/package.json"
-    ( cd "$work2/npm" && "$NPM" install "${NPM_BEFORE[@]}" --ignore-scripts --no-audit --no-fund --no-progress >/dev/null 2>&1 )
+    ( cd "$work2/npm" && "$NPM" "${NPM_ARGS[@]}" >/dev/null 2>&1 )
     ( cd "$work2/jhol" && JHOL_NO_PREPARED_SNAPSHOT=1 "$JHOL" install >/dev/null 2>&1 )
     manifest "$work2/npm" > "$work2/npm.manifest" 2>/dev/null || true
     manifest "$work2/jhol" > "$work2/jhol.manifest" 2>/dev/null || true

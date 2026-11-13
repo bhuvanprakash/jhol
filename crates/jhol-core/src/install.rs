@@ -1753,6 +1753,7 @@ fn nested_layout_from_flat_state(
         resolved.insert(
             name.clone(),
             crate::lockfile_write::ResolvedPackage {
+                registry_name: None,
                 version: version.clone(),
                 resolved: url,
                 integrity,
@@ -3233,6 +3234,7 @@ fn load_installed_package(
     Some((
         name.to_string(),
         crate::lockfile_write::ResolvedPackage {
+            registry_name: None,
             version: version.to_string(),
             resolved: String::new(),
             integrity: None,
@@ -3771,6 +3773,17 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
 
     let store_index = utils::read_store_index();
 
+    // A dependency declared as `file:`, `workspace:`, `link:` or `git+` has no registry tarball.
+    // Such entries are materialised by `spec_grammar::materialize_special_deps` below; letting
+    // them into the fetch list invented a registry URL and produced a 404 (the `ci` failure on a
+    // mixed-spec project). The classification lives in one predicate, so every install path
+    // agrees on what counts as a registry package.
+    let declared_specs = crate::lockfile::read_package_json_deps(&Path::new(".").join("package.json"))
+        .unwrap_or_default();
+    let special_present = declared_specs
+        .iter()
+        .any(|(_, spec)| crate::lockfile::spec_is_non_registry(spec));
+
     let mut to_fetch: Vec<crate::lockfile::LockfileInstallEntry> = Vec::new();
     let mut cache_hits: Vec<(crate::lockfile::LockfileInstallEntry, std::path::PathBuf)> =
         Vec::new();
@@ -3908,7 +3921,23 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
             missing_offline.push(entry.spec.clone());
             continue;
         }
+        // Non-registry packages are never fetched from the registry.
+        let entry_base = base_name(&entry.package).to_string();
+        if declared_specs
+            .get(&entry_base)
+            .map(|spec| crate::lockfile::spec_is_non_registry(spec))
+            .unwrap_or(false)
+        {
+            continue;
+        }
         to_fetch.push(entry);
+    }
+
+    if special_present {
+        let ld = crate::spec_grammar::materialize_special_deps(Path::new("."), node_modules);
+        if !ld.specials.is_empty() {
+            finalize_special_deps(Path::new("package-lock.json"), &ld.specials);
+        }
     }
 
     profiler.mark("layout_lookup");
@@ -3930,11 +3959,15 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
         ));
     }
 
+    // Shared store symlinks cannot provide distinct nested dependency scopes.
+    let requires_project_paths = cache_hits.iter().any(|(entry, _)| {
+        !entry.top_level || entry.package != entry.registry_name
+    }) || to_fetch.iter().any(|entry| !entry.top_level || entry.package != entry.registry_name);
     let install_entry = |entry: &crate::lockfile::LockfileInstallEntry,
                          tarball_path: &Path|
      -> Result<(), String> {
         let install_path = Path::new(&entry.install_path);
-        let spec = format!("{}@{}", entry.package, entry.version);
+        let spec = &entry.spec;
         if std::env::var("JHOL_DEBUG_LAYOUT").is_ok() {
             crate::utils::log(&format!(
                 "[layout]   MATERIALIZE {} -> {} via tarball {}",
@@ -3949,7 +3982,9 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
         // zero store I/O.  Falls through to the store path on miss.
         // Only for top-level entries: this path installs to node_modules/<pkg>,
         // which would ignore a nested `install_path`.
-        if entry.top_level && try_install_bundled_from_cache(&spec, &entry.package, node_modules) {
+        if entry.top_level && entry.package == entry.registry_name
+            && try_install_bundled_from_cache(spec, &entry.package, node_modules)
+        {
             materialize::finish(node_modules, &entry.package)?;
             crate::progress::mark_from_cache();
             crate::progress::mark_linked();
@@ -3958,7 +3993,7 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
 
         // Idempotency: if install_path is already a symlink to a store dir
         // containing this tarball's hash, the package is correctly installed.
-        if install_path
+        if !requires_project_paths && install_path
             .symlink_metadata()
             .map(|m| m.file_type().is_symlink())
             .unwrap_or(false)
@@ -3994,7 +4029,7 @@ fn install_lockfile_layout(options: &InstallOptions) -> Result<bool, JholError> 
             None
         };
 
-        if let Some(unpacked_dir) = unpacked_opt {
+        if let Some(unpacked_dir) = unpacked_opt.filter(|_| !requires_project_paths || !utils::use_symlink()) {
             let link_root =
                 lockfile_link_root_for_install_path(install_path, &entry.package, node_modules);
             if utils::link_package_from_store(&unpacked_dir, &link_root, &entry.package).is_ok() {
@@ -7814,6 +7849,7 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
             special_result.local_registry_deps
         );
     }
+    let requested_roots = packages;
     let mut registry_packages: Vec<String> = Vec::new();
     for p in packages {
         let handled = special_deps
@@ -7854,10 +7890,24 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
         // Deterministic CI mode: read resolved specs directly from lockfile
         match lockfile::read_all_resolved_specs_from_dir(Path::new(".")) {
             Some(specs) if !specs.is_empty() => {
+                // **A lockfile entry for a local/workspace/git dependency is not a registry
+                // package.** `ci` read every resolved spec from the lockfile and handed the
+                // whole set to the registry fetch stage, which built
+                // `https://registry…/<version>.tgz` for `file:`/`workspace:`/`git+` entries and
+                // reported three 404s on a mixed-spec project. They were materialised above by
+                // the spec-grammar pre-pass, so they must be excluded here — with one filter,
+                // the same one that decides `registry_packages`.
+                let filtered: Vec<String> = specs
+                    .into_iter()
+                    .filter(|s| {
+                        let base = base_name(s).to_string();
+                        !special_names.contains(base.as_str())
+                    })
+                    .collect();
                 if !options.quiet && crate::utils::is_verbose() {
-                    crate::utils::log(&format!("Lockfile layout ({} packages)", specs.len()));
+                    crate::utils::log(&format!("Lockfile layout ({} packages)", filtered.len()));
                 }
-                specs
+                filtered
             }
             _ => packages.iter().map(|p| (*p).to_string()).collect(),
         }
@@ -7971,6 +8021,9 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
     // finish within ten minutes, while the flat path installs the same tree in ~12 s. Bound it by
     // manifest size so an install always terminates; `JHOL_JAGR_MAX_DEPS` raises or removes the
     // bound for anyone who wants nested placement on a large graph.
+    let needs_alias_layout = special_deps.iter().any(|dep| {
+        matches!(dep.kind, crate::spec_grammar::SpecialKind::Alias { .. })
+    }) || !recorded_aliases().is_empty();
     let max_nested_deps: usize = std::env::var("JHOL_JAGR_MAX_DEPS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
@@ -7979,7 +8032,7 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
         .map(|d| d.len())
         .unwrap_or(0);
     let nested_budget_ok = max_nested_deps == 0 || manifest_dep_count <= max_nested_deps;
-    if !nested_budget_ok && expansion_conflict.is_some() {
+    if !nested_budget_ok && (expansion_conflict.is_some() || needs_alias_layout) && !options.from_lockfile {
         return Err(crate::error_handling::utils::application_error(
             "resolve_nested_layout",
             Some("resolution_budget"),
@@ -8026,11 +8079,8 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
             let as_of_requested = std::env::var("JHOL_AS_OF").is_ok()
                 || std::env::var("JHOL_ALLOW_LICENSE").is_ok()
                 || std::env::var("JHOL_EXCLUDE_VULN").is_ok();
-            if as_of_requested {
-                // Nothing to set: the instance resolver is always the first attempt.
-            }
-            if !dropped.is_empty() || expansion_conflict.is_some() || as_of_requested {
-                if !options.quiet {
+            if !dropped.is_empty() || expansion_conflict.is_some() || as_of_requested || needs_alias_layout {
+                if !options.quiet && (!dropped.is_empty() || expansion_conflict.is_some()) {
                     match &expansion_conflict {
                         Some((parent, dep, range, version)) => crate::utils::log(&format!(
                             "flat resolution conflict ({} requires {} {}, resolved {}); resolving nested layout",
@@ -8067,7 +8117,7 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                             .map(|(_, v)| (base_name(s).to_string(), v.to_string()))
                     })
                     .collect();
-                let fast_layout = if single_pass_enabled && dropped.is_empty() && !as_of_requested {
+                let fast_layout = if single_pass_enabled && dropped.is_empty() && !as_of_requested && !needs_alias_layout {
                     lockfile::read_package_json_deps(pj)
                         .and_then(|d| nested_layout_from_flat_state(&d, &flat_selected))
                 } else {
@@ -8117,8 +8167,7 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                 // escape hatch to a strictly weaker resolver is a way to be surprised
                 // rather than a way to be safe. Retiring it is the first entry in
                 // `ENV-AUDIT.md`'s "retired" list.
-                let nested_first = true;
-                let _ = &nested_first;
+
                 let t_nested = std::time::Instant::now();
                 let resolved_tree: Result<
                     HashMap<String, crate::lockfile_write::ResolvedPackage>,
@@ -8126,26 +8175,28 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                 > = match fast_layout {
                     Some(layout) => Ok(layout.into_iter().collect()),
                     None => {
-                        let mut attempt = if nested_first {
-                            crate::lockfile_write::resolve_full_tree_nested(pj)
-                        } else {
-                            Err("disabled".to_string())
-                        };
+                        let mut nested_roots = deps.clone();
+                        for spec in requested_roots.iter().copied().chain(special_result.local_registry_deps.iter().map(String::as_str)) {
+                            let name = base_name(spec);
+                            let range = spec.strip_prefix(name).and_then(|suffix| suffix.strip_prefix('@')).unwrap_or("*");
+                            if !name.is_empty() {
+                                nested_roots.entry(name.to_owned()).or_insert_with(|| range.to_owned());
+                            }
+                        }
+                        let mut attempt = crate::lockfile_write::resolve_nested_roots(pj, nested_roots, options.strict_peer_deps);
                         if attempt.is_err() {
                             // A dated install must not fall back: installing
                             // today's tree while claiming a past date is the one
                             // outcome a reproducibility feature must never
                             // produce. Fail with the reason instead.
-                            if as_of_requested {
-                                // One label for both policy inputs; the message
-                                // names the package, the range and the reason.
+                            if as_of_requested || needs_alias_layout || options.strict_peer_deps {
                                 return Err(crate::error_handling::utils::application_error(
-                                    "resolve_policy",
-                                    Some("policy_unavailable"),
+                                    "resolve_nested_layout",
+                                    Some(if as_of_requested { "policy_unavailable" } else { "resolution_failed" }),
                                     attempt.as_ref().err().map(|e| e.as_str()).unwrap_or("unknown"),
                                 ));
                             }
-                            if nested_first && !options.quiet {
+                            if !options.quiet {
                                 crate::utils::log(&format!(
                                     "nested resolver: {}; falling back to the flat resolver",
                                     attempt.as_ref().err().map(|e| e.as_str()).unwrap_or("")
@@ -8172,8 +8223,11 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                             let store_index = utils::read_store_index();
                             let cache_store =
                                 crate::content::store_dir(&PathBuf::from(utils::get_cache_dir()));
-                            for spec in packages {
+                            for spec in requested_roots {
                                 let name = base_name(spec).to_string();
+                                if special_names.contains(&name) {
+                                    continue;
+                                }
                                 if tree.contains_key(&format!("node_modules/{}", name)) {
                                     continue;
                                 }
@@ -8209,6 +8263,7 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                                                 )
                                             });
                                         crate::lockfile_write::ResolvedPackage {
+                                            registry_name: None,
                                             version: v.to_string(),
                                             resolved: crate::lockfile::tarball_url_from_registry(
                                                 n, v,
@@ -8247,10 +8302,18 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                             );
                         }
                         if layout_ok {
+                            let state = crate::tree_state::verify_tree(Path::new("."));
+                            if matches!(state, crate::tree_state::TreeState::Missing { .. } | crate::tree_state::TreeState::Wrong { .. }) {
+                                return Err(crate::error_handling::utils::application_error(
+                                    "verify_nested_layout", Some("layout_mismatch"), &state.describe(),
+                                ));
+                            }
                             sync_hidden_lockfile();
                             let _ = crate::capsule::write_capsule_from_project(Path::new("."));
                             remember_installed_packages(Path::new("node_modules"));
-                            write_install_markers();
+                            if state.is_match() {
+                                write_install_markers();
+                            }
                             #[cfg(feature = "pipeline")]
                             post_install_jgrid_ingest(None);
                             return Ok(());

@@ -46,9 +46,28 @@ fn package_name_from_lockfile_key(key: &str) -> Option<String> {
     }
 }
 
+/// Is this dependency spec something other than a registry package?
+///
+/// A `file:`, `link:`, `workspace:`, `portal:` or `git+` spec has bytes on this machine (or in a
+/// git remote); it has **no registry tarball**, so any path that resolves such a package to
+/// `https://registry…/<version>.tgz` invents a 404. Measured: `jhol ci` on a project with
+/// `file:`, `workspace:*` and `git+file://` dependencies failed with three 404s, because the
+/// lockfile-layout fetch built a registry URL for each of them.
+pub fn spec_is_non_registry(spec: &str) -> bool {
+    let s = spec.trim();
+    ["file:", "link:", "workspace:", "portal:", "patch:", "git+", "git:", "github:", "gitlab:", "bitbucket:"]
+        .iter()
+        .any(|p| s.starts_with(p))
+        || (s.starts_with("http://") || s.starts_with("https://"))
+            && (s.ends_with(".git") || s.contains(".git#"))
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LockfileInstallEntry {
+    /// The directory name, which may be an alias.
     pub package: String,
+    /// Registry identity of the artifact installed at this path.
+    pub registry_name: String,
     pub version: String,
     pub spec: String,
     pub resolved: String,
@@ -1399,11 +1418,15 @@ fn read_npm_lock_install_entries_from_str(s: &str) -> Option<Vec<LockfileInstall
         let Some(name) = package_name_from_lockfile_key(key) else {
             continue;
         };
+        let registry_name = val.get("name").and_then(|value| value.as_str()).unwrap_or(&name).to_owned();
+        if crate::utils::validate_package_name(&registry_name).as_deref() != Some(registry_name.as_str()) {
+            return None;
+        }
         let Some(version) = val.get("version").and_then(|v| v.as_str()) else {
             continue;
         };
         let version = version.to_string();
-        if skip_lockfile_materialization(&name, val) {
+        if skip_lockfile_materialization(&registry_name, val) {
             continue;
         }
         // Local packages (`file:`/`link:`/`workspace:`) are symlinked by the
@@ -1424,7 +1447,7 @@ fn read_npm_lock_install_entries_from_str(s: &str) -> Option<Vec<LockfileInstall
             .and_then(|r| r.as_str())
             .filter(|url| !url.trim().is_empty())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| tarball_url_from_registry(&name, &version));
+            .unwrap_or_else(|| tarball_url_from_registry(&registry_name, &version));
         let integrity = val
             .get("integrity")
             .and_then(|i| i.as_str())
@@ -1432,9 +1455,10 @@ fn read_npm_lock_install_entries_from_str(s: &str) -> Option<Vec<LockfileInstall
         let install_path = normalize_lock_install_path(key);
 
         entries.push(LockfileInstallEntry {
-            package: name.clone(),
+            package: name,
+            registry_name: registry_name.clone(),
             version: version.clone(),
-            spec: format!("{}@{}", name, version),
+            spec: format!("{}@{}", registry_name, version),
             resolved,
             integrity,
             install_path: install_path.clone(),
@@ -1560,19 +1584,16 @@ pub fn read_lockfile_install_entries_from_dir(dir: &Path) -> Option<Vec<Lockfile
             }
         }
     }
-    // Binary lockfile cache (sub-millisecond deserialization across processes via bincode)
-    let bin_key = {
-        let path_str = path.to_string_lossy();
-        let dur = mtime
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let h = xxhash_rust::xxh3::xxh3_64(path_str.as_bytes()) ^ (dur as u64);
-        format!("{:016x}.bin", h)
-    };
-    let bin_path = PathBuf::from(crate::utils::get_cache_dir())
-        .join("lockfiles")
-        .join(&bin_key);
+    let (path, content) = cached_lockfile_content(dir)?;
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(content.as_bytes());
+    for axis in [crate::utils::target_os(), crate::utils::target_cpu(), crate::utils::target_libc().unwrap_or_default()] {
+        digest.update([0]);
+        digest.update(axis.as_bytes());
+    }
+    let bin_path = PathBuf::from(crate::utils::get_cache_dir()).join("lockfiles")
+        .join(format!("v3-{}.bin", hex::encode(digest.finalize())));
     if let Ok(bin_data) = std::fs::read(&bin_path) {
         if let Ok(entries) = bincode::deserialize::<Vec<LockfileInstallEntry>>(&bin_data) {
             if let Ok(mut guard) = cache.write() {
@@ -1581,7 +1602,6 @@ pub fn read_lockfile_install_entries_from_dir(dir: &Path) -> Option<Vec<Lockfile
             return Some(entries);
         }
     }
-    let (path, content) = cached_lockfile_content(dir)?;
     let name = path.to_string_lossy();
     // npm's own lockfile carries resolved URLs + integrity, so prefer it. The
     // other three only give name -> version, which is enough: the tarball URL
@@ -1599,6 +1619,7 @@ pub fn read_lockfile_install_entries_from_dir(dir: &Path) -> Option<Vec<Lockfile
             let top = format!("node_modules/{}", name);
             entries.push(LockfileInstallEntry {
                 package: name.clone(),
+                registry_name: name.clone(),
                 version: version.clone(),
                 spec: format!("{}@{}", name, version),
                 resolved: tarball_url_from_registry(&name, &version),

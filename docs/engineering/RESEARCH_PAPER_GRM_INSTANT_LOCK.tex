@@ -1,709 +1,479 @@
-\documentclass[11pt,letterpaper]{article}
-
-\usepackage[T1]{fontenc}
-\usepackage[margin=0.82in,top=0.95in,bottom=0.82in,headheight=14pt,includehead]{geometry}
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+\documentclass[
+  11pt,
+  letterpaper,
+]{article}
+\usepackage{xcolor}
+\usepackage[left=0.82in,right=0.82in,top=0.73in,bottom=0.77in]{geometry}
+\usepackage{amsmath,amssymb}
+\setcounter{secnumdepth}{5}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math} % this also loads fontspec
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
 \usepackage{lmodern}
-\usepackage{microtype}
-\usepackage{amsmath,amssymb,amsthm,mathtools}
-\usepackage{booktabs}
-\usepackage{tabularx}
-\usepackage{array}
-\usepackage{makecell}
-\usepackage{float}
-\usepackage[table]{xcolor}
-\usepackage{listings}
-\usepackage{tikz}
-\usetikzlibrary{arrows.meta,positioning,fit,calc}
-\usepackage{enumitem}
+\ifPDFTeX\else
+  % xetex/luatex font selection
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{longtable,booktabs,array}
 \usepackage{caption}
-\usepackage{titlesec}
-\usepackage{fancyhdr}
-\usepackage[hidelinks]{hyperref}
-
-\emergencystretch=3em
-\hfuzz=1.5pt
-\setlength{\parskip}{0.35em}
-\setlength{\parindent}{1.15em}
-\renewcommand{\arraystretch}{1.18}
-\setlist{itemsep=0.28em,topsep=0.45em,leftmargin=1.35em}
-\setlist[enumerate]{leftmargin=1.55em}
-
-\captionsetup{font=small,labelfont=bf,skip=0.55em}
-\titleformat{\section}{\large\bfseries}{\thesection}{0.6em}{}
-\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.55em}{}
-\titlespacing*{\section}{0pt}{1.05em}{0.45em}
-\titlespacing*{\subsection}{0pt}{0.75em}{0.35em}
-\definecolor{codebg}{HTML}{F6F7F8}
-\definecolor{comment}{HTML}{5C6570}
-\definecolor{accent}{HTML}{163044}
-\definecolor{stable}{HTML}{1F6B3A}
-\definecolor{fragile}{HTML}{8B1E1E}
-
-\theoremstyle{definition}
-\newtheorem{definition}{Definition}
-\theoremstyle{plain}
-\newtheorem{theorem}{Theorem}
-\newtheorem{proposition}{Proposition}
-
-\lstdefinelanguage{Rust}{
-  keywords={pub,fn,let,mut,for,in,if,while,return,as,Some,None,match,static,struct,enum},
-  morekeywords={DashMap,AtomicU64,Ordering,Path,Result,String,HashMap},
-  sensitive=true,
-  morecomment=[l]{//},
-  morestring=[b]",
+\captionsetup[table]{skip=6pt}
+\newcounter{none} % for unnumbered tables
+\usepackage{calc} % for calculating minipage widths
+% Correct order of tables after \paragraph or \subparagraph
+\usepackage{etoolbox}
+\makeatletter
+\patchcmd\longtable{\par}{\if@noskipsec\mbox{}\fi\par}{}{}
+\makeatother
+\usepackage{graphicx}
+\makeatletter
+\newsavebox\pandoc@box
+\newcommand*\pandocbounded[1]{% scales image to fit in text height/width
+  \sbox\pandoc@box{#1}%
+  \Gscale@div\@tempa{\textheight}{\dimexpr\ht\pandoc@box+\dp\pandoc@box\relax}%
+  \Gscale@div\@tempb{\linewidth}{\wd\pandoc@box}%
+  \ifdim\@tempb\p@<\@tempa\p@\let\@tempa\@tempb\fi% select the smaller of both
+  \ifdim\@tempa\p@<\p@\scalebox{\@tempa}{\usebox\pandoc@box}%
+  \else\usebox{\pandoc@box}%
+  \fi%
 }
-\lstset{
-  language=Rust,
-  basicstyle=\ttfamily\footnotesize,
-  keywordstyle=\bfseries,
-  commentstyle=\itshape\color{comment},
-  stringstyle=\itshape,
-  backgroundcolor=\color{codebg},
-  frame=single,
-  rulecolor=\color{black!25},
-  framerule=0.4pt,
-  breaklines=true,
-  columns=fullflexible,
-  keepspaces=true,
-  showstringspaces=false,
-  numbers=left,
-  numberstyle=\tiny\color{black!45},
-  numbersep=7pt,
-  xleftmargin=1.6em,
-  framexleftmargin=1.3em,
-  aboveskip=0.85em,
-  belowskip=0.7em,
-  tabsize=4,
-  upquote=true
+% Set default figure placement to htbp
+\def\fps@figure{htbp}
+\makeatother
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\usepackage{needspace}
+\clubpenalty=10000
+\widowpenalty=10000
+\pretocmd{\section}{\Needspace{6\baselineskip}}{}{}
+\pretocmd{\subsection}{\Needspace{10\baselineskip}}{}{}
+\usepackage{bookmark}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\urlstyle{same}
+% fallback for those not using the hyperref driver hyperxmp:
+\makeatletter
+\@ifundefined{xmpquote}{\newcommand{\xmpquote}[1]{#1}}{}
+\makeatother
+\hypersetup{
+  pdftitle={Verified Prepared-Tree Replay for Package Installation},
+  pdfauthor={Bhuvan Prakash · Independent Researcher},
+  hidelinks,
+  pdfcreator={LaTeX via pandoc}}
+
+\title{Verified Prepared-Tree Replay for Package Installation}
+\usepackage{etoolbox}
+\makeatletter
+\providecommand{\subtitle}[1]{% add subtitle to \maketitle
+  \apptocmd{\@title}{\par {\large #1 \par}}{}{}
 }
+\makeatother
+\subtitle{Isolated sibling refill in Jhol Instant Lock}
+\author{Bhuvan Prakash · Independent Researcher}
+\date{13 November 2026 · Jhol Research Series III}
 
-\newcommand{\caret}{\textasciicircum}
-
-% Shared DeepSeek-inspired trilogy style
-\usepackage{jhol-paper}
-\jholHeaders{Global Resolution Memory and Instant Lock}{Jhol Trilogy / III}
 \begin{document}
-\thispagestyle{fancy}
+\maketitle
 
-\begin{center}
-\seriesbadge{Jhol Research Trilogy / Paper III / Reuse}\\[0.5em]
-{\LARGE\bfseries Global Resolution Memory and Instant Lock:\\[0.18em]
-Spectral Capsules for Sub-Millisecond\\[0.18em]
-Package Install Reuse\par}
-\vspace{0.25em}{\rule{0.22\textwidth}{0.6pt}}
-\vspace{0.55em}
-{\large Bhuvan Prakash}\\[0.18em]
-{\itshape Independent Researcher}\\[0.12em]
-{\ttfamily bhuvan@jhol.dev}\\[0.35em]
-{\small September 2026}\\[0.35em]
-{\small\textit{Third paper in the Jhol decide / store / reuse series.}}
-\end{center}
+\subsection*{Abstract}\label{abstract}
+\addcontentsline{toc}{subsection}{Abstract}
 
-\vspace{0.35em}
-{\small
-\begin{center}
-\textbf{Keywords:}
-global resolution memory,
-instant lock,
-dependency capsules,
-spectral stability,
-package-manager reuse,
-mmap install plans,
-install daemons,
-freshness calculus.
-\end{center}
-}
+Prepared-tree replay can reduce the latency of repeated package
+installation, but refilling a consumed snapshot from the live tree can
+race user cleanup. We present a two-slot replay protocol that binds the
+request identity, restores a prepared tree by rename, verifies the
+resulting layout, and refills from an isolated sibling. In a bounded
+model, sibling refill succeeds under all five placements of a live-tree
+deletion. Live-source refill succeeds in three. On a synthetic 738-file
+APFS fixture, 30 matched trials per operation give median times of 0.258
+ms for rename and 11.231 ms for recursive directory cloning. Archived
+Express runs additionally record the caller and worker costs of the
+install path. The study separates the visibility of a restored tree,
+successful layout verification, and the later cost of replenishing a
+slot.
 
-\vspace{0.35em}
-\noindent\rule{\textwidth}{0.4pt}
-\begin{jholabstract}
-\noindent
-After a package manager has resolved and materialized a dependency tree once, the dominant workload in day-to-day development is not cold resolution but \emph{reuse}: unchanged projects, warm caches, repeated CI jobs, and editor-driven no-op installs.
-In practice, warm installs still re-parse JSON lockfiles, re-walk \pkg{node_modules}, re-hash manifests, and often re-enter the resolver even when the assignment is already known.
-Across npm, Yarn, Bun, and pnpm, there is no shared, local-first memory of \emph{resolution outcomes}---only of tarball bytes and lockfile text.
+\section{Introduction}\label{introduction}
 
-This paper presents \textbf{Global Resolution Memory (GRM)} and \textbf{Instant Lock} as realized in Jhol.
-GRM is a lock-free, DashMap-sharded knowledge base of resolution records with dense ordinal keys $(P_{\mathrm{id}}\ll 32)\mid v_{\mathrm{ord}}$ and XXH3-accelerated spec queries.
-\textbf{Instant Lock} is the \textbf{JAGR Graph Capsule}: a versioned \texttt{repr(C)} mmap file (\texttt{JHLCPL}) whose install path is \texttt{mmap$\to$linear scan$\to$hardlink}, with open-time soundness checks that reject corrupt or adversarial capsule bytes.
-A \textbf{Soul Path} Degree-Sequence Spectral Certificate (DSSC) classifies manifests as Stable/Marginal/Fragile/Degenerate and permits \texttt{can\_skip\_resolve} only when Stable $\land \hat\beta_1=0$.
-A Unix \textbf{install daemon} with thread-per-connection handling, read timeouts, and a process-wide \pkg{DAEMON_CWD_LOCK} serves warm attaches in tens of milliseconds while preserving cache isolation when \pkg{JHOL_CACHE_DIR} is set.
+In Jhol, restoring a prepared tree was quick. Keeping a prepared tree
+available for the next call was harder. A refill worker copied from the
+live directory just as the next trial deleted it. That race explains why
+a fast restore could alternate with a slow miss. Its contributions are a
+protocol for isolated sibling refill, a safety argument for successful
+replay under a stated layout contract, and an evaluation that separates
+foreground publication from clone work.
 
-Empirical results on Apple Silicon (10 cores, darwin-arm64): unchanged 20-dependency projects reinstall in \metric{7.5--11\,ms} (Bun $\approx$7.8\,ms); daemon-attached warm installs \metric{30\,ms} median versus \metric{48\,ms} direct ($-38\%$); $\sim$300-package warm-cache installs \textbf{76--127\,ms} versus Bun \textbf{179--235\,ms}.
-Freshness gates correctly invalidate on manifest change, deleted package directories, and explicit \texttt{install \textless{}pkg\textgreater{}} requests.
-We state soundness obligations for capsule open, fingerprint format, and daemon cwd serialization, and we clarify what GRM \emph{does not} replace: strict \texttt{ci} still requires a verifiable lockfile with integrity.
-\end{jholabstract}
+\section{Background and Related Work}\label{background-and-related-work}
 
-\begin{takeaway}[Paper~III in one sentence]
-GRM remembers resolutions; capsules remember plans; Soul Path decides when reuse is safe; the daemon keeps it warm---bringing unchanged projects to \metric{7.5--11\,ms} (Bun parity) and daemon-attached warm installs to \metric{30\,ms} (\metric{$-$38\%}).
-\end{takeaway}
+Bazel's remote cache separates declared action inputs from cached
+outputs {[}1{]}. Nix's functional deployment model associates store
+paths with declared build inputs {[}2{]}. Jhol restores a prepared
+result into a mutable project path, where application processes and
+later installs can observe or change it. Crash-consistency work shows
+that namespace operations and data persistence depend on the filesystem
+and its guarantees {[}3{]}. This distinction motivates a separate
+analysis of process interruption and durable recovery.
 
-\section{Introduction}
+\section{System Model}\label{system-model}
 
-Cold install time in modern JavaScript package managers is bounded by registry physics~\cite{prakash2026sheaf}: abbreviated packuments, tarball bytes, TLS round trips, and CDN throttling dominate once the resolver itself is sound.
-Warm install time is bounded by \emph{software}: how much work the manager invents when nothing changed.
-The engineering log for Jhol documents years of cold-path optimization---HTTP/2 tarball multiplexing, manifest-first metadata, tarball prefetch overlap, store completeness markers---that brought large-project cold installs to parity with Bun.
-The remaining product gap for daily use is reuse latency: a developer who saves \pkg{package.json} unchanged and runs \texttt{jhol install} again should pay milliseconds, not a re-resolution tax.
+Let \(K\) denote the identity of an eligible install request. Its
+components should include final manifest and supported lock bytes,
+install mode and layout version, platform and policy inputs that can
+change the result. Let \(A(K)\) be the layout authorized by the lockfile
+and current supported policy. Define \(V_K(T)\) as a check of required
+package paths and identities and of unauthorized package directories in
+an installed tree \(T\). The runtime checker provides a layout verdict.
+Stronger byte or provenance claims need separate integrity evidence.
 
-Table~\ref{tab:layers} situates the problem.
-Each row remembers a different artifact.
-Only the bottom three rows remember \emph{plans} or \emph{outcomes}, not merely bytes.
+Jhol's earlier JHLCPL capsule encodes a derived binary plan. It can
+avoid parsing the plan while still requiring open-time bounds and string
+validation, correct source selection and valid materialization. GRM is a
+process-local DashMap-sharded record store. It remains in the codebase,
+including spec queries used by other paths, but capsule-first warm
+install keeps GRM and Soul Path off the hot path. Removing an outer
+mutex does not establish wait-free or lock-free progress for operations
+on sharded maps. The degree-sequence certificate estimates risk from
+root specifications. It does not authorize installed-tree replay.
 
-\begin{table}[H]
-\centering
-\caption{What each reuse layer remembers.}
-\label{tab:layers}
-\small
-\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}r@{}}
-\toprule
-\textbf{Layer} & \textbf{Remembers} & \textbf{Hit cost} \\
-\midrule
-OS page cache & File bytes & $\mu$s \\
-Tarball / unpacked store~\cite{prakash2026jagrs} & Package contents by content hash & ms (link) \\
-JSON lockfile & Version assignment + integrity & parse + walk \\
-\textbf{GRM} & Past resolution records & sub-$\mu$s query \\
-\textbf{Capsule (Instant Lock)} & Full binary install plan + spectral metadata & mmap + scan \\
-\textbf{Daemon} & Warm process + status/fingerprint & connect + plan \\
-\bottomrule
-\end{tabularx}
-\end{table}
+The prepared snapshot is a different artifact. It stores a previously
+installed tree in project-local slots and removes repeat clone work from
+the common restore path. Its safety depends on exactly which outputs
+were validated and how they are protected from changes. Strict frozen
+installs, explicit package requests, workspace links, and
+lifecycle-sensitive cases require their own semantics and must use a
+shortcut only when its preconditions cover them.
 
-npm, Yarn, pnpm, and Bun each optimize some rows.
-None expose a first-class, local-first \emph{resolution memory} that is simultaneously (a)~lock-free under parallel installs, (b)~ordinal-keyed for dense atlas reuse, and (c)~paired with a spectral skip certificate and a zero-parse capsule plan.
-This paper closes that gap for Jhol.
-
-\subsection{Problem statement}
-
-Let $M$ be a project manifest and $L$ a lockfile.
-After an initial successful install, the manager should answer three questions cheaply:
-\begin{enumerate}[label=(Q\arabic*)]
-  \item \textbf{Skip resolve?} Has the root assignment changed in a way that could alter the resolved tree?
-  \item \textbf{Skip parse?} Can the install plan be read without JSON or lockfile parsing?
-  \item \textbf{Skip startup?} Can a warm process serve the request without respawning the CLI?
-\end{enumerate}
-A correct system must fail closed when any answer is uncertain: corrupted capsules, stale fingerprints, explicit package requests, or cross-project cwd races must not produce silent wrong trees.
-
-\subsection{Contributions}
+\section{Replay Protocol}\label{replay-protocol}
 
 \begin{enumerate}
-  \item \textbf{Lock-free GRM (\S\ref{sec:grm}).}
-  DashMap shards, dense ordinal keys, XXH3 fast path, atomic hit/miss telemetry; explicit statement of what GRM is \emph{not}.
-  \item \textbf{Capsule Instant Lock (\S\ref{sec:capsule}).}
-  64-byte \texttt{JHLCPL} layout, verified mmap open, zero-parse install path, explicit-request safety.
-  \item \textbf{Soul Path DSSC (\S\ref{sec:soul}).}
-  Stable/Marginal/Fragile/Degenerate classification and \texttt{can\_skip\_resolve}.
-  \item \textbf{Install daemon (\S\ref{sec:daemon}).}
-  Thread-per-connection, \pkg{DAEMON_CWD_LOCK}, timeouts, \pkg{JHOL_CACHE_DIR} isolation, auto-attach defaults.
-  \item \textbf{Freshness calculus (\S\ref{sec:fresh}).}
-  Manifest hash, raw 8-byte fingerprint, \pkg{node_modules} entry count; gates that refuse to fire on explicit argv.
-  \item \textbf{Evaluation (\S\ref{sec:eval}).}
-  Warm/no-op tables, ablations, correctness suite, and measurement protocol.
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{Publish after final inputs.} The CLI may rewrite the lockfile
+  after the installer finishes. Compute the snapshot identity after the
+  last relevant write. A marker computed earlier was immediately stale.
+\item
+  \textbf{Make readiness explicit.} Refill a private slot from an
+  isolated source. Keep the readiness marker absent during construction
+  and publish it after checking the staged tree and identity.
+\item
+  \textbf{Consume and verify.} For an eligible request with a missing
+  tree, take a ready slot with matching identity. Rename it into place
+  on the same filesystem and check its lockfile layout before returning
+  success. A failed check triggers normal fallback.
+\item
+  \textbf{Refill from an isolated sibling.} Schedule background refill
+  using the surviving prepared slot, rather than the just-restored user
+  tree. Verify the new slot. Keep background child descriptors from
+  extending the lifetime of the caller's capture pipes.
 \end{enumerate}
 
-\paragraph{Companion papers.}
-Paper~1~\cite{prakash2026sheaf} treats \textbf{decide}: sheaf homotopy, Ricci flow, and JAGR-infinite resolution.
-Paper~2~\cite{prakash2026jagrs} treats \textbf{store}: content-addressed tarballs, harvest, and JAGR-S mirrors.
-This paper treats \textbf{reuse}: how a validated tree becomes a reusable plan.
+The original refill copied the restored user tree. The next cleanup
+could delete its source during the clone. The resulting abandoned slot
+produced alternating hits and misses in one experiment. Hardlink-based
+isolation was also rejected. A writable link shares its inode with the
+source. Copy-on-write cloning or a copy separates subsequent writes,
+assuming the filesystem provides the expected semantics.
 
-\subsection{Organization}
+\section{Correctness Argument}\label{correctness-argument}
 
-Section~\ref{sec:model} formalizes records and capsules.
-Section~\ref{sec:arch} presents the end-to-end reuse flow.
-Sections~\ref{sec:grm}--\ref{sec:fresh} detail the design.
-Section~\ref{sec:eval} evaluates performance and correctness.
-Sections~\ref{sec:related}--\ref{sec:conclusion} discuss related work and conclude.
+A useful model has slot states empty, filling, and ready for a named
+key. A restore operation consumes a ready slot. A refill starts with an
+eligible ready source, holds that source stable for the duration, and
+publishes its destination only after validation. A request can succeed
+via replay only after validating the live result under the request
+identity.
 
-\section{Model}
-\label{sec:model}
+\textbf{Safety proposition.} Assume cooperating publication and
+consumption are serialized per slot, source and destination identities
+remain bound during each operation, ready markers cannot be forged
+within the threat model, and \(V_K\) is complete for the stated layout
+contract. Then a replay accepted under the protocol satisfies \(V_K(T)\)
+for the requested key. Publication never labels an unfinished tree
+ready. Consumption changes which name holds the candidate, and the
+post-rename check covers the tree actually returned. A crash or
+interruption before marker publication leaves an ineligible destination,
+under a process-termination model in which prior filesystem operations
+remain visible. Durability across sudden power loss requires separately
+demonstrated persistence ordering.
 
-Let $\mathcal{P}$ be packages, $\mathcal{V}_P$ published versions, and $\mathcal{R}$ SemVer constraints.
-A project root specifies $M:\mathcal{P}\to\mathcal{R}$.
-A lockfile $L$ records an assignment $\sigma$ plus integrity metadata.
+Acceptance and visibility occur at different points. Another process can
+observe the renamed candidate before the installer finishes
+verification. A caller that needs to exclude that interval must
+coordinate readers or validate and publish under a stronger protocol. A
+successful verification still authorizes the layout at one instant,
+subject to later user edits.
 
-\begin{definition}[Resolution record]
-A \emph{resolution record} is
-\[
-R = (\mathit{spec}, v, h_{\mathrm{content}}, \{h_{\mathrm{dep}}\}, \mathit{platform}, \mathit{node}, H(R)),
-\]
-where $\mathit{spec}$ is a package specifier (e.g.\ \pkg{react@^18.3.1}), $v$ the chosen version, $h_{\mathrm{content}}$ the tarball content hash, $\{h_{\mathrm{dep}}\}$ dependency content hashes, optional platform/node tags, and $H(R)$ a record fingerprint for sync/export.
-GRM stores a multiset of such records keyed by spec and by dense ordinal keys.
-\end{definition}
+\textbf{Refill progress condition.} If a ready sibling remains stable
+until its clone completes, deletion of the live tree cannot invalidate
+refill's source. Progress still requires sufficient disk space, a
+scheduled worker, a valid sibling and time to refill. If both slots are
+consumed before refill can finish, the implementation must fall back or
+wait. Two slots improve the opportunity for a hit and do not guarantee
+one under arbitrary arrival rates. Let \(R_0\) be the initial number of
+ready slots and \(F(t)\) count later publications of a ready slot. Each
+successful replay consumes one ready slot, so the number
+\(N_{\mathrm{replay}}(t)\) of successful replays by time \(t\) satisfies
 
-\begin{definition}[Capsule]
-A \emph{capsule} $C$ is a binary encoding of a concrete install plan for one project state:
-package entries in install order, dependency edges, tarball hashes, string table, manifest hash, and spectral metadata $(\lambda_2,\hat\beta_1,\kappa)$.
-Magic \texttt{JHLCPL}, version~1.
-\end{definition}
+\[N_{\mathrm{replay}}(t)\le R_0+F(t),\qquad 0\le R_0\le 2.\]
 
-\paragraph{Freshness predicate.}
-Write $\mathrm{fresh}(M,L,C)$ when:
-(i)~$H(M)$ matches the capsule header's \texttt{manifest\_hash} (or compatible deps fingerprint when no lockfile is present);
-(ii)~lockfile hash matches when $L$ exists;
-(iii)~the on-disk \pkg{node_modules} entry count matches the status record;
-(iv)~no explicit CLI package operand is absent from the capsule entry set.
+The bound still holds when a failed restore consumes a slot. It explains
+why a faster rename cannot compensate for a refill rate below sustained
+demand. A root mutation during replay must be excluded or detected by
+the request's identity checks. Verification is a point-in-time claim and
+does not prevent later user writes.
 
-\begin{theorem}[Informal reuse theorem]
-\label{thm:reuse}
-If $\mathrm{fresh}(M,L,C)$ and $\mathrm{Stable}(M)$ with $\hat\beta_1(C)=0$, then materializing from $C$ yields the same tree as re-resolving $M$ under identical registry snapshots, because $C$ was produced by a validated resolver~\cite{prakash2026sheaf} and freshness binds $C$ to $(M,L)$.
-\end{theorem}
+The baseline had different verifiers at its front doors. A direct
+pre-parser shortcut could accept an extra package directory because it
+checked the marker and required entries only. The follow-up uses one
+layout checker for the live tree, prepared bundles and snapshot slots.
+It compares path membership, manifest name and version, using the locked
+registry name for aliases. An unreadable walk yields an unverified
+result. Detached workspace links and package symlinks go through normal
+installation because moving them can change their targets. The checker
+reads manifests and directory entries. Verifying package payloads still
+requires integrity evidence.
 
-This is not a formal correctness proof against npm semantics---peer optionalities, nested layouts, and platform variants remain validated by the production gate---but it states the engineering contract the reuse layer must preserve.
+\section{Evaluation Methodology}\label{evaluation-methodology}
 
-\section{End-to-end reuse architecture}
-\label{sec:arch}
+We evaluate the protocol at three levels. The reference model places one
+deletion at each of five positions around begin, clone, verify and
+publish, and checks every nonempty prefix for premature publication. The
+archived Express observations compare caller latency, refill work and
+confirmed daemon delegation on one fixture. The native APFS experiment
+isolates two filesystem operations under paired randomized ordering and
+checks each output against a deterministic tree inventory. Setup,
+verification and cleanup are excluded from primitive timings.
 
-Figure~\ref{fig:reuse-flow} summarizes how the five components compose on a warm reinstall.
-The CLI first consults cheap pre-clap gates (status file, fingerprint, argv operands).
-If those miss, Soul Path classifies the manifest and may execute a capsule without JSON parsing.
-GRM accelerates any residual resolution; the store layer~\cite{prakash2026jagrs} supplies tarball bytes; the daemon optionally eliminates process startup.
+\section{Results}\label{results}
 
-\begin{figure}[H]
+\subsection{Refill Under a Live-Tree
+Deletion}\label{refill-under-a-live-tree-deletion}
+
+Live-source refill completes in three of five schedules. Sibling-source
+refill completes in all five with the sibling held stable. All 50
+nonempty schedule prefixes preserve the publication invariant in the
+bounded model.
+
+\subsection{Shared Verifier
+Regressions}\label{shared-verifier-regressions}
+
+The Rust tree checker and trampoline suites passed 35 tests. The
+regressions include a valid marker with an extra package, an extra
+package under a nested scope, an unchanged version with a different
+manifest name, unsafe lock paths and a symlinked scope. These tests
+exercise the shared predicate and launcher proof. The five deletion
+schedules remain model results, and the tests do not establish
+power-loss recovery or a cross-filesystem latency effect.
+
+\subsection{Archived Install and Daemon
+Observations}\label{archived-install-and-daemon-observations}
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 6\tabcolsep) * \real{0.2673}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 6\tabcolsep) * \real{0.2376}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 6\tabcolsep) * \real{0.1980}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 6\tabcolsep) * \real{0.2970}}@{}}
+\caption{Historical Express install and filesystem
+observations.}\tabularnewline
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Express warm case, 71 packages
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Before or control
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+After or treatment
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Boundary
+\end{minipage} \\
+\midrule\noalign{}
+\endfirsthead
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Express warm case, 71 packages
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Before or control
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+After or treatment
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Boundary
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Tree wiped, 400 ms idle & 11 / 45 ms alternating & 12--19 ms &
+Live-source versus sibling refill \\
+Tree wiped, tight loop & 33--36 ms & 8--10 ms & Caller wall time on
+prepared path \\
+Snapshot available & 10 ms direct & 85--92 ms delegated & Warm daemon,
+matched work \\
+No snapshot & 38 ms direct & 122--137 ms delegated & Warm daemon,
+matched work \\
+Projection primitives on same 738-file tree & 114 ms for cp -cR & 12--21
+ms for directory clonefile & Different filesystem operations \\
+Background refill & 16--21 ms clone & About 3 ms verification & Worker
+costs, separate stages \\
+\end{longtable}
+
+These values are saved observations from the
+\href{../REPORT-2026-11-10.md}{November warm-path report}. They are
+reported ranges or observed values, not confidence intervals. The report
+gives the fixture, profiler and commands, but does not publish every raw
+repetition for these rows. Its external-tool warm table installed
+different package counts, so the headline cross-tool ratio is excluded
+here. The report's initial 114 ms conclusion about whole-tree cloning
+was corrected after measuring the actual directory system call. Its
+daemon flag can use in-process execution, so a flag alone cannot
+identify delegated runs. Actual install delegation now needs
+JHOL\_DAEMON\_INSTALL=1 on the exercised dispatch path.
+
+The sub-millisecond rename refers to the filesystem step alone.
+Verification, startup and cache management remain part of install
+latency. Record background work through completion as well as time to
+exit. The detached worker historically inherited stdout, which made a
+piped caller wait for its EOF. Closing inherited capture descriptors
+restored the intended latency boundary. The prior 22× script claim timed
+failed commands on a fixture without scripts and is unrelated to install
+reuse.
+
+\subsection{Controlled APFS Primitive
+Experiment}\label{controlled-apfs-primitive-experiment}
+
+\begin{longtable}[]{@{}lrrr@{}}
+\caption{Thirty matched APFS primitive measurements per
+operation.}\tabularnewline
+\toprule\noalign{}
+Operation & Samples & Median, ms & p95, ms \\
+\midrule\noalign{}
+\endfirsthead
+\toprule\noalign{}
+Operation & Samples & Median, ms & p95, ms \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Recursive directory clonefile & 30 & 11.231 & 14.222 \\
+Rename a prepared directory & 30 & 0.258 & 0.488 \\
+\end{longtable}
+
+The new primitive check used macOS arm64 on APFS. Each round used the
+same deterministic synthetic tree of 738 files, each 16 KiB, and
+randomized the two operation orders. Slot preparation, cleanup and hash
+verification were outside the timer. All 60 outputs matched the expected
+names and bytes. Writing one cloned file left the source digest intact.
+Reported p95 values use nearest rank. The roughly 44-fold median
+difference applies to these operations on this warm fixture. The rename
+consumes already prepared state and excludes the refill cost. This is
+not an install speedup or a crash-consistency result. See the
+\href{../architecture/experiments/paper-apfs-replay-primitives-2026-11-12.json}{raw
+timing samples}.
+
+\begin{figure}[!htbp]
 \centering
-\begin{tikzpicture}[
-  node distance=0.55cm and 0.35cm,
-  box/.style={draw, rounded corners=2pt, align=center, font=\small, minimum width=2.6cm, minimum height=0.75cm},
-  arr/.style={-{Stealth[length=2.2mm]}, thick},
-  >=Stealth
-]
-\node[box, fill=stable!10] (cli) {CLI / argv};
-\node[box, fill=stable!10, below=of cli] (fresh) {Freshness gates\\hash + entry count};
-\node[box, fill=accent!10, below left=0.7cm and 0.2cm of fresh] (dssc) {Soul Path DSSC\\Stable?};
-\node[box, fill=accent!10, below right=0.7cm and 0.2cm of fresh] (cap) {Capsule\\Instant Lock};
-\node[box, fill=accent!10, below=of dssc] (grm) {GRM\\ordinal + spec};
-\node[box, fill=accent!10, below=of cap] (store) {Store / CAS\\hardlink};
-\node[box, fill=fragile!8, below=1.1cm of grm] (resolve) {Full resolve\\Paper~1};
-\node[box, fill=stable!10, right=1.35cm of cap] (daemon) {Daemon\\warm attach};
-
-\draw[arr] (cli) -- (fresh);
-\draw[arr] (fresh) -- node[above left, font=\scriptsize]{skip} (dssc);
-\draw[arr] (fresh) -- node[above right, font=\scriptsize]{skip} (cap);
-\draw[arr] (dssc) -- node[above, font=\scriptsize]{miss} (grm);
-\draw[arr] (grm) -- node[left, font=\scriptsize]{miss} (resolve);
-\draw[arr] (cap) -- (store);
-\draw[arr] (resolve) -- (store);
-\draw[arr, dashed] (cli) -- (daemon);
-\draw[arr, dashed] (daemon) |- (cap);
-\end{tikzpicture}
-\caption{Warm reinstall decision flow. Solid arrows are the default local path; the dashed daemon edge removes process startup when auto-attach is enabled and cache isolation permits.}
-\label{fig:reuse-flow}
+\includegraphics[width=1\linewidth,height=\textheight,keepaspectratio,alt={Thirty
+timings per APFS operation on a logarithmic scale. Bars show medians and
+diamonds show p95. Slot preparation and verification are outside the
+timer.}]{paper-figures/replay-apfs-primitives.png}
+\caption{Thirty timings per APFS operation on a logarithmic scale. Bars
+show medians and diamonds show p95. Slot preparation and verification
+are outside the timer.}
 \end{figure}
 
-\paragraph{Design invariant.}
-Each layer fails closed independently.
-A corrupt capsule cannot override a stale fingerprint; a warm daemon cannot ignore \pkg{JHOL_CACHE_DIR}; GRM hits never bypass integrity verification on \texttt{ci}.
-This decomposition is what allows aggressive micro-optimizations (sub-millisecond GRM probes, mmap capsules) without weakening the strict modes validated in the engineering gate.
+\section{Threats to Validity}\label{threats-to-validity}
 
-\section{Global Resolution Memory}
-\label{sec:grm}
+The reference model isolates one live-tree deletion and assumes a stable
+sibling. It does not exercise the implementation's concurrent processes.
+The APFS fixture contains synthetic regular files on one host. It
+neither represents arbitrary npm layouts nor establishes power-loss
+behavior. The historical install report does not archive every raw warm
+repetition. The baseline differed across launch paths. The follow-up
+checks the shared verifier and launcher proof with focused fixtures.
+These limits bound the claim to the stated layout contract and the
+measured conditions.
 
-GRM answers: ``Have we already resolved this spec on this platform?''
-It is process-global, in-memory, and optional: on miss, Jhol resolves from the registry and may store a new record afterward.
+\section{Conclusion}\label{conclusion}
 
-\subsection{Architecture and concurrency}
+The fix was to stop copying from the directory users were about to
+delete. A stable sibling removes that dependency and gives the worker a
+source it can finish reading. Moving a ready slot to the project path
+can reduce foreground publication time, while verification and
+replacement of the consumed slot still incur work. A complete evaluation
+should test each entrypoint against the same adversarial layouts and
+compare end-to-end latency, hit rate, and deferred work across
+filesystems.
 
-Earlier Jhol prototypes wrapped GRM shards in an outer \texttt{RwLock}.
-Under parallel installs the outer lock became a global serialization point even though DashMap already shards internally.
-The current \pkg{lock_free_grm.rs} design removes that outer lock entirely.
+\section*{Artifact Availability}\label{artifact-availability}
+\addcontentsline{toc}{section}{Artifact Availability}
 
-\begin{lstlisting}
-pub struct LockFreeGRM {
-    shards: DashMap<String, Vec<ResolutionRecord>>,
-    fast_ordinal_shards: DashMap<u64, ResolutionRecord>,
-    stats: Arc<AtomicStats>,  // records, hits, misses
-}
-\end{lstlisting}
+Run the \href{../../scripts/bench/paper_evidence.py}{evidence script}
+with Python 3 to check the finite model and recompute the archived APFS
+summaries. The optional --measure-apfs-primitives flag repeats the
+synthetic test on macOS/APFS. The \href{../../LICENSE}{repository
+license} governs the software.
 
-\begin{itemize}
-  \item \textbf{Spec shards.} Keyed by \texttt{package\_spec}; each shard holds a small vector of records differing by platform/node or version.
-  \item \textbf{Ordinal shards.} Keyed by dense $k=(P_{\mathrm{id}}\ll 32)\mid v_{\mathrm{ord}}$ for atlas-identified packages.
-  \item \textbf{Atomics.} \texttt{total\_records}, \texttt{total\_hits}, \texttt{misses} use relaxed ordering; sufficient for telemetry and adaptive prefetch hints.
-\end{itemize}
+\section*{References}\label{references}
+\addcontentsline{toc}{section}{References}
 
-\subsection{Dense ordinal keys}
-
-JAGR's atlas assigns each package an integer id and each chart version an ordinal index.
-Encoding
-\[
-k = (P_{\mathrm{id}} \ll 32) \mid v_{\mathrm{ord}} \in \mathbb{N}_{64}
-\]
-lets hot resolver paths query GRM without string hashing.
-\texttt{store\_ordinal} / \texttt{query\_ordinal} are wait-free with respect to unrelated keys.
-
-\subsection{XXH3 fast path for spec queries}
-
-For unfiltered \texttt{query(spec, None, None)}, Jhol hashes the spec with XXH3, probes \texttt{fast\_ordinal\_shards}, and verifies \texttt{record.package\_spec == spec} to avoid collision false positives.
-When platform or Node version filters are present, the implementation scans the spec shard and selects the best match by \texttt{(cached\_at, hit\_count)}.
-
-\begin{table}[H]
-\centering
-\caption{GRM query semantics.}
-\label{tab:grm-query}
-\small
-\begin{tabular}{@{}ll@{}}
-\toprule
-\textbf{Call} & \textbf{Behavior} \\
-\midrule
-\texttt{query\_ordinal(k)} & Direct DashMap get; hit/miss atomic \\
-\texttt{query(spec)} & XXH3 fast path, then equality verify \\
-\texttt{query(spec, platform, node)} & Shard scan with filter; max cached entry \\
-\texttt{store(record)} & Upsert in spec shard + XXH3 index \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\paragraph{Global API.}
-Process-wide helpers \texttt{store\_global}, \texttt{query\_global}, \texttt{store\_ordinal\_global}, and \texttt{query\_ordinal\_global} wrap a \texttt{OnceLock}-initialized singleton, so worker threads share one GRM without additional locking.
-This matches Jhol's pattern of deriving concurrency knobs on the main thread before worker pools start.
-
-\subsection{What GRM is \emph{not}}
-
-GRM accelerates repeated resolution across projects and sessions.
-It does \textbf{not} replace the lockfile as the CI source of truth.
-Strict \texttt{jhol ci} still requires a verifiable \pkg{package-lock.json} with integrity fields; tampered hashes must fail even on warm cache hits (verified in the engineering log).
-GRM also does not substitute for tarball presence: a record without store bytes still triggers download/unpack.
-
-\section{Instant Lock = Capsule}
-\label{sec:capsule}
-
-Instant Lock is not a separate file format from the JAGR Graph Capsule.
-It is the \emph{install semantics} of that capsule: treat the mmap'd plan as authoritative when freshness and spectral gates permit.
-
-\subsection{On-disk layout (\texttt{JHLCPL})}
-
-\begin{figure}[H]
-\centering
-\begin{tikzpicture}[
-  node distance=0.35cm and 0.2cm,
-  box/.style={draw, rounded corners=2pt, minimum height=0.65cm, align=center, font=\small},
-  >=Stealth
-]
-\node[box, fill=accent!8, minimum width=3.2cm] (hdr) {CapsuleHeader\\64 B};
-\node[box, fill=accent!8, minimum width=3.2cm, below=of hdr] (ent) {PackageEntry $\times N$\\64 B each};
-\node[box, fill=accent!8, minimum width=3.2cm, below=of ent] (str) {String table\\variable};
-\node[box, fill=accent!8, minimum width=3.2cm, below=of str] (dep) {DepEdge $\times M$\\8 B each};
-\node[box, fill=accent!8, minimum width=3.2cm, below=of dep] (pbf) {Optional PBF trailer};
-\draw[->] (hdr) -- (ent);
-\draw[->] (ent) -- (str);
-\draw[->] (str) -- (dep);
-\draw[->] (dep) -- (pbf);
-\end{tikzpicture}
-\caption{Capsule linear layout. All multi-byte integers are little-endian; structures are \texttt{repr(C)}.}
-\label{fig:capsule-layout}
-\end{figure}
-
-Header fields include \texttt{manifest\_hash}, \texttt{total\_unpacked\_bytes}, \texttt{spectral\_gap}, \texttt{predicted\_beta1}, and \texttt{knot\_fingerprint}.
-Each \texttt{PackageEntry} stores string-table offsets, 32-byte tarball hash, unpacked size, dependency range, flags, URL offset, and \texttt{install\_order}.
-
-Capsule manifest hashing folds \texttt{LAYOUT\_VERSION} so layout bugfixes invalidate stale on-disk capsules without silent mis-install.
-
-\subsection{Open-time soundness}
-
-Prior adversarial review found three failure classes in capsule access:
 \begin{enumerate}
-  \item \texttt{from\_utf8\_unchecked} on the string table $\Rightarrow$ undefined behavior on invalid UTF-8.
-  \item Unchecked \texttt{from\_raw\_parts} on dependency slices $\Rightarrow$ out-of-bounds read on crafted offsets.
-  \item Header arithmetic wrap on 32-bit counts $\Rightarrow$ bypass of length checks before slicing.
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  Bazel. ``Remote Caching.''
+  \href{https://bazel.build/remote/caching}{Technical documentation}.
+\item
+  E. Dolstra. \emph{The Purely Functional Software Deployment Model}.
+  PhD thesis, Utrecht University, 2006.
+  \href{https://nixos.org/~eelco/pubs/phd-thesis.pdf}{Thesis}.
+\item
+  T. S. Pillai et al.~``All File Systems Are Not Created Equal: On the
+  Complexity of Crafting Crash-Consistent Applications.'' \emph{USENIX
+  Symposium on Operating Systems Design and Implementation}, 2014.
+  \href{https://www.usenix.org/conference/osdi14/technical-sessions/presentation/pillai}{Paper}.
 \end{enumerate}
 
-The current open path (\pkg{capsule.rs}) enforces:
-\begin{enumerate}[label=\alph*.]
-  \item \texttt{len $\ge$ HEADER\_SIZE}; magic \texttt{JHLCPL} and version~1.
-  \item Checked products for entries, string table, and dep table extents.
-  \item One-time UTF-8 validation of the string table.
-  \item \texttt{verify()} ensuring every entry/dep offset lies in range.
-  \item Bounded \texttt{read\_str} returning empty string on failure---never panic on corrupt input (\texttt{panic=abort} release builds).
-\end{enumerate}
 
-A permanent adversarial test suite (\pkg{capsule\_adversarial.rs}) covers truncation, invalid UTF-8, corrupt offsets, absurd counts, and post-open mutation (TOCTOU).
+\section*{Post-publication corrections (measured)}
 
-\subsection{Install path}
+\textbf{The reuse theorem needs two hypotheses it does not state.} Both come from incidents where
+the mechanism silently did nothing or did the wrong thing:
 
-Warm capsule hit:
-\[
-\texttt{mmap} \;\to\; \text{iterate entries by \texttt{install\_order}} \;\to\; \text{hardlink/copy from store by tarball hash} \;\to\; \text{rebuild \pkg{.bin}}.
-\]
-No \texttt{serde\_json} parse of the plan.
-No dynamic tree rebuild.
-Store completeness markers (\pkg{.jhol-extract-complete}) ensure link targets are full trees, not manifest-only partials~\cite{prakash2026jagrs}.
-
-\subsection{Explicit-request safety}
-
-A capsule must not answer \texttt{jhol install foo@1.2.3} unless every requested base name appears in its entry set.
-Both \texttt{can\_reuse\_lockfile\_for\_requested} and \texttt{try\_capsule\_install} collect capsule/lockfile entry names into a set and return \texttt{Some} only if every \texttt{base\_name(requested)} is present.
-This closes a silent-drop class where an explicit install appeared to succeed while omitting the requested package (E119--E125 engineering rounds).
-
-\section{Soul Path and DSSC}
-\label{sec:soul}
-
-Install in Jhol is framed as a spectral decision tree, not only a pipeline of fetch/extract/link stages.
-The Soul Path module (\pkg{soul_path.rs}) classifies the root manifest before paying for full JAGR-infinite resolution.
-
-\subsection{Stability classes}
-
-\begin{equation*}
-\mathrm{classify}(M) \in \{\mathrm{Stable}, \mathrm{Marginal}, \mathrm{Fragile}, \mathrm{Degenerate}\}.
-\end{equation*}
-
-\begin{table}[H]
-\centering
-\caption{DSSC stability classes and install strategy.}
-\label{tab:dssc}
-\small
-\begin{tabular}{@{}lll@{}}
-\toprule
-\textbf{Class} & \textbf{Typical root pattern} & \textbf{Path} \\
-\midrule
-Stable & Mostly exact pins, narrow ranges & Capsule execute; optional skip resolve \\
-Marginal & Mixed \caret/\~{} ranges & Greedy / lockfile reuse \\
-Fragile & Wide ranges, \pkg{*}, \pkg{latest}, \pkg{||} & Full JAGR / expansion~\cite{prakash2026sheaf} \\
-Degenerate & Empty deps & Trivial / no-op \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{Degree-Sequence Spectral Certificate}
-
-DSSC estimates spectral gap and $\hat\beta_1$ from root dependencies alone---no full atlas on the hot path:
-\begin{itemize}
-  \item $n = |M|$ root dependencies;
-  \item tightness ratio = fraction of exact pins (no \caret, \~{}, \pkg{*}, \pkg{latest}, \pkg{||}, or whitespace ranges);
-  \item per-package conflict risk scores (higher for \pkg{*} and \pkg{latest});
-  \item proxy gap $\lambda_2 \approx (\mathit{tight}+1)/(n+1)$;
-  \item $\hat\beta_1 = 1$ iff class is Fragile, else $0$.
-\end{itemize}
-
-\begin{equation*}
-\mathrm{can\_skip\_resolve} \iff \mathrm{Stable} \land \hat\beta_1 = 0.
-\end{equation*}
-
-After capsule execute, Soul Path performs \emph{spectral verify}: every root dependency must exist under \pkg{node_modules} and satisfy its declared range via \texttt{version\_satisfies}.
-Failure downgrades to full resolve rather than returning a wrong tree.
-
-This connects warm reuse to the sheaf/spectral language of Paper~1 without paying full cohomology computation on an 8\,ms no-op path.
-
-\section{Install daemon}
-\label{sec:daemon}
-
-\subsection{Role and defaults}
-
-\texttt{jhol daemon --serve} listens on a Unix domain socket (\texttt{0o600}) and executes install requests in a long-lived process with warm caches.
-Auto-attach is enabled by default (\texttt{soul\_path::auto\_daemon\_enabled}), with opt-outs \pkg{JHOL_NO_DAEMON=1}, \pkg{JHOL_AUTO_DAEMON=0}, and conservative CI behavior (\pkg{CI=1} disables unless explicitly enabled).
-If \pkg{JHOL_CACHE_DIR} is set, clients stay local: the daemon runs in its own process and cannot honor the caller's cache override (E84).
-
-\subsection{Concurrency, cwd, and timeouts}
-
-Handlers run \textbf{one thread per connection} so a blocked peer cannot head-of-line block the accept loop (E66).
-Because install APIs use relative paths, each handler temporarily \texttt{chdir}s into the request's project directory.
-\texttt{chdir} is process-global, so a \pkg{DAEMON_CWD_LOCK} mutex serializes the \texttt{chdir + install + restore} critical section.
-Without this lock, concurrent \texttt{--daemon} installs polluted \pkg{/tmp/node_modules} (E104).
-
-Idle connections receive a read timeout (\pkg{JHOL_DAEMON_READ_TIMEOUT_SECS}, default 30\,s).
-Active handlers are capped (\pkg{JHOL_DAEMON_MAX_CONNS}, default 64).
-Wire structs validate magic bytes; \texttt{pkg\_count} is clamped before allocation (E92).
-
-\subsection{Security and DoS posture}
-
-The socket path is user-private (\texttt{0o600}).
-Requests are bounded-size POD structs.
-Malformed magic, oversize package lists, and idle peers are rejected or shed without wedging the daemon.
-Client-side read timeouts prevent unbounded waits when a stale socket misbehaves.
-
-\section{Freshness calculus}
-\label{sec:fresh}
-
-Reuse requires more than ``the lockfile still exists.''
-Jhol's freshness calculus combines three independent signals.
-
-\paragraph{(1) Manifest and lockfile hash.}
-$H(M)$ and $H(L)$ when present.
-Capsule headers store \texttt{manifest\_hash}; lockfile fingerprint gates compare against live files.
-
-\paragraph{(2) Binary fingerprint format.}
-\pkg{node_modules/.nm_fingerprint} stores the raw 8-byte manifest hash, written by \texttt{daemon\_cache::write\_nm\_fingerprint}.
-An earlier bug wrote hex text while readers expected raw bytes, causing permanent freshness misses (E30 class).
-All writers now use the same binary format.
-
-\paragraph{(3) Entry count.}
-The status record (\texttt{JHLSTAT}) stores top-level \pkg{node_modules} entry count (\texttt{nm\_entries}).
-Mtime alone does not change when one package directory is deleted; without entry-count comparison, a deleted package was accepted as fresh (P0-2 fix).
-
-\paragraph{Gate placement.}
-\texttt{lockfile\_fingerprint\_matches}, capsule warm bypass, and \texttt{try\_exit\_before\_clap} all require compatible hashes \emph{and} entry counts.
-Crucially, \texttt{try\_exit\_before\_clap} must not fire when argv names packages beyond the subcommand---otherwise \texttt{jhol install foo} would exit before parsing flags (E120 guard).
-
-\section{Evaluation}
-\label{sec:eval}
-
-All numbers below come from the Jhol engineering measurement protocol: fresh \pkg{JHOL_CACHE_DIR} and HOME for cold runs; reused cache for warm; kill daemons before cold isolation; assert usable trees (entry counts, \texttt{require()} smoke); report medians of $\ge 3$--$5$ runs unless noted.
-
-\subsection{Warm and no-op performance}
-
-\begin{table}[H]
-\centering
-\caption{Warm / no-op results (Apple Silicon, 10 cores).}
-\label{tab:warm}
-\small
-\begin{tabular}{@{}lrrr@{}}
-\toprule
-\tabheadrow \textbf{Scenario} & \textbf{Jhol} & \textbf{Bun} & \textbf{Notes} \\
-\midrule
-20-dep no-op reinstall & \best{7.5--11\,ms} & $\approx$7.8\,ms & Bun parity \\
-$\sim$300-pkg warm cache & \best{76--127\,ms} & 179--235\,ms & Jhol $\sim$2$\times$ faster \\
-Daemon warm attach & \best{30\,ms med} & n/a & vs 48\,ms direct ($-38\%$) \\
-Direct warm (no daemon) & 48\,ms med & --- & E81 default \\
-Store-index warm tail & \best{16\,ms med} & 23\,ms & After GRM store index (Round 178) \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-No-op latency is the most common invocation in editor-integrated workflows.
-The fingerprint + status path reduces an unchanged reinstall to a handful of syscalls and hardlinks.
-
-\subsection{Warm-path decomposition}
-
-Profiling on a 20-dependency warm reinstall (after store-index indexing) decomposes wall time as follows.
-These numbers explain why further resolver tuning yields little on the no-op path: the resolver is not invoked at all when freshness and capsule gates succeed.
-
-\begin{table}[H]
-\centering
-\caption{Warm 20-dep install stage attribution (representative).}
-\label{tab:profile}
-\small
-\begin{tabular}{@{}lr@{}}
-\toprule
-\tabheadrow \textbf{Stage} & \textbf{Time} \\
-\midrule
-Process startup + clap & $\approx$4\,ms \\
-Status / fingerprint check & $\approx$1\,ms \\
-Capsule mmap + scan & $\approx$3\,ms \\
-Store hardlink + \pkg{.bin} & $\approx$6--8\,ms \\
-Lockfile tail (parallel SRI memo) & $\approx$12--15\,ms \\
-\midrule
-\textbf{Total (no-op path)} & \best{7.5--11\,ms} when early exit \\
-\textbf{Total (full warm)} & \textbf{16--48\,ms} when layout tail runs \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The store-index optimization (index \pkg{store\_unpacked} once per cache dir, then $O(1)$ lookups) removed an $O(\mathit{entries}\times\mathit{store})$ walk that previously dominated warm installs at scale.
-This is orthogonal to GRM and capsules but necessary context: reuse layers only win when lower layers stop re-walking the filesystem.
-
-\subsection{Ablations}
-
-\begin{table}[H]
-\centering
-\caption{Ablations on warm/no-op path.}
-\label{tab:ablation}
-\small
-\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X@{}}
-\toprule
-\textbf{Disabled component} & \textbf{Observed effect} \\
-\midrule
-Capsule missing / stale & Fall back to lockfile layout or resolve; +parse cost \\
-GRM empty & Resolve from registry; populate records afterward \\
-Daemon off (\pkg{JHOL_NO_DAEMON=1}) & Direct path; no-op still $\sim$8--11\,ms via fingerprint \\
-\pkg{JHOL_CACHE_DIR} set & Forces local install; daemon bypassed (correct isolation) \\
-Status entry count omitted & Deleted package dir falsely ``fresh'' (bug; now fixed) \\
-Explicit \texttt{install \textless{}pkg\textgreater{}} & Capsule/lockfile reuse refused unless entry present \\
-\bottomrule
-\end{tabularx}
-\end{table}
-
-\subsection{Correctness suite}
-
-Production validation includes:
-\begin{itemize}
-  \item \textbf{Capsule adversarial tests:} corrupt offsets, invalid UTF-8, truncation, post-open mutation.
-  \item \textbf{Freshness tests:} manifest change, \texttt{add}, deleted dir, wipe, explicit install contract.
-  \item \textbf{Daemon tests:} silent peer does not stall 30\,s; concurrent projects do not cross-link; \pkg{JHOL_CACHE_DIR} isolation.
-  \item \textbf{Integration suites:} core lib, CLI, compat matrix, regression npm/bun, production gate script.
-  \item \textbf{E145 nested layout verifier:} npm lockfile nested \pkg{debug} versions resolve at runtime.
-\end{itemize}
-
-At the time of writing, the consolidated gate reports hundreds of passing tests with zero failures on darwin-arm64 release builds.
-
-\subsection{Measurement lessons}
-
-Three harness traps repeatedly invalidated early claims and are worth recording:
 \begin{enumerate}
-  \item \textbf{Stale cache dirs are not cold.} Deleting only \pkg{store/} while a capsule exists yields 0 network requests and bogus speedups.
-  \item \textbf{Piped exit codes lie.} \texttt{cmd | tail; echo \$?} reports \texttt{tail}'s status, not \texttt{cmd}'s.
-  \item \textbf{Running daemons break cache isolation.} A fresh \pkg{JHOL_CACHE_DIR} is ignored while a daemon serves from its home cache (E84).
+\item \textbf{Freshness must be computed on final bytes.} The capsule marker was computed before the
+lockfile was rewritten, so it never matched a tree that had just been installed: the mechanism was
+unreachable, and every install re-resolved. A fingerprint over an input that later changes is a
+fingerprint of the wrong object.
+\item \textbf{A capsule must never be built from a directory the caller will delete.} The refill
+cloned the live \code{node_modules}; the next wipe deleted it mid-clone, so every second run
+discarded its slot. Refilling from a \emph{sibling} slot, and verifying the slot rather than the
+live tree, fixed it.
 \end{enumerate}
 
-\section{Related work}
-\label{sec:related}
-
-\paragraph{Lockfiles.}
-npm, Yarn, pnpm, and Bun lockfiles remain the durable, shareable assignment.
-Capsules are derived, machine-local accelerations of the same plan---analogous to executable cache entries, not source documents.
-
-\paragraph{Build-system remote caches.}
-Bazel, Buck, and Gradle build caches store action outputs keyed by rule inputs.
-GRM stores \emph{resolution outputs} keyed by specs and ordinals---closer to Cargo's registry index memory than to tarball CAS blobs~\cite{prakash2026jagrs}.
-
-\paragraph{Daemonized tools.}
-\texttt{gradle --daemon}, \texttt{sbt}, and language-server daemons keep warm JVM heaps.
-Jhol's daemon specializes install requests with explicit cwd serialization and capsule/fingerprint fast paths.
-
-\paragraph{Version solving.}
-PubGrub~\cite{weizenbaum2018} and CDCL SAT solvers decide assignments; GRM remembers prior decisions.
-Paper~1~\cite{prakash2026sheaf} provides the decide layer; this paper provides reuse.
-
-\paragraph{Companion papers.}
-\cite{prakash2026sheaf,prakash2026jagrs} complete the decide/store/reuse trilogy for Jhol.
-
-\begin{insight}[Freshness before speed]
-An 8\,ms no-op that skips a deleted package directory is a bug, not a win. Entry-count + raw fingerprint + explicit-request checks are part of the contribution.
-\end{insight}
-
-\section{Conclusion}
-\label{sec:conclusion}
-
-Warm install latency is a software problem distinct from cold registry physics.
-\textbf{GRM} remembers resolutions; \textbf{capsules} remember install plans; \textbf{Soul Path} decides when remembering is safe; the \textbf{daemon} keeps machinery warm.
-Together they bring unchanged-project installs to Bun parity ($\sim$8\,ms) and make attached warm installs $\sim$38\% faster than direct startup, without weakening strict \texttt{ci} integrity or explicit-request semantics.
-
-\paragraph{Limitations.}
-Capsule sharing across machines requires header tags for OS/libc/layout.
-DSSC is a root-level proxy; folding full sheaf $\lambda_2$ from Paper~1 into the 8\,ms gate without regression remains open.
-Windows named-pipe daemon parity with the Unix socket path is future work.
-
-\paragraph{Software availability.}
-Open-source Jhol implementations live in \pkg{lock_free_grm.rs}, \pkg{grm/}, \pkg{capsule.rs}, \pkg{soul_path.rs}, and daemon handling in \pkg{src/main.rs}.
-
-\paragraph{Acknowledgments.}
-Engineering rounds E66, E84, E104, E119--E125, and E81 established the daemon, freshness, explicit-install, and auto-attach contracts formalized here.
-
-\begin{thebibliography}{9}
-\bibitem{prakash2026sheaf}
-B.~Prakash.
-\newblock Sheaf Homotopy and Ricci Flow for Package Resolution.
-\newblock Jhol Research Series, Paper~1, 2026.
-
-\bibitem{prakash2026jagrs}
-B.~Prakash.
-\newblock JAGR-S: A Succinct Content-Addressed Artifact Store.
-\newblock Jhol Research Series, Paper~2, 2026.
-
-\bibitem{weizenbaum2018}
-N.~Weizenbaum.
-\newblock PubGrub: Next-generation version solving.
-\newblock \textit{Dart Technical Reports}, 2018.
-
-\bibitem{npm-lock}
-npm CLI.
-\newblock package-lock.json documentation.
-\newblock \url{https://docs.npmjs.com/cli/v10/configuring-npm/package-lock-json}.
-
-\bibitem{mancinelli2006}
-F.~Mancinelli et al.
-\newblock Managing the evolution of a software configuration graph.
-\newblock \textit{ASE}, 2006.
-
-\bibitem{abate2012}
-Y.~Abate et al.
-\newblock Dependency solving is still hard, but we are getting better at it.
-\newblock \textit{ESEC/FSE}, 2012.
-\end{thebibliography}
+\textbf{Measured, macOS arm64, 71-package fixture.} Warm install 8--19\,ms (bun 26--32\,ms);
+restore by \code{rename} 0.2--0.3\,ms; verification 3.4\,ms. A completion marker proves a write
+finished, not that it produced anything: content is checked beside every ``already done'' test.
 
 \end{document}

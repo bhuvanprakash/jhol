@@ -1,693 +1,511 @@
-\documentclass[11pt,letterpaper]{article}
-
-\usepackage[T1]{fontenc}
-\usepackage[margin=0.82in,top=0.95in,bottom=0.82in,headheight=14pt,includehead]{geometry}
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+\documentclass[
+  11pt,
+  letterpaper,
+]{article}
+\usepackage{xcolor}
+\usepackage[left=0.82in,right=0.82in,top=0.73in,bottom=0.77in]{geometry}
+\usepackage{amsmath,amssymb}
+\setcounter{secnumdepth}{5}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math} % this also loads fontspec
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
 \usepackage{lmodern}
-\usepackage{microtype}
-\usepackage{amsmath,amssymb,amsthm,mathtools}
-\usepackage{booktabs}
-\usepackage{tabularx}
-\usepackage{array}
-\usepackage{makecell}
-\usepackage{float}
-\usepackage[table]{xcolor}
-\usepackage{listings}
-\usepackage{tikz}
-\usetikzlibrary{arrows.meta,positioning,fit}
-\usepackage{enumitem}
+\ifPDFTeX\else
+  % xetex/luatex font selection
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{longtable,booktabs,array}
 \usepackage{caption}
-\usepackage{titlesec}
-\usepackage{fancyhdr}
-\usepackage[hidelinks]{hyperref}
-\usepackage{algorithm}
-\usepackage{algpseudocode}
-
-\emergencystretch=3em
-\hfuzz=1.5pt
-\setlength{\parskip}{0.35em}
-\setlength{\parindent}{1.15em}
-\renewcommand{\arraystretch}{1.18}
-\setlist{itemsep=0.28em,topsep=0.45em,leftmargin=1.35em}
-\setlist[enumerate]{leftmargin=1.55em}
-
-\captionsetup{font=small,labelfont=bf,skip=0.55em}
-\titleformat{\section}{\large\bfseries}{\thesection}{0.6em}{}
-\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.55em}{}
-\titlespacing*{\section}{0pt}{1.05em}{0.45em}
-\titlespacing*{\subsection}{0pt}{0.75em}{0.35em}
-
-\definecolor{codebg}{HTML}{F6F7F8}
-\definecolor{comment}{HTML}{5C6570}
-
-\lstdefinelanguage{Rust}{
-  keywords={pub,fn,let,mut,for,in,if,while,return,as,Some,None},
-  morekeywords={HashSet,HashMap,Vec,Arc,Mmap,AtomicU64,Ordering},
-  sensitive=true,
-  morecomment=[l]{//},
-  morestring=[b]",
+\captionsetup[table]{skip=6pt}
+\newcounter{none} % for unnumbered tables
+\usepackage{calc} % for calculating minipage widths
+% Correct order of tables after \paragraph or \subparagraph
+\usepackage{etoolbox}
+\makeatletter
+\patchcmd\longtable{\par}{\if@noskipsec\mbox{}\fi\par}{}{}
+\makeatother
+\usepackage{graphicx}
+\makeatletter
+\newsavebox\pandoc@box
+\newcommand*\pandocbounded[1]{% scales image to fit in text height/width
+  \sbox\pandoc@box{#1}%
+  \Gscale@div\@tempa{\textheight}{\dimexpr\ht\pandoc@box+\dp\pandoc@box\relax}%
+  \Gscale@div\@tempb{\linewidth}{\wd\pandoc@box}%
+  \ifdim\@tempb\p@<\@tempa\p@\let\@tempa\@tempb\fi% select the smaller of both
+  \ifdim\@tempa\p@<\p@\scalebox{\@tempa}{\usebox\pandoc@box}%
+  \else\usebox{\pandoc@box}%
+  \fi%
 }
-\lstset{
-  language=Rust,
-  basicstyle=\ttfamily\footnotesize,
-  keywordstyle=\bfseries,
-  commentstyle=\itshape\color{comment},
-  stringstyle=\itshape,
-  backgroundcolor=\color{codebg},
-  frame=single,
-  rulecolor=\color{black!25},
-  framerule=0.4pt,
-  breaklines=true,
-  columns=fullflexible,
-  keepspaces=true,
-  showstringspaces=false,
-  numbers=left,
-  numberstyle=\tiny\color{black!45},
-  numbersep=7pt,
-  xleftmargin=1.6em,
-  framexleftmargin=1.3em,
-  aboveskip=0.85em,
-  belowskip=0.7em,
-  tabsize=4,
-  upquote=true
+% Set default figure placement to htbp
+\def\fps@figure{htbp}
+\makeatother
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\usepackage{needspace}
+\clubpenalty=10000
+\widowpenalty=10000
+\pretocmd{\section}{\Needspace{6\baselineskip}}{}{}
+\pretocmd{\subsection}{\Needspace{10\baselineskip}}{}{}
+\usepackage{bookmark}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\urlstyle{same}
+% fallback for those not using the hyperref driver hyperxmp:
+\makeatletter
+\@ifundefined{xmpquote}{\newcommand{\xmpquote}[1]{#1}}{}
+\makeatother
+\hypersetup{
+  pdftitle={JAGR-S: A Succinct Content-Addressed Artifact Store},
+  pdfauthor={Bhuvan Prakash · Independent Researcher},
+  hidelinks,
+  pdfcreator={LaTeX via pandoc}}
+
+\title{JAGR-S: A Succinct Content-Addressed Artifact Store}
+\usepackage{etoolbox}
+\makeatletter
+\providecommand{\subtitle}[1]{% add subtitle to \maketitle
+  \apptocmd{\@title}{\par {\large #1 \par}}{}{}
 }
+\makeatother
+\subtitle{Cost and route analysis of secondary storage in package
+installation}
+\author{Bhuvan Prakash · Independent Researcher}
+\date{13 November 2026 · Jhol Research Series II}
 
-
-\theoremstyle{definition}
-\newtheorem{definition}{Definition}
-\theoremstyle{plain}
-\newtheorem{theorem}{Theorem}
-\newtheorem{proposition}{Proposition}
-
-\algrenewcommand\algorithmicrequire{\textbf{Input:}}
-\algrenewcommand\algorithmicensure{\textbf{Output:}}
-
-% Shared DeepSeek-inspired trilogy style
-\usepackage{jhol-paper}
-\jholHeaders{JAGR-S: Succinct Artifact Store}{Jhol Trilogy / II}
 \begin{document}
-\thispagestyle{fancy}
+\maketitle
 
-\begin{center}
-\seriesbadge{Jhol Research Trilogy / Paper II / Store}\\[0.5em]
-{\LARGE\bfseries JAGR-S: A Succinct Content-Addressed\\[0.18em]
-Artifact Store with Sheaf Spectral Locality\\[0.18em]
-for Package Managers\par}
-\vspace{0.25em}{\rule{0.22\textwidth}{0.6pt}}
-\vspace{0.55em}
-{\large Bhuvan Prakash}\\[0.18em]
-{\itshape Independent Researcher}\\[0.12em]
-{\ttfamily bhuvan@jhol.dev}\\[0.35em]
-{\small September 2026}\\[0.35em]
-{\small\textit{Companion to ``Sheaf Homotopy and Ricci Flow for Package Resolution''~\cite{prakash2026sheaf}.}}
-\end{center}
+\subsection*{Abstract}\label{abstract}
+\addcontentsline{toc}{subsection}{Abstract}
 
-\begin{jholabstract}
-\noindent
-Modern JavaScript package managers spend a large fraction of cold-install time---and nearly all of warm-install time---on storage: tarball placement, integrity verification, unpacking, and projection into \pkg{node_modules}. Existing designs duplicate bytes across compressed archives, unpacked trees, and per-project links, and they index those bytes with formats that force JSON parsing or directory walks on every reuse. Concurrent multi-project installs further contend on coarse locks around shared caches.
+Secondary indexes can accelerate artifact lookup while increasing the
+storage and verification costs of package installation. We investigate
+this tradeoff in Jhol using JAGR-S, an optional memory-mapped mirror,
+and JGrid, a separate materialization store. We model the reuse volume
+needed to recover ingest and storage costs as a function of verified hit
+rate, hit benefit, and miss cost. In a nine-round locked-install
+ablation, the mirror-enabled arms wrote 775,006 bytes of mirror objects
+per run and produced no JGrid artifact. In a separate seeded probe,
+JAGR-S supplied 34 tarballs. An initial JGrid store missed replay
+because three package identities were incomplete. These observations
+establish that the experimental treatment and the storage route actually
+used must be reported separately. They provide no matched evidence for
+enabling the secondary stores by default.
 
-This paper presents the \textbf{Jhol storage stack}, centered on \textbf{JAGR-S} (\pkg{.jagrs}): a succinct mmap-backed store with (i)~SwissProbe-16 SIMD fingerprint probing, (ii)~broadword $O(1)$ Elias--Fano monotone indexing, (iii)~sheaf spectral locality that co-locates co-installed packages by the Fiedler partition of the Cellular Sheaf Laplacian~\cite{prakash2026sheaf}, (iv)~lock-free generation epochs, and (v)~bounded header-only \texttt{msync}. Supporting layers include completeness-marked \pkg{store_unpacked} trees, the experimental JGrid materialization pyramid, and SRI harvest from npm \pkg{_cacache}.
+\section{Introduction}\label{introduction}
 
-Microbenchmarks on Apple Silicon and Linux x86\_64 show probe latency $24.5\,\mathrm{ns}\!\to\!1.8\,\mathrm{ns}$ ($13.6\times$), Elias--Fano select $82\!\to\!3.4\,\mathrm{ns}$ ($24.1\times$), and tarball slice lookup $1.42\,\mu\mathrm{s}\!\to\!0.08\,\mu\mathrm{s}$ ($17.7\times$). Because FastStream~\cite{prakash2026sheaf} already eliminates the triple-write penalty on the default path, JAGR-S ships as an \emph{opt-in} mirror (\pkg{JHOL_JAGRS_MIRROR=1}). End-to-end, SRI harvest recovers 63\% of tarballs on a warm developer machine for a 70-package fixture without trusting foreign caches until the local SRI verifier accepts them.
-\end{jholabstract}
+I added secondary storage to Jhol to answer a practical question: how
+much work can an install skip if the machine already has the bytes? A
+tarball, an extracted package, and a ready project tree skip different
+parts of an install. A secondary store can remove work from one level
+while duplicating bytes or introducing publication work at another. This
+study asks when an optional store pays for itself in verified
+installation. It contributes a model of cumulative cost, a source audit
+of the index operations, and route-level evidence from a locked-install
+ablation and seeded probes.
 
-\begin{takeaway}[Paper~II in one sentence]
-JAGR-S pushes artifact lookup into the nanosecond regime (\metric{1.8\,ns} probes, \metric{17.7$\times$} faster slice reads) via SwissProbe-16, broadword Elias--Fano, and sheaf spectral co-location---but ships \emph{opt-in}, because FastStream already won the default cold path.
-\end{takeaway}
+\section{Background and Related Work}\label{background-and-related-work}
 
-\section{Introduction}
-\label{sec:intro}
+Dolstra's functional deployment model identifies build inputs and
+outputs through reproducible store paths {[}1{]}. Jhol's storage layers
+serve a different output model in which package instances are
+materialized in an existing mutable project. Swiss Tables accelerate
+search using grouped control-byte comparisons {[}2{]}. Elias's work
+establishes the lineage for representing and accessing monotone data
+{[}3{]}. The implementation audit distinguishes these techniques from
+the operations reached by the measured JAGR-S route. File-system
+persistence varies across platforms, so generation visibility and
+persistence of the underlying objects require distinct guarantees
+{[}4{]}.
 
-A package manager has two jobs: \emph{resolve} a satisfying version assignment, and \emph{materialize} the corresponding artifacts. The companion paper~\cite{prakash2026sheaf} reformulates resolution through cellular sheaves, Wilsonian renormalization, and Forman--Ricci curvature, and introduces \textbf{FastStream} zero-copy stream-to-store ingestion that removes the classical triple-write penalty (fetch $\to$ \pkg{.tgz} $\to$ unpack $\to$ link). Once the assignment exists, however, wall-clock time on warm paths is dominated by bytes:
-\begin{equation*}
-\text{Registry}\to\text{tarball}\to\text{SRI verify}\to\text{unpacked tree}\to\pkg{node_modules}.
-\end{equation*}
-Production managers (npm, pnpm, Yarn, Bun) converge on content-addressed caches, but they leave three structural gaps that this paper addresses.
+\section{System and Threat Model}\label{system-and-threat-model}
 
-\begin{enumerate}
-  \item \textbf{Index cost.} Lookups either parse JSON indexes, walk directory trees, or maintain sidecar databases whose latency dwarfs the mmap cost of reading the artifact itself.
-  \item \textbf{Layout locality.} Packages that always co-install (\pkg{react}/\pkg{react-dom}, \pkg{@babel/*}) are scattered by hash, defeating OS readahead during mass materialization.
-  \item \textbf{Cross-tool waste.} A machine that already holds npm \pkg{_cacache} or another project's store still re-downloads the same SRI-identified bytes.
-\end{enumerate}
+Package resolution chooses an identity, source and expected integrity.
+Storage accepts bytes and materializes that choice. Each stage requires
+a distinct check.
 
-\begin{table}[H]
+{\def\LTcaptype{none} % do not increment counter
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.2396}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.2917}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.4688}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Layer
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Reusable artifact
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Evidence needed to accept a hit
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+npm cache harvest & Compressed tarball & Expected SRI verified over
+compressed bytes \\
+Primary Jhol store & Tarball and unpacked tree & Verified admission and
+an eligible complete extraction \\
+JAGR-S mirror & Object and alias records & Validated lookup, expected
+identity and downstream integrity \\
+JGrid & Blocks, package trees or bundle & Complete package identities
+and matching route and layout \\
+Prepared project snapshot & Project-local tree & Bound inputs and
+verified lockfile layout, as in Paper III \\
+\end{longtable}
+}
+
+The primary store is the normal path. JAGR-S duplicates object storage
+only when enabled as a mirror. JGrid's runtime feature, ingest flags and
+replay eligibility are distinct. An enabled flag is an experimental
+treatment, while a verified route hit is an observed outcome. A failed
+optional lookup must fall back or fail explicitly under the mode's
+contract.
+
+The trust boundary starts at the expected artifact identity and
+integrity. A cache may supply missing, corrupt, truncated or mismatched
+data. Archive extraction also has to enforce path confinement
+independently of an otherwise valid digest. The experiment assumes the
+manifest or lockfile and its registry identity are trusted inputs. A
+registry that deliberately publishes malicious content under its correct
+digest is outside the guarantee.
+
+The October audit also identified a transfer boundary relevant to all
+these layers. The staged path downloads compressed bytes to a temporary
+file before extraction. The optional streamed extraction path overlaps
+transfer with projection while still recording compressed bytes. An SRI
+claim refers to the compressed artifact. A disk-write claim must account
+for both the archive and staged tree.
+
+\section{Index Implementation}\label{index-implementation}
+
+The examined implementation uses an mmap manifest with fixed-width
+entries and separate object and alias storage. Capacity and table
+extents are checked at open. The lookup in jagrs.rs scans slots
+individually, comparing the H2 fingerprint, entry kind and key hash. It
+is a scalar fingerprint probe in the audited route. The method named
+get\_tarball\_slice returns a Vec copied from the mapping. The
+Elias--Fano helper has an intra-word rank selection routine, while its
+sequence lookup walks high-bit words. Ordinary writes supply zero
+locality tags. These are distinct from the September manuscript's
+SIMD-group, borrowed slice, constant-time sequence lookup and deployed
+spectral-placement claims.
+
+Open-time validation and collision handling serve different purposes.
+Validating the table's span proves that a slot address lies in the
+mapped table. Object extent, object size, identity and returned bytes
+must still be checked at the boundary where a hit is trusted. A
+truncated or malicious index must not turn a lookup miss into the wrong
+accepted artifact. The hash probe is an index accelerator. Expected
+cryptographic integrity remains the authorization for content reuse.
+
+A generation counter can help readers detect change. Header flushing
+alone does not establish ordering, power-loss durability or
+cross-process exclusion for the object and alias logs. A proof for a
+durable design would have to specify file data persistence, publication
+order, synchronization with concurrent readers and writers, and safe
+reclamation. The unpacked-store marker records completed work. Jhol also
+rejects zero-length package manifests and marker-only trees. A marker or
+one body file cannot certify every descendant byte against arbitrary
+modification.
+
+\section{Cost Model}\label{cost-model}
+
+Consider a fixed horizon and measure all time in the same units. Let
+\(W\) be added ingest, indexing and verification time. Let \(m\) be the
+number of eligible subsequent installs, \(q\) the probability an
+eligible run reaches and verifies a mirror hit, \(s\) the mean time
+saved conditional on that hit, and \(c\) the mean penalty of trying a
+miss. Let \(B\) be incremental bytes retained and \(\lambda\) a
+workload-specific cost per retained byte over the chosen horizon. The
+net expected value in time-equivalent units is
+
+\[m\big(qs-(1-q)c\big)-W-\lambda B.\]
+
+The model assumes stationary per-attempt means over the stated horizon.
+When \(g=qs-(1-q)c\) is positive, payback requires
+\(m>(W+\lambda B)/g\). If \(g\) is zero or negative, additional attempts
+do not repay a positive fixed cost under this policy. For a real
+workload, compute this per cache regime or sum the per-attempt estimates
+across regimes. Keep disk bytes and latency separate when no defensible
+conversion factor exists.
+
+In a matched experiment, define \(H_i=1\) only when the selected route
+actually yields a verified hit. Let \(s_i\) be time saved on hit trials
+and \(c_i\) time lost on miss trials, each measured against an
+equivalent control. With terms outside their relevant trial type set to
+zero, the empirical net gain per attempt is
+
+\[\widehat{g}=\frac{1}{n}\sum_{i=1}^{n}\bigl[H_i s_i-(1-H_i)c_i\bigr].\]
+
+This estimate requires route observations and a matched control. A flag
+alone supplies neither. A safe policy uses a conservative estimate of
+\(g\). Charge bytes that duplicate the primary store and account for
+compaction, eviction, and background I/O. Compare total work as well as
+caller latency so deferral does not hide a regression. In a route with
+\(q=0\) for JGrid, a faster end-to-end sample cannot establish a benefit
+from JGrid. This is directly testable from route traces and differs from
+extrapolating a probe microbenchmark to install latency.
+
+\section{Evaluation Methodology}\label{evaluation-methodology}
+
+The first experiment asks which storage routes execute during a locked
+install. The five-root fixture is held fixed while secondary-store
+settings and cache eligibility vary. Nine interleaved runs per arm
+record elapsed time, realized package counts, import checks and
+persistent bytes. Route traces and artifact creation distinguish a store
+that was enabled from one that was used. The second experiment seeds
+identical artifacts for targeted replay probes. It checks whether the
+requested store supplies usable package bytes or falls back. The single
+seeded probes establish route behavior and do not estimate an effect
+size.
+
+\Needspace{14\baselineskip}
+\section{Results}\label{results}
+
+\subsection{Locked Install Ablation}\label{locked-install-ablation}
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 8\tabcolsep) * \real{0.2268}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 8\tabcolsep) * \real{0.2268}}
+  >{\raggedleft\arraybackslash}p{(\linewidth - 8\tabcolsep) * \real{0.1237}}
+  >{\raggedleft\arraybackslash}p{(\linewidth - 8\tabcolsep) * \real{0.1443}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 8\tabcolsep) * \real{0.2784}}@{}}
+\caption{Nine interleaved locked-install observations per
+arm.}\tabularnewline
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Locked install arm
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Median {[}range{]}, ms
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedleft
+JGrid bytes
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedleft
+Mirror bytes
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Observed scope
+\end{minipage} \\
+\midrule\noalign{}
+\endfirsthead
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Locked install arm
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Median {[}range{]}, ms
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedleft
+JGrid bytes
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedleft
+Mirror bytes
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Observed scope
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Jhol agent defaults & 606.6 {[}518.6, 2333.6{]} & 0 & 0 & Native locked
+route \\
+Jhol forced secondary stores & 594.6 {[}523.9, 987.1{]} & 0 & 775006 &
+Mirror write, no JGrid artifact \\
+Jhol harvest plus mirror & 554.9 {[}501.7, 853.8{]} & 0 & 775006 &
+Mirror write with harvest eligible \\
+Bun isolated tool cache & 562.4 {[}444.0, 757.2{]} & --- & --- &
+Different resolved package count \\
+\end{longtable}
+
+The September fixture used five pinned roots, nine interleaved runs per
+arm, a lockfile, fresh Jhol cache directories and disabled daemon. All
+27 Jhol samples passed the recorded root import checks. The archive
+reports 34 Jhol manifests and 31 for Bun throughout. Home-cache harvest
+remained eligible in relevant Jhol arms. The ranges and object sizes
+were recomputed from the archive. These rows are descriptive. The
+differing closures and route eligibility preclude attributing
+differences to JGrid or claiming a matched cold speedup over Bun. See
+the
+\href{../architecture/experiments/jgrid-jagrs-ablation-2026-09-30.md}{ablation
+protocol and route traces} and
+\href{../architecture/experiments/jgrid-jagrs-ablation-results.json}{raw
+observations}.
+
+\begin{figure}[!htbp]
 \centering
-\caption{The package-\emph{storage} spectrum.}
-\label{tab:spectrum}
-\small
-\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X@{}}
-\toprule
-\textbf{JSON / walk indexes} & \textbf{Hash-only CAS} & \textbf{Succinct + spectral (JAGR-S)} \\
-\midrule
-npm \pkg{store\_index.json}, directory scans &
-Git, Nix, pnpm store, Bazel remote &
-This paper \\
-\addlinespace
-Simple to implement.
-$O(n)$ parse or walk per warm install.
-Poor multi-process scaling. &
-Content addressing by cryptographic hash.
-Deterministic reuse.
-Index still external or ad hoc. &
-mmap + SwissProbe-16 + Elias--Fano:
-nanosecond-scale lookups.
-Sheaf Fiedler co-clustering.
-Lock-free reader epochs. \\
-\bottomrule
-\end{tabularx}
-\end{table}
-
-\noindent\textit{Table~\ref{tab:spectrum}: Existing storage designs trade implementation simplicity against lookup latency and physical layout. JAGR-S occupies the succinct-index region while remaining compatible with Jhol's primary \pkg{store/} + \pkg{store\_unpacked/} path.}
-
-\subsection{Contributions}
-\label{sec:contributions}
-\begin{enumerate}
-  \item \textbf{JAGR-S v3} (\S\ref{sec:jagrs}): a three-file mmap store (\pkg{manifest.jagrs}, \pkg{objects.jagrs}, \pkg{aliases.jagrs}) with 32-byte SwissProbe entries, append-only object logs, and open-time capacity validation that prevents mask wrap and absurd sparse claims.
-  \item \textbf{SwissProbe-16 and broadword Elias--Fano} (\S\ref{sec:swiss}--\S\ref{sec:ef}): SIMD-accelerated H2 fingerprint probing and constant-time \texttt{select} on monotone offset sequences, yielding order-of-magnitude microbenchmark gains.
-  \item \textbf{Sheaf spectral co-clustering} (\S\ref{sec:spectral}): physical layout tags derived from the Fiedler partition of the Cellular Sheaf Laplacian~\cite{prakash2026sheaf}, reducing batch page-cache misses during co-installed materialization.
-  \item \textbf{Completeness-marked unpacked store} (\S\ref{sec:complete}): \pkg{.jhol-extract-complete} prevents partial extracts and dangling store symlinks from poisoning warm installs and nested lockfile materialization.
-  \item \textbf{JGrid materialization pyramid} (\S\ref{sec:jgrid}): L0/L1/L2 clone-ready tiers over the \pkg{JHGR0002} single-file format for sub-millisecond experimental materialization.
-  \item \textbf{SRI harvest} (\S\ref{sec:harvest}): $O(1)$ reuse of npm \pkg{_cacache} via lockfile integrity strings, with double SRI verification before \pkg{store/} admission.
-  \item \textbf{Honest default policy} (\S\ref{sec:eval}): measurement-driven decision to keep JAGR-S and JGrid ingest opt-in so default installs stay lean while preserving research artifacts for high-reuse workloads.
-\end{enumerate}
-
-\paragraph{Paper organization.}
-\S\ref{sec:background} reviews content-addressed storage, mmap, Swiss tables, and Elias--Fano encoding.
-\S\ref{sec:threat} states the threat model and correctness obligations.
-\S\ref{sec:arch} sketches the Jhol storage architecture and FastStream integration.
-\S\ref{sec:jagrs}--\S\ref{sec:harvest} develop each layer.
-\S\ref{sec:eval} reports evaluation and the opt-in deployment decision.
-\S\ref{sec:related} discusses related work.
-\S\ref{sec:conclusion} concludes.
-
-\section{Background}
-\label{sec:background}
-
-\subsection{Content-addressed artifact stores}
-A \emph{content-addressed store} (CAS) names artifacts by cryptographic digests of their bytes rather than by mutable paths. Git~\cite{git}, Nix~\cite{nix}, pnpm's content store~\cite{pnpm}, and npm's \pkg{_cacache}~\cite{cacache} all exploit the property that identical bytes imply identical keys, enabling deduplication and deterministic reuse. Package managers additionally carry \emph{registry identities} (\pkg{name@version}) that must map to tarball bytes and, after inflation, to directory trees $T_{P,v}$.
-
-\subsection{Memory-mapped I/O}
-\texttt{mmap} maps file bytes into the process address space, letting lookups become pointer arithmetic plus bounds checks rather than \texttt{read}/\texttt{pread} syscalls. JAGR-S and JGrid both treat on-disk tables as immutable or append-only regions behind \texttt{Arc<Mmap>}, so hot paths return \texttt{\&[u8]} slices without intermediate buffers. Writers synchronize only dirty header ranges via \texttt{msync}, not whole files.
-
-\subsection{Swiss tables and SIMD probing}
-Swiss-table hash maps (lineage from cuckoo hashing~\cite{cuckoo}) store a compact \emph{control byte} per slot---the H2 fingerprint---so probes compare 8-bit tags before 64-bit keys. Grouped probing (16 slots per cache line) enables SIMD lane comparisons. JAGR-S adapts this pattern to a fixed-capacity mmap table with open addressing.
-
-\subsection{Elias--Fano succinct indexes}
-Elias--Fano~\cite{elias1974} encodes a monotone sequence of $n$ integers in $[0,U)$ using $n\lceil\log_2(U/n)\rceil + 2n$ bits, supporting $O(1)$ \texttt{select} (find the position of the $i$-th one-bit) and near-optimal space. JAGR-S uses Elias--Fano for alias offset streams; v3 replaces linear bit scans with \texttt{broadword\_select64}, a branchless popcount tree on 64-bit words.
-
-\section{Threat model and correctness obligations}
-\label{sec:threat}
-
-We assume a local multi-user or multi-process machine. Adversaries may truncate or corrupt cache files, plant path-traversal entries in tarballs, supply wrong bytes under a guessed \pkg{_cacache} path, or race concurrent writers against readers. Jhol's storage stack must satisfy the obligations below.
-
-\begin{table}[H]
-\centering
-\caption{Correctness obligations and defenses.}
-\label{tab:obligations}
-\small
-\begin{tabular}{@{}p{0.28\textwidth}p{0.34\textwidth}p{0.30\textwidth}@{}}
-\toprule
-\textbf{Obligation} & \textbf{Meaning} & \textbf{Defense in Jhol} \\
-\midrule
-Integrity & $\operatorname{verify}(s,\text{bytes})=\mathsf{true}$ before trust &
-SRI on download, warm \pkg{ci} re-hash, harvest double-check \\
-Completeness & $T_{P,v}$ contains all declared files &
-\pkg{.jhol-extract-complete} marker + repair \\
-Confinement & Extracted paths stay under package root &
-\pkg{validate\_archive\_path}, symlink/hardlink refusal \\
-Index soundness & Lookup offsets lie inside mmap bounds &
-Open-time capacity checks, capsule/JAGR-S bounds tests \\
-Import authenticity & Exported cache blobs match signed manifest &
-\pkg{JHOL\_CACHE\_SIGNING\_KEY} fail-closed import \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\paragraph{Non-goals.}
-We do not defend against a malicious registry that serves bytes matching a wrong but well-formed SRI for an unintended version; version selection is the resolver's job~\cite{prakash2026sheaf}. We also do not encrypt cache contents at rest.
-
-\section{System architecture}
-\label{sec:arch}
-
-Figure~\ref{fig:arch} summarizes how resolution output flows into storage. FastStream~\cite{prakash2026sheaf} streams registry bytes directly into \pkg{store/<hash>.tgz} while simultaneously inflating into \pkg{store\_unpacked/<shard>/<hash>/}, avoiding the classical staging file. JAGR-S mirrors the same bytes into \pkg{v3/objects.jagrs} when \pkg{JHOL\_JAGRS\_MIRROR=1}. JGrid ingest (\pkg{JHOL\_JGRID\_INGEST=1}) builds a \pkg{JHGR0002} file for experimental L0--L2 materialization. SRI harvest consults npm \pkg{_cacache} \emph{before} network fetch.
-
-\begin{figure}[H]
-\centering
-\begin{tikzpicture}[
-  node distance=0.55cm and 0.9cm,
-  box/.style={draw, rounded corners=2pt, align=center, font=\small,
-              minimum width=2.1cm, minimum height=0.75cm},
-  arr/.style={-{Stealth[length=2mm]}, thick}
-]
-\node[box] (res) {Resolver\\\cite{prakash2026sheaf}};
-\node[box, right=of res] (fs) {FastStream\\ingest};
-\node[box, below=of fs] (store) {\pkg{store/}\\tarballs};
-\node[box, left=of store] (unp) {\pkg{store\_unpacked/}\\+ marker};
-\node[box, right=of store] (jag) {JAGR-S\\(opt-in)};
-\node[box, below=of jag] (harv) {SRI harvest\\\pkg{_cacache}};
-\node[box, below=of unp] (nm) {\pkg{node\_modules}};
-\node[box, right=of nm] (jgrid) {JGrid L0--L2\\(opt-in)};
-
-\draw[arr] (res) -- (fs);
-\draw[arr] (fs) -- (store);
-\draw[arr] (fs) -- (unp);
-\draw[arr, dashed] (store) -- (jag);
-\draw[arr, dashed] (harv) -- (store);
-\draw[arr] (unp) -- (nm);
-\draw[arr, dashed] (jgrid) -- (nm);
-\end{tikzpicture}
-\caption{Jhol storage architecture. Solid arrows are default-path hot flows; dashed arrows are opt-in mirrors or harvest shortcuts.}
-\label{fig:arch}
+\includegraphics[width=1\linewidth,height=\textheight,keepaspectratio,alt={Locked-install
+observations and mirror object sizes. Dots show all nine times per arm.
+Vertical ticks show medians. Bun installed 31 manifests and Jhol
+installed 34. All measured Jhol arms recorded zero JGrid
+bytes.}]{paper-figures/storage-locked-ablation.png}
+\caption{Locked-install observations and mirror object sizes. Dots show
+all nine times per arm. Vertical ticks show medians. Bun installed 31
+manifests and Jhol installed 34. All measured Jhol arms recorded zero
+JGrid bytes.}
 \end{figure}
 
-\paragraph{Default vs.\ opt-in.}
-Measurement on a Next.js-scale tree ($\sim$300 packages) showed: (i)~default FastStream + \pkg{store}/\pkg{store\_unpacked} warm installs in 8--17\,ms; (ii)~enabling JAGR-S mirror adds $\sim$128\,MB with parity warm time; (iii)~default JGrid ingest adds $\sim$185\,MB and $\sim$0.9\,s without beating warm relink. The product therefore keeps secondary stores research-available but off by default (\S\ref{sec:eval}).
+\subsection{Seeded Replay and Storage
+Costs}\label{seeded-replay-and-storage-costs}
 
-\section{JAGR-S: format and algorithms}
-\label{sec:jagrs}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.2737}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3789}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3474}}@{}}
+\caption{Follow-up probes and separately recorded storage
+costs.}\tabularnewline
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Seeded or historical experiment
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Observed result
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+What it establishes
+\end{minipage} \\
+\midrule\noalign{}
+\endfirsthead
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Seeded or historical experiment
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Observed result
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+What it establishes
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Seed 34 packages & 4,296,518 B JGrid, 784,657 B mirror objects &
+Physical output for one seeded fixture \\
+Original seeded JGrid replay & Normal fallback, no JGrid hit & Three
+empty name offsets prevented complete lookup \\
+JAGR-S seeded replay & 34 tarballs materialized, three imports pass &
+Mirror can supply bytes on the normal install route \\
+Clean offline JGrid replay & 304 ms profiler time, 34 manifests, five
+imports pass & One observed replay, no matched timing control \\
+Earlier Next.js-scale warm measurements & About 128 MB extra for the
+mirror, 185 MB and 0.9 s for JGrid ingest & Historical storage cost with
+no established warm gain \\
+\end{longtable}
 
-JAGR-S (\textbf{J}hol \textbf{A}rtifact \textbf{G}raph \textbf{R}esolution \textbf{S}tore) replaces JSON \pkg{store\_index.json} and sharded directory walks with three mmap-friendly files under \pkg{<cache>/v3/}:
+The first four rows come from the September follow-up probes. The final
+row is retained as a historical observation from the first edition. It
+lacks per-run provenance in the cited table and should not anchor a
+quantitative deployment threshold. The developer-cache harvest result of
+44/70 is similarly conditioned on local cache contents. The September
+paper reported only 4/300 on the larger fixture. Future trials should
+vary cache density deliberately.
 
-\begin{verbatim}
-~/.jhol-cache/v3/
-  manifest.jagrs   # fixed header + SwissProbe table
-  objects.jagrs    # append-only tarball blob log
-  aliases.jagrs    # name@version -> content hash (+ string table)
-\end{verbatim}
+\subsection{Reuse Boundaries After
+Admission}\label{reuse-boundaries-after-admission}
 
-\subsection{Manifest header layout}
-\label{sec:header}
+A follow-up separated two checks that had been performed by different
+install routes. Prepared replay now shares a checker for package paths,
+names, versions and extra entries. This strengthens the acceptance rule
+for a prepared layout while leaving tarball admission tied to the
+expected compressed-byte digest. The release gate uses a disposable
+cache and compares two offline trees with a third after garbage
+collection. Injected failures verified that the gate rejects an empty
+tree, mismatched trees and a failed install or sweep. This gate test
+supplies no new measurement of JAGR-S or JGrid hit rate, disk cost or
+throughput.
 
-The manifest begins with a packed \texttt{ManifestHeader} (64 bytes in the reference implementation), followed by \texttt{capacity} $\times$ 32-byte \texttt{JagrsEntry} slots.
+\section{Threats to Validity}\label{threats-to-validity}
 
-\begin{table}[H]
-\centering
-\caption{\texttt{ManifestHeader} fields (little-endian, \texttt{repr(C)}).}
-\small
-\begin{tabular}{@{}llr@{}}
-\toprule
-\textbf{Field} & \textbf{Type} & \textbf{Role} \\
-\midrule
-\pkg{magic} & \texttt{[u8;8]} & \pkg{JAGRSV01} \\
-\pkg{version} & \texttt{u32} & format version \\
-\pkg{capacity} & \texttt{u32} & table size, power of two \\
-\pkg{entry\_count} & \texttt{u32} & live entries \\
-\pkg{object\_size} & \texttt{u64} & bytes in \pkg{objects.jagrs} \\
-\pkg{alias\_count} & \texttt{u32} & alias records \\
-\pkg{generation} & \texttt{u64} & writer epoch (also atomic) \\
-\pkg{epoch} & \texttt{u64} & creation timestamp \\
-\pkg{spectral\_clusters} & \texttt{u32} & sheaf cluster count \\
-\pkg{flags} & \texttt{u32} & \texttt{0x1}=SIMD, \texttt{0x2}=lock-free \\
-\bottomrule
-\end{tabular}
-\end{table}
+The compared package managers installed different closures. Home-cache
+harvest also remained eligible in some Jhol arms. These conditions
+prevent a matched inference about cold latency. The seeded probes
+covered one fixture, and the original Next.js-scale observations lack
+the per-run provenance needed for a new effect estimate. The isolated
+1.8 ns and 3.4 ns observations from the initial manuscript require the
+original harness and precise exercised operations before they can
+support an implementation claim. Neither the archived runs nor the
+probes evaluate power-loss persistence.
 
-\subsection{32-byte entry layout}
-\label{sec:entry}
+\section{Conclusion}\label{conclusion}
 
-Each \texttt{JagrsEntry} occupies exactly 32 bytes:
+The first locked run taught me to ask which path ran before asking which
+setting was faster. Enabling JGrid produced no JGrid artifact on that
+path. The seeded probes gave a different answer about what the stores
+could do. Together, these runs make secondary storage a workload
+decision. A deployment decision needs observed verified hits, an
+equivalent primary-store control, and accounting for background work and
+persistent bytes. A follow-up should compare scalar and grouped probes
+across load factors and residency states, then measure the whole-install
+effect under fixed artifact sets and matched layouts.
 
-\begin{table}[H]
-\centering
-\caption{\texttt{JagrsEntry} (32 bytes).}
-\small
-\begin{tabular}{@{}ll@{}}
-\toprule
-\textbf{Field} & \textbf{Width} \\
-\midrule
-\pkg{key\_hash} & 64-bit XXH3 of key \\
-\pkg{offset} / \pkg{size} & 32-bit each, into \pkg{objects}/\pkg{aliases} \\
-\pkg{kind} & 8-bit (\texttt{0}=empty, \texttt{1}=tarball, \texttt{2}=alias) \\
-\pkg{refcount} & 8-bit alias refcount \\
-\pkg{h2\_tag} & 8-bit SwissProbe fingerprint \\
-\pkg{fiedler\_partition} & 8-bit (\texttt{1}/\texttt{2} bisection) \\
-\pkg{sheaf\_cluster} & 16-bit cluster id \\
-\pkg{flags} & 16-bit (delta/chunk hints) \\
-\pkg{checksum} & 64-bit XXH3 of object bytes \\
-\bottomrule
-\end{tabular}
-\end{table}
+\section*{Artifact Availability}\label{artifact-availability}
+\addcontentsline{toc}{section}{Artifact Availability}
 
-Entries are power-of-two aligned in the mmap region immediately after the header. Open validates \texttt{capacity} $\in \{2^k : 1 \le k \le 24\}$ and checks file length $\ge \texttt{sizeof(header)} + \texttt{capacity}\times 32$, rejecting truncated or maliciously sparse manifests before any \texttt{from\_raw\_parts} slicing (\S\ref{sec:soundness}).
+The \href{../../scripts/bench/paper_evidence.py}{evidence script}
+reproduces the medians, ranges and scoped quality checks from the saved
+data. The linked ablation record describes flags, seeded probes and
+known fallback conditions. The \href{../../LICENSE}{repository license}
+governs the software.
 
-\subsection{SwissProbe-16}
-\label{sec:swiss}
-
-Let $k$ be a lookup key and $h_1 = H_{64}(k)$ its 64-bit hash. The H2 control tag is
-\begin{equation}
-h_2 = \bigl((h_1 \gg 56)\;\mathrm{as}\;\mathtt{u8}\bigr)\;|\;\texttt{0x80},
-\label{eq:h2}
-\end{equation}
-forcing the high bit so empty slots (\texttt{0x00}) are distinguishable. Probing starts at index $i_0 = h_1 \bmod C$ for table capacity $C$ and examines up to $\lceil \log_2 C \rceil$ slots. Within each 16-slot \emph{group} aligned to a cache line, SIMD compares all control bytes to $h_2$ before touching full \texttt{key\_hash} fields.
-
-\begin{algorithm}[H]
-\caption{SwissProbe lookup}
-\label{alg:swiss}
-\begin{algorithmic}[1]
-\Require key hash $h_1$, kind $\tau$, table $T[0..C-1]$
-\Ensure entry $e$ or $\bot$
-\State $h_2 \gets ((h_1 \gg 56) \bmod 256) \;|\; \texttt{0x80}$
-\State $i \gets h_1 \bmod C$
-\For{$r = 1$ \textbf{to} $\lceil \log_2 C \rceil$}
-  \If{$T[i].\text{kind} = \texttt{empty}$}
-    \State \Return $\bot$
-  \EndIf
-  \If{$T[i].h_2 = h_2$ \textbf{and} $T[i].\text{kind}=\tau$ \textbf{and} $T[i].\text{key}=h_1$}
-    \State \Return $T[i]$
-  \EndIf
-  \State $i \gets (i+1) \bmod C$
-\EndFor
-\State \Return $\bot$
-\end{algorithmic}
-\end{algorithm}
-
-Measured on 10k successful lookups (Apple Silicon, release build): \textbf{24.5\,ns $\to$ 1.8\,ns} per probe ($13.6\times$). Legacy entries with \texttt{h2\_tag=0} remain compatible: the implementation falls back to full key comparison.
-
-\subsection{Broadword Elias--Fano select}
-\label{sec:ef}
-
-Alias offset streams are monotone and encoded in Elias--Fano form: a \emph{low} bit-packed region and a \emph{high} bitvector where \texttt{select}$(i)$ returns the position of the $(i{+}1)$-th set bit. Version 3 implements \texttt{broadword\_select64} using a fixed-depth popcount tree on 64-bit words---four instructions per word, no data-dependent branches.
-
-\begin{algorithm}[H]
-\caption{\texttt{broadword\_select64}$(w, r)$}
-\label{alg:select}
-\begin{algorithmic}[1]
-\Require 64-bit word $w$, rank $r \ge 1$
-\Ensure bit index of $r$-th one in $w$, or $64$ if $r > \mathrm{popcount}(w)$
-\State $c_{16} \gets \mathrm{popcount}(w \land \texttt{0x0000FFFF0000FFFF})$
-\If{$r \le c_{16}$} \State $w \gets w \land \texttt{0x0000FFFF0000FFFF}$ \Else \State $w \gets w \gg 32$; $r \gets r - c_{16}$ \EndIf
-\State \Comment{repeat at 16-, 8-, 4-, 2-bit levels}
-\State \Return index of remaining one-bit via \texttt{ctz}
-\end{algorithmic}
-\end{algorithm}
-
-Measured: \textbf{82\,ns $\to$ 3.4\,ns} per \texttt{select} ($24.1\times$). Combined with SwissProbe, tarball slice resolution drops from \textbf{1.42\,$\mu\mathrm{s}$ $\to$ 0.08\,$\mu\mathrm{s}$} ($17.7\times$).
-
-\subsection{Sheaf spectral locality}
-\label{sec:spectral}
-
-Let $G=(V,E)$ be the install graph at append time and $L_{\mathcal{F}}=\delta_0^*\delta_0$ the Cellular Sheaf Laplacian from~\cite{prakash2026sheaf}. The \textbf{Fiedler vector} $\mathbf{v}_2$ (eigenvector for the algebraic connectivity $\lambda_2$) induces a bipartition $V=V_1 \sqcup V_2$. When appending to \pkg{objects.jagrs}, JAGR-S tags each object with \texttt{(sheaf\_cluster, fiedler\_partition)} and groups consecutive appends from the same side of the cut. Co-installed packages therefore occupy sequential disk ranges, improving readahead during batch materialization.
-
-\begin{proposition}[Heuristic locality]
-If packages $a$ and $b$ are connected in $G$ and $|v_2(a)-v_2(b)|$ is small, placing their blobs adjacently reduces expected page faults per unit link materialization compared to hash-random placement.
-\end{proposition}
-
-Measured batch page-cache miss rate during 70-package materialization: \textbf{14.2\% $\to$ 1.6\%} ($8.9\times$ fewer misses). Spectral tags are computed from the \emph{current} install graph; online updates as the graph grows remain future work (\S\ref{sec:conclusion}).
-
-\subsection{Lock-free generations and zero-copy slices}
-\label{sec:lockfree}
-
-Writers hold a process-local mutex for append serialization but expose cross-process coherence through an \texttt{AtomicU64} \texttt{generation} mirrored in the mmap header. Each successful \texttt{store()} performs \texttt{generation\_atomic.fetch\_add(1, Release)}; readers load with \texttt{Acquire} before trusting offsets.
-
-\texttt{get\_tarball\_slice} returns \texttt{\&[u8]} into an \texttt{Arc<Mmap>} of \pkg{objects.jagrs}---no \texttt{Vec} allocation on the hot path. \texttt{flush()} calls \texttt{flush\_range(0, sizeof(ManifestHeader))}, synchronizing only the 64-byte header. Measured header sync: \textbf{3.8\,ms $\to$ 0.04\,ms} ($95\times$).
-
-\begin{lstlisting}[caption={Zero-copy slice (conceptual).},label={lst:slice}]
-pub fn get_tarball_slice(&self, key_hash: u64)
-    -> Option<&[u8]>
-{
-    let (entry, _) = self.probe(key_hash, KIND_TARBALL)?;
-    let mmap = self.objects_mmap.read().as_ref()?;
-    let start = entry.offset as usize;
-    let end = start + entry.size as usize;
-    Some(&mmap[start..end])
-}
-\end{lstlisting}
-
-\subsection{Soundness at open time}
-\label{sec:soundness}
-
-\begin{theorem}[Safe indexing]
-If open rejects manifests unless \texttt{capacity} is a power of two in $[1,2^{24}]$ and file length covers the full table, then every \texttt{JagrsEntry} slice and alias record slice is in-bounds for all validated offsets stored while the manifest was consistent.
-\end{theorem}
-
-This closes the class of vulnerabilities where a truncated manifest led to \texttt{from\_raw\_parts} with out-of-range lengths (E93/E144). Corrupt entries fail closed with \texttt{Err} rather than undefined behavior.
-
-\section{Unpacked store completeness}
-\label{sec:complete}
-
-FastStream projects inflated bytes into \pkg{store\_unpacked/<shard>/<hash>/}. A classical failure mode is a \emph{partial} directory---often only \pkg{package.json}, the first tar entry---that subsequent installs treat as complete because \texttt{exists()} returns true. Symlinks into such directories poison warm installs and nested lockfile paths (E145).
-
-\paragraph{Marker rule.}
-After a full extract, write \pkg{.jhol-extract-complete}. Define
-\begin{equation*}
-\mathrm{complete}(D) \iff
-\exists\,\pkg{.jhol-extract-complete}\in D
-\;\lor\;
-\exists\,\text{regular file } f\in D,\; f \notin \{\pkg{package.json}, \text{marker}\}.
-\end{equation*}
-Manifest-only directories, dangling symlinks, and incomplete siblings trigger \texttt{remove\_store\_dir} + re-extract. All materialization sites consult \texttt{store\_extract\_complete} before short-circuiting.
-
-\begin{algorithm}[H]
-\caption{Ensure unpacked store directory}
-\label{alg:complete}
-\begin{algorithmic}[1]
-\Require tarball bytes $B$, target directory $D$
-\Ensure complete tree at $D$
-\If{$\mathrm{complete}(D)$} \State \Return
-\EndIf
-\State $\mathrm{remove\_store\_dir}(D)$
-\State $\mathrm{extract\_tar}(B, D)$
-\State write marker \pkg{.jhol-extract-complete} in $D$
-\end{algorithmic}
-\end{algorithm}
-
-This invariant is independent of JAGR-S: the default \pkg{store\_unpacked/} path relies on it for correctness; JAGR-S mirrors are irrelevant if unpacked siblings are wrong.
-
-\section{JGrid materialization pyramid}
-\label{sec:jgrid}
-
-\textbf{JGrid} is a single-file \pkg{.jgrid} format (magic \pkg{JHGR0002}) implementing a three-tier materialization pyramid. Lookups use mmap + a Swiss table over SHA-256 block hashes ($\sim$2--6\,ns per hit in microbench).
-
-\begin{table}[H]
-\centering
-\caption{JGrid tiers and mechanisms.}
-\label{tab:jgrid}
-\small
-\begin{tabular}{@{}lllp{4.2cm}@{}}
-\toprule
-\textbf{Tier} & \textbf{Target} & \textbf{Latency class} & \textbf{Mechanism} \\
-\midrule
-L0 & Whole \pkg{node\_modules} & $\le$200\,$\mu$s & One \texttt{clonefile}/reflink of pre-built bundle \\
-L1 & Per-package tree & $\le$50\,$\mu$s & Clone-ready directory per manifest \\
-L2 & Content blocks & $\le$500\,$\mu$s & Swiss SHA-256$\to$(offset,size) in \pkg{JHGR0002} \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\paragraph{On-disk regions.}
-The 256-byte \texttt{GridHeader} records offsets for control words, hash slots, block data, manifests, string table, and optional tree index (L1). Blocks are 4096-byte aligned. Materialization tries L0 $\to$ L1 $\to$ L2 and falls back to the default store path on miss.
-
-\paragraph{Opt-in ingest.}
-Ingest (\pkg{JHOL\_JGRID\_INGEST=1}) walks an installed tree post-install. On a Next.js-scale project, default ingest added $\sim$185\,MB and $\sim$0.9\,s without beating the existing warm relink path ($\sim$30\,ms with daemon attach). L0 bundle creation on ingest---so the fastest tier can win end-to-end---remains open work.
-
-\section{SRI harvest: local-origin bytes}
-\label{sec:harvest}
-
-npm's \pkg{_cacache} addresses content by the same SRI string lockfiles already carry. Given $s=\texttt{sha512-}\langle\text{base64}\rangle$, decode to hex digest $d$ and construct the path in $O(1)$:
-\begin{equation}
-\mathrm{path}(s) = \texttt{content-v2/sha512/}d_{0:2}\texttt{/}d_{2:4}\texttt{/}d_{4:}.
-\label{eq:cacache}
-\end{equation}
-
-No directory scan or secondary index is required.
-
-\begin{algorithm}[H]
-\caption{SRI harvest}
-\label{alg:harvest}
-\begin{algorithmic}[1]
-\Require integrity string $s$, cache roots $R$
-\Ensure verified bytes $B$ or $\bot$
-\If{harvest disabled} \State \Return $\bot$ \EndIf
-\For{each root $r \in R$}
-  \State $p \gets \mathrm{path}(s)$ relative to $r$
-  \If{not readable($p$)} \textbf{continue} \EndIf
-  \State $B \gets \mathrm{read}(p)$
-  \If{$\mathrm{verify\_sri}(B, s)$} \State \Return $B$ \EndIf
-\EndFor
-\State \Return $\bot$
-\end{algorithmic}
-\end{algorithm}
-
-Harvest integrates at the single tarball choke point \texttt{download\_tarball\_to\_store\_hash\_only}: harvested bytes still pass through the normal SRI pipeline before \pkg{store/} admission---a foreign cache can only be \emph{ignored}, never trusted blindly. Disable with \pkg{JHOL\_NO\_HARVEST=1}.
-
-On a warm developer machine, a 70-package fixture harvested \textbf{44/70 (63\%)} of tarballs (median cold 1.88\,s $\to$ 1.76\,s). Next.js-scale trees with freshly published versions harvested fewer entries (4/300) because npm's cache lacked those releases---honest measurement, not a implementation defect.
-
-\section{Integration with FastStream}
-\label{sec:faststream}
-
-The companion sheaf paper~\cite{prakash2026sheaf} introduces \textbf{FastStream}: HTTP/2-multiplexed download directly into the content store while selective extraction runs on the byte stream, eliminating the intermediate ``write \pkg{.tgz}, read \pkg{.tgz}, unpack'' cycle. JAGR-S is \emph{downstream} of FastStream: it indexes bytes FastStream (or harvest) already verified.
-
-\begin{itemize}
-  \item \textbf{Default path:} FastStream $\to$ \pkg{store/<hash>.tgz} + \pkg{store\_unpacked/} + completeness marker. Lookups use an in-process store index with SRI sidecars (\pkg{.tgz.sri}).
-  \item \textbf{Mirror path:} When \pkg{JHOL\_JAGRS\_MIRROR=1}, an additional append to \pkg{v3/objects.jagrs} and SwissProbe insert occur. \texttt{soul\_path} falls back from JAGR-S slices to \pkg{store/} tarballs if the mirror is absent.
-  \item \textbf{Warm reuse:} Global Resolution Memory~\cite{prakash2026grm} and capsule fast paths replay lockfile layouts without re-resolution; storage correctness reduces to index lookup + completeness checks.
-\end{itemize}
-
-Storage does not re-derive version assignments; it assumes the resolver and law layer~\cite{prakash2026sheaf} already produced a verified assignment $\sigma$.
-
-\section{Evaluation}
-\label{sec:eval}
-
-All microbenchmarks use release builds on Apple Silicon and Linux x86\_64 (10 cores), medians of $\ge 5$ runs unless noted. End-to-end numbers use fresh \pkg{JHOL\_CACHE\_DIR} per cold arm and assert non-zero tarball downloads.
-
-\subsection{Microbenchmarks}
-\label{sec:micro}
-
-\begin{table}[H]
-\centering
-\caption{JAGR-S microbenchmarks (v1/v2 $\to$ v3).}
-\label{tab:micro}
-\small
-\begin{tabular}{@{}lrrr@{}}
-\toprule
-\tabheadrow \textbf{Metric} & \textbf{Before} & \textbf{After} & \textbf{Speedup} \\
-\midrule
-Hash probe & 24.5\,ns & \best{1.8\,ns} & \best{$13.6\times$} \\
-Elias--Fano select & 82.0\,ns & \best{3.4\,ns} & \best{$24.1\times$} \\
-Tarball slice lookup & 1.42\,$\mu$s & \best{0.08\,$\mu$s} & \best{$17.7\times$} \\
-Page-cache miss (batch) & 14.2\% & \best{1.6\%} & \best{$8.9\times$ fewer} \\
-Header \texttt{msync} & 3.8\,ms & \best{0.04\,ms} & \best{$95\times$} \\
-Entry size & 64\,B & \best{32\,B} & \best{$2\times$ denser} \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Platform: 10k lookups / selects; batch materialization of 70 packages for miss rate.
-
-\subsection{End-to-end storage policy}
-\label{sec:e2e}
-
-\begin{table}[H]
-\centering
-\caption{Default vs.\ opt-in storage (Next.js-scale fixture, September 2026).}
-\label{tab:policy}
-\small
-\begin{tabular}{@{}lrrl@{}}
-\toprule
-\tabheadrow \textbf{Configuration} & \textbf{Cache size} & \textbf{Warm install} & \textbf{Notes} \\
-\midrule
-\best{Default (FastStream + store)} & \best{$\sim$400\,MB} & \best{8--17\,ms} & Production default \\
-+ JAGR-S mirror & +$\sim$128\,MB & parity & \pkg{JHOL\_JAGRS\_MIRROR=1} \\
-+ JGrid ingest & +$\sim$185\,MB & parity / slight loss & \pkg{JHOL\_JGRID\_INGEST=1} \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Full test suites (402 core + 26 CLI integration tests) remain green under all configurations. Correctness suites include nested npm-lockfile materialization (E145) and strict \pkg{ci} integrity replay.
-
-\subsection{Harvest evaluation}
-\label{sec:harvest-eval}
-
-\begin{table}[H]
-\centering
-\caption{SRI harvest results.}
-\label{tab:harvest}
-\small
-\begin{tabular}{@{}lrrl@{}}
-\toprule
-\tabheadrow \textbf{Fixture} & \textbf{Harvested} & \textbf{Cold $\Delta$} & \textbf{Comment} \\
-\midrule
-20-dep / $\sim$70 pkgs & \best{44/70 (63\%)} & \best{$-120$\,ms median} & populated npm cache \\
-Next.js ($\sim$300 pkgs) & 4/300 & $-4.3$\,s when hits exist & new releases absent locally \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Harvest is proportional to what other tools already cached; it makes ``cold'' mean ``as cold as the machine actually is.''
-
-\begin{insight}[Systems lesson]
-The win is proportional to what \emph{other} tools already cached---not a universal $10\times$. Harvest reframes ``cold'' as ``as cold as the machine actually is,'' without trusting foreign bytes until the local SRI verifier accepts them.
-\end{insight}
-
-\subsection{Ablation: opt-in decision}
-\label{sec:ablation}
-
-We ablated three secondary-store knobs on the same hardware:
+\section*{References}\label{references}
+\addcontentsline{toc}{section}{References}
 
 \begin{enumerate}
-  \item \textbf{JAGR-S mirror on:} $+128$\,MB disk, warm time statistically indistinguishable from default; no user-visible win on the measured warm path.
-  \item \textbf{JGrid default ingest on:} $+185$\,MB, $+0.9$\,s install tail on first ingest, warm parity at best; L0 bundles not created.
-  \item \textbf{Both off (shipped default):} lean cache, full correctness, FastStream-only ingestion.
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  E. Dolstra. \emph{The Purely Functional Software Deployment Model}.
+  PhD thesis, Utrecht University, 2006.
+  \href{https://nixos.org/~eelco/pubs/phd-thesis.pdf}{Thesis}.
+\item
+  Abseil. ``Swiss Tables Design Notes.''
+  \href{https://abseil.io/about/design/swisstables}{Technical
+  documentation}.
+\item
+  P. Elias. ``Efficient Storage and Retrieval by Content and Address of
+  Static Files.'' \emph{Journal of the ACM}, 21(2), 246--260, 1974.
+  \href{https://doi.org/10.1145/321812.321820}{DOI}.
+\item
+  T. S. Pillai et al.~``All File Systems Are Not Created Equal: On the
+  Complexity of Crafting Crash-Consistent Applications.'' \emph{USENIX
+  Symposium on Operating Systems Design and Implementation}, 2014.
+  \href{https://www.usenix.org/conference/osdi14/technical-sessions/presentation/pillai}{Paper}.
 \end{enumerate}
 
-\textbf{Decision.} Ship JAGR-S and JGrid as opt-in research artifacts. The algorithms stand alone; the product policy avoids taxing every install for mirror bytes that the primary store already holds.
 
-\section{Related work}
-\label{sec:related}
+\section*{Post-publication corrections (measured)}
 
-\paragraph{Content-addressed package stores.}
-pnpm~\cite{pnpm} uses a content store with hardlinks into per-project \pkg{node\_modules}; Nix~\cite{nix} builds purely functional trees from CAS paths; Bun and npm maintain tarball caches with JSON or SQLite indexes. JAGR-S specializes the \emph{index structure} (SwissProbe + Elias--Fano) and \emph{physical layout} (sheaf spectral tags) for JavaScript-scale graphs with frequent warm reuse.
+\textbf{The tables describe a binary that no longer exists.} The cache layer changed after these
+measurements: a single freshness policy now governs both the in-memory and the on-disk packument
+caches (default 60\,s), and resolution reads the authoritative full packument rather than the
+abbreviated one. Every microbenchmark here must be re-run against the current binary before it is
+quoted.
 
-\paragraph{Succinct data structures.}
-Elias--Fano~\cite{elias1974} and broadword techniques are classical in information retrieval; Swiss-table probing inherits from cuckoo hashing~\cite{cuckoo}. To our knowledge, combining sheaf Laplacian Fiedler partitions with append placement in a package-manager artifact store is new.
-
-\paragraph{Cross-tool cache reuse.}
-Yarn Plug'n'Play and pnpm reduce duplication \emph{within} one tool. SRI harvest reuses \emph{another} tool's cache by shared cryptographic identity (\pkg{sha512-} in lockfiles), with double verification.
-
-\paragraph{Companion papers.}
-Topological resolution, FastStream ingestion, and sheaf invariants appear in~\cite{prakash2026sheaf}. Global Resolution Memory and Instant Lock warm replay appear in~\cite{prakash2026grm}. This paper completes the \emph{store} layer of Jhol's decide/store/reuse agenda.
-
-\begin{caveat}[Why JAGR-S is opt-in]
-A second on-disk mirror that adds $\sim$128\,MB without beating warm relink is a tax, not a feature. Measurement---not aesthetics---decides the default.
-\end{caveat}
-
-\section{Conclusion}
-\label{sec:conclusion}
-
-We presented Jhol's storage stack centered on \textbf{JAGR-S v3}: a succinct, lock-free, spectrally laid-out artifact store; completeness-marked unpacked trees; an experimental JGrid pyramid; and SRI harvest. Microbenchmarks show order-of-magnitude gains on probe, select, and slice resolution; systems measurement shows default FastStream + \pkg{store}/\pkg{store\_unpacked} already wins warm installs, so secondary stores remain opt-in.
-
-\subsection{Limitations and future work}
+\textbf{Storage failure modes found in production use.}
 \begin{itemize}
-  \item \textbf{Online spectral layout:} co-clustering tags are computed from the install graph at append time; dynamic graphs need incremental Fiedler updates.
-  \item \textbf{Byte unification:} naive deduplication of \pkg{store/} tarballs vs.\ \pkg{store\_unpacked/} saves only 0.47\,MB on a Next.js tree (E16); compressed-store unification remains open.
-  \item \textbf{JGrid L0 bundles:} ingest should emit L0 clone-ready bundles so the fastest tier can beat warm relink end-to-end.
-  \item \textbf{HTTP/2 default tarballs:} cold install latency is connection-bound; Jhol's reqwest HTTP/2 path reduces tail latency on multi-tarball installs (companion measurement series).
+\item Publishing an unpacked entry failed with \code{ENOTDIR} when a shard path was a file
+  (\code{SSDP publish error: Not a directory}), after runs that exhausted the disk.
+\item Store entries are written read-only; recursive cleanup of a corrupt cache therefore fails
+  with \code{EACCES} unless permissions are fixed first. A cache that cannot be reclaimed is a
+  support incident.
+\item A single-version snapshot served as registry metadata is unsound (see the companion paper's
+  retraction): the store may hold bytes, never facts about published versions.
 \end{itemize}
-
-\subsection{Software availability}
-Jhol is open source. JAGR-S: \pkg{crates/jhol-core/src/jagrs.rs}; harvest: \pkg{harvest.rs}; JGrid: \pkg{crates/jhol-core/src/jgrid/}. Enable mirrors with \pkg{JHOL\_JAGRS\_MIRROR=1} and \pkg{JHOL\_JGRID\_INGEST=1}. Reproduce microbenchmarks via \pkg{cargo test -p jhol-core jagrs::} and the project's benchmark harness.
-
-\begin{thebibliography}{99}
-
-\bibitem{prakash2026sheaf}
-B.~Prakash.
-\newblock Sheaf Homotopy and Ricci Flow for Package Resolution.
-\newblock Technical Report, Jhol Project, 2026.
-
-\bibitem{prakash2026grm}
-B.~Prakash.
-\newblock Global Resolution Memory and Instant Lock.
-\newblock Technical Report, Jhol Project, 2026.
-
-\bibitem{elias1974}
-P.~Elias.
-\newblock Efficient storage and retrieval by content and address of static files.
-\newblock \textit{Journal of the ACM}, 21(2):246--260, 1974.
-
-\bibitem{cuckoo}
-R.~Pagh and F.~F.~Rodler.
-\newblock Cuckoo hashing.
-\newblock \textit{Journal of Algorithms}, 51(2):122--144, 2004.
-
-\bibitem{pnpm}
-Z.~Kochanski.
-\newblock pnpm: Fast, disk-space-efficient package manager.
-\newblock \url{https://pnpm.io}, 2024.
-
-\bibitem{cacache}
-npm Inc.
-\newblock cacache: content-addressable cache for npm.
-\newblock \url{https://github.com/npm/cacache}, 2024.
-
-\bibitem{nix}
-E.~Dolstra.
-\newblock The Purely Functional Software Deployment Model.
-\newblock PhD thesis, Utrecht University, 2006.
-
-\bibitem{git}
-L.~Torvalds and J.~Hamano.
-\newblock Git: fast, scalable, distributed revision control system.
-\newblock \url{https://git-scm.com}, 2005.
-
-\end{thebibliography}
 
 \end{document}
