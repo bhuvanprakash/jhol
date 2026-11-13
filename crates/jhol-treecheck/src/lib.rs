@@ -21,7 +21,7 @@
 //! the stronger, opt-in form.)
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Upper bound on directories inspected before we admit we do not know.
 const MAX_INSPECT: usize = 40_000;
@@ -38,8 +38,12 @@ pub enum TreeState {
     Wrong { path: String, want: String, got: String },
     /// A package is installed that the lockfile does not authorise.
     Extraneous { path: String },
-    /// No readable lockfile, or the tree is too large to inspect cheaply.
+    /// No lockfile, or the tree is too large to inspect cheaply.
     Unverified { reason: String },
+    /// The lockfile exists but cannot be read. Not "unknown" — corrupt, and a failure: a
+    /// verifier that answers "unverified" to a truncated authority is lying about the one thing
+    /// it exists for.
+    Corrupt { path: String, detail: String },
 }
 
 impl TreeState {
@@ -58,6 +62,9 @@ impl TreeState {
                 format!("{} is {} but the lockfile pins {}", path, got, want)
             }
             TreeState::Extraneous { path } => format!("{} is not in the lockfile", path),
+            TreeState::Corrupt { path, detail } => {
+                format!("{path} is corrupt: {detail}")
+            }
             TreeState::Unverified { reason } => format!("tree not verified: {}", reason),
         }
     }
@@ -69,228 +76,242 @@ impl TreeState {
     }
 }
 
-/// Does a lockfile entry's platform restriction apply to this machine?
-///
-/// npm records `os`/`cpu`/`libc` lists on optional platform-specific packages
-/// (esbuild publishes one per target: `@esbuild/aix-ppc64`, `@esbuild/darwin-arm64`,
-/// …). Exactly one of them installs here; the rest are *legitimately absent*, and a
-/// verifier that demands them reports a missing package on a perfectly good tree.
-/// Found on `vite`, which ships 21 of them.
-///
-/// Semantics follow npm: a plain list is an allow-list (any match passes), a
-/// leading `!` makes it a deny-list (no match may appear).
+/// Does this lockfile entry apply to the configured install target?
 pub fn entry_platform_applies(entry: &serde_json::Value) -> bool {
-    fn list(entry: &serde_json::Value, key: &str) -> Vec<String> {
-        match entry.get(key) {
-            Some(serde_json::Value::Array(a)) => a
-                .iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect(),
-            Some(serde_json::Value::String(s)) => vec![s.clone()],
-            _ => Vec::new(),
-        }
-    }
-
-    // Current machine in npm's vocabulary.
-    let here: &[&str] = &match std::env::consts::OS {
-        "macos" => &["darwin"][..],
-        "windows" => &["win32"][..],
-        other => &[other][..], // linux is "linux" in npm too
-    };
-    let arch: &[&str] = &match std::env::consts::ARCH {
-        "x86_64" => &["x64"][..],
-        "aarch64" => &["arm64"][..],
-        "x86" => &["ia32"][..],
-        other => &[other][..],
-    };
-
-    let mut check = |values: Vec<String>, candidates: &[&str]| -> bool {
-        if values.is_empty() {
-            return true;
-        }
-        let (negated, positive): (Vec<String>, Vec<String>) =
-            values.into_iter().partition(|v| v.starts_with('!'));
-        if !negated.is_empty() {
-            // A deny-list: nothing listed may be present.
-            return !negated
-                .iter()
-                .map(|n| n.trim_start_matches('!'))
-                .any(|n| candidates.iter().any(|c| c.eq_ignore_ascii_case(n)));
-        }
-        positive
+    fn target(variables: &[&str], default: Option<&str>) -> Option<String> {
+        variables
             .iter()
-            .any(|p| candidates.iter().any(|c| c.eq_ignore_ascii_case(p)))
-    };
+            .filter_map(|name| std::env::var(name).ok())
+            .find(|value| !value.trim().is_empty())
+            .map(|value| value.trim().to_owned())
+            .or_else(|| default.map(str::to_owned))
+    }
 
-    if !check(list(entry, "os"), here) {
-        return false;
-    }
-    if !check(list(entry, "cpu"), arch) {
-        return false;
-    }
-    // `libc` only distinguishes Linux distributions; elsewhere it never applies.
-    let libc = list(entry, "libc");
-    if !libc.is_empty() {
-        let current: &[&str] = if cfg!(target_env = "musl") {
-            &["musl"]
-        } else if cfg!(target_os = "linux") {
-            &["glibc"]
-        } else {
-            &[]
-        };
-        if !check(libc, current) {
-            return false;
-        }
-    }
-    true
-}
-
-/// The lockfile's view: tree path -> locked version.
-///
-/// Keys are `package-lock.json` `packages` keys (`node_modules/a`,
-/// `node_modules/a/node_modules/b`). The root entry (`""`) carries no version
-/// and is skipped.
-/// Install locations that the lockfile records as **links** (`link:`, `file:`,
-/// workspace). They carry no registry version, so they were skipped entirely — which
-/// made a link-only project verify as `Match` with `node_modules` deleted, and `install`
-/// then answer "Up to date (0 packages)" and create nothing.
-fn locked_links(project_dir: &Path) -> Vec<String> {
-    let Some(path) = ["package-lock.json", "npm-shrinkwrap.json", "jhol-lock.json"]
-        .iter()
-        .map(|n| project_dir.join(n))
-        .find(|p| p.exists())
-    else {
-        return Vec::new();
-    };
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Vec::new();
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return Vec::new();
-    };
-    let mut out: Vec<String> = v
-        .get("packages")
-        .and_then(|p| p.as_object())
-        .map(|packages| {
-            packages
+    fn allows(selector: Option<&serde_json::Value>, target: &str) -> bool {
+        let values: Vec<&str> = match selector {
+            Some(serde_json::Value::Array(values)) => values
                 .iter()
-                .filter(|(_, entry)| entry.get("link").and_then(|x| x.as_bool()) == Some(true))
-                .map(|(key, _)| key.clone())
-                .filter(|key| key.contains("node_modules/"))
-                .collect()
-        })
-        .unwrap_or_default();
-    out.sort();
-    out
+                .filter_map(serde_json::Value::as_str)
+                .collect(),
+            Some(serde_json::Value::String(value)) => vec![value],
+            _ => return true,
+        };
+        let mut positive = false;
+        let mut matched = false;
+        for value in values {
+            if let Some(excluded) = value.strip_prefix('!') {
+                if excluded.eq_ignore_ascii_case(target) {
+                    return false;
+                }
+            } else {
+                positive = true;
+                matched |= value.eq_ignore_ascii_case(target) || value == "any";
+            }
+        }
+        !positive || matched
+    }
+
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        "windows" => "win32",
+        other => other,
+    };
+    let cpu = match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        "x86" => "ia32",
+        other => other,
+    };
+    let libc = if cfg!(target_env = "musl") {
+        Some("musl")
+    } else if cfg!(target_os = "linux") {
+        Some("glibc")
+    } else {
+        None
+    };
+    [
+        (
+            "os",
+            target(
+                &["JHOL_OS", "npm_config_os", "npm_config_platform"],
+                Some(os),
+            ),
+        ),
+        (
+            "cpu",
+            target(
+                &["JHOL_CPU", "npm_config_cpu", "npm_config_arch"],
+                Some(cpu),
+            ),
+        ),
+        ("libc", target(&["JHOL_LIBC", "npm_config_libc"], libc)),
+    ]
+    .iter()
+    .all(|(field, target)| {
+        target
+            .as_deref()
+            .is_none_or(|target| allows(entry.get(field), target))
+    })
 }
 
-fn locked_paths(project_dir: &Path) -> Option<HashMap<String, String>> {
-    let path = ["package-lock.json", "npm-shrinkwrap.json", "jhol-lock.json"]
-        .iter()
-        .map(|n| project_dir.join(n))
-        .find(|p| p.exists())?;
-    let text = std::fs::read_to_string(&path).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let packages = v.get("packages")?.as_object()?;
-    let mut out = HashMap::with_capacity(packages.len());
+enum LockedPackage<'a> {
+    Registry { name: &'a str, version: &'a str },
+    Link,
+}
+
+type Packages = serde_json::Map<String, serde_json::Value>;
+
+/// Why a lockfile could not be read: it is absent, or it exists and is not usable.
+///
+/// The distinction is the whole point. A missing lockfile means "nothing to verify against"; a
+/// lockfile that **exists but does not parse** means the authority is corrupt, and a verifier that
+/// answers "unverified, exit 0" to that is lying about the only thing it is for. Measured: a
+/// truncated `package-lock.json` was accepted by `jhol verify` with exit 0.
+fn read_lockfile(project_dir: &Path) -> Result<Option<Packages>, (String, String)> {
+    for name in ["npm-shrinkwrap.json", "package-lock.json", "jhol-lock.json"] {
+        let path = project_dir.join(name);
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err((name.to_string(), format!("cannot read: {err}"))),
+        };
+        let mut lock: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|e| (name.to_string(), format!("not valid JSON: {e}")))?;
+        let packages = lock
+            .get_mut("packages")
+            .ok_or_else(|| (name.to_string(), "no `packages` object".to_string()))?
+            .take();
+        let serde_json::Value::Object(packages) = packages else {
+            return Err((name.to_string(), "`packages` is not an object".to_string()));
+        };
+        return Ok(Some(packages));
+    }
+    Ok(None)
+}
+
+/// Validate the complete lock path and return its final package name.
+fn installed_name(mut key: &str) -> Option<&str> {
+    fn valid(segment: &str) -> bool {
+        !segment.is_empty() && !segment.starts_with('.') && !segment.contains(['\\', ':'])
+    }
+
+    loop {
+        key = key.strip_prefix("node_modules/")?;
+        let first = key.split('/').next()?;
+        if !valid(first) {
+            return None;
+        }
+        let mut length = first.len();
+        if first.starts_with('@') {
+            let second = key.get(length + 1..)?.split('/').next()?;
+            if first.len() == 1 || !valid(second) || second.starts_with('@') {
+                return None;
+            }
+            length += second.len() + 1;
+        }
+        if length == key.len() {
+            return Some(key);
+        }
+        key = key.get(length + 1..)?;
+    }
+}
+
+fn locked_paths(packages: &Packages, detached: bool) -> Option<HashMap<&str, LockedPackage<'_>>> {
+    let mut locked = HashMap::with_capacity(packages.len());
     for (key, entry) in packages {
         if key.is_empty() {
             continue;
         }
-        let Some(version) = entry.get("version").and_then(|x| x.as_str()) else {
-            // A key without a version is a link/workspace entry, not an
-            // installed package.
-            continue;
-        };
-        if entry.get("link").and_then(|x| x.as_bool()) == Some(true) {
-            continue;
+        if !detached && !key.starts_with("node_modules/") && !key.contains("/node_modules/") {
+            continue; // Workspace source record, outside the live tree.
         }
-        // Only real install locations are comparable to disk.
-        if !key.contains("node_modules/") {
-            continue;
-        }
-        // A package for another OS/CPU/libc cannot be on this disk. Demanding it
-        // reported `@esbuild/aix-ppc64` missing on darwin/arm64 — a false alarm on
-        // a correct tree (21 such packages in `vite` alone).
-        if !entry_platform_applies(entry) {
-            continue;
-        }
-        out.insert(key.clone(), version.to_string());
-    }
-    Some(out)
-}
-
-/// Version recorded in an installed package.json, without parsing the whole
-/// document into a struct (these are small, but there are many).
-fn disk_version(package_json: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(package_json).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-    v.get("version")?.as_str().map(|s| s.to_string())
-}
-
-/// Every install location under `node_modules`, as lockfile-style paths.
-///
-/// The queue holds *node_modules directories*, not package directories: a
-/// package's own `lib/` is not an install location, only its nested
-/// `node_modules` is. Getting that wrong reports `node_modules/a/lib` as an
-/// unauthorised package and prunes real files.
-fn installed_paths(project_dir: &Path) -> Option<Vec<String>> {
-    let root = project_dir.join("node_modules");
-    if !root.is_dir() {
-        return Some(Vec::new());
-    }
-    let mut out = Vec::new();
-    let mut queue: Vec<(PathBuf, String)> = vec![(root, "node_modules".to_string())];
-    while let Some((nm_dir, prefix)) = queue.pop() {
-        let entries = match std::fs::read_dir(&nm_dir) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') || name == ".bin" || name == ".cache" {
+        let name = installed_name(key)?;
+        let package = if entry.get("link").and_then(|value| value.as_bool()) == Some(true) {
+            if detached {
+                return None; // Links can depend on their original location.
+            }
+            LockedPackage::Link
+        } else {
+            let version = entry.get("version")?.as_str()?;
+            let name = match entry.get("name") {
+                Some(value) => value.as_str()?,
+                None => name,
+            };
+            if name.is_empty() || version.is_empty() {
+                return None;
+            }
+            if entry.get("optional").and_then(|value| value.as_bool()) == Some(true)
+                && !entry_platform_applies(entry)
+            {
                 continue;
             }
-            let path = entry.path();
-            if name.starts_with('@') {
-                // Scoped: the child is the package, not the scope directory.
-                if let Ok(children) = std::fs::read_dir(&path) {
-                    let mut kids: Vec<_> = children.flatten().collect();
-                    kids.sort_by_key(|c| c.file_name());
-                    for child in kids {
-                        let cname = child.file_name().to_string_lossy().to_string();
-                        if cname.starts_with('.') || !child.path().is_dir() {
-                            continue;
-                        }
-                        let cpath = child.path();
-                        let rel = format!("{}/{}/{}", prefix, name, cname);
-                        out.push(rel.clone());
-                        if out.len() > MAX_INSPECT {
-                            return None;
-                        }
-                        let nested = cpath.join("node_modules");
-                        if nested.is_dir() {
-                            queue.push((nested, format!("{}/node_modules", rel)));
-                        }
-                    }
+            LockedPackage::Registry { name, version }
+        };
+        locked.insert(key.as_str(), package);
+    }
+    Some(locked)
+}
+
+/// Walk package locations, scopes and nested node_modules. A failed directory
+/// read cannot establish absence. Never descend through a package symlink.
+fn installed_paths(root: &Path, detached: bool) -> std::io::Result<Vec<String>> {
+    use std::io::{Error, ErrorKind};
+
+    let mut installed = Vec::new();
+    let mut inspected = 0;
+    let mut queue = vec![(root.to_path_buf(), "node_modules".to_owned(), false)];
+    while let Some((directory, prefix, scoped)) = queue.pop() {
+        let metadata = match std::fs::symlink_metadata(&directory) {
+            Ok(metadata) => metadata,
+            Err(err) if !scoped && err.kind() == ErrorKind::NotFound => continue,
+            Err(err) => return Err(err),
+        };
+        if !metadata.is_dir() {
+            return Err(Error::other(format!(
+                "{} is not a directory",
+                directory.display()
+            )));
+        }
+        for entry in std::fs::read_dir(&directory)? {
+            inspected += 1;
+            if inspected > MAX_INSPECT {
+                return Err(Error::other(format!(
+                    "tree larger than {MAX_INSPECT} entries"
+                )));
+            }
+            let entry = entry?;
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| Error::other("node_modules contains a non-Unicode entry"))?;
+            if name.starts_with('.') {
+                continue;
+            }
+            let kind = entry.file_type()?;
+            let relative = format!("{prefix}/{name}");
+            if !scoped && name.starts_with('@') {
+                if kind.is_dir() || kind.is_symlink() {
+                    queue.push((entry.path(), relative, true));
                 }
                 continue;
             }
-            if !path.is_dir() {
+            if !kind.is_dir() && !kind.is_symlink() {
                 continue;
             }
-            let rel = format!("{}/{}", prefix, name);
-            out.push(rel.clone());
-            if out.len() > MAX_INSPECT {
-                return None;
+            if kind.is_symlink() && detached {
+                return Err(Error::other(format!("{relative} is a symlink")));
             }
-            let nested = path.join("node_modules");
-            if nested.is_dir() {
-                queue.push((nested, format!("{}/node_modules", rel)));
+            if kind.is_dir() {
+                queue.push((
+                    entry.path().join("node_modules"),
+                    format!("{relative}/node_modules"),
+                    false,
+                ));
             }
+            installed.push(relative);
         }
     }
-    Some(out)
+    Ok(installed)
 }
 
 /// Does the lockfile account for everything its own entries declare?
@@ -305,23 +326,7 @@ fn installed_paths(project_dir: &Path) -> Option<Vec<String>> {
 /// Conservative on purpose: we prune only when every dependency declared by a
 /// locked package is itself locked. Otherwise the tree is reported but never
 /// modified.
-fn lockfile_is_complete(project_dir: &Path) -> bool {
-    let Some(path) = ["package-lock.json", "npm-shrinkwrap.json", "jhol-lock.json"]
-        .iter()
-        .map(|n| project_dir.join(n))
-        .find(|p| p.exists())
-    else {
-        return false;
-    };
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return false;
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return false;
-    };
-    let Some(packages) = v.get("packages").and_then(|p| p.as_object()) else {
-        return false;
-    };
+fn lockfile_is_complete(packages: &Packages) -> bool {
     // Names that are locked, keyed the way dependency maps refer to them.
     let mut locked_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for key in packages.keys() {
@@ -368,153 +373,139 @@ pub struct TreeReport {
 /// counter that also called `std::env::var` per entry. The walk is the expensive part of
 /// a status refresh, so it happens once and reports both facts.
 pub fn inspect_tree(project_dir: &Path) -> TreeReport {
-    let Some(locked) = locked_paths(project_dir) else {
-        return TreeReport {
-            state: TreeState::Unverified {
-                reason: "no readable lockfile".to_string(),
-            },
-            installed: 0,
-        };
+    inspect_tree_at(project_dir, &project_dir.join("node_modules"), false)
+}
+
+fn inspect_tree_at(project_dir: &Path, tree: &Path, detached: bool) -> TreeReport {
+    let unverified = |reason| TreeReport {
+        state: TreeState::Unverified { reason },
+        installed: 0,
     };
-    let Some(installed) = installed_paths(project_dir) else {
-        return TreeReport {
-            state: TreeState::Unverified {
-                reason: format!("tree larger than {} entries", MAX_INSPECT),
-            },
-            installed: 0,
-        };
+    let packages = match read_lockfile(project_dir) {
+        Ok(Some(packages)) => packages,
+        Ok(None) => return unverified("no lockfile".to_owned()),
+        Err((path, detail)) => {
+            return TreeReport {
+                state: TreeState::Corrupt { path, detail },
+                installed: 0,
+            }
+        }
     };
-    let installed_count = installed.len();
-    let state = verify_against(project_dir, &locked, &installed);
+    let Some(locked) = locked_paths(&packages, detached) else {
+        return unverified("lockfile layout cannot be verified".to_owned());
+    };
+    let installed = match installed_paths(tree, detached) {
+        Ok(installed) => installed,
+        Err(err) => return unverified(err.to_string()),
+    };
     TreeReport {
-        state,
-        installed: installed_count,
+        state: verify_against(tree, &packages, &locked, &installed),
+        installed: installed.len(),
     }
 }
 
 fn verify_against(
-    project_dir: &Path,
-    locked: &std::collections::HashMap<String, String>,
+    tree: &Path,
+    packages: &Packages,
+    locked: &HashMap<&str, LockedPackage<'_>>,
     installed: &[String],
 ) -> TreeState {
     let installed_set: std::collections::HashSet<&str> =
-        installed.iter().map(|s| s.as_str()).collect();
+        installed.iter().map(String::as_str).collect();
+    let mut keys: Vec<_> = locked.keys().copied().collect();
+    keys.sort_unstable();
 
-    // Links must exist too. They are not version-compared (a link has no registry
-    // version), but a lockfile that records one is asking for a path on disk.
-    let links = locked_links(project_dir);
-    for path in &links {
-        if !project_dir.join(path).exists() {
-            return TreeState::Missing { path: path.clone() };
-        }
-    }
-
-    // Stable iteration order: want deterministic reports and no reliance on
-    // HashMap order (the same discipline the resolver needed).
-    let mut keys: Vec<&String> = locked.keys().collect();
-    keys.sort();
-
-    for key in &keys {
-        let want = &locked[*key];
-        if !installed_set.contains(key.as_str()) {
+    for &key in &keys {
+        if !installed_set.contains(key) {
             return TreeState::Missing {
-                path: (*key).clone(),
+                path: key.to_owned(),
             };
         }
     }
-    // Read the manifests **in parallel**. After a snapshot restore the tree's metadata is
-    // cold, and 71 sequential opens cost ~10 ms of a 17 ms warm install. Chunked with
-    // `std::thread::scope` rather than a new dependency: this crate deliberately carries
-    // only `serde_json`.
-    let read_one = |key: &String| {
-        (
-            key.clone(),
-            disk_version(&project_dir.join(key).join("package.json")),
-        )
-    };
-    let versions: Vec<(String, Option<String>)> = {
-        let threads = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4)
-            .min(keys.len().max(1));
-        let chunk = keys.len().div_ceil(threads).max(1);
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = keys
-                .chunks(chunk)
-                .map(|part| {
-                    let read_one = &read_one;
-                    scope.spawn(move || part.iter().map(|k| read_one(k)).collect::<Vec<_>>())
-                })
-                .collect();
-            handles
-                .into_iter()
-                .flat_map(|h| h.join().unwrap_or_default())
-                .collect()
-        })
-    };
-    for (key, got) in &versions {
-        let key = key;
-        let want = &locked[key];
-        match got.clone() {
-            Some(got) if &got == want => {}
-            Some(got) => {
-                return TreeState::Wrong {
-                    path: (*key).clone(),
-                    want: want.clone(),
-                    got,
-                }
-            }
-            None => {
-                return TreeState::Missing {
-                    path: (*key).clone(),
-                }
-            }
-        }
-    }
-    let mut installed_sorted = installed.to_vec();
-    installed_sorted.sort();
-    let has_extras = installed_sorted
-        .iter()
-        .any(|p| !locked.contains_key(p) && !links.iter().any(|l| l == p));
-    if has_extras && !lockfile_is_complete(project_dir) {
-        // Installed packages the lockfile does not mention, *and* a lockfile
-        // that does not account for its own dependencies: this is a lockfile
-        // defect, not an unauthorised package. Report it; never delete for it.
-        return TreeState::Unverified {
-            reason: "lockfile does not account for every package it installed".to_string(),
+
+    let read_one = |key: &str| {
+        let package_dir = tree.join(&key["node_modules/".len()..]);
+        let missing = || TreeState::Missing {
+            path: key.to_owned(),
         };
-    }
-    for path in installed_sorted {
-        if !locked.contains_key(&path) && !links.iter().any(|l| l == &path) {
-            return TreeState::Extraneous { path: path.clone() };
+        let LockedPackage::Registry { name, version } = &locked[key] else {
+            return (!package_dir.is_dir()).then(missing);
+        };
+        let Some(manifest) = std::fs::read(package_dir.join("package.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        else {
+            return Some(missing());
+        };
+        let got_version = manifest.get("version").and_then(|value| value.as_str());
+        let got_name = manifest.get("name").and_then(|value| value.as_str());
+        match (got_name, got_version) {
+            (_, Some(got)) if got != *version => Some(TreeState::Wrong {
+                path: key.to_owned(),
+                want: (*version).to_owned(),
+                got: got.to_owned(),
+            }),
+            (Some(got), Some(_)) if got != *name => Some(TreeState::Wrong {
+                path: key.to_owned(),
+                want: format!("{name}@{version}"),
+                got: format!("{got}@{version}"),
+            }),
+            (Some(_), Some(_)) => None,
+            _ => Some(missing()),
         }
+    };
+
+    // Parallel manifest reads matter when the restored metadata is cold.
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(keys.len().max(1));
+    let chunk = keys.len().div_ceil(threads).max(1);
+    let mismatch = std::thread::scope(|scope| {
+        let handles: Vec<_> = keys
+            .chunks(chunk)
+            .map(|part| {
+                let read_one = &read_one;
+                std::thread::Builder::new()
+                    .spawn_scoped(scope, move || part.iter().find_map(|key| read_one(key)))
+            })
+            .collect();
+        let mut mismatch = None;
+        for (handle, part) in handles.into_iter().zip(keys.chunks(chunk)) {
+            let result = match handle {
+                Ok(handle) => handle.join().unwrap_or_else(|_| {
+                    Some(TreeState::Unverified {
+                        reason: "manifest inspection failed".to_owned(),
+                    })
+                }),
+                Err(_) => part.iter().find_map(|key| read_one(key)),
+            };
+            mismatch = mismatch.or(result);
+        }
+        mismatch
+    });
+    if let Some(mismatch) = mismatch {
+        return mismatch;
+    }
+
+    if let Some(path) = installed
+        .iter()
+        .filter(|p| !locked.contains_key(p.as_str()))
+        .min()
+    {
+        if !lockfile_is_complete(packages) {
+            return TreeState::Unverified {
+                reason: "lockfile does not account for every package it installed".to_owned(),
+            };
+        }
+        return TreeState::Extraneous { path: path.clone() };
     }
     TreeState::Match
 }
 
-/// Does `tree` hold what the lockfile authorises, when `tree` is *not* the live
-/// `node_modules`?
-///
-/// The snapshot refill needs this: it clones `node_modules` into a slot and must prove
-/// the **slot** is complete. Verifying the live tree instead is wrong — in a
-/// wipe-and-reinstall loop the caller deletes that tree while the clone is running, so a
-/// good slot was being discarded and the next run fell back to a full install. Version
-/// comparison only, like `verify_tree`: same guarantee, different root.
+/// Verify a detached node_modules tree against the project's lockfile.
 pub fn subtree_matches(project_dir: &Path, tree: &Path) -> bool {
-    let Some(locked) = locked_paths(project_dir) else {
-        return false;
-    };
-    for (key, want) in &locked {
-        let Some(rel) = key.strip_prefix("node_modules/") else {
-            continue;
-        };
-        let manifest = tree.join(rel).join("package.json");
-        match disk_version(&manifest) {
-            Some(got) if &got == want => {}
-            _ => return false,
-        }
-    }
-    true
+    inspect_tree_at(project_dir, tree, true).state.is_match()
 }
 
 /// Bring the tree into agreement with the lockfile, as far as that needs no
@@ -553,15 +544,20 @@ pub fn reconcile_tree(project_dir: &Path) -> TreeState {
 /// Only called after [`verify_tree`] reported `Extraneous`, so the walk is
 /// already known to be affordable.
 pub fn prune_extraneous(project_dir: &Path) -> std::io::Result<usize> {
-    let Some(locked) = locked_paths(project_dir) else {
+    // A corrupt lockfile authorises nothing, so pruning would be arbitrary: refuse instead of
+    // deleting against an authority we cannot read.
+    let Ok(Some(packages)) = read_lockfile(project_dir) else {
         return Ok(0);
     };
-    let Some(installed) = installed_paths(project_dir) else {
+    if !lockfile_is_complete(&packages) {
+        return Ok(0);
+    }
+    let Some(locked) = locked_paths(&packages, false) else {
         return Ok(0);
     };
-    let mut extraneous: Vec<String> = installed
+    let mut extraneous: Vec<String> = installed_paths(&project_dir.join("node_modules"), false)?
         .into_iter()
-        .filter(|p| !locked.contains_key(p))
+        .filter(|p| !locked.contains_key(p.as_str()))
         .collect();
     extraneous.sort_by_key(|p| std::cmp::Reverse(p.len()));
     let mut removed = 0;
@@ -598,7 +594,11 @@ mod tests {
         fs::create_dir_all(&p).unwrap();
         fs::write(
             p.join("package.json"),
-            format!(r#"{{"name":"x","version":"{}"}}"#, version),
+            serde_json::json!({
+                "name": installed_name(path).unwrap(),
+                "version": version,
+            })
+            .to_string(),
         )
         .unwrap();
     }
@@ -606,10 +606,7 @@ mod tests {
     fn lock(entries: &[(&str, &str)]) -> String {
         let mut pkgs = String::from(r#""":{"name":"root"}"#);
         for (path, version) in entries {
-            pkgs.push_str(&format!(
-                r#","{}":{{"version":"{}"}}"#,
-                path, version
-            ));
+            pkgs.push_str(&format!(r#","{}":{{"version":"{}"}}"#, path, version));
         }
         format!(r#"{{"lockfileVersion":3,"packages":{{{}}}}}"#, pkgs)
     }
@@ -622,6 +619,57 @@ mod tests {
         pkg(d, "node_modules/a", "1.0.0");
         assert_eq!(verify_tree(d), TreeState::Match);
         assert!(!verify_tree(d).needs_install());
+    }
+
+    #[test]
+    fn detached_layout_rejects_extras_and_wrong_package_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let slot = root.join("snapshot");
+        project(root, &lock(&[("node_modules/a", "1.0.0")]));
+        pkg(&slot, "node_modules/a", "1.0.0");
+        let tree = slot.join("node_modules");
+        assert!(subtree_matches(root, &tree));
+        assert!(!verify_tree(root).is_match());
+
+        pkg(&slot, "node_modules/a/node_modules/@scope/extra", "1.0.0");
+        assert!(!subtree_matches(root, &tree));
+        fs::remove_dir_all(tree.join("a/node_modules")).unwrap();
+        fs::write(
+            tree.join("a/package.json"),
+            r#"{"name":"wrong","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        assert!(!subtree_matches(root, &tree));
+    }
+
+    #[test]
+    fn unsafe_lock_paths_are_unverified() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        for path in [
+            "node_modules/../outside",
+            "node_modules/a/extra",
+            "node_modules//a",
+        ] {
+            project(root, &lock(&[(path, "1.0.0")]));
+            assert!(matches!(verify_tree(root), TreeState::Unverified { .. }));
+            assert!(!subtree_matches(root, &root.join("node_modules")));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_scopes_are_unverified_and_are_not_pruned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        project(root, &lock(&[]));
+        let outside = root.join("outside");
+        fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("node_modules/@scope")).unwrap();
+        assert!(matches!(verify_tree(root), TreeState::Unverified { .. }));
+        assert!(prune_extraneous(root).is_err());
+        assert!(outside.is_dir());
     }
 
     #[test]
@@ -903,5 +951,44 @@ mod platform_tests {
         let not_linux = json!({ "version": "1.0.0", "os": ["!linux"] });
         let is_linux = std::env::consts::OS == "linux";
         assert_eq!(entry_platform_applies(&not_linux), !is_linux);
+    }
+}
+
+#[cfg(test)]
+mod corrupt_lockfile_tests {
+    use super::*;
+
+    /// A lockfile that exists and does not parse is a **failure**, not "unverified". The audit
+    /// harness caught this: `jhol verify` exited 0 on `{"packages":` — a verifier that passes a
+    /// corrupt authority is worse than no verifier.
+    #[test]
+    fn a_truncated_lockfile_is_corrupt_not_unverified() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("node_modules/a")).unwrap();
+        std::fs::write(dir.path().join("node_modules/a/package.json"), r#"{"name":"a","version":"1.0.0"}"#).unwrap();
+        std::fs::write(dir.path().join("package-lock.json"), r#"{"packages":"#).unwrap();
+        match verify_tree(dir.path()) {
+            TreeState::Corrupt { path, detail } => {
+                assert_eq!(path, "package-lock.json");
+                assert!(detail.contains("JSON"), "{detail}");
+            }
+            other => panic!("expected Corrupt, got {other:?}"),
+        }
+    }
+
+    /// Absent stays "unverified": there is nothing to disagree with, and that distinction is the
+    /// reason the two states exist separately.
+    #[test]
+    fn an_absent_lockfile_stays_unverified() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(verify_tree(dir.path()), TreeState::Unverified { .. }));
+    }
+
+    /// A lockfile without a `packages` object is also corrupt: npm's schema requires it.
+    #[test]
+    fn a_lockfile_without_packages_is_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package-lock.json"), r#"{"lockfileVersion":3}"#).unwrap();
+        assert!(matches!(verify_tree(dir.path()), TreeState::Corrupt { .. }));
     }
 }

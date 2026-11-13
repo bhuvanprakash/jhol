@@ -28,8 +28,11 @@ macro_rules! mutex_lock {
 }
 
 /// One resolved package entry for the lockfile.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedPackage {
+    /// Actual registry name for a package installed at an alias path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry_name: Option<String>,
     pub version: String,
     pub resolved: String,
     pub integrity: Option<String>,
@@ -508,6 +511,7 @@ pub fn resolve_full_tree_pubgrub_v2(
         tree.insert(
             name.clone(),
             ResolvedPackage {
+                registry_name: None,
                 version: snapshot.version.clone(),
                 resolved: snapshot.resolved.clone(),
                 integrity: snapshot.integrity.clone(),
@@ -702,6 +706,7 @@ fn resolve_simple_fast_path(
                                 result.insert(
                                     name,
                                     ResolvedPackage {
+                                        registry_name: None,
                                         version,
                                         resolved,
                                         integrity,
@@ -901,6 +906,7 @@ fn build_tree_from_versions(
         result.insert(
             name.clone(),
             ResolvedPackage {
+                registry_name: None,
                 version: version_str.clone(),
                 resolved: resolved_url,
                 integrity,
@@ -958,6 +964,7 @@ fn build_tree_from_pubgrub_solution(
         result.insert(
             name.clone(),
             ResolvedPackage {
+                registry_name: None,
                 version: version_str,
                 resolved: resolved_url,
                 integrity,
@@ -1069,6 +1076,7 @@ pub fn build_tree_from_lockfile_if_valid(
         tree.insert(
             format!("node_modules/{}", e.package),
             ResolvedPackage {
+                registry_name: None,
                 version: e.version.clone(),
                 resolved: e.resolved.clone(),
                 integrity: e.integrity.clone(),
@@ -1623,6 +1631,7 @@ fn build_tree_from_assignment(
         tree.insert(
             format!("node_modules/{}", name),
             ResolvedPackage {
+                registry_name: None,
                 version,
                 resolved: resolved_url,
                 integrity,
@@ -1696,6 +1705,7 @@ pub fn build_tree_from_jagr_selection(
         tree.insert(
             format!("node_modules/{}", name),
             ResolvedPackage {
+                registry_name: None,
                 version,
                 resolved: resolved_url,
                 integrity,
@@ -1853,6 +1863,7 @@ fn resolve_full_tree_legacy(
         tree.insert(
             name.clone(),
             ResolvedPackage {
+                registry_name: None,
                 version,
                 resolved: resolved_url,
                 integrity,
@@ -2024,53 +2035,40 @@ fn classify_entries(
         entries.entry(key).or_insert(pkg);
     }
 
-    let lookup = |name: &str| -> Option<String> {
-        let direct = format!("node_modules/{}", name);
-        if entries.contains_key(&direct) {
-            return Some(direct);
-        }
-        if entries.contains_key(name) {
-            return Some(name.to_string());
-        }
-        // nested placement: any key ending in /node_modules/<name>
-        let suffix = format!("/node_modules/{}", name);
-        entries.keys().find(|k| k.ends_with(&suffix)).cloned()
-    };
-
-    let mut visit = |roots: Vec<&String>, out: &mut HashSet<String>| {
-        let mut q: VecDeque<String> = VecDeque::new();
-        for r in roots {
-            if let Some(k) = lookup(r) {
-                q.push_back(k);
-            }
-        }
+    let visit = |roots: Vec<&String>, out: &mut HashSet<String>| {
+        let mut q: VecDeque<String> = roots.into_iter()
+            .map(|name| crate::layout::top_level_node(name))
+            .filter(|key| entries.contains_key(key))
+            .collect();
         while let Some(key) = q.pop_front() {
             if !out.insert(key.clone()) {
                 continue;
             }
-            if let Some(pkg) = entries.get(&key) {
-                let mut names: Vec<&String> = pkg.dependencies.keys().collect();
-                names.sort();
-                for dep in names {
-                    if let Some(k) = lookup(dep) {
-                        if !out.contains(&k) {
-                            q.push_back(k);
-                        }
+            let package = entries[&key];
+            for dep in package.dependencies.keys() {
+                if let Some((child, _)) = crate::layout::visible_dependency_at(&key, dep, |path| entries.get(path)) {
+                    if !out.contains(&child) {
+                        q.push_back(child);
+                    }
+                }
+            }
+            for peer in package.peer_dependencies.keys() {
+                if let Some((child, _)) = crate::layout::visible_peer_at(&key, peer, |path| entries.get(path)) {
+                    if !out.contains(&child) {
+                        q.push_back(child);
                     }
                 }
             }
         }
     };
 
-    let prod_roots: Vec<&String> = manifest.dependencies.keys().collect();
-    let mut prod_set: HashSet<String> = HashSet::new();
+    let prod_roots = manifest.dependencies.keys().chain(manifest.peer.keys())
+        .filter(|name| !manifest.optional.contains_key(*name)).collect();
+    let mut prod_set = HashSet::new();
     visit(prod_roots, &mut prod_set);
 
-    // Optional roots are prod-ish (npm: optional deps of prod packages are
-    // installable) but marked so `--omit=optional` can drop their subtrees
-    // when they are not reachable from a hard dependency.
-    let opt_roots: Vec<&String> = manifest.optional.keys().collect();
-    let mut opt_set: HashSet<String> = HashSet::new();
+    let opt_roots = manifest.optional.keys().collect();
+    let mut opt_set = HashSet::new();
     visit(opt_roots, &mut opt_set);
 
     let mut out = HashMap::new();
@@ -2105,6 +2103,7 @@ fn build_packages_json(
     root_version: &str,
     declared_specs: &HashMap<String, String>,
     tree: &HashMap<String, ResolvedPackage>,
+    manifest: Option<&crate::lockfile::ManifestDeps>,
 ) -> serde_json::Value {
     let mut packages = serde_json::Map::new();
 
@@ -2166,25 +2165,13 @@ fn build_packages_json(
 
     // npm-compatible class markers, so a later `--omit=dev` install knows
     // which entries came in through devDependencies.
-    let classes = if let Some(manifest) = crate::lockfile::read_manifest_deps(
-        std::path::Path::new("package.json"),
-    ) {
-        let c = classify_entries(tree, &manifest);
-        if std::env::var_os("JHOL_OMIT_DEBUG").is_some() {
-            eprintln!("[omit] classify cwd={:?} deps={:?} dev={:?} -> {:?}",
-                std::env::current_dir().ok(), manifest.dependencies.keys().collect::<Vec<_>>(),
-                manifest.dev.keys().collect::<Vec<_>>(), c);
-        }
-        c
-    } else {
-        if std::env::var_os("JHOL_OMIT_DEBUG").is_some() {
-            eprintln!("[omit] no manifest at cwd={:?}", std::env::current_dir().ok());
-        }
-        HashMap::new()
-    };
+    let classes = manifest.map(|manifest| classify_entries(tree, manifest)).unwrap_or_default();
 
     for (key, pkg) in &normalized_tree {
         let mut entry = serde_json::Map::new();
+        if let Some(name) = &pkg.registry_name {
+            entry.insert("name".to_owned(), serde_json::Value::String(name.clone()));
+        }
         entry.insert(
             "version".to_string(),
             serde_json::Value::String(pkg.version.clone()),
@@ -2389,6 +2376,7 @@ impl IncrementalLockfileUpdater {
             tree.insert(
                 key.clone(),
                 ResolvedPackage {
+                    registry_name: value.get("name").and_then(|name| name.as_str()).map(str::to_owned),
                     version,
                     resolved,
                     integrity,
@@ -2407,29 +2395,7 @@ impl IncrementalLockfileUpdater {
         existing: &HashMap<String, ResolvedPackage>,
         new: &HashMap<String, ResolvedPackage>,
     ) -> Option<HashMap<String, ResolvedPackage>> {
-        let mut updated = existing.clone();
-        let mut has_changes = false;
-
-        for (key, new_pkg) in new {
-            if let Some(existing_pkg) = existing.get(key) {
-                if existing_pkg.version != new_pkg.version
-                    || existing_pkg.resolved != new_pkg.resolved
-                    || existing_pkg.integrity != new_pkg.integrity
-                {
-                    updated.insert(key.clone(), new_pkg.clone());
-                    has_changes = true;
-                }
-            } else {
-                updated.insert(key.clone(), new_pkg.clone());
-                has_changes = true;
-            }
-        }
-
-        if has_changes {
-            Some(updated)
-        } else {
-            None
-        }
+        (existing != new).then(|| new.clone())
     }
 
     /// Computes incremental update restricted to the Cellular Sheaf perturbation support $\operatorname{supp}(\Delta L_{\mathcal{F}})$.
@@ -2450,10 +2416,7 @@ impl IncrementalLockfileUpdater {
             }
 
             if let Some(existing_pkg) = existing.get(key) {
-                if existing_pkg.version != new_pkg.version
-                    || existing_pkg.resolved != new_pkg.resolved
-                    || existing_pkg.integrity != new_pkg.integrity
-                {
+                if existing_pkg != new_pkg {
                     updated.insert(key.clone(), new_pkg.clone());
                     has_changes = true;
                 }
@@ -2480,7 +2443,8 @@ impl IncrementalLockfileUpdater {
         let declared_specs =
             lockfile::read_package_json_deps(package_json_path).unwrap_or_default();
 
-        let packages = build_packages_json(&root_name, &root_version, &declared_specs, tree);
+        let manifest = crate::lockfile::read_manifest_deps(package_json_path);
+        let packages = build_packages_json(&root_name, &root_version, &declared_specs, tree, manifest.as_ref());
 
         let lockfile_content = serde_json::json!({
             "name": root_name,
@@ -2511,7 +2475,8 @@ impl IncrementalLockfileUpdater {
         let declared_specs =
             lockfile::read_package_json_deps(package_json_path).unwrap_or_default();
 
-        let packages = build_packages_json(&root_name, &root_version, &declared_specs, tree);
+        let manifest = crate::lockfile::read_manifest_deps(package_json_path);
+        let packages = build_packages_json(&root_name, &root_version, &declared_specs, tree, manifest.as_ref());
 
         let lockfile_content = serde_json::json!({
             "name": root_name,
@@ -2581,7 +2546,8 @@ pub async fn write_package_lock_async(
     let (root_name, root_version) = read_root_package_info(package_json_path)?;
     let declared_specs = lockfile::read_package_json_deps(package_json_path).unwrap_or_default();
 
-    let packages = build_packages_json(&root_name, &root_version, &declared_specs, tree);
+    let manifest = crate::lockfile::read_manifest_deps(package_json_path);
+        let packages = build_packages_json(&root_name, &root_version, &declared_specs, tree, manifest.as_ref());
 
     let lockfile_content = serde_json::json!({
         "name": root_name,
@@ -2603,6 +2569,12 @@ pub fn write_capsule_from_tree(
     project_dir: &Path,
     tree: &HashMap<String, ResolvedPackage>,
 ) -> Result<(), String> {
+    if tree.iter().any(|(path, package)| {
+        path.matches("node_modules/").count() > 1 || package.registry_name.is_some()
+    }) {
+        return Err("name-only capsule cannot represent this layout".to_owned());
+    }
+
     use crate::capsule::{capsule_path, write_capsule, CapsuleBuilder};
 
     // Compute manifest hash from package.json + package-lock.json
@@ -2764,6 +2736,7 @@ mod tests {
         tree.insert(
             "node_modules/ms".to_string(),
             ResolvedPackage {
+                registry_name: None,
                 version: "2.1.3".to_string(),
                 resolved: "https://example.invalid/ms.tgz".to_string(),
                 integrity: None,
@@ -2773,7 +2746,7 @@ mod tests {
             },
         );
 
-        let v = build_packages_json("app", "1.0.0", &declared, &tree);
+        let v = build_packages_json("app", "1.0.0", &declared, &tree, None);
         let root = &v[""]["dependencies"];
         assert_eq!(root["ms"], "^2.1.3", "a range must stay a range");
         assert_eq!(root["my-lodash"], "npm:lodash@4.17.21", "alias must appear");
@@ -2839,6 +2812,7 @@ mod pubgrub_fallback_tests {
                 (
                     (*n).to_string(),
                     ResolvedPackage {
+                        registry_name: None,
                         version: "1.0.0".to_string(),
                         resolved: String::new(),
                         integrity: None,
@@ -2917,59 +2891,180 @@ mod pubgrub_fallback_tests {
 /// takes the top of `node_modules` (ties: highest version); every other instance
 /// is nested under the dependent that requires it. That is hoisting, expressed as
 /// the smallest rule that produces a working tree.
-/// Peer requirements that the installed tree does not satisfy.
-///
-/// `peers` is `(dependent, peer, spec)` as the resolver recorded it, and the answer is
-/// judged against the versions actually chosen — not against the manifest, which is how
-/// a peer conflict used to disappear on the instance-resolved path.
-pub(crate) fn peer_violations(
-    instances: &[crate::jagr_nest::Instance],
-    peers: &[(String, String, String)],
-) -> Vec<String> {
-    let mut violations = Vec::new();
-    for (dependent, peer, spec) in peers {
-        let installed: Vec<&str> = instances
-            .iter()
-            .filter(|i| &i.package == peer || &i.installed_as == peer)
-            .map(|i| i.version.as_str())
-            .collect();
-        if installed.is_empty() {
-            // An absent peer is optional here: nothing declared it as a dependency,
-            // so there is no version to judge.
-            continue;
-        }
-        let compiled = crate::registry::compile_spec(spec);
-        let satisfied = installed.iter().any(|v| {
-            semver::Version::parse(v)
-                .map(|p| compiled.matches(&p))
-                .unwrap_or(false)
-        });
-        if !satisfied {
-            violations.push(format!(
-                "{dependent} wants {peer}@{spec}, installed {}",
-                installed.join(", ")
-            ));
+/// Project the instance graph onto install paths. The graph is authoritative
+/// about the release each demand selected. A copy may share a path only when
+/// the consumer's first visible provider is that exact instance.
+fn place_nested_instances(
+    plan: &crate::jagr_nest::NestedResolution,
+    roots: &HashMap<String, String>,
+    world: &HashMap<String, serde_json::Value>,
+    optional_roots: &HashSet<String>,
+    strict_peers: bool,
+) -> Result<HashMap<String, ResolvedPackage>, String> {
+    use crate::jagr_nest::{compile_registry_requirement, expand_alias};
+
+    fn valid_name(name: &str) -> bool {
+        let segment = |part: &str| {
+            !part.is_empty() && !part.starts_with('.') && !part.ends_with('.')
+                && part.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.'))
+        };
+        match name.strip_prefix('@') {
+            Some(scoped) => scoped.split_once('/').is_some_and(|(scope, package)| segment(scope) && segment(package)),
+            None => segment(name),
         }
     }
-    violations.sort();
-    violations.dedup();
-    violations
+
+    let instances = &plan.instances;
+    let mut outgoing = vec![Vec::new(); instances.len()];
+    let mut placements = BTreeMap::new();
+    for ((consumer, name), &provider) in &plan.instance_edges {
+        let instance = instances.get(provider).ok_or("missing provider instance")?;
+        if instance.installed_as != *name || !valid_name(name) || !valid_name(&instance.package) {
+            return Err(format!("invalid instance identity for {name}"));
+        }
+        if let Some(consumer) = consumer {
+            outgoing.get_mut(*consumer).ok_or("missing consumer instance")?.push((name, provider));
+        } else {
+            placements.insert(crate::layout::top_level_node(name), provider);
+        }
+    }
+
+    // Reserve root locations. For each other name, hoist the instance that
+    // serves the most demands, breaking ties by version and stable instance ID.
+    let mut hoisted = BTreeMap::new();
+    for (id, instance) in instances.iter().enumerate() {
+        let score = (instance.required_by.len(), semver::Version::parse(&instance.version).ok(), std::cmp::Reverse(id));
+        let winner = hoisted.entry(instance.installed_as.as_str()).or_insert_with(|| (score.clone(), id));
+        if score > winner.0 {
+            *winner = (score, id);
+        }
+    }
+    for (name, (_, id)) in hoisted {
+        // A skipped optional root may have an incompatible transitive release.
+        // Keep that release under its consumer so the root remains absent.
+        if !optional_roots.contains(name) {
+            placements.entry(crate::layout::top_level_node(name)).or_insert(id);
+        }
+    }
+
+    let mut queue: std::collections::VecDeque<_> = placements.keys().cloned().collect();
+    while let Some(consumer) = queue.pop_front() {
+        let id = placements[&consumer];
+        for &(name, provider) in &outgoing[id] {
+            let visible = crate::layout::visible_dependency(&consumer, name, |path| placements.get(path));
+            if visible == Some(&provider) {
+                continue;
+            }
+            let slot = format!("{consumer}/{}", crate::layout::top_level_node(name));
+            if placements.contains_key(&slot) {
+                return Err(format!("conflicting providers at {slot}"));
+            }
+            if placements.len() >= 40_000 || slot.len() > 2_048 {
+                return Err(format!("nested layout exceeded its placement bound for {name}"));
+            }
+            placements.insert(slot.clone(), provider);
+            queue.push_back(slot);
+        }
+    }
+
+    let satisfies = |name: &str, spec: &str, id: usize| {
+        let instance = &instances[id];
+        let (registry_name, range) = expand_alias(name, spec);
+        instance.package == registry_name && world.get(&registry_name).is_some_and(|metadata| {
+            semver::Version::parse(&instance.version).is_ok_and(|version| {
+                compile_registry_requirement(&range, metadata).matches(&version)
+            })
+        })
+    };
+    for (name, spec) in roots {
+        if optional_roots.contains(name) && !placements.contains_key(&crate::layout::top_level_node(name)) {
+            continue;
+        }
+        if !placements.get(&crate::layout::top_level_node(name)).is_some_and(|&id| satisfies(name, spec, id)) {
+            return Err(format!("root dependency {name} {spec} has no matching provider"));
+        }
+    }
+    let mut peer_conflicts = Vec::new();
+    let mut out = HashMap::new();
+    for (path, &id) in &placements {
+        let instance = &instances[id];
+        let name = &instance.package;
+        let version = &instance.version;
+        let metadata = world.get(name).ok_or_else(|| format!("missing metadata for {name}"))?;
+        if metadata.get("versions").and_then(|v| v.get(version)).and_then(|v| v.as_object()).is_none() {
+            return Err(format!("missing release metadata for {name}@{version}"));
+        }
+        let mut dependencies = registry::get_version_required_dependencies(metadata, version);
+        let optional_dependencies = registry::get_version_optional_dependencies(metadata, version);
+        for &(target, _) in &outgoing[id] {
+            if let Some(spec) = optional_dependencies.get(target) {
+                dependencies.insert(target.clone(), spec.clone());
+            }
+        }
+        for (target, spec) in &dependencies {
+            let provider = crate::layout::visible_dependency(path, target, |key| placements.get(key));
+            if !provider.is_some_and(|&id| satisfies(target, spec, id)) {
+                return Err(format!("{path} has no matching provider for {target} {spec}"));
+            }
+        }
+        for &(target, provider) in &outgoing[id] {
+            if crate::layout::visible_dependency(path, target, |key| placements.get(key)) != Some(&provider) {
+                return Err(format!("{path} cannot see its selected provider for {target}"));
+            }
+        }
+        let peer_dependencies = registry::get_version_peer_dependencies(metadata, version);
+        let peer_dependencies_meta = registry::get_version_peer_dependencies_meta(metadata, version);
+        for (peer, spec) in &peer_dependencies {
+            let optional = peer_dependencies_meta.get(peer).and_then(|meta| meta.get("optional"))
+                .and_then(|value| value.as_bool()) == Some(true);
+            let provider = crate::layout::visible_peer(path, peer, |key| placements.get(key));
+            if (provider.is_some() || !optional) && !provider.is_some_and(|&id| satisfies(peer, spec, id)) {
+                let got = provider.map(|&id| instances[id].version.as_str()).unwrap_or("absent");
+                peer_conflicts.push(format!("{path} requires peer {peer} {spec}, got {got}"));
+            }
+        }
+        out.insert(path.clone(), ResolvedPackage {
+            registry_name: (instance.installed_as != *name).then(|| name.clone()),
+            version: version.clone(),
+            resolved: registry::get_tarball_url(metadata, version)
+                .unwrap_or_else(|| lockfile::tarball_url_from_registry(name, version)),
+            integrity: registry::get_integrity_for_version(metadata, version),
+            dependencies,
+            peer_dependencies,
+            peer_dependencies_meta,
+        });
+    }
+    if !peer_conflicts.is_empty() {
+        peer_conflicts.sort();
+        let detail = format!("peer dependency conflicts: {}", peer_conflicts.join("; "));
+        if strict_peers {
+            return Err(detail);
+        }
+        crate::utils::log(&format!("warning: {detail}"));
+    }
+    Ok(out)
 }
 
 pub fn resolve_full_tree_nested(
     package_json_path: &Path,
 ) -> Result<HashMap<String, ResolvedPackage>, String> {
-    use crate::jagr_nest;
-
-    let manifest_deps = crate::lockfile::read_package_json_deps(package_json_path)
+    let roots = crate::lockfile::read_package_json_deps(package_json_path)
         .ok_or_else(|| "no dependencies in package.json".to_string())?;
-    if manifest_deps.is_empty() {
+    resolve_nested_roots(package_json_path, roots, crate::jagr_infinite::strict_peer_dependencies())
+}
+
+pub(crate) fn resolve_nested_roots(
+    package_json_path: &Path,
+    mut roots: HashMap<String, String>,
+    strict_peers: bool,
+) -> Result<HashMap<String, ResolvedPackage>, String> {
+    use crate::jagr_nest;
+    roots.retain(|_, spec| matches!(crate::spec_grammar::classify(spec),
+        crate::spec_grammar::Spec::Registry(_) | crate::spec_grammar::Spec::Alias { .. }));
+    if roots.is_empty() {
         return Ok(HashMap::new());
     }
-    let roots: HashMap<String, String> = manifest_deps
-        .iter()
-        .map(|(name, spec)| (name.clone(), spec.clone()))
-        .collect();
+    let optional_roots = crate::lockfile::read_optional_dependency_names(package_json_path);
 
     // Fetch-and-retry: the nested resolver reports which package it needs, this
     // loop provides it. That is how a resolver should fail — with a request, not
@@ -3015,7 +3110,6 @@ pub fn resolve_full_tree_nested(
         }
     };
 
-    let mut provider = RegistryProvider::new();
     let mut world: HashMap<String, serde_json::Value> = HashMap::new();
 
     // Bounded prefetch. Fetching one package per retry cost ~270 sequential round
@@ -3100,7 +3194,6 @@ pub fn resolve_full_tree_nested(
                 started.elapsed().as_secs_f64() * 1000.0
             );
         }
-        let _ = &mut provider;
     }
 
     // `--exclude-vuln`: resolve, ask OSV about the releases that were chosen, ban
@@ -3114,7 +3207,7 @@ pub fn resolve_full_tree_nested(
     let mut solve_calls = 0usize;
     let mut resolved = loop {
         solve_calls += 1;
-        match jagr_nest::resolve_with_options(&world, &roots, &options) {
+        match jagr_nest::resolve_with_optional_roots(&world, &roots, &options, &optional_roots) {
             Ok(r) => break r,
             Err(e) if e.needs_fetch() => {
                 if world.contains_key(&e.package) {
@@ -3244,7 +3337,7 @@ pub fn resolve_full_tree_nested(
                 break;
             }
             options.banned = Some(bans);
-            resolved = match jagr_nest::resolve_with_options(&world, &roots, &options) {
+            resolved = match jagr_nest::resolve_with_optional_roots(&world, &roots, &options, &optional_roots) {
                 Ok(r) => r,
                 Err(e) => {
                     return Err(format!(
@@ -3259,232 +3352,99 @@ pub fn resolve_full_tree_nested(
         }
     }
 
-    // Which instance wins the top of node_modules, per package.
-    let mut demand: HashMap<&str, usize> = HashMap::new();
-    for i in &resolved.instances {
-        *demand.entry(i.package.as_str()).or_default() += 1;
-    }
-    let mut winner: HashMap<(String, String), bool> = HashMap::new();
-    {
-        let mut best: HashMap<&str, (usize, (u64, u64, u64))> = HashMap::new();
-        for i in &resolved.instances {
-            let key = (i.package.as_str(), i.version.as_str());
-            let vk = semver::Version::parse(&i.version)
-                .map(|v| (v.major, v.minor, v.patch))
-                .unwrap_or((0, 0, 0));
-            let d = i.required_by.len();
-            let e = best.entry(i.package.as_str()).or_insert((0, (0, 0, 0)));
-            if d > e.0 || (d == e.0 && vk > e.1) {
-                *e = (d, vk);
-                for other in resolved.instances.iter() {
-                    if other.package == i.package {
-                        winner.insert(
-                            (other.package.clone(), other.version.clone()),
-                            other.version == i.version,
-                        );
-                    }
-                }
-            }
-        }
-    }
-    let _ = demand;
-
     if std::env::var_os("JHOL_PROFILE_INSTALL").is_some() {
         eprintln!(
             "[jhol-profile] stage=nest_solve delta_ms={} world={} instances={} solves={}",
             t_resolve.elapsed().as_millis(),
             world.len(),
             resolved.instances.len(),
-            solve_calls
+            solve_calls,
         );
     }
-    let t_paths = std::time::Instant::now();
-
-    // Assign paths. A winner sits at the top; everything else nests under a
-    // dependent whose path is already known.
-    let mut path_of: HashMap<(String, String), String> = HashMap::new();
-    for i in &resolved.instances {
-        let key = (i.package.clone(), i.version.clone());
-        if winner.get(&key).copied().unwrap_or(false) {
-            let name = if i.installed_as.is_empty() {
-                i.package.clone()
-            } else {
-                i.installed_as.clone()
-            };
-            path_of.insert(key, format!("node_modules/{}", name));
-        }
-    }
-    // Fixpoint over the remaining instances; sorted iteration keeps it stable.
-    let mut ordered: Vec<&jagr_nest::Instance> = resolved.instances.iter().collect();
-    ordered.sort_by(|a, b| {
-        (a.package.as_str(), std::cmp::Reverse(a.version.as_str()))
-            .cmp(&(b.package.as_str(), std::cmp::Reverse(b.version.as_str())))
-    });
-    let mut progress = true;
-    while progress {
-        progress = false;
-        for inst in &ordered {
-            let key = (inst.package.clone(), inst.version.clone());
-            if path_of.contains_key(&key) {
-                continue;
-            }
-            // Find a dependent instance with a known path.
-            let mut placed = None;
-            for (dependent, _spec) in &inst.required_by {
-                if dependent == "<root>" {
-                    continue;
-                }
-                let Some((dname, dver)) = dependent.rsplit_once('@') else {
-                    continue;
-                };
-                if let Some(parent_path) = path_of.get(&(dname.to_string(), dver.to_string())) {
-                    let name = if inst.installed_as.is_empty() {
-                        inst.package.clone()
-                    } else {
-                        inst.installed_as.clone()
-                    };
-                    placed = Some(format!("{}/node_modules/{}", parent_path, name));
-                    break;
-                }
-            }
-            if let Some(p) = placed {
-                path_of.insert(key, p);
-                progress = true;
-            }
-        }
-    }
-    // Anything still unplaced (a cycle in required_by) goes to the top level:
-    // wrong layout is better than a missing package, and it cannot happen for a
-    // DAG, which npm trees are.
-    for i in &resolved.instances {
-        let key = (i.package.clone(), i.version.clone());
-        if !path_of.contains_key(&key) {
-            let name = if i.installed_as.is_empty() {
-                i.package.clone()
-            } else {
-                i.installed_as.clone()
-            };
-            path_of.insert(key, format!("node_modules/{}", name));
-        }
-    }
-
-    // Peer dependencies, on the path that actually installs.
-    //
-    // They were recorded (`NestedResolution::peers`) and then never checked here, so
-    // `--strict-peer-deps` was honoured only by the root validator and the flat
-    // resolver. A peer requirement is satisfied when the *installed* version matches;
-    // npm warns by default and fails in strict mode.
-    let violations = peer_violations(&resolved.instances, &resolved.peers);
-    if !violations.is_empty() {
-        let strict = std::env::var("JHOL_STRICT_PEER_DEPS")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-        if strict {
-            return Err(format!(
-                "peer dependency conflicts: {}",
-                violations.join("; ")
-            ));
-        }
-        crate::utils::log(&format!(
-            "warning: {} peer requirement(s) unsatisfied: {}",
-            violations.len(),
-            violations.join("; ")
-        ));
-    }
-
-    if std::env::var_os("JHOL_PROFILE_INSTALL").is_some() {
-        eprintln!(
-            "[jhol-profile] stage=nest_paths delta_ms={}",
-            t_paths.elapsed().as_millis()
-        );
-    }
-    let t_snaps = std::time::Instant::now();
-    let mut out: HashMap<String, ResolvedPackage> = HashMap::new();
-    for inst in &resolved.instances {
-        let key = (inst.package.clone(), inst.version.clone());
-        let Some(path) = path_of.get(&key) else {
-            continue;
-        };
-        // Deduplicate: two instances of the same name+version are the same
-        // directory.
-        if out.contains_key(path) {
-            continue;
-        }
-        let snap = match provider.snapshot(&inst.package, &inst.version) {
-            Ok(s) => s,
-            Err(e) => return Err(format!("metadata for {}: {}", inst.package, e)),
-        };
-        out.insert(
-            path.clone(),
-            ResolvedPackage {
-                version: inst.version.clone(),
-                resolved: snap.resolved,
-                integrity: snap.integrity,
-                dependencies: snap.dependencies,
-                peer_dependencies: snap.peer_dependencies,
-                peer_dependencies_meta: snap.peer_dependencies_meta,
-            },
-        );
-    }
-    let _ = &mut resolved;
-    
-    if std::env::var_os("JHOL_PROFILE_INSTALL").is_some() {
-        eprintln!(
-            "[jhol-profile] stage=nest_snapshots delta_ms={} packages={}",
-            t_snaps.elapsed().as_millis(),
-            out.len()
-        );
-    }
-Ok(out)
+    place_nested_instances(&resolved, &roots, &world, &optional_roots, strict_peers)
 }
 
 #[cfg(test)]
-mod peer_tests {
+mod nested_placement_tests {
     use super::*;
-    use crate::jagr_nest::Instance;
+    use serde_json::json;
 
-    fn inst(package: &str, version: &str) -> Instance {
-        Instance {
-            package: package.to_string(),
-            installed_as: package.to_string(),
-            version: version.to_string(),
-            required_by: Vec::new(),
+    fn resolve(
+        world: &HashMap<String, serde_json::Value>,
+        roots: &HashMap<String, String>,
+        strict_peers: bool,
+    ) -> Result<HashMap<String, ResolvedPackage>, String> {
+        let plan = crate::jagr_nest::resolve(world, roots).unwrap();
+        place_nested_instances(&plan, roots, world, &HashSet::new(), strict_peers)
+    }
+
+    #[test]
+    fn nested_placement_preserves_alias_paths_and_lock_identity() {
+        let world = HashMap::from([
+            ("wrapper".into(), json!({"versions": {"1.0.0": {"dependencies": {
+                "alias": "npm:other@1.0.0", "real": "1.0.0",
+            }}}})),
+            ("real".into(), json!({"versions": {"1.0.0": {}}})),
+            ("other".into(), json!({"versions": {"1.0.0": {}}})),
+        ]);
+        let roots = HashMap::from([
+            ("wrapper".into(), "1.0.0".into()),
+            ("real".into(), "1.0.0".into()),
+            ("alias".into(), "npm:real@1.0.0".into()),
+            ("alias-two".into(), "npm:real@1.0.0".into()),
+        ]);
+        let tree = resolve(&world, &roots, true).unwrap();
+        let lock = build_packages_json("fixture", "1.0.0", &roots, &tree, None);
+        assert!(lock["node_modules/real"].get("name").is_none());
+        assert_eq!(lock["node_modules/alias"]["name"], "real");
+        assert_eq!(lock["node_modules/alias-two"]["name"], "real");
+        assert_eq!(lock["node_modules/wrapper/node_modules/alias"]["name"], "other");
+        assert_eq!(lock["node_modules/wrapper"]["dependencies"]["alias"], "npm:other@1.0.0");
+    }
+
+    #[test]
+    fn nested_placement_checks_each_consumer_and_its_nearest_peer() {
+        let world = HashMap::from([
+            ("left".into(), json!({"versions": {"1.0.0": {"dependencies": {
+                "consumer": "1.0.0", "host": "2.0.0",
+            }}}})),
+            ("right".into(), json!({"versions": {"1.0.0": {"dependencies": {
+                "consumer": "1.0.0", "host": "2.0.0",
+            }}}})),
+            ("consumer".into(), json!({"versions": {
+                "1.0.0": {"peerDependencies": {"host":"^2", "optional-peer": "*"},
+                    "peerDependenciesMeta": {"optional-peer": {"optional": true}}},
+                "2.0.0": {},
+            }})),
+            ("host".into(), json!({"versions": {"1.0.0": {}, "2.0.0": {}}})),
+        ]);
+        let roots = HashMap::from([
+            ("left".into(), "1.0.0".into()), ("right".into(), "1.0.0".into()),
+            ("host".into(), "1.0.0".into()), ("consumer".into(), "2.0.0".into()),
+        ]);
+        let tree = resolve(&world, &roots, true).unwrap();
+        for side in ["left", "right"] {
+            assert_eq!(tree[&format!("node_modules/{side}/node_modules/consumer")].version, "1.0.0");
+            assert_eq!(tree[&format!("node_modules/{side}/node_modules/host")].version, "2.0.0");
         }
+        let mut shadow = world.clone();
+        shadow.get_mut("left").unwrap()["versions"]["1.0.0"]["dependencies"]["host"] = json!("1.0.0");
+        let error = resolve(&shadow, &roots, true).unwrap_err();
+        assert!(error.contains("node_modules/left/node_modules/consumer requires peer host ^2, got 1.0.0"), "{error}");
     }
 
-    /// A peer conflict must be judged against what was installed. This is the check
-    /// that was missing on the instance-resolved path: the requirement was recorded
-    /// and never compared with the chosen version.
     #[test]
-    fn peer_violations_flags_a_mismatch() {
-        let instances = vec![inst("react", "17.0.2"), inst("react-dom", "18.2.0")];
-        let peers = vec![(
-            "react-dom@18.2.0".to_string(),
-            "react".to_string(),
-            "^18.2.0".to_string(),
-        )];
-        let got = peer_violations(&instances, &peers);
-        assert_eq!(got.len(), 1, "{got:?}");
-        assert!(got[0].contains("17.0.2"), "{got:?}");
-    }
-
-    /// A satisfied peer, and a peer that is simply not installed, are both quiet:
-    /// treating an absent peer as a violation would fail trees npm installs happily.
-    #[test]
-    fn satisfied_and_absent_peers_are_quiet() {
-        let instances = vec![inst("react", "18.2.0"), inst("react-dom", "18.2.0")];
-        let ok = vec![(
-            "react-dom@18.2.0".to_string(),
-            "react".to_string(),
-            "^18.2.0".to_string(),
-        )];
-        assert!(peer_violations(&instances, &ok).is_empty());
-
-        let absent = vec![(
-            "some-lib@1.0.0".to_string(),
-            "not-installed".to_string(),
-            "^1.0.0".to_string(),
-        )];
-        assert!(peer_violations(&instances, &absent).is_empty());
+    fn nested_placement_can_drop_an_optional_branch_after_a_conflict() {
+        let world = HashMap::from([
+            ("parent".into(), json!({"versions": {"1.0.0": {
+                "dependencies": {"child": "1.0.0"},
+                "optionalDependencies": {"soft": "1.0.0"},
+            }}})),
+            ("child".into(), json!({"versions": {"1.0.0": {}}})),
+            ("soft".into(), json!({"versions": {"1.0.0": {"dependencies": {"child": "2.0.0"}}}})),
+        ]);
+        let tree = resolve(&world, &HashMap::from([("parent".into(), "1.0.0".into())]), true).unwrap();
+        assert_eq!(tree.len(), 2);
+        assert!(!tree.contains_key("node_modules/soft"));
     }
 }

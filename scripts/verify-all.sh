@@ -28,9 +28,21 @@ fail=0
 say() { printf '%s\n' "$*"; }
 step() { say ""; say "== $* =="; }
 
+gate_log=$(mktemp) || exit 1
+trap 'rm -f "$gate_log"' 0
+trap 'exit 1' HUP INT TERM
+run_logged() {
+  lines=$1
+  shift
+  "$@" >"$gate_log" 2>&1
+  status=$?
+  tail -n "$lines" "$gate_log" || return 1
+  return "$status"
+}
+
 if [ "${VERIFY_FAST:-0}" != "1" ]; then
   step "cargo test --workspace --all-features"
-  if ! cargo test --workspace --all-features --lib 2>&1 | tail -20; then
+  if ! run_logged 20 cargo test --workspace --all-features --lib; then
     say "FAIL --workspace --all-features"
     fail=1
   fi
@@ -43,7 +55,7 @@ fi
 # gates were green. It needs the built binary, so it runs here rather than per-round.
 if [ "${VERIFY_FAST:-0}" != "1" ]; then
   step "CLI suite (cargo test --test commands)"
-  if ! cargo test -q --test commands 2>&1 | tail -6; then
+  if ! run_logged 6 cargo test -q --test commands; then
     say "FAIL CLI suite"
     fail=1
   fi
@@ -51,14 +63,14 @@ fi
 
 if [ "${VERIFY_SKIP_GATES:-0}" != "1" ]; then
   step "installer gate (crates/jhol-core/verify.sh)"
-  if ! sh crates/jhol-core/verify.sh 2>&1 | tail -6; then
+  if ! run_logged 6 sh crates/jhol-core/verify.sh; then
     say "FAIL installer gate"
     fail=1
   fi
 
   if command -v node >/dev/null 2>&1; then
     step "engine gate (crates/jhol-vm/verify.sh)"
-    if ! sh crates/jhol-vm/verify.sh 2>&1 | tail -8; then
+    if ! run_logged 8 sh crates/jhol-vm/verify.sh; then
       say "FAIL engine gate"
       fail=1
     fi

@@ -102,30 +102,17 @@ pub mod chart {
 
     impl VersionBitmap {
         pub fn new(lo: VersionOrdinal, hi: VersionOrdinal) -> Self {
-            let bits = ((hi.0 as u32).saturating_sub(lo.0 as u32) + 1) as usize;
-            let words = bits.div_ceil(64);
-            Self {
-                words: vec![u64::MAX; words],
-                ordinal_lo: lo,
-                ordinal_hi: hi,
-            }
-            .mask_padding()
+            let mut bitmap = Self::empty(lo, hi);
+            bitmap.set_interval(VersionInterval { lo, hi });
+            bitmap
         }
-        /// Zero out padding bits in the last word beyond `ordinal_hi`.
-        fn mask_padding(mut self) -> Self {
-            let bits = (self.ordinal_hi.0 as u32).saturating_sub(self.ordinal_lo.0 as u32) + 1;
-            let total_words = bits.div_ceil(64) as usize;
-            let hi_mod = (bits - 1) % 64;
-            if hi_mod != 63 && total_words > 0 {
-                self.words[total_words - 1] &= (1u64 << (hi_mod + 1)) - 1;
-            }
-            self
+        fn words_for_window(lo: VersionOrdinal, hi: VersionOrdinal) -> usize {
+            hi.0.checked_sub(lo.0)
+                .map_or(0, |span| (usize::from(span) + 1).div_ceil(64))
         }
         pub fn empty(lo: VersionOrdinal, hi: VersionOrdinal) -> Self {
-            let bits = ((hi.0 as u32).saturating_sub(lo.0 as u32) + 1) as usize;
-            let words = bits.div_ceil(64);
             Self {
-                words: vec![0; words],
+                words: vec![0; Self::words_for_window(lo, hi)],
                 ordinal_lo: lo,
                 ordinal_hi: hi,
             }
@@ -255,62 +242,72 @@ pub mod chart {
         /// both a false conflict (valid trees reported unsatisfiable) and, on other
         /// shapes, a silently wrong selection.
         ///
-        /// Fast path when the bases match (the overwhelmingly common case, since
-        /// masks for one target are built on that target's window). Otherwise align
-        /// **by ordinal**, which is O(versions) but rare and obviously correct.
+        /// Intersect into the left window. Bits outside either operand are zero,
+        /// including whole words beyond the end of a same-base operand.
         #[inline]
         pub fn intersect(&mut self, other: &Self) {
-            if self.ordinal_lo == other.ordinal_lo && self.words.len() >= other.words.len() {
-                for (a, b) in self.words.iter_mut().zip(other.words.iter()) {
+            if self.ordinal_lo == other.ordinal_lo {
+                let common = self.words.len().min(other.words.len());
+                for (a, b) in self.words[..common].iter_mut().zip(&other.words[..common]) {
                     *a &= *b;
                 }
+                self.words[common..].fill(0);
                 return;
             }
-            let lo = self.ordinal_lo.0.max(other.ordinal_lo.0);
-            let hi = self.ordinal_hi.0.min(other.ordinal_hi.0);
-            let mut words = vec![0u64; self.words.len()];
-            if lo <= hi {
-                for ord in lo..=hi {
-                    let o = VersionOrdinal(ord);
-                    if self.contains_ordinal(o) && other.contains_ordinal(o) {
-                        let off = (ord - self.ordinal_lo.0) as usize;
-                        let wi = off / 64;
-                        if wi < words.len() {
-                            words[wi] |= 1u64 << (off % 64);
-                        }
-                    }
-                }
+            for (index, word) in self.words.iter_mut().enumerate() {
+                *word &= other.word_at(i32::from(self.ordinal_lo.0) + 64 * index as i32);
             }
-            self.words = words;
         }
-        /// Union (OR), base-aware for the same reason as `intersect`.
+
+        /// Union both sets and widen the represented window to include both.
         #[inline]
         pub fn union(&mut self, other: &Self) {
+            if other.ordinal_lo > other.ordinal_hi {
+                return;
+            }
+            if self.ordinal_lo > self.ordinal_hi {
+                *self = other.clone();
+            } else if self.ordinal_lo > other.ordinal_lo {
+                let mut combined = other.clone();
+                combined.union_from(self);
+                *self = combined;
+            } else {
+                self.union_from(other);
+            }
+        }
+
+        fn union_from(&mut self, other: &Self) {
+            self.ordinal_hi = self.ordinal_hi.max(other.ordinal_hi);
+            self.words.resize(Self::words_for_window(self.ordinal_lo, self.ordinal_hi), 0);
             if self.ordinal_lo == other.ordinal_lo {
-                if other.words.len() > self.words.len() {
-                    self.words.resize(other.words.len(), 0);
-                }
-                for (a, b) in self.words.iter_mut().zip(other.words.iter()) {
+                for (a, b) in self.words.iter_mut().zip(&other.words) {
                     *a |= *b;
                 }
                 return;
             }
-            let lo = self.ordinal_lo.0.min(other.ordinal_lo.0);
-            let hi = self.ordinal_hi.0.max(other.ordinal_hi.0);
-            let mut out = VersionBitmap::empty(VersionOrdinal(lo), VersionOrdinal(hi));
-            for ord in self.ordinal_lo.0..=self.ordinal_hi.0 {
-                let o = VersionOrdinal(ord);
-                if self.contains_ordinal(o) {
-                    out.set_ordinal(o);
-                }
+            for (index, word) in self.words.iter_mut().enumerate() {
+                *word |= other.word_at(i32::from(self.ordinal_lo.0) + 64 * index as i32);
             }
-            for ord in other.ordinal_lo.0..=other.ordinal_hi.0 {
-                let o = VersionOrdinal(ord);
-                if other.contains_ordinal(o) {
-                    out.set_ordinal(o);
-                }
+        }
+
+        /// Read 64 bits in absolute ordinal space, with zero extension.
+        fn word_at(&self, ordinal: i32) -> u64 {
+            let offset = ordinal - i32::from(self.ordinal_lo.0);
+            let index = offset.div_euclid(64);
+            let shift = offset.rem_euclid(64) as u32;
+            let get = |index| {
+                usize::try_from(index)
+                    .ok()
+                    .and_then(|i| self.words.get(i))
+                    .copied()
+                    .unwrap_or(0)
+            };
+            let low = get(index) >> shift;
+            if shift == 0 {
+                low
+            } else {
+                low | (get(index + 1) << (64 - shift))
             }
-            *self = out;
         }
         #[inline]
         pub fn is_empty(&self) -> bool {
@@ -330,6 +327,13 @@ pub mod chart {
                 .get(offset / 64)
                 .is_some_and(|word| word & (1u64 << (offset % 64)) != 0)
         }
+        pub fn clear_ordinal(&mut self, ordinal: VersionOrdinal) {
+            if ordinal >= self.ordinal_lo && ordinal <= self.ordinal_hi {
+                let bit = usize::from(ordinal.0 - self.ordinal_lo.0);
+                self.words[bit / 64] &= !(1u64 << (bit % 64));
+            }
+        }
+
         /// Pick arbitrary set bit (for greedy selection)
         #[inline]
         pub fn pick_one(&self) -> Option<VersionOrdinal> {
@@ -365,6 +369,9 @@ pub mod chart {
         pub fn contains_interval(&self, interval: &VersionInterval) -> bool {
             if interval.is_empty() {
                 return true;
+            }
+            if interval.lo < self.ordinal_lo || interval.hi > self.ordinal_hi {
+                return false;
             }
             let lo_idx = (interval.lo.0 - self.ordinal_lo.0) as usize;
             let hi_idx = (interval.hi.0 - self.ordinal_lo.0) as usize;
@@ -421,47 +428,27 @@ pub mod chart {
         /// Real version strings, indexed by ordinal offset from `ordinal_lo`.
         /// `versions[ordinal.0 - ordinal_lo.0]` = the npm version string.
         pub versions: Vec<String>,
+        pub latest: Option<VersionOrdinal>,
         pub deps: Vec<DependencyEdge>,
         pub peers: Vec<PeerEdge>,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
     pub struct DependencyEdge {
         pub target_pkg: u32,
-        /// The raw spec this dependent asked for. `required`/`required_mask` are
-        /// what propagation uses; the string is what a human is shown, and it is
-        /// the derivation a later `jhol why` can answer from.
-        #[serde(default)]
+        pub target_name: String,
         pub spec: String,
-        /// The requirement expressed in a *generic* ordinal scale. Kept for
-        /// legacy readers and for the "is this range empty" questions; it is
-        /// NOT usable for narrowing because the scale is not the target's.
+        /// Generic-scale interval for Atlas diagnostics.
         pub required: VersionInterval,
-        /// The requirement expressed in the **target package's** version
-        /// ordinals — computed once at chart-build time by evaluating the raw
-        /// spec against the target's published version list.
-        ///
-        /// This is the field propagation narrows with. Without it, transitive
-        /// requirements could not narrow at all: `parse_single_range` returns
-        /// the full range for exact pins and plain versions, so an edge looked
-        /// unconstrained and every package resolved to its newest version.
-        #[serde(default)]
+        /// Absolute ordinals of the parent releases declaring this edge.
+        pub declaring: VersionBitmap,
+        /// Exact target ordinals. An empty mask proves no published match.
+        /// A missing mask means the requirement could not be evaluated.
         pub required_mask: Option<VersionBitmap>,
         pub optional: bool,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
-    pub struct PeerEdge {
-        pub target_pkg: u32,
-        /// Raw peer spec, for the same reason as `DependencyEdge::spec`.
-        #[serde(default)]
-        pub spec: String,
-        /// Generic-scale requirement (see `DependencyEdge::required`).
-        pub required: VersionInterval,
-        /// Target-ordinal requirement (see `DependencyEdge::required_mask`).
-        #[serde(default)]
-        pub required_mask: Option<VersionBitmap>,
-    }
+    pub type PeerEdge = DependencyEdge;
 
     /// Exact Betti numbers for a chart's constraint complex.
     /// H⁰ = connected components, H¹ = cycles, H² = voids.
@@ -499,6 +486,8 @@ pub mod chart {
     pub struct Chart {
         pub id: u64,                                  // semantic hash of constraint signature
         pub packages: HashMap<u32, ChartPackage>,     // by package_id
+        /// Explicit roots for a project chart. An Atlas chart has no root context.
+        pub roots: Option<Vec<u32>>,
         pub transitions: HashMap<u64, TransitionMap>, // to neighboring charts
         pub betti: BettiNumbers,
         pub merkle_root: [u8; 32], // content hash for Atlas DAG
@@ -742,21 +731,18 @@ pub mod atlas {
     fn merge_chart(a: &mut Chart, b: &Chart) -> Result<(), String> {
         for (pkg_id, pkg_b) in &b.packages {
             if let Some(pkg_a) = a.packages.get_mut(pkg_id) {
-                // Intersect allowed versions
+                if pkg_a.ordinal_lo != pkg_b.ordinal_lo
+                    || pkg_a.ordinal_hi != pkg_b.ordinal_hi
+                    || pkg_a.versions != pkg_b.versions
+                    || pkg_a.latest != pkg_b.latest
+                    || pkg_a.deps != pkg_b.deps
+                    || pkg_a.peers != pkg_b.peers
+                {
+                    return Err(format!("incompatible release facts for package {}", pkg_id));
+                }
                 pkg_a.allowed.intersect(&pkg_b.allowed);
                 if pkg_a.allowed.is_empty() {
                     return Err(format!("empty intersection for package {}", pkg_id));
-                }
-                // Union dependencies (they should be compatible via transition)
-                for dep in &pkg_b.deps {
-                    if !pkg_a.deps.iter().any(|d| d.target_pkg == dep.target_pkg) {
-                        pkg_a.deps.push(dep.clone());
-                    }
-                }
-                for peer in &pkg_b.peers {
-                    if !pkg_a.peers.iter().any(|p| p.target_pkg == peer.target_pkg) {
-                        pkg_a.peers.push(peer.clone());
-                    }
                 }
             } else {
                 a.packages.insert(*pkg_id, pkg_b.clone());
@@ -789,28 +775,30 @@ pub mod atlas {
         proof_hash.as_slice() == trans.merkle_proof
     }
 
-    /// Compute SHA-256 hash of chart for Merkle DAG
-    fn compute_chart_hash(chart: &Chart) -> [u8; 32] {
+    /// Digest the exact inputs used by the solver and Atlas transition lookup.
+    pub(crate) fn compute_chart_hash(chart: &Chart) -> [u8; 32] {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
-        hasher.update(chart.id.to_le_bytes());
-        hasher.update((chart.packages.len() as u64).to_le_bytes());
-        for (pkg_id, pkg) in &chart.packages {
-            hasher.update(pkg_id.to_le_bytes());
-            hasher.update(pkg.ordinal_lo.0.to_le_bytes());
-            hasher.update(pkg.ordinal_hi.0.to_le_bytes());
-            // Hash bitmap
-            for word in &pkg.allowed.words {
-                hasher.update(word.to_le_bytes());
-            }
+        let mut write = |value: &[u8]| {
+            hasher.update((value.len() as u64).to_le_bytes());
+            hasher.update(value);
+        };
+        write(b"jhol-atlas-chart-v2");
+        write(&chart.id.to_le_bytes());
+        write(&bincode::serialize(&chart.roots).expect("serializable roots"));
+        let mut packages: Vec<_> = chart.packages.iter().collect();
+        packages.sort_unstable_by_key(|(id, _)| **id);
+        for (&id, package) in packages {
+            write(&id.to_le_bytes());
+            write(&bincode::serialize(package).expect("serializable package"));
         }
-        for (to_id, trans) in &chart.transitions {
-            hasher.update(to_id.to_le_bytes());
-            for (pkg, interval) in &trans.package_map {
-                hasher.update(pkg.to_le_bytes());
-                hasher.update(interval.lo.0.to_le_bytes());
-                hasher.update(interval.hi.0.to_le_bytes());
-            }
+        let mut transitions: Vec<_> = chart.transitions.iter().collect();
+        transitions.sort_unstable_by_key(|(id, _)| **id);
+        for (&id, transition) in transitions {
+            write(&id.to_le_bytes());
+            let mut mappings: Vec<_> = transition.package_map.iter().collect();
+            mappings.sort_unstable_by_key(|(id, _)| **id);
+            write(&bincode::serialize(&mappings).expect("serializable transition"));
         }
         hasher.finalize().into()
     }
@@ -838,10 +826,22 @@ pub mod atlas {
         let lo = *ords.first()?;
         let hi = *ords.last()?;
         let mut mask = VersionBitmap::empty(lo, hi);
-        let mut any = false;
         // Compile the range once: matching a spec against every published
         // version is the inner loop of chart build.
+        if spec.contains("||") && spec.split("||").any(|part| {
+            part.trim().is_empty() || semver::VersionReq::parse(part.trim()).is_err()
+        }) {
+            return None;
+        }
         let compiled = crate::registry::compile_spec(spec);
+        if matches!(compiled, crate::registry::CompiledSpec::Unsupported) {
+            if spec == "latest" {
+                let (ordinal, _) = preferred.get(&target)?;
+                mask.set_ordinal(*ordinal);
+                return Some(mask);
+            }
+            return None;
+        }
         for (i, ver) in parsed.iter().enumerate() {
             // Parsed once per package, not once per (spec, version) pair:
             // `version_satisfies` re-parses the version string on every call,
@@ -853,34 +853,14 @@ pub mod atlas {
             };
             if satisfied {
                 mask.set_ordinal(VersionOrdinal(ords[i].0));
-                any = true;
             }
         }
-        if any {
-            // Cap at the registry's `latest` tag when that release satisfies this very spec.
-            // Measured on four tools: npm, bun, pnpm and yarn all install the tagged version for
-            // an ordinary range even when a published-but-untagged release also satisfies it.
-            // The cap is applied per edge and only when the tag satisfies it, so a range that
-            // genuinely needs a newer release (`^1.3.1` with latest 1.3.0) is untouched.
-            if let Some((cap, Some(cap_version))) = preferred.get(&target) {
-                if compiled.matches(cap_version) && *cap >= lo && *cap <= hi {
-                    let window = VersionBitmap::from_interval(VersionInterval::new(lo, *cap));
-                    mask.intersect(&window);
-                }
-            }
-            Some(mask)
-        } else {
-            // Nothing published satisfies this requirement: leave the mask empty
-            // so propagation reports a conflict rather than accepting anything.
-            Some(VersionBitmap::empty(lo, hi))
-        }
+        Some(mask)
     }
 
     /// The `latest` dist-tag of each package, as (ordinal, parsed version).
     ///
-    /// Edge masks cap at this when the tagged release satisfies the edge's range: measured on
-    /// npm, bun, pnpm and yarn, all four install the tagged version for an ordinary range even
-    /// when a published-but-untagged release also satisfies it.
+    /// Search tries the tag first when it remains in the current domain.
     pub(crate) fn preferred_from_tags(
         packuments: &HashMap<String, serde_json::Value>,
         name_to_id: &HashMap<String, u32>,
@@ -906,13 +886,41 @@ pub mod atlas {
         out
     }
 
-    /// Build chart from constraint set (for precompute)
+    /// Build an Atlas chart with unconditional declarations.
     pub fn build_chart_from_constraints(
         constraints: &HashMap<u32, VersionInterval>,
         package_versions: &HashMap<u32, Vec<VersionOrdinal>>,
         package_version_strings: &HashMap<u32, Vec<String>>,
         package_deps: &HashMap<u32, Vec<(u32, String, VersionInterval, bool)>>,
         package_peers: &HashMap<u32, Vec<(u32, String, VersionInterval)>>,
+        preferred: &HashMap<u32, (VersionOrdinal, Option<semver::Version>)>,
+    ) -> Chart {
+        use crate::jagr_index::IndexEdge;
+        let names: HashMap<_, _> = constraints.keys().map(|&id| (id.to_string(), id)).collect();
+        let offsets = |id| {
+            (0..package_version_strings.get(id).map_or(0, Vec::len) as u32).collect()
+        };
+        let deps = package_deps.iter().map(|(id, edges)| {
+            (*id, edges.iter().map(|(target, spec, _, optional)| IndexEdge {
+                target: target.to_string(), spec: spec.clone(), optional: *optional, declaring: offsets(id),
+            }).collect())
+        }).collect();
+        let peers = package_peers.iter().map(|(id, edges)| {
+            (*id, edges.iter().map(|(target, spec, _)| IndexEdge {
+                target: target.to_string(), spec: spec.clone(), optional: false, declaring: offsets(id),
+            }).collect())
+        }).collect();
+        build_release_chart(constraints, package_versions, package_version_strings, &deps, &peers, &names, preferred)
+    }
+
+    /// Build exact edge relations over each pair of package ordinal spaces.
+    pub fn build_release_chart(
+        constraints: &HashMap<u32, VersionInterval>,
+        package_versions: &HashMap<u32, Vec<VersionOrdinal>>,
+        package_version_strings: &HashMap<u32, Vec<String>>,
+        package_deps: &HashMap<u32, Vec<crate::jagr_index::IndexEdge>>,
+        package_peers: &HashMap<u32, Vec<crate::jagr_index::IndexEdge>>,
+        name_to_id: &HashMap<String, u32>,
         preferred: &HashMap<u32, (VersionOrdinal, Option<semver::Version>)>,
     ) -> Chart {
         let mut packages = HashMap::new();
@@ -934,6 +942,7 @@ pub mod atlas {
             })
             .collect();
 
+        let mut mask_cache = HashMap::new();
         for (pkg_id, required) in constraints {
             // If version list absent, fall back to full ordinal domain.
             let versions = package_versions.get(pkg_id);
@@ -942,89 +951,55 @@ pub mod atlas {
                 _ => (VersionOrdinal::MIN, VersionOrdinal::MAX),
             };
 
-            let mut allowed = VersionBitmap::new(ordinal_lo, ordinal_hi);
-            allowed.set_interval(*required);
+            let mut allowed = VersionBitmap::empty(ordinal_lo, ordinal_hi);
+            if let Some(versions) = versions {
+                for &ordinal in versions {
+                    if required.contains(ordinal) {
+                        allowed.set_ordinal(ordinal);
+                    }
+                }
+            }
 
             let version_strings = package_version_strings
                 .get(pkg_id)
                 .cloned()
                 .unwrap_or_default();
 
-            // Resolve every requirement into the *target's* ordinal space, once.
-            // `mask_for` evaluates the raw spec against the target's published
-            // version strings, which is the only representation propagation can
-            // intersect with a target domain.
-            // Memoised per (target, spec). A chart has thousands of edges but
-            // very few *distinct* (target, spec) pairs — "^1.2.3" repeats
-            // dominate on real trees — so without this the same spec was
-            // re-evaluated against the target's whole version list once per
-            // edge: O(edges x versions) work for O(distinct specs x versions)
-            // facts.
-            let mask_cache: std::cell::RefCell<
-                HashMap<(u32, String), Option<VersionBitmap>>,
-            > = std::cell::RefCell::new(HashMap::new());
-            let mask_for = |target: u32, spec: &str| -> Option<VersionBitmap> {
-                let key = (target, spec.to_string());
-                if let Some(hit) = mask_cache.borrow().get(&key) {
-                    return hit.clone();
-                }
-                let computed = compute_mask(
-                    target,
-                    spec,
-                    &parsed_versions,
-                    package_version_strings,
-                    package_versions,
-                    preferred,
-                );
-                mask_cache.borrow_mut().insert(key, computed.clone());
-                computed
+            // Compile each distinct target range once for the whole chart.
+            let mut mask_for = |target: u32, spec: &str| {
+                mask_cache.entry((target, spec.to_owned())).or_insert_with(|| {
+                    compute_mask(target, spec, &parsed_versions, package_version_strings, package_versions, preferred)
+                }).clone()
             };
 
-            // Deterministic edge order. `extract_deps` builds its result from a
-            // HashSet, so the order of a package's edges depended on hashing —
-            // the solver is pure, but the chart it was given was not. Sorting by
-            // (target, spec, optional) makes the chart a function of its inputs,
-            // which is what "same manifest, same tree" requires. It also makes a
-            // chart built from the binary index comparable to one built from JSON.
-            let mut deps: Vec<crate::jagr_infinite::chart::DependencyEdge> = package_deps
-                .get(pkg_id)
-                .map(|v| {
-                    v.iter()
-                        .map(|(t, spec, r, opt)| crate::jagr_infinite::chart::DependencyEdge {
-                            target_pkg: *t,
-                            spec: spec.clone(),
-                            required: *r,
-                            required_mask: mask_for(*t, spec),
-                            optional: *opt,
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let mut peers: Vec<crate::jagr_infinite::chart::PeerEdge> = package_peers
-                .get(pkg_id)
-                .map(|v| {
-                    v.iter()
-                        .map(|(t, spec, r)| crate::jagr_infinite::chart::PeerEdge {
-                            target_pkg: *t,
-                            spec: spec.clone(),
-                            required: *r,
-                            required_mask: mask_for(*t, spec),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            deps.sort_by(|a, b| {
-                (a.target_pkg, a.spec.as_str(), a.optional).cmp(&(
-                    b.target_pkg,
-                    b.spec.as_str(),
-                    b.optional,
-                ))
-            });
-            peers.sort_by(|a, b| {
-                (a.target_pkg, a.spec.as_str()).cmp(&(b.target_pkg, b.spec.as_str()))
-            });
+            let mut build_edges = |edges: Option<&Vec<crate::jagr_index::IndexEdge>>| {
+                let mut edges: Vec<_> = edges.into_iter().flatten().map(|edge| {
+                    let target = name_to_id.get(&edge.target).copied().unwrap_or(u32::MAX);
+                    let mut declaring = VersionBitmap::empty(ordinal_lo, ordinal_hi);
+                    for &offset in &edge.declaring {
+                        if let Some(ordinal) = versions.and_then(|list| list.get(offset as usize)) {
+                            declaring.set_ordinal(*ordinal);
+                        }
+                    }
+                    crate::jagr_infinite::chart::DependencyEdge {
+                        target_pkg: target,
+                        target_name: edge.target.clone(),
+                        spec: edge.spec.clone(),
+                        required: crate::jagr_infinite::precompute::spec_to_interval(&edge.spec)
+                            .unwrap_or_else(VersionInterval::full),
+                        declaring,
+                        required_mask: mask_for(target, &edge.spec),
+                        optional: edge.optional,
+                    }
+                }).collect();
+                edges.sort_unstable_by(|a, b| {
+                    (a.target_pkg, &a.target_name, &a.spec, a.optional)
+                        .cmp(&(b.target_pkg, &b.target_name, &b.spec, b.optional))
+                });
+                edges
+            };
+            let deps = build_edges(package_deps.get(pkg_id));
+            let peers = build_edges(package_peers.get(pkg_id));
             packages.insert(
                 *pkg_id,
                 ChartPackage {
@@ -1034,6 +1009,7 @@ pub mod atlas {
                     ordinal_hi,
                     allowed,
                     versions: version_strings,
+                    latest: preferred.get(pkg_id).map(|(ordinal, _)| *ordinal),
                     deps,
                     peers,
                 },
@@ -1048,6 +1024,7 @@ pub mod atlas {
         let mut chart = Chart {
             id,
             packages,
+            roots: None,
             transitions: HashMap::new(),
             peer_warnings: Vec::new(),
             betti,
@@ -1711,7 +1688,7 @@ pub mod precompute {
     // npm versions for lockfile/output.
 
     use crate::jagr_infinite::{
-        atlas::{build_chart_from_constraints, Atlas},
+        atlas::Atlas,
         chart::{Chart, VersionInterval, VersionOrdinal},
     };
     use std::collections::{HashMap, HashSet};
@@ -1727,19 +1704,11 @@ pub mod precompute {
         use rayon::prelude::*;
 
         let t0 = std::time::Instant::now();
-        let items: Vec<(
-            u32,
-            (Vec<VersionOrdinal>, Vec<String>),
-            Vec<(u32, String, VersionInterval, bool)>,
-            Vec<(u32, String, VersionInterval)>,
-        )> = packuments
+        let items: Vec<_> = packuments
             .par_iter()
             .filter_map(|(name, packument)| {
                 let &pkg_id = name_to_id.get(name)?;
-                let vs_strs = extract_versions_sorted(packument);
-                let d = extract_deps(packument, name_to_id);
-                let p = extract_peers(packument, name_to_id);
-                Some((pkg_id, vs_strs, d, p))
+                Some((pkg_id, crate::jagr_index::package_from_packument(name, packument)))
             })
             .collect();
 
@@ -1756,24 +1725,19 @@ pub mod precompute {
         let mut deps = HashMap::with_capacity(items.len());
         let mut peers = HashMap::with_capacity(items.len());
 
-        for (pkg_id, (vs, strs), d, p) in items {
+        for (pkg_id, package) in items {
             constraints.insert(pkg_id, VersionInterval::full());
-            versions.insert(pkg_id, vs);
-            version_strings.insert(pkg_id, strs);
-            deps.insert(pkg_id, d);
-            peers.insert(pkg_id, p);
+            versions.insert(pkg_id, ordinals_for(&package.versions));
+            version_strings.insert(pkg_id, package.versions);
+            deps.insert(pkg_id, package.deps);
+            peers.insert(pkg_id, package.peers);
         }
 
         let t_assemble = std::time::Instant::now();
         let preferred =
             crate::jagr_infinite::atlas::preferred_from_tags(packuments, name_to_id, &versions, &version_strings);
-        let mut chart = build_chart_from_constraints(
-            &constraints,
-            &versions,
-            &version_strings,
-            &deps,
-            &peers,
-            &preferred,
+        let mut chart = crate::jagr_infinite::atlas::build_release_chart(
+            &constraints, &versions, &version_strings, &deps, &peers, name_to_id, &preferred,
         );
         if std::env::var_os("JAGR_PROFILE_CHART").is_some() {
             eprintln!(
@@ -1868,25 +1832,16 @@ pub mod precompute {
         (atlas, name_to_id)
     }
 
-    /// Extract versions sorted by semver ascending; ordinals = rank order.
-    /// Version strings stay parallel to the ordinal positions.
-    fn extract_versions_sorted(
-        packument: &serde_json::Value,
-    ) -> (Vec<VersionOrdinal>, Vec<String>) {
-        let mut parsed: Vec<semver::Version> = Vec::new();
-        if let Some(versions) = packument.get("versions").and_then(|v| v.as_object()) {
-            for vstr in versions.keys() {
-                if let Ok(v) = semver::Version::parse(vstr) {
-                    parsed.push(v);
-                }
-            }
+    fn ordinals_for(versions: &[String]) -> Vec<VersionOrdinal> {
+        if versions.len() > usize::from(u16::MAX) + 1 {
+            return Vec::new();
         }
-        parsed.sort();
-        let ordinals = (0..parsed.len())
-            .map(|i| VersionOrdinal(i as u16))
-            .collect::<Vec<_>>();
-        let strings = parsed.iter().map(|v| v.to_string()).collect::<Vec<_>>();
-        (ordinals, strings)
+        (0..versions.len()).map(|i| VersionOrdinal(i as u16)).collect()
+    }
+
+    fn extract_versions_sorted(packument: &serde_json::Value) -> (Vec<VersionOrdinal>, Vec<String>) {
+        let package = crate::jagr_index::package_from_packument("", packument);
+        (ordinals_for(&package.versions), package.versions)
     }
 
     #[cfg(test)]
@@ -1990,180 +1945,19 @@ pub mod precompute {
             // each package in the cluster (O(P^2) string comparisons per install).
             if let Some(name) = id_to_name.get(&pkg_id) {
                 if let Some(packument) = packuments.get(name) {
-                    deps.insert(pkg_id, extract_deps(packument, name_to_id));
-                    peers.insert(pkg_id, extract_peers(packument, name_to_id));
+                    let package = crate::jagr_index::package_from_packument(name, packument);
+                    deps.insert(pkg_id, package.deps);
+                    peers.insert(pkg_id, package.peers);
                 }
             }
         }
 
-        build_chart_from_constraints(
-            &constraints,
-            &versions,
-            &version_strings,
-            &deps,
-            &peers,
-            &HashMap::new(),
+        let preferred = crate::jagr_infinite::atlas::preferred_from_tags(
+            packuments, name_to_id, &versions, &version_strings,
+        );
+        crate::jagr_infinite::atlas::build_release_chart(
+            &constraints, &versions, &version_strings, &deps, &peers, name_to_id, &preferred,
         )
-    }
-
-    /// Extract dependency edges: dep_id + interval over its ordinal domain.
-    ///
-    /// Deduplicated: every published version of a package is scanned, so the same
-    /// `(dep_id, interval)` pair recurs once per version that declares it, and the
-    /// chart only needs the *set* of edges. Without dedupe a package like `next`
-    /// (~1000 versions x ~30 deps) contributed ~30k near-identical entries, and a
-    /// 300-package project held millions of them — the bulk of the RSS and of the
-    /// `spec_to_interval` time that made a 12-dependency install exceed 4 GB.
-    fn extract_deps(
-        packument: &serde_json::Value,
-        name_to_id: &HashMap<String, u32>,
-    ) -> Vec<(u32, String, VersionInterval, bool)> {
-        // Dependency declarations repeat across many releases. Deduplicate the
-        // borrowed (name, spec, optional) triples before semver parsing so
-        // repeated ranges cost one parse, without allocating intermediate
-        // Strings.
-        //
-        // The optional flag is carried through to the chart because the two
-        // classes behave differently at resolution time: a required edge that
-        // cannot be satisfied is a conflict, while an optional edge that cannot
-        // be satisfied is *dropped* (npm installs the tree and omits the leaf).
-        // Marking every edge required — which this did — meant one unavailable
-        // platform-specific optional dependency could fail a whole install.
-        let mut specs: HashSet<(&str, &str, bool)> = HashSet::new();
-        if let Some(versions) = packument.get("versions").and_then(|v| v.as_object()) {
-            for ver_info in versions.values() {
-                for (key, optional) in [("dependencies", false), ("optionalDependencies", true)] {
-                    if let Some(deps) = ver_info.get(key).and_then(|v| v.as_object()) {
-                        for (dep_name, spec) in deps {
-                            if name_to_id.contains_key(dep_name) {
-                                // Trim before dedup: `" ^1.0.0 "` and
-                                // `"^1.0.0"` are the same requirement, and two
-                                // edges for one requirement would build two
-                                // masks for the same thing.
-                                specs.insert((
-                                    dep_name.as_str(),
-                                    spec.as_str().unwrap_or("*").trim(),
-                                    optional,
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // A name declared in both sections is a hard dependency: npm treats the
-        // required declaration as authoritative.
-        let mut required_names: HashSet<&str> = HashSet::new();
-        for (name, _, optional) in &specs {
-            if !*optional {
-                required_names.insert(name);
-            }
-        }
-        let mut edges = HashSet::with_capacity(specs.len());
-        for (dep_name, spec, optional) in specs {
-            let optional = optional && !required_names.contains(dep_name);
-            if let (Some(&dep_id), Some(interval)) =
-                (name_to_id.get(dep_name), spec_to_interval(spec))
-            {
-                // The raw spec rides along: the chart builder evaluates it
-                // against the target's published version list to produce a mask
-                // in the target's own ordinal space, which is what propagation
-                // intersects. The generic interval cannot do that.
-                edges.insert((dep_id, spec.to_string(), interval, optional));
-            }
-        }
-        edges.into_iter().collect()
-    }
-
-    /// Extract peer dependency edges (deduplicated, see `extract_deps`).
-    fn extract_peers(
-        packument: &serde_json::Value,
-        name_to_id: &HashMap<String, u32>,
-    ) -> Vec<(u32, String, VersionInterval)> {
-        // Same borrowed pre-deduplication as extract_deps; peer ranges also
-        // recur heavily across release histories.
-        let mut specs: HashSet<(&str, &str)> = HashSet::new();
-        if let Some(versions) = packument.get("versions").and_then(|v| v.as_object()) {
-            for ver_info in versions.values() {
-                if let Some(peers) = ver_info.get("peerDependencies").and_then(|v| v.as_object()) {
-                    for (peer_name, spec) in peers {
-                        if name_to_id.contains_key(peer_name) {
-                            specs.insert((
-                                peer_name.as_str(),
-                                spec.as_str().unwrap_or("*").trim(),
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-        let mut edges = HashSet::with_capacity(specs.len());
-        for (peer_name, spec) in specs {
-            if let (Some(&peer_id), Some(interval)) =
-                (name_to_id.get(peer_name), spec_to_interval(spec))
-            {
-                // The raw spec rides along so the chart builder can build a
-                // mask in the *peer's* ordinal space — the same reason
-                // dependencies carry theirs.
-                edges.insert((peer_id, spec.to_string(), interval));
-            }
-        }
-        edges.into_iter().collect()
-    }
-
-    #[cfg(test)]
-    mod edge_dedup_tests {
-        use super::{extract_deps, extract_peers};
-        use serde_json::json;
-        use std::collections::HashMap;
-
-        #[test]
-        fn repeated_dependency_and_peer_specs_keep_same_unique_edges() {
-            let packument = json!({
-                "versions": {
-                    "1.0.0": {
-                        "dependencies": { "shared": "^1.0.0", "invalid": "not a range" },
-                        "peerDependencies": { "host": ">=2 <4" }
-                    },
-                    "2.0.0": {
-                        "dependencies": { "shared": "^1.0.0", "invalid": "not a range" },
-                        "peerDependencies": { "host": ">=2 <4" }
-                    },
-                    "3.0.0": {
-                        "dependencies": { "shared": "~1.2.0" },
-                        "peerDependencies": { "host": "^3.0.0" }
-                    },
-                    "4.0.0": {
-                        "dependencies": { "shared": " ^1.0.0 " },
-                        "peerDependencies": { "host": " ^3.0.0 " }
-                    }
-                }
-            });
-            let ids = HashMap::from([
-                ("shared".to_string(), 7),
-                ("host".to_string(), 9),
-                ("invalid".to_string(), 11),
-            ]);
-
-            let deps = extract_deps(&packument, &ids);
-            let peers = extract_peers(&packument, &ids);
-
-            // Dedup is on (target, SPEC, interval, optional). It used to be on
-            // (target, interval), and because the generic-scale interval for
-            // `^1.0.0` and `~1.2.0` came out identical, two genuinely different
-            // requirements collapsed into one — which then produced a mask that
-            // satisfied neither precisely. Repeats of the *same* spec still
-            // collapse (^1.0.0 appears twice, and " ^1.0.0 " with whitespace),
-            // and an unparsable spec is still dropped.
-            assert_eq!(deps.len(), 2, "expected ^1.0.0 and ~1.2.0: {:?}", deps);
-            assert!(deps.iter().all(|(id, _, _, opt)| *id == 7 && !*opt));
-            let mut specs: Vec<&str> = deps.iter().map(|(_, s, _, _)| s.as_str()).collect();
-            specs.sort();
-            assert_eq!(specs, vec!["^1.0.0", "~1.2.0"]);
-
-            assert_eq!(peers.len(), 1);
-            assert!(peers.iter().all(|(id, _, _)| *id == 9));
-        }
     }
 
     /// Parse a semver range (`^1.2.0`, `~0.4`, exact, `*`, `||` alternatives)
@@ -2337,14 +2131,16 @@ pub mod persistence {
 
     /// Persist Atlas to .jhol-atlas format (Merkle DAG)
     pub fn persist_atlas(atlas: &Atlas, path: &Path) -> Result<(), String> {
-        let data = bincode::serialize(atlas).map_err(|e| e.to_string())?;
+        let mut data = b"JHOLATL2".to_vec();
+        bincode::serialize_into(&mut data, atlas).map_err(|e| e.to_string())?;
         std::fs::write(path, data).map_err(|e| e.to_string())
     }
 
     /// Load Atlas from .jhol-atlas
     pub fn load_atlas(path: &Path) -> Result<Atlas, String> {
         let data = std::fs::read(path).map_err(|e| e.to_string())?;
-        bincode::deserialize(&data).map_err(|e| e.to_string())
+        let body = data.strip_prefix(b"JHOLATL2").ok_or("obsolete Atlas format")?;
+        bincode::deserialize(body).map_err(|e| e.to_string())
     }
 
     /// Incremental Atlas sync (for registry updates)
@@ -2652,207 +2448,68 @@ pub mod rvm {
                 Ok(())
             }
 
-            // ── The engine: bitmap propagation, bounded search, exact verification
-            //
-            // Design note (why this is not a clone of anything): a package's
-            // version domain here is a **fixed-width bitmap over dense ordinals**
-            // (`VersionBitmap`). Narrowing is a word-wise AND, so the cost of
-            // "intersect a dependent's requirement into a package's domain" is
-            // O(64 versions) of machine words rather than semver string work.
-            // The loop below therefore narrows to a fixpoint with a dirty queue
-            // (each package re-queued only when its domain actually shrank)
-            // instead of re-deriving constraints per decision. Search is only
-            // entered when narrowing stalls, and it is bounded, so a pathological
-            // graph costs a controlled number of steps rather than a hang.
+            // Propagation projects mandatory relations onto target domains.
+            // Search activates the remaining version-conditioned dependencies.
             pub(crate) fn propagate(
                 mut chart: crate::jagr_infinite::chart::Chart,
             ) -> Result<crate::jagr_infinite::chart::Chart, String> {
-                use std::collections::{HashMap, VecDeque};
+                use crate::jagr_infinite::chart::VersionBitmap;
+                use std::collections::{BTreeMap, BTreeSet};
 
-                // Reverse index: which packages constrain this one, and how.
-                // (parent, generic interval, target-space mask, optional)
-                type Incoming = HashMap<
-                    u32,
-                    Vec<(
-                        u32,
-                        crate::jagr_infinite::chart::VersionInterval,
-                        Option<crate::jagr_infinite::chart::VersionBitmap>,
-                        bool,
-                    )>,
-                >;
-                let mut incoming: Incoming = HashMap::new();
-                for (pid, pkg) in &chart.packages {
-                    for edge in &pkg.deps {
-                        incoming.entry(edge.target_pkg).or_default().push((
-                            *pid,
-                            edge.required,
-                            edge.required_mask.clone(),
-                            edge.optional,
-                        ));
+                let mut active: BTreeSet<_> = chart.roots.clone()
+                    .unwrap_or_else(|| chart.packages.keys().copied().collect())
+                    .into_iter().collect();
+                // Each sweep can only add mandatory packages or remove candidates.
+                // Search checks all remaining relations if this cheap prepass hits its cap.
+                for _ in 0..chart.packages.len().clamp(1, 16) {
+                    let mut changed = false;
+                    for pid in active.iter().copied().collect::<Vec<_>>() {
+                        let Some(parent) = chart.packages.get(&pid) else {
+                            return Err(format!("JAGR-∞: missing root metadata for {pid}"));
+                        };
+                        if parent.allowed.is_empty() {
+                            return Err(format!("JAGR-∞ conflict: {}", Self::explain_empty(&chart, pid)));
+                        }
+                        let mut by_target: BTreeMap<u32, (VersionBitmap, VersionBitmap)> = BTreeMap::new();
+                        for edge in parent.deps.iter().filter(|edge| !edge.optional) {
+                            let mut declaring = parent.allowed.clone();
+                            declaring.intersect(&edge.declaring);
+                            if declaring.is_empty() {
+                                continue;
+                            }
+                            let (Some(target), Some(mask)) =
+                                (chart.packages.get(&edge.target_pkg), edge.required_mask.as_ref())
+                            else {
+                                // Search reports incomplete metadata if it reaches this edge.
+                                continue;
+                            };
+                            let mut compatible = target.allowed.clone();
+                            compatible.intersect(mask);
+                            let relation = by_target.entry(edge.target_pkg).or_insert_with(|| (
+                                VersionBitmap::empty(parent.ordinal_lo, parent.ordinal_hi),
+                                VersionBitmap::empty(target.ordinal_lo, target.ordinal_hi),
+                            ));
+                            relation.0.union(&declaring);
+                            relation.1.union(&compatible);
+                        }
+                        for (target, (coverage, compatible)) in by_target {
+                            // A release with no edge to this target leaves it unrestricted.
+                            if coverage != chart.packages[&pid].allowed {
+                                continue;
+                            }
+                            changed |= active.insert(target);
+                            let child = chart.packages.get_mut(&target).expect("known target");
+                            if child.allowed != compatible {
+                                child.allowed = compatible;
+                                changed = true;
+                            }
+                            if child.allowed.is_empty() {
+                                return Err(format!("JAGR-∞ conflict: {}", Self::explain_empty(&chart, target)));
+                            }
+                        }
                     }
-                }
-
-                // Deterministic processing order. `incoming` is built by
-                // iterating a HashMap, so the order requirements were applied in
-                // depended on hashing — the same manifest could narrow by a
-                // different route and (with masks that tie) settle differently.
-                // Propagation is idempotent and monotone, so sorting cannot
-                // change the fixpoint, only guarantee it is reached identically.
-                for parents in incoming.values_mut() {
-                    parents.sort_by(|a, b| a.0.cmp(&b.0));
-                }
-
-                let mut dirty: VecDeque<u32> = VecDeque::new();
-                // Membership side-set: `VecDeque::contains` is a linear scan,
-                // so a naive re-queue was O(n^2) on a large graph.
-                let mut queued: std::collections::HashSet<u32> = std::collections::HashSet::new();
-                let mut initial: Vec<u32> = chart.packages.keys().copied().collect();
-                initial.sort_unstable();
-                for pid in initial {
-                    dirty.push_back(pid);
-                    queued.insert(pid);
-                }
-
-                let mut rounds = 0usize;
-                let max_rounds = chart.packages.len().saturating_mul(4).max(16);
-                while let Some(pid) = dirty.pop_front() {
-                    queued.remove(&pid);
-                    rounds += 1;
-                    if rounds > max_rounds {
-                        // Fixpoint reached in practice long before this; if not,
-                        // stop narrowing and let Search deal with the rest.
+                    if !changed {
                         break;
-                    }
-                    let Some(pkg) = chart.packages.get(&pid) else {
-                        continue;
-                    };
-                    let current = pkg.allowed.clone();
-                    let mut narrowed = current.clone();
-
-                    // A package's own domain is the intersection of every
-                    // dependent's requirement that applies to it, minus nothing
-                    // else: domains only shrink, which is what makes the
-                    // fixpoint terminate.
-                    // Narrow with the target-space masks: each dependent's
-                    // requirement expressed in THIS package's ordinals. This is
-                    // what makes transitive narrowing work — the generic
-                    // interval could only ever be `full` for plain specs.
-                    // A dependent's requirement on this package is the
-                    // **union** over the versions of that dependent still in
-                    // play, not the intersection of all of them: express 4.0.0
-                    // asking accepts ~1.0.5 and express 4.18.2 asking ~1.3.8 are
-                    // alternatives, and conjoining them emptied the domain for
-                    // every real tree. Across *different* dependents the
-                    // requirement is a conjunction, because both must be served
-                    // by one instance.
-                    //
-                    // Unioning per parent over-approximates: it includes
-                    // requirements of parent versions that may not be chosen.
-                    // That is the safe direction — propagation only narrows, and
-                    // legality is proved separately against the versions that
-                    // were actually selected, so a weak narrowing cannot ship a
-                    // tree that violates a spec.
-                    let mut from_parent: HashMap<u32, crate::jagr_infinite::chart::VersionBitmap> =
-                        HashMap::new();
-                    if let Some(parents) = incoming.get(&pid) {
-                        for (parent, _interval, mask, optional) in parents {
-                            if *optional {
-                                continue;
-                            }
-                            // `None`: the spec could not be evaluated against
-                            // this package's versions, so it contributes nothing
-                            // rather than everything or nothing.
-                            let Some(m) = mask else {
-                                continue;
-                            };
-                            match from_parent.get_mut(parent) {
-                                Some(acc) => acc.union(m),
-                                None => {
-                                    from_parent.insert(*parent, m.clone());
-                                }
-                            }
-                        }
-                    }
-                    for bitmap in from_parent.values() {
-                        narrowed.intersect(bitmap);
-                    }
-
-                    // Peer requirements narrow a domain when they overlap it,
-                    // and are reported when they do not — they never empty a
-                    // domain on their own, because npm installs the tree and
-                    // warns rather than failing. `--strict-peer-deps` turns the
-                    // report into a failure at the call site.
-                    //
-                    // Before this, peers were collected, stored, written to the
-                    // lockfile and then ignored by resolution: `PeerEdge`
-                    // existed and had no consumer, so `--strict-peer-deps` had
-                    // nothing to act on.
-                    let mut peer_notes: Vec<String> = Vec::new();
-                    if let Some(pkg) = chart.packages.get(&pid) {
-                        for peer in &pkg.peers {
-                            // Does the peer's range overlap anything the domain
-                            // still allows? Test by intersecting the peer mask
-                            // with the live domain — no interval round-trip.
-                            let mut mask = match &peer.required_mask {
-                                Some(m) if !m.is_empty() => m.clone(),
-                                _ => crate::jagr_infinite::chart::VersionBitmap::from_interval(
-                                    peer.required,
-                                ),
-                            };
-                            mask.intersect(&narrowed);
-                            if !mask.is_empty() {
-                                narrowed = mask;
-                            } else if !narrowed.is_empty() {
-                                let peer_name = chart
-                                    .packages
-                                    .get(&peer.target_pkg)
-                                    .map(|c| c.name.clone())
-                                    .filter(|n| !n.is_empty())
-                                    .unwrap_or_else(|| format!("pkg#{}", peer.target_pkg));
-                                peer_notes.push(format!(
-                                    "{} cannot satisfy peer {} (wants ordinals [{}..{}])",
-                                    if pkg.name.is_empty() {
-                                        format!("pkg#{}", pid)
-                                    } else {
-                                        pkg.name.clone()
-                                    },
-                                    peer_name,
-                                    peer.required.lo.0,
-                                    peer.required.hi.0
-                                ));
-                            }
-                        }
-                    }
-                    if !peer_notes.is_empty() {
-                        // Collected, not fatal: the caller decides. Recorded on
-                        // the chart so `verify_selection` can surface it.
-                        for note in peer_notes {
-                            chart.peer_warnings.push(note);
-                        }
-                    }
-
-                    if narrowed.is_empty() {
-                        // Empty after required narrowing = a real conflict.
-                        // Optional-only parents were skipped above, so this is
-                        // a hard failure with a full explanation.
-                        let who = Self::explain_empty(&chart, pid);
-                        return Err(format!("JAGR-∞ conflict: {}", who));
-                    }
-
-                    let changed = narrowed != current;
-                    if let Some(pkg) = chart.packages.get_mut(&pid) {
-                        pkg.allowed = narrowed;
-                    }
-                    if changed {
-                        // Re-queue every package this one constrains: their
-                        // domains may now be narrower.
-                        if let Some(pkg) = chart.packages.get(&pid) {
-                            for edge in &pkg.deps {
-                                if queued.insert(edge.target_pkg) {
-                                    dirty.push_back(edge.target_pkg);
-                                }
-                            }
-                        }
                     }
                 }
                 Ok(chart)
@@ -2922,221 +2579,132 @@ pub mod rvm {
                 )
             }
 
-            /// Bounded backtracking over the narrowed domains.
-            ///
-            /// Ordering chooses the most-constrained package first (fewest
-            /// candidate versions), which is what keeps the search small on
-            /// real trees: the leaf that only one version can satisfy is
-            /// decided first, and its consequences propagate immediately.
+            /// Bounded search over the active closure, with rollback for each decision.
             pub(crate) fn search(
                 chart: crate::jagr_infinite::chart::Chart,
                 budget: usize,
-            ) -> Result<
-                (
-                    HashMap<u32, crate::jagr_infinite::chart::VersionOrdinal>,
-                    crate::jagr_infinite::chart::Chart,
-                ),
-                String,
-            > {
-                use crate::jagr_infinite::chart::{VersionBitmap, VersionOrdinal};
-                use std::collections::HashMap;
-
-                let mut domains: HashMap<u32, VersionBitmap> = chart
-                    .packages
-                    .iter()
-                    .map(|(k, v)| (*k, v.allowed.clone()))
-                    .collect();
-
-                let mut order: Vec<u32> = chart.packages.keys().copied().collect();
-                // Most-constrained-first, tie-broken by package id. Without the
-                // tie-break the order of equal-sized domains followed HashMap
-                // iteration, so the *same* manifest could produce different
-                // trees on different runs. A resolver must be a function.
-                order.sort_by_key(|pid| (domains.get(pid).map(|d| d.count()).unwrap_or(0), *pid));
-
-                let mut assignment: HashMap<u32, VersionOrdinal> = HashMap::new();
-                let mut steps = 0usize;
-                let budget = budget.max(order.len());
-
-                if Self::solve_backtrack(
-                    &chart,
-                    &order,
-                    0,
-                    &mut domains,
-                    &mut assignment,
-                    &mut steps,
-                    budget,
-                ) {
-                    return Ok((assignment, chart));
-                }
-                if steps >= budget {
-                    return Err(format!(
-                        "JAGR-∞ search budget exhausted after {} steps over {} packages \
-                         (raise JAGR_RECONCILE_STEPS for this project)",
-                        steps,
-                        chart.packages.len()
-                    ));
-                }
-                // Search proved there is no assignment: report the first
-                // package whose domain is empty under the propagated chart.
-                let mut empt: Vec<u32> = chart
-                    .packages
-                    .iter()
-                    .filter(|(_, p)| p.allowed.is_empty())
-                    .map(|(k, _)| *k)
-                    .collect();
-                empt.sort();
-                let detail = match empt.first() {
-                    Some(pid) => Self::explain_empty(&chart, *pid),
-                    None => {
-                        // No domain is empty, so the obstruction is a *choice*:
-                        // whatever version is picked for one package violates a
-                        // requirement of another. "Unsatisfiable across 70
-                        // packages" is true and useless; name the packages with
-                        // the fewest candidates, which is where a human starts.
-                        let mut tight: Vec<(u32, String)> = chart
-                            .packages
-                            .iter()
-                            .map(|(id, p)| {
-                                let label = if p.name.is_empty() {
-                                    format!("pkg#{}", id)
-                                } else {
-                                    p.name.clone()
-                                };
-                                (
-                                    p.allowed.count(),
-                                    format!("{} ({} candidates)", label, p.allowed.count()),
-                                )
-                            })
-                            .collect();
-                        tight.sort();
-                        let shown: Vec<String> =
-                            tight.iter().take(6).map(|(_, s)| s.clone()).collect();
-                        format!(
-                            "constraints are mutually unsatisfiable across {} packages; \
-                             the fewest-candidate packages are: {}",
-                            chart.packages.len(),
-                            shown.join(", ")
-                        )
-                    }
-                };
-                Err(format!("JAGR-∞ unsatisfiable: {}", detail))
+            ) -> Result<(
+                HashMap<u32, VersionOrdinal>,
+                crate::jagr_infinite::chart::Chart,
+            ), String> {
+                Self::search_counted(chart, budget).map(|(selection, chart, _)| (selection, chart))
             }
 
-            fn solve_backtrack(
-                chart: &crate::jagr_infinite::chart::Chart,
-                order: &[u32],
-                idx: usize,
-                domains: &mut HashMap<u32, crate::jagr_infinite::chart::VersionBitmap>,
-                assignment: &mut HashMap<u32, crate::jagr_infinite::chart::VersionOrdinal>,
-                steps: &mut usize,
+            pub(crate) fn search_counted(
+                chart: crate::jagr_infinite::chart::Chart,
                 budget: usize,
-            ) -> bool {
+            ) -> Result<(
+                HashMap<u32, VersionOrdinal>,
+                crate::jagr_infinite::chart::Chart,
+                usize,
+            ), String> {
                 use crate::jagr_infinite::chart::VersionBitmap;
-                if idx >= order.len() {
-                    return true;
-                }
-                if *steps >= budget {
-                    return false;
-                }
-                let pid = order[idx];
-                let Some(domain) = domains.get(&pid).cloned() else {
-                    return false;
-                };
+                use std::collections::BTreeMap;
 
-                // Try versions highest-first (npm's default preference), each
-                // one propagated into its dependents before descending.
-                let mut candidates: Vec<u16> = Vec::new();
-                let Some(pkg) = chart.packages.get(&pid) else {
-                    return false;
-                };
-                for off in 0..pkg.versions.len() {
-                    let ord = pkg.ordinal_lo.0 + off as u16;
-                    if domain.contains_ordinal(crate::jagr_infinite::chart::VersionOrdinal(ord)) {
-                        candidates.push(ord);
-                    }
+                struct Decision {
+                    package: u32,
+                    remaining: VersionBitmap,
+                    trail_start: usize,
                 }
-                candidates.reverse();
 
-                for ord in candidates {
-                    *steps += 1;
-                    if *steps >= budget {
-                        return false;
-                    }
-                    // Narrow dependents under this tentative choice.
-                    let mut saved: Vec<(u32, VersionBitmap)> = Vec::new();
-                    let mut ok = true;
-                    if let Some(pkg) = chart.packages.get(&pid) {
-                        // Two mistakes lived here, both the same mistake: a mask is
-                        // expressed in the **target's** ordinals, so it can never be
-                        // tested against the dependent's chosen ordinal (`ord`), and
-                        // edges from different versions of this dependent are
-                        // alternatives, not conjuncts.
-                        //
-                        // So: group the package's edges by target, union their masks
-                        // (any release of this dependent may apply), and narrow each
-                        // child once. The child's own choice is then checked against
-                        // its narrowed domain, which is the only place a version is
-                        // actually constrained.
-                        let mut by_target: HashMap<u32, VersionBitmap> = HashMap::new();
-                        let mut optional: std::collections::HashSet<u32> =
-                            std::collections::HashSet::new();
-                        for edge in &pkg.deps {
-                            if edge.optional {
-                                optional.insert(edge.target_pkg);
+                let roots = chart.roots.clone()
+                    .unwrap_or_else(|| chart.packages.keys().copied().collect());
+                let mut active = BTreeMap::new();
+                for root in roots {
+                    let package = chart.packages.get(&root)
+                        .ok_or_else(|| format!("JAGR-∞: missing root metadata for {root}"))?;
+                    active.insert(root, package.allowed.clone());
+                }
+                let mut assignment = HashMap::new();
+                let mut trail = Vec::<(u32, Option<VersionBitmap>)>::new();
+                let mut decisions: Vec<Decision> = Vec::new();
+                let mut steps = 0;
+                let mut incomplete = None;
+                let mut last_conflict = None;
+                let mut advance = true;
+
+                loop {
+                    if advance {
+                        let next = active.iter().filter(|(id, _)| !assignment.contains_key(*id))
+                            .min_by_key(|(id, domain)| (domain.count(), **id));
+                        match next {
+                            Some((&package, domain)) => decisions.push(Decision {
+                                package,
+                                remaining: domain.clone(),
+                                trail_start: trail.len(),
+                            }),
+                            None => {
+                                Self::verify_selection(&chart, &assignment)?;
+                                return Ok((assignment, chart, steps));
                             }
-                            let Some(m) = &edge.required_mask else {
-                                continue; // unevaluable: narrow nothing
-                            };
-                            match by_target.get_mut(&edge.target_pkg) {
-                                Some(acc) => acc.union(m),
-                                None => {
-                                    by_target.insert(edge.target_pkg, m.clone());
+                        }
+                    }
+                    let Some(decision) = decisions.last_mut() else {
+                        return Err(incomplete.or(last_conflict)
+                            .unwrap_or_else(|| "JAGR-∞: no valid flat selection".to_owned()));
+                    };
+                    assignment.remove(&decision.package);
+                    while trail.len() > decision.trail_start {
+                        let (id, previous) = trail.pop().expect("trail entry exists");
+                        match previous {
+                            Some(domain) => { active.insert(id, domain); }
+                            None => { active.remove(&id); }
+                        }
+                    }
+
+                    let preferred = chart.packages[&decision.package].latest
+                        .filter(|ordinal| decision.remaining.contains_ordinal(*ordinal));
+                    let Some(candidate) = preferred.or_else(|| decision.remaining.pick_highest()) else {
+                        decisions.pop();
+                        advance = false;
+                        continue;
+                    };
+                    if steps == budget {
+                        return Err(format!("JAGR-∞ search budget exhausted after {steps} candidate decisions"));
+                    }
+                    steps += 1;
+                    decision.remaining.clear_ordinal(candidate);
+                    let pid = decision.package;
+                    assignment.insert(pid, candidate);
+                    advance = true;
+
+                    let parent = &chart.packages[&pid];
+                    for edge in parent.deps.iter().filter(|edge| {
+                        !edge.optional && edge.declaring.contains_ordinal(candidate)
+                    }) {
+                        let target = edge.target_pkg;
+                        let (Some(package), Some(mask)) = (chart.packages.get(&target), edge.required_mask.as_ref())
+                        else {
+                            incomplete.get_or_insert_with(|| format!(
+                                "JAGR-∞: cannot evaluate {} dependency {} {}", parent.name, edge.target_name, edge.spec,
+                            ));
+                            advance = false;
+                            break;
+                        };
+                        if let Some(chosen) = assignment.get(&target) {
+                            if mask.contains_ordinal(*chosen) {
+                                continue;
+                            }
+                        } else {
+                            let previous = active.get(&target);
+                            let mut narrowed = previous.unwrap_or(&package.allowed).clone();
+                            narrowed.intersect(mask);
+                            if !narrowed.is_empty() {
+                                if previous != Some(&narrowed) {
+                                    let previous = active.insert(target, narrowed);
+                                    trail.push((target, previous));
                                 }
+                                continue;
                             }
                         }
-                        for (target, mask) in by_target {
-                            let Some(child_domain) = domains.get(&target).cloned() else {
-                                continue; // pruned out of scope with its parent
-                            };
-                            let mut narrowed = child_domain.clone();
-                            narrowed.intersect(&mask);
-                            if narrowed.is_empty() {
-                                if optional.contains(&target) {
-                                    continue; // soft edge: the child is dropped
-                                }
-                                ok = false;
-                                break;
-                            }
-                            if narrowed != child_domain {
-                                saved.push((target, child_domain));
-                                domains.insert(target, narrowed);
-                            }
-                        }
-                    }
-                    if ok {
-                        assignment.insert(
-                            pid,
-                            crate::jagr_infinite::chart::VersionOrdinal(ord),
-                        );
-                        if Self::solve_backtrack(
-                            chart,
-                            order,
-                            idx + 1,
-                            domains,
-                            assignment,
-                            steps,
-                            budget,
-                        ) {
-                            return true;
-                        }
-                        assignment.remove(&pid);
-                    }
-                    for (p, d) in saved.into_iter().rev() {
-                        domains.insert(p, d);
+                        last_conflict = Some(format!(
+                            "JAGR-∞: no valid flat selection for {} requiring {} {}",
+                            parent.name, edge.target_name, edge.spec,
+                        ));
+                        advance = false;
+                        break;
                     }
                 }
-                false
             }
 
             /// Public wrapper so the persisted selection cache can validate an
@@ -3153,84 +2721,56 @@ pub mod rvm {
                 chart: &crate::jagr_infinite::chart::Chart,
                 selection: &HashMap<u32, crate::jagr_infinite::chart::VersionOrdinal>,
             ) -> Result<(), String> {
-                if let Some(unknown) = selection
-                    .keys()
-                    .find(|pid| !chart.packages.contains_key(pid))
-                {
-                    return Err(format!(
-                        "JAGR-∞ verification failed: package {} absent from the chart",
-                        unknown
-                    ));
-                }
-                if selection.is_empty() && !chart.packages.is_empty() {
-                    return Err(format!(
-                        "JAGR-∞ internal: empty selection for a {}-package chart",
-                        chart.packages.len()
-                    ));
-                }
-                let mut failures: Vec<String> = Vec::new();
-                for (pid, pkg) in &chart.packages {
-                    let Some(chosen) = selection.get(pid) else {
-                        failures.push(format!(
-                            "{} was never assigned",
-                            if pkg.name.is_empty() {
-                                format!("pkg#{}", pid)
-                            } else {
-                                pkg.name.clone()
-                            }
-                        ));
-                        continue;
-                    };
-                    if !pkg.allowed.contains_ordinal(*chosen) {
-                        failures.push(format!(
-                            "{} was assigned ordinal {} outside its narrowed domain",
-                            pkg.name, chosen.0
-                        ));
+                use std::collections::HashSet;
+
+                for (&pid, &ordinal) in selection {
+                    let package = chart.packages.get(&pid)
+                        .ok_or_else(|| format!("JAGR-∞ verification failed: package {pid} absent from the chart"))?;
+                    if !package.allowed.contains_ordinal(ordinal)
+                        || ordinal.0.checked_sub(package.ordinal_lo.0).is_none_or(|offset| usize::from(offset) >= package.versions.len())
+                    {
+                        return Err(format!("{} was assigned ordinal {} outside allowed domain", package.name, ordinal.0));
                     }
-                    for edge in &pkg.deps {
-                        if edge.optional {
-                            continue;
-                        }
-                        let edge_ok = match &edge.required_mask {
-                            Some(m) if !m.is_empty() => m.contains_ordinal(*chosen),
-                            _ => edge.required.contains(*chosen),
-                        };
-                        if !edge_ok {
-                            let child = chart
-                                .packages
-                                .get(&edge.target_pkg)
-                                .map(|c| c.name.clone())
-                                .unwrap_or_else(|| format!("pkg#{}", edge.target_pkg));
-                            let got = selection
-                                .get(&edge.target_pkg)
-                                .map(|o| o.0.to_string())
-                                .unwrap_or_else(|| "unassigned".into());
-                            failures.push(format!(
-                                "{} requires {} in ordinals [{}..{}], got {}",
-                                pkg.name, child, edge.required.lo.0, edge.required.hi.0, got
+                }
+                if selection.is_empty() && !chart.packages.is_empty()
+                    && chart.roots.as_ref().is_none_or(|roots| !roots.is_empty())
+                {
+                    return Err("JAGR-∞ verification failed: empty selection".to_owned());
+                }
+                let mut pending = chart.roots.clone()
+                    .unwrap_or_else(|| chart.packages.keys().copied().collect());
+                let mut reachable = HashSet::new();
+                while let Some(pid) = pending.pop() {
+                    if !reachable.insert(pid) {
+                        continue;
+                    }
+                    let parent = chart.packages.get(&pid)
+                        .ok_or_else(|| format!("JAGR-∞ verification failed: package {pid} absent from the chart"))?;
+                    let chosen = selection.get(&pid)
+                        .ok_or_else(|| format!("{} was never assigned", parent.name))?;
+                    for edge in parent.deps.iter().filter(|edge| {
+                        !edge.optional && edge.declaring.contains_ordinal(*chosen)
+                    }) {
+                        let child = selection.get(&edge.target_pkg).ok_or_else(|| format!(
+                            "{} was never assigned: {} requires {}", edge.target_name, parent.name, edge.spec,
+                        ))?;
+                        let compatible = edge.required_mask.as_ref()
+                            .is_some_and(|mask| mask.contains_ordinal(*child));
+                        if !compatible {
+                            return Err(format!(
+                                "JAGR-∞ verification failed: {} requires {} {}",
+                                parent.name, edge.target_name, edge.spec,
                             ));
                         }
+                        pending.push(edge.target_pkg);
                     }
                 }
-                if failures.is_empty() {
-                    return Ok(());
+                if reachable.len() != selection.len() {
+                    return Err("JAGR-∞ verification failed: selection contains an unreachable package".to_owned());
                 }
-                failures.sort();
-                failures.dedup();
-                let shown: Vec<String> = failures.into_iter().take(6).collect();
-                Err(format!(
-                    "JAGR-∞ verification failed: {}",
-                    shown.join("; ")
-                ))
+                Ok(())
             }
 
-            fn pop_interval(&mut self) -> Result<VersionInterval, String> {
-                match self.stack.pop() {
-                    Some(Value::Interval(i)) => Ok(i),
-                    Some(v) => Err(format!("expected Interval, got {:?}", v)),
-                    None => Err("stack underflow".into()),
-                }
-            }
         }
 
         #[cfg(test)]
@@ -3251,6 +2791,7 @@ pub mod rvm {
                         ordinal_hi: hi,
                         allowed,
                         versions: vec!["1.0.0".into(), "2.0.0".into()],
+                        latest: None,
                         deps: Vec::new(),
                         peers: Vec::new(),
                     }
@@ -3260,6 +2801,7 @@ pub mod rvm {
                     id: chart_id,
                     packages: HashMap::from([(3, package(3, "pkg")), (4, package(4, "peer"))]),
                     transitions: HashMap::new(),
+                    roots: None,
                     betti: BettiNumbers::default(),
                     peer_warnings: Vec::new(),
                     merkle_root: [0; 32],
@@ -3612,271 +3154,154 @@ pub struct SolveStats {
     pub steps: usize,
 }
 
-/// `select_versions` with phase timings. Same semantics, same result.
+/// `select_versions` with phase timings and chart counters.
 pub fn select_versions_stats(
     packuments: &HashMap<String, serde_json::Value>,
     deps: &HashMap<String, String>,
 ) -> (Option<HashMap<String, String>>, SolveStats, Option<String>) {
-    use crate::jagr_infinite::chart::{VersionBitmap, VersionOrdinal};
-
-    let mut stats = SolveStats::default();
-    if deps.is_empty() || packuments.is_empty() {
-        return (None, stats, Some("empty input".to_string()));
-    }
-    let mut names: Vec<&String> = packuments.keys().collect();
-    names.sort();
-    let name_to_id: HashMap<String, u32> = names
-        .into_iter()
-        .enumerate()
-        .map(|(i, n)| (n.clone(), i as u32))
-        .collect();
-
-    let t_chart = std::time::Instant::now();
-    let mut chart = crate::jagr_infinite::precompute::build_full_chart(packuments, &name_to_id);
-    let chart_us = t_chart.elapsed().as_micros();
-
-    stats.packages = chart.packages.len();
-    stats.chart_us = chart_us;
-    {
-        // Distinct (target, spec) pairs: what the mask cache amortises.
-        let mut seen: std::collections::HashSet<(u32, &str)> = std::collections::HashSet::new();
-        for pkg in chart.packages.values() {
-            for e in &pkg.deps {
-                seen.insert((e.target_pkg, e.spec.as_str()));
-                stats.edges += 1;
-            }
-        }
-        stats.distinct_specs = seen.len();
-    }
-
-    let mut constraints: HashMap<u32, crate::jagr_infinite::chart::VersionInterval> =
-        HashMap::new();
-    for (name, spec) in deps {
-        let Some(&id) = name_to_id.get(name) else {
-            return (None, stats, Some(format!("root {name} is not in the packument set")));
-        };
-        let Some(pkg) = chart.packages.get(&id) else {
-            return (None, stats, Some(format!("root {name} has no chart package")));
-        };
-        let Some((interval, _domain)) = candidate_domain_for_package(pkg, spec) else {
-            return (None, stats, Some(format!("root {name}@{spec} has no candidate domain")));
-        };
-        constraints.insert(id, interval);
-    }
-    if constraints.is_empty() {
-        return (None, stats, Some("no constraints".to_string()));
-    }
-    for (id, interval) in &constraints {
-        if let Some(pkg) = chart.packages.get_mut(id) {
-            let mut mask = VersionBitmap::from_interval(*interval);
-            mask.intersect(&pkg.allowed);
-            if mask.is_empty() {
-                return (None, stats, Some("a direct range matches nothing published".to_string()));
-            }
-            pkg.allowed = mask;
-        }
-    }
-
-    // Scope the solve to what the manifest can reach.
-    //
-    // The chart is built from the whole packument set, and propagation used to
-    // require a satisfiable version for **every** package in it. A packument set
-    // is routinely larger than the tree (a prefetch frontier fetches ahead of
-    // the resolution, a shared cache view holds unrelated packages), so a
-    // package nobody depends on could fail the entire resolve — an express
-    // manifest once failed on `@esbuild/aix-ppc64`, a darwin-arm64 machine being
-    // asked to satisfy a Linux ppc64 binary — and force the nested fallback on a
-    // tree with no conflict in it.
-    //
-    // Reachability is computed over edges without regard to version choice, so
-    // it over-approximates: everything that could possibly be needed is kept,
-    // and only packages no path from a root can name are dropped.
-    {
-        let mut reachable: std::collections::HashSet<u32> = std::collections::HashSet::new();
-        let mut stack: Vec<u32> = constraints.keys().copied().collect();
-        while let Some(id) = stack.pop() {
-            if !reachable.insert(id) {
-                continue;
-            }
-            if let Some(pkg) = chart.packages.get(&id) {
-                for edge in &pkg.deps {
-                    stack.push(edge.target_pkg);
-                }
-                for peer in &pkg.peers {
-                    stack.push(peer.target_pkg);
-                }
-            }
-        }
-        let before = chart.packages.len();
-        chart.packages.retain(|id, _| reachable.contains(id));
-        stats.packages = chart.packages.len();
-        if std::env::var_os("JAGR_PROFILE_CHART").is_some() {
-            eprintln!(
-                "[chart] reachable {before} -> {} packages",
-                chart.packages.len()
-            );
-        }
-    }
-
-    let t_prop = std::time::Instant::now();
-    let narrowed = match crate::jagr_infinite::rvm::exec::RVM::propagate(chart) {
-        Ok(n) => n,
-        Err(e) => {
-            stats.propagate_us = t_prop.elapsed().as_micros();
-            return (None, stats, Some(format!("propagate: {e}")));
-        }
-    };
-    stats.propagate_us = t_prop.elapsed().as_micros();
-
-    let t_search = std::time::Instant::now();
-    let (selection, _) =
-        match crate::jagr_infinite::rvm::exec::RVM::search(narrowed.clone(), 20_000) {
-            Ok(s) => s,
-            Err(e) => {
-                stats.search_us = t_search.elapsed().as_micros();
-                return (None, stats, Some(format!("search: {e}")));
-            }
-        };
-    stats.search_us = t_search.elapsed().as_micros();
-    if selection.is_empty() {
-        return (None, stats, Some("empty selection".to_string()));
-    }
-    stats.steps = selection.len();
-
-    let mut out: HashMap<String, String> = HashMap::new();
-    for (id, ordinal) in selection {
-        let Some(pkg) = narrowed.packages.get(&id) else {
-            continue;
-        };
-        if pkg.name.is_empty() {
-            continue;
-        }
-        let Some(offset) = ordinal.0.checked_sub(pkg.ordinal_lo.0) else {
-            continue;
-        };
-        let Some(version) = pkg.versions.get(offset as usize) else {
-            continue;
-        };
-        if !pkg.allowed.contains_ordinal(VersionOrdinal(ordinal.0)) {
-            continue;
-        }
-        out.insert(pkg.name.clone(), version.clone());
-    }
-    (Some(out), stats, None)
+    select_flat(packuments, deps, true)
 }
 
 pub fn select_versions(
     packuments: &HashMap<String, serde_json::Value>,
     deps: &HashMap<String, String>,
 ) -> Option<HashMap<String, String>> {
-    use crate::jagr_infinite::chart::{VersionBitmap, VersionOrdinal};
-
-    let trace = std::env::var_os("JHOL_TRACE_PICK").is_some();
-    let bail = |why: &str| {
-        if trace {
-            eprintln!("[solve] bail: {why}");
+    let (selection, _, reason) = select_flat(packuments, deps, false);
+    if std::env::var_os("JHOL_TRACE_PICK").is_some() {
+        if let Some(reason) = reason {
+            eprintln!("[solve] bail: {reason}");
         }
-    };
+    }
+    selection
+}
+
+fn select_flat(
+    packuments: &HashMap<String, serde_json::Value>,
+    deps: &HashMap<String, String>,
+    collect_counters: bool,
+) -> (Option<HashMap<String, String>>, SolveStats, Option<String>) {
+    use crate::jagr_infinite::rvm::exec::RVM;
+
+    let mut stats = SolveStats::default();
     if deps.is_empty() || packuments.is_empty() {
-        bail("no deps or no packuments");
-        return None;
+        return (None, stats, Some("empty input".into()));
     }
 
-    // Deterministic id assignment (name order), so a chart is a function of its
-    // inputs and the selection cache keys stay stable.
-    let mut names: Vec<&String> = packuments.keys().collect();
+    let mut names: Vec<_> = packuments.keys().collect();
     names.sort();
     let name_to_id: HashMap<String, u32> = names
         .into_iter()
         .enumerate()
-        .map(|(i, n)| (n.clone(), i as u32))
+        .map(|(i, name)| (name.clone(), i as u32))
         .collect();
 
+    let started = std::time::Instant::now();
     let mut chart = crate::jagr_infinite::precompute::build_full_chart(packuments, &name_to_id);
-    // `build_full_chart` leaves `name` empty (the solver path maps ids back
-    // through its own table). Naming them here is what lets this function
-    // return names instead of ids — and it makes conflict messages readable.
-    for (name, id) in &name_to_id {
-        if let Some(pkg) = chart.packages.get_mut(id) {
-            pkg.name = name.clone();
-        }
-    }
-
-    let mut constraints: HashMap<u32, crate::jagr_infinite::chart::VersionInterval> =
-        HashMap::new();
-    for (name, spec) in deps {
-        let id = *name_to_id.get(name)?;
-        let pkg = chart.packages.get(&id)?;
-        let Some((interval, _domain)) = candidate_domain_for_package(pkg, spec) else {
-            bail(&format!("no candidate domain for {name} spec {spec}"));
-            return None;
-        };
-        constraints.insert(id, interval);
-    }
-    if constraints.is_empty() {
-        bail("no constraints");
-        return None;
-    }
-
-    // Apply each direct range to its package's domain. `build_full_chart`
-    // seeds every package with the *full* ordinal range because its other
-    // caller derives domains later; without this step the solver happily picks
-    // the newest version regardless of the requested range (caught by
-    // `picks_the_highest_version_satisfying_the_direct_range`).
-    for (id, interval) in &constraints {
-        if let Some(pkg) = chart.packages.get_mut(id) {
-            let mut mask = crate::jagr_infinite::chart::VersionBitmap::from_interval(*interval);
-            mask.intersect(&pkg.allowed);
-            if mask.is_empty() {
-                bail("a direct range matches nothing published");
-                return None; // requested range matches nothing published
+    stats.chart_us = started.elapsed().as_micros();
+    if collect_counters {
+        let mut specs = std::collections::HashSet::new();
+        for package in chart.packages.values() {
+            for edge in &package.deps {
+                specs.insert((edge.target_pkg, edge.spec.as_str()));
+                stats.edges += 1;
             }
-            pkg.allowed = mask;
+        }
+        stats.distinct_specs = specs.len();
+    }
+    for (name, id) in &name_to_id {
+        if let Some(package) = chart.packages.get_mut(id) {
+            package.name.clone_from(name);
         }
     }
 
-    let mut atlas = crate::jagr_infinite::atlas::Atlas::new();
-    atlas.insert_chart(chart.clone());
-
-    let mut narrowed = match crate::jagr_infinite::rvm::exec::RVM::propagate(chart) {
-        Ok(n) => n,
-        Err(e) => {
-            bail(&format!("propagate: {e}"));
-            return None;
-        }
-    };
-    let (selection, _) = match crate::jagr_infinite::rvm::exec::RVM::search(narrowed.clone(), 20_000)
-    {
-        Ok(s) => s,
-        Err(e) => {
-            bail(&format!("search: {e}"));
-            return None;
-        }
-    };
-    if selection.is_empty() {
-        bail("empty selection");
-        return None;
+    let mut domains = HashMap::new();
+    for (name, spec) in deps {
+        let Some(&id) = name_to_id.get(name) else {
+            return (None, stats, Some(format!("root {name} is not in the packument set")));
+        };
+        let Some(domain) = chart.packages.get(&id)
+            .and_then(|package| candidate_domain_for_package(package, spec))
+            .map(|(_, exact)| exact)
+        else {
+            return (None, stats, Some(format!("root {name}@{spec} has no candidate domain")));
+        };
+        domains.insert(id, domain);
+    }
+    if let Err(error) = refine_chart_candidates(&mut chart, &domains) {
+        return (None, stats, Some(error));
     }
 
-    let mut out: HashMap<String, String> = HashMap::new();
+    // Shared cache views can contain unrelated packages. Traverse the union of
+    // possible dependency and peer edges to keep all reachable candidates.
+    let mut reachable = std::collections::HashSet::new();
+    let mut pending: Vec<_> = domains.keys().copied().collect();
+    while let Some(id) = pending.pop() {
+        if reachable.insert(id) {
+            if let Some(package) = chart.packages.get(&id) {
+                pending.extend(package.deps.iter().map(|edge| edge.target_pkg));
+                pending.extend(package.peers.iter().map(|edge| edge.target_pkg));
+            }
+        }
+    }
+    let mut roots: Vec<_> = domains.keys().copied().collect();
+    roots.sort_unstable();
+    chart.roots = Some(roots);
+    let before = chart.packages.len();
+    chart.packages.retain(|id, _| reachable.contains(id));
+    stats.packages = chart.packages.len();
+    if collect_counters && std::env::var_os("JAGR_PROFILE_CHART").is_some() {
+        eprintln!("[chart] reachable {before} -> {} packages", stats.packages);
+    }
+
+    let started = std::time::Instant::now();
+    let propagated = RVM::propagate(chart);
+    stats.propagate_us = started.elapsed().as_micros();
+    let narrowed = match propagated {
+        Ok(chart) => chart,
+        Err(error) => return (None, stats, Some(format!("propagate: {error}"))),
+    };
+
+    let started = std::time::Instant::now();
+    let searched = RVM::search_counted(narrowed, 20_000);
+    stats.search_us = started.elapsed().as_micros();
+    let (selection, chart, steps) = match searched {
+        Ok(result) => result,
+        Err(error) => return (None, stats, Some(format!("search: {error}"))),
+    };
+    if selection.is_empty() || !selection_matches_exact_domains(&selection, &domains) {
+        return (None, stats, Some("search returned no exact root assignment".into()));
+    }
+    stats.steps = steps;
+
+    for (&id, &chosen) in &selection {
+        let package = &chart.packages[&id];
+        let optional_deps = package.deps.iter().filter(|edge| edge.optional).map(|edge| (edge, false));
+        let peers = package.peers.iter().map(|edge| (edge, true));
+        for (edge, peer) in optional_deps.chain(peers)
+            .filter(|(edge, _)| edge.declaring.contains_ordinal(chosen))
+        {
+            match (selection.get(&edge.target_pkg), edge.required_mask.as_ref()) {
+                (Some(child), Some(mask)) if mask.contains_ordinal(*child) => {}
+                (None, Some(mask)) if edge.optional && mask.is_empty() => {}
+                (None, _) if edge.optional && peer => {}
+                _ => return (None, stats, Some(format!("{} needs normal placement", edge.target_name))),
+            }
+        }
+    }
+    let mut out = HashMap::new();
     for (id, ordinal) in selection {
-        let Some(pkg) = narrowed.packages.get(&id) else {
-            return None;
+        let candidate = chart.packages.get(&id).and_then(|package| {
+            let index = usize::from(ordinal.0.checked_sub(package.ordinal_lo.0)?);
+            let version = package.versions.get(index)?;
+            (!package.name.is_empty() && package.allowed.contains_ordinal(ordinal))
+                .then_some((&package.name, version))
+        });
+        let Some((name, version)) = candidate else {
+            return (None, stats, Some(format!("search returned an invalid candidate for {id}")));
         };
-        if pkg.name.is_empty() {
-            continue;
-        }
-        let offset = ordinal.0.checked_sub(pkg.ordinal_lo.0)? as usize;
-        let Some(version) = pkg.versions.get(offset) else {
-            return None;
-        };
-        if !pkg.allowed.contains_ordinal(VersionOrdinal(ordinal.0)) {
-            return None;
-        }
-        out.insert(pkg.name.clone(), version.clone());
-        let _ = VersionBitmap::new;
+        out.insert(name.clone(), version.clone());
     }
-    Some(out)
+    (Some(out), stats, None)
 }
 
 /// Main entry point for JAGR-∞ resolver.
@@ -4120,6 +3545,9 @@ pub(crate) fn resolve_full_tree_jagr_infinite_with_full_retry(
 
     refine_on_chart(&mut final_chart, &constraints)?;
     refine_chart_candidates(&mut final_chart, &direct_domains)?;
+    let mut roots: Vec<_> = direct_domains.keys().copied().collect();
+    roots.sort_unstable();
+    final_chart.roots = Some(roots);
     // Include exact bitmap holes in cache identity. Interval hull alone aliases
     // distinct disjunctive ranges that happen to share the same endpoints.
     final_chart.id = chart_id_for_exact_domains(&constraints, &direct_domains);
@@ -4184,7 +3612,7 @@ pub(crate) fn resolve_full_tree_jagr_infinite_with_full_retry(
                     let selection = tropical_point_to_selection(&point, &ordinal_bounds);
                     let exact_direct_match =
                         selection_matches_exact_domains(&selection, &direct_domains);
-                    if exact_direct_match {
+                    if exact_direct_match && RVM::verify_selection_for_cache(&final_chart, &selection).is_ok() {
                         let resolved = selection_to_resolved(
                             selection,
                             &id_to_pkg,
@@ -4235,6 +3663,7 @@ pub(crate) fn resolve_full_tree_jagr_infinite_with_full_retry(
     // Ensure the chart (constructed above) is reachable by LoadChart.
     let mut atlas = Atlas::new();
     atlas.insert_chart(final_chart.clone());
+    final_chart.merkle_root = atlas.charts[&final_chart.id].merkle_root;
     // P3: reuse a previously compiled program for the same chart signature
     // (compilation is deterministic given the same constraint map).
     let cache_key = rvm_program_cache_key(&constraints, &direct_domains);
@@ -4274,34 +3703,6 @@ pub(crate) fn resolve_full_tree_jagr_infinite_with_full_retry(
             sel
         }
     };
-    // Peer requirements that could not be satisfied. Advisory (npm installs the
-    // tree and warns); `--strict-peer-deps` or JHOL_STRICT_PEER_DEPS escalates.
-    // Propagation records them on the chart, so this is the one place that has
-    // to report them.
-    if !final_chart.peer_warnings.is_empty() {
-        let strict = std::env::var("JHOL_STRICT_PEER_DEPS")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-        let shown: Vec<String> = final_chart.peer_warnings.iter().take(6).cloned().collect();
-        let more = if final_chart.peer_warnings.len() > 6 {
-            format!(" (+{} more)", final_chart.peer_warnings.len() - 6)
-        } else {
-            String::new()
-        };
-        if strict {
-            return Err(format!(
-                "peer dependency conflicts: {}{}",
-                shown.join("; "),
-                more
-            ));
-        }
-        crate::utils::log(&format!(
-            "warning: {} peer requirement(s) unsatisfied: {}{}",
-            final_chart.peer_warnings.len(),
-            shown.join("; "),
-            more
-        ));
-    }
     trace(format!(
         "layer=rvm (tropical RVM over {} chart packages, {} versions), solve {:?}",
         final_chart.packages.len(),
@@ -4433,7 +3834,7 @@ fn validate_layout(
     Ok(())
 }
 
-fn strict_peer_dependencies() -> bool {
+pub(crate) fn strict_peer_dependencies() -> bool {
     std::env::var("JHOL_STRICT_PEER_DEPS").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
 }
 
@@ -4523,7 +3924,7 @@ fn collect_peer_conflicts(layout: &HashMap<String, ResolvedPackage>) -> Vec<Stri
                 .and_then(|m| m.get("optional"))
                 .and_then(|o| o.as_bool())
                 .unwrap_or(false);
-            match crate::layout::visible_dependency(node, peer, |path| layout.get(path)) {
+            match crate::layout::visible_peer(node, peer, |path| layout.get(path)) {
                 None if optional => {}
                 None => conflicts.push(format!(
                     "{}@{} requires missing peer {} {}",
@@ -4855,24 +4256,21 @@ fn candidate_domain_for_package(
         return None;
     }
     let spec = spec.trim();
-    if spec.is_empty() || spec == "*" || spec == "latest" {
-        let interval = VersionInterval::new(package.ordinal_lo, package.ordinal_hi);
-        return Some((
-            interval,
-            crate::jagr_infinite::chart::VersionBitmap::new(package.ordinal_lo, package.ordinal_hi),
-        ));
+    if spec == "latest" {
+        let latest = package.latest?;
+        let interval = VersionInterval::new(latest, latest);
+        return Some((interval, crate::jagr_infinite::chart::VersionBitmap::from_interval(interval)));
     }
 
-    // Parse spec into a matcher (handle `||` OR ranges like npm).
-    let alternatives: Vec<&str> = spec.split("||").map(str::trim).collect();
-    if alternatives.iter().any(|part| part.is_empty()) {
+    if spec.contains("||") && spec.split("||").any(|part| {
+        part.trim().is_empty() || semver::VersionReq::parse(part.trim()).is_err()
+    }) {
         return None;
     }
-    let matches: Vec<semver::VersionReq> = alternatives
-        .into_iter()
-        .map(semver::VersionReq::parse)
-        .collect::<Result<_, _>>()
-        .ok()?;
+    let compiled = crate::registry::compile_spec(spec);
+    if matches!(compiled, crate::registry::CompiledSpec::Unsupported) {
+        return None;
+    }
 
     // Find min/max ordinal positions whose published version matches ANY
     // alternative. versions[i] aligns with ordinal (ordinal_lo + i).
@@ -4880,12 +4278,7 @@ fn candidate_domain_for_package(
         crate::jagr_infinite::chart::VersionBitmap::empty(package.ordinal_lo, package.ordinal_hi);
     for (i, vstr) in package.versions.iter().enumerate() {
         let v = semver::Version::parse(vstr).ok()?;
-        let matched = if crate::registry::is_exact_version_pin(spec) {
-            crate::registry::version_satisfies(spec, vstr)
-        } else {
-            matches.iter().any(|req| req.matches(&v))
-        };
-        if matched {
+        if compiled.matches(&v) {
             let offset = u16::try_from(i).ok()?;
             let ordinal = VersionOrdinal(package.ordinal_lo.0.checked_add(offset)?);
             domain.set_interval(VersionInterval::new(ordinal, ordinal));
@@ -5559,7 +4952,7 @@ fn build_ordinal_bounds(chart: &Chart) -> HashMap<u32, (VersionOrdinal, VersionO
 fn load_or_build_atlas() -> Result<Atlas, String> {
     // Try to load cached atlas
     let cache_dir = crate::utils::get_cache_dir();
-    let atlas_path = std::path::Path::new(&cache_dir).join("jagr-infinite-atlas.bin");
+    let atlas_path = std::path::Path::new(&cache_dir).join("jagr-infinite-atlas-v2.bin");
     if atlas_path.exists() {
         if let Ok(data) = std::fs::read(&atlas_path) {
             if let Ok(atlas) = bincode::deserialize::<Atlas>(&data) {
@@ -5581,7 +4974,7 @@ fn rvm_program_cache_key(
     // the freshly built Atlas and policy each time. Change this version marker
     // whenever the emitted instruction semantics or consumed inputs change.
     let mut hasher = Sha256::new();
-    hasher.update(b"jhol-jagr-rvm-program-v2\0");
+    hasher.update(b"jhol-jagr-rvm-program-v3\0");
     let mut package_ids: Vec<_> = constraints.keys().copied().collect();
     package_ids.sort_unstable();
     hasher.update((package_ids.len() as u64).to_le_bytes());
@@ -5616,7 +5009,7 @@ fn try_cached_program(
     chart_id: u64,
     constraints: &HashMap<u32, VersionInterval>,
 ) -> Option<crate::jagr_infinite::rvm::inst::Program> {
-    let path = atlas_cache_dir().join(format!("rvm-v2-{}.rvm", hex::encode(cache_key)));
+    let path = atlas_cache_dir().join(format!("rvm-v3-{}.rvm", hex::encode(cache_key)));
     use std::io::Read;
     let file = std::fs::File::open(&path).ok()?;
     let mut data = Vec::new();
@@ -5703,50 +5096,59 @@ fn decode_cached_program(
 /// chart (`verify_selection`), so a registry that moved a dependency under us
 /// degrades to a cache miss instead of a stale tree. That check is cheap —
 /// one edge scan — and it is what makes the cache safe to persist.
-fn selection_cache_path(chart_id: u64) -> std::path::PathBuf {
-    atlas_cache_dir().join(format!("sel-v1-{:016x}.sel", chart_id))
+fn selection_cache_path(chart: &Chart) -> std::path::PathBuf {
+    let digest = if chart.merkle_root == [0; 32] {
+        atlas::compute_chart_hash(chart)
+    } else {
+        chart.merkle_root
+    };
+    atlas_cache_dir().join(format!("sel-v2-{}.sel", hex::encode(digest)))
 }
 
-/// Load a cached selection for `chart_id`, accepting it only if it still
-/// satisfies every edge of `chart`.
-fn try_cached_selection(
-    chart: &crate::jagr_infinite::chart::Chart,
-) -> Option<HashMap<u32, crate::jagr_infinite::chart::VersionOrdinal>> {
+fn try_cached_selection(chart: &Chart) -> Option<HashMap<u32, VersionOrdinal>> {
+    use bincode::Options;
+    use std::io::Read;
+
     if std::env::var_os("JHOL_NO_SELECTION_CACHE").is_some() {
         return None;
     }
-    let path = selection_cache_path(chart.id);
-    let bytes = std::fs::read(path).ok()?;
-    let raw: HashMap<u32, u16> = bincode::deserialize(&bytes).ok()?;
-    let selection: HashMap<u32, crate::jagr_infinite::chart::VersionOrdinal> = raw
-        .into_iter()
-        .map(|(k, v)| (k, crate::jagr_infinite::chart::VersionOrdinal(v)))
-        .collect();
-    if selection.len() != chart.packages.len() {
+    let max_bytes = chart.packages.len().checked_mul(6)?.checked_add(8)?;
+    let file = std::fs::File::open(selection_cache_path(chart)).ok()?;
+    let mut bytes = Vec::new();
+    file.take(max_bytes as u64 + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() < 8 || bytes.len() > max_bytes {
         return None;
     }
-    // Re-verify against the live chart: the whole point of the cache is to skip
-    // work, not to skip correctness.
+    let count = usize::try_from(u64::from_le_bytes(bytes[..8].try_into().ok()?)).ok()?;
+    if count > chart.packages.len() || count.checked_mul(6)?.checked_add(8)? != bytes.len() {
+        return None;
+    }
+    let raw: HashMap<u32, u16> = bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .reject_trailing_bytes()
+        .deserialize(&bytes).ok()?;
+    if raw.len() != count {
+        return None;
+    }
+    let selection = raw.into_iter().map(|(id, ordinal)| (id, VersionOrdinal(ordinal))).collect();
     crate::jagr_infinite::rvm::exec::RVM::verify_selection_for_cache(chart, &selection).ok()?;
     Some(selection)
 }
 
-fn persist_cached_selection(
-    chart: &crate::jagr_infinite::chart::Chart,
-    selection: &HashMap<u32, crate::jagr_infinite::chart::VersionOrdinal>,
-) {
-    let dir = atlas_cache_dir();
-    let _ = std::fs::create_dir_all(&dir);
-    let raw: HashMap<u32, u16> = selection.iter().map(|(k, v)| (*k, v.0)).collect();
+fn persist_cached_selection(chart: &Chart, selection: &HashMap<u32, VersionOrdinal>) {
+    if std::env::var_os("JHOL_NO_SELECTION_CACHE").is_some() {
+        return;
+    }
+    let raw: std::collections::BTreeMap<u32, u16> = selection.iter().map(|(id, ordinal)| (*id, ordinal.0)).collect();
     if let Ok(bytes) = bincode::serialize(&raw) {
-        let _ = std::fs::write(selection_cache_path(chart.id), bytes);
+        crate::content::write_atomic(&selection_cache_path(chart), &bytes);
     }
 }
 
 fn persist_cached_program(program: &crate::jagr_infinite::rvm::inst::Program, cache_key: [u8; 32]) {
     let dir = atlas_cache_dir();
     let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join(format!("rvm-v2-{}.rvm", hex::encode(cache_key)));
+    let path = dir.join(format!("rvm-v3-{}.rvm", hex::encode(cache_key)));
     if let Ok(data) = bincode::serialize(program) {
         if data.len() <= MAX_CACHED_RVM_PROGRAM_BYTES {
             let _ = std::fs::write(path, data);
@@ -6226,6 +5628,7 @@ fn try_lockfile_fast_path_with_policy(
         resolved.insert(
             node.clone(),
             ResolvedPackage {
+                registry_name: None,
                 version: version.clone(),
                 resolved: resolved_url.clone(),
                 integrity: integrity.clone(),
@@ -6380,6 +5783,7 @@ fn selection_to_resolved(
         result.insert(
             name.clone(),
             ResolvedPackage {
+                registry_name: None,
                 version: version.clone(),
                 resolved: crate::lockfile::tarball_url_from_registry(name, &version),
                 integrity,
@@ -6884,6 +6288,126 @@ pub mod sheaf_laplacian {
 mod tests {
     use super::*;
 
+    #[test]
+    fn hardening_bitmap_set_operations_match_sparse_ordinal_sets() {
+        use std::collections::BTreeSet;
+
+        let windows = [(0, 63), (0, 127), (1, 64), (23, 168), (129, 193), (65470, 65535)];
+        for (left_lo, left_hi) in windows {
+            for (right_lo, right_hi) in windows {
+                let make = |lo, hi, stride| {
+                    let ordinals: BTreeSet<u16> = (lo..=hi).filter(|n| n % stride != 1).collect();
+                    let mut mask = chart::VersionBitmap::empty(VersionOrdinal(lo), VersionOrdinal(hi));
+                    for ordinal in &ordinals {
+                        mask.set_ordinal(VersionOrdinal(*ordinal));
+                    }
+                    (mask, ordinals)
+                };
+                let (left, lhs) = make(left_lo, left_hi, 3);
+                let (right, rhs) = make(right_lo, right_hi, 4);
+                let mut intersection = left.clone();
+                intersection.intersect(&right);
+                let mut union = left;
+                union.union(&right);
+                for (bitmap, expected) in [
+                    (intersection, lhs.intersection(&rhs).copied().collect::<BTreeSet<_>>()),
+                    (union, lhs.union(&rhs).copied().collect::<BTreeSet<_>>()),
+                ] {
+                    assert_eq!(bitmap.count() as usize, expected.len());
+                    assert_eq!(bitmap.pick_highest().map(|v| v.0), expected.last().copied());
+                    assert!(expected.iter().all(|n| bitmap.contains_ordinal(VersionOrdinal(*n))));
+                }
+            }
+        }
+        let mask = chart::VersionBitmap::new(VersionOrdinal(63), VersionOrdinal(64));
+        assert!(!mask.contains_interval(&VersionInterval::new(VersionOrdinal(62), VersionOrdinal(64))));
+        assert!(chart::VersionBitmap::new(VersionOrdinal(64), VersionOrdinal(63)).is_empty());
+    }
+
+    #[test]
+    fn hardening_release_conditions_match_an_exhaustive_flat_oracle() {
+        use serde_json::json;
+        let roots = HashMap::from([("a".to_owned(), "*".to_owned()), ("b".to_owned(), "*".to_owned())]);
+        let choices = [None, Some("1.0.0"), Some("2.0.0")];
+        for a0 in choices {
+            for a1 in choices {
+                for b0 in choices {
+                    for b1 in choices {
+                        let info = |target: &str, requirement: Option<&str>| match requirement {
+                            Some(range) => json!({"dependencies": { (target): range }}),
+                            None => json!({}),
+                        };
+                        let world = HashMap::from([
+                            ("a".into(), json!({"versions": {"1.0.0": info("b", a0), "2.0.0": info("b", a1)}})),
+                            ("b".into(), json!({"versions": {"1.0.0": info("a", b0), "2.0.0": info("a", b1)}})),
+                        ]);
+                        let versions = ["1.0.0", "2.0.0"];
+                        let valid = |a: usize, b: usize| {
+                            [a0, a1][a].is_none_or(|need| need == versions[b])
+                                && [b0, b1][b].is_none_or(|need| need == versions[a])
+                        };
+                        let expected = (0..2).any(|a| (0..2).any(|b| valid(a, b)));
+                        let got = select_versions(&world, &roots);
+                        assert_eq!(got.is_some(), expected, "{a0:?} {a1:?} {b0:?} {b1:?}");
+                        if let Some(selection) = got {
+                            assert!(valid(usize::from(selection["a"] == "2.0.0"), usize::from(selection["b"] == "2.0.0")));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hardening_release_conditions_verify_only_the_selected_closure() {
+        use crate::jagr_infinite::rvm::exec::RVM;
+        use serde_json::json;
+        let names = HashMap::from([("parent".into(), 1), ("child".into(), 2)]);
+        let world = HashMap::from([
+            ("parent".into(), json!({"versions": {
+                "1.0.0": {}, "2.0.0": {"dependencies": {"child": "2.0.0"}}
+            }})),
+            ("child".into(), json!({"versions": {"1.0.0": {}, "2.0.0": {}}})),
+        ]);
+        let mut chart = precompute::build_full_chart(&world, &names);
+        chart.roots = Some(vec![1]);
+        let selection = |parent, child| HashMap::from([(1, VersionOrdinal(parent)), (2, VersionOrdinal(child))]);
+        assert!(RVM::verify_selection_for_cache(&chart, &selection(1, 1)).is_ok());
+        assert!(RVM::verify_selection_for_cache(&chart, &selection(1, 0)).is_err());
+        assert!(RVM::verify_selection_for_cache(&chart, &selection(0, 0)).is_err());
+        assert!(RVM::verify_selection_for_cache(&chart, &HashMap::from([(1, VersionOrdinal(0))])).is_ok());
+
+        let mut changed = world.clone();
+        changed.get_mut("parent").unwrap()["versions"]["2.0.0"]["dependencies"]["child"] = json!("1.0.0");
+        let mut changed_chart = precompute::build_full_chart(&changed, &names);
+        changed_chart.roots = chart.roots.clone();
+        assert_ne!(selection_cache_path(&chart), selection_cache_path(&changed_chart));
+        assert!(RVM::verify_selection_for_cache(&changed_chart, &selection(1, 1)).is_err());
+    }
+
+    #[test]
+    fn hardening_flat_and_profile_paths_keep_exact_reachable_domains() {
+        let worlds = HashMap::from([
+            ("target".into(), serde_json::json!({"versions":{
+                "1.0.0":{"version":"1.0.0"},"2.0.0":{"version":"2.0.0"},"3.0.0":{"version":"3.0.0"}
+            }})),
+            ("holder".into(), serde_json::json!({"versions":{
+                "1.0.0":{"version":"1.0.0","dependencies":{"target":"<3.0.0"}}
+            }})),
+            ("unused".into(), serde_json::json!({"versions":{
+                "1.0.0":{"version":"1.0.0","dependencies":{"target":"^9.0.0"}}
+            }})),
+        ]);
+        let roots = HashMap::from([
+            ("target".into(), "1.0.0 || 3.0.0".into()),
+            ("holder".into(), "1.0.0".into()),
+        ]);
+        let installed = select_versions(&worlds, &roots).expect("root domains intersect at 1.0.0");
+        assert_eq!(installed.get("target").map(String::as_str), Some("1.0.0"));
+        assert!(!installed.contains_key("unused"));
+        assert_eq!(select_versions_stats(&worlds, &roots).0, Some(installed));
+    }
+
     /// Edges belong to versions, not packages. A dependent whose releases ask for
     /// different majors must not be conjoined: express 4.0.0 wants accepts ~1.0.5
     /// and 4.18.2 wants ~1.3.8, and intersecting those two empties the domain for
@@ -6899,29 +6423,18 @@ mod tests {
             (1u32, vec!["1.0.0".to_string(), "2.0.0".to_string()]),
         ]);
         // app 1.0.0 -> dep ^1, app 2.0.0 -> dep ^2
-        let deps = HashMap::from([
-            (
-                0u32,
-                vec![
-                    (1u32, "^1.0.0".to_string(), VersionInterval::full(), false),
-                    (1u32, "^2.0.0".to_string(), VersionInterval::full(), false),
-                ],
-            ),
-            (1u32, Vec::new()),
-        ]);
-        let peers: HashMap<u32, Vec<(u32, String, VersionInterval)>> =
-            HashMap::from([(0u32, Vec::new()), (1u32, Vec::new())]);
+        use crate::jagr_index::IndexEdge;
+        let names = HashMap::from([("app".into(), 0), ("dep".into(), 1)]);
+        let deps = HashMap::from([(0, vec![
+            IndexEdge { target: "dep".into(), spec: "^1.0.0".into(), optional: false, declaring: vec![0] },
+            IndexEdge { target: "dep".into(), spec: "^2.0.0".into(), optional: false, declaring: vec![1] },
+        ])]);
         let constraints = HashMap::from([
-            (0u32, VersionInterval::full()),
-            (1u32, VersionInterval::full()),
+            (0, VersionInterval::full()),
+            (1, VersionInterval::full()),
         ]);
-        let mut chart = atlas::build_chart_from_constraints(
-            &constraints,
-            &versions,
-            &strings,
-            &deps,
-            &peers,
-            &HashMap::new(),
+        let mut chart = atlas::build_release_chart(
+            &constraints, &versions, &strings, &deps, &HashMap::new(), &names, &HashMap::new(),
         );
         for (id, name) in [(0u32, "app"), (1u32, "dep")] {
             if let Some(pkg) = chart.packages.get_mut(&id) {
@@ -7384,6 +6897,7 @@ mod tests {
                 ordinal_hi,
                 allowed: chart::VersionBitmap::new(ordinal_lo, ordinal_hi),
                 versions: versions.iter().map(|v| (*v).to_string()).collect(),
+                latest: None,
                 deps: Vec::new(),
                 peers: Vec::new(),
             }
@@ -7420,6 +6934,7 @@ mod tests {
         let mut chart = chart::Chart {
             id: 0,
             packages: HashMap::from([(1, versions.clone())]),
+            roots: None,
             transitions: HashMap::new(),
             betti: chart::BettiNumbers::default(),
             peer_warnings: Vec::new(),
@@ -7493,6 +7008,7 @@ mod tests {
 
     fn resolved_pkg(version: &str) -> ResolvedPackage {
         ResolvedPackage {
+            registry_name: None,
             version: version.to_string(),
             resolved: format!("https://registry.npmjs.org/lodash/-/lodash-{}.tgz", version),
             integrity: None,
@@ -8030,6 +7546,7 @@ mod tests {
                 VersionOrdinal(2),
             ),
             versions: vec!["1.0.0".into(), "1.1.0".into(), "2.0.0".into()],
+            latest: None,
             deps: Vec::new(),
             peers: Vec::new(),
         };
@@ -8675,6 +8192,7 @@ mod jres_bug_proof {
         m.insert(
             "node_modules/express".to_string(),
             ResolvedPackage {
+                registry_name: None,
                 version: "4.22.3".to_string(),
                 resolved: "https://registry.npmjs.org/express/-/express-4.22.3.tgz".to_string(),
                 integrity: Some("sha512-Bdcs4".to_string()),
@@ -8715,6 +8233,7 @@ mod jres_codec_tests {
         m.insert(
             "node_modules/express".to_string(),
             ResolvedPackage {
+                registry_name: None,
                 version: "4.22.3".to_string(),
                 resolved: "https://registry.npmjs.org/express/-/express-4.22.3.tgz".to_string(),
                 integrity: Some("sha512-Bdcs4".to_string()),

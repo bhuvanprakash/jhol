@@ -1,0 +1,22 @@
+[
+  {
+    "arguments": [
+      "install",
+      "--native-only",
+      "--no-scripts"
+    ],
+    "verified_slots": 6,
+    "registry_requests": 37
+  },
+  {
+    "arguments": [
+      "install",
+      "--native-only",
+      "--offline",
+      "--frozen-lockfile",
+      "--no-scripts"
+    ],
+    "verified_slots": 6,
+    "registry_requests": 0
+  }
+]

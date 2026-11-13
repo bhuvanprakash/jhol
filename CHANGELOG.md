@@ -4277,3 +4277,24 @@ resolver of record. Scorecard unchanged this pass, and the two findings above ar
 Test updated to the new policy: `online_bundle_answers_nothing_unless_asked` (the old test
 asserted that the bundle answers exact pins while online — the rule that made a snapshot the
 resolver of record). jhol-core 741, bin 25.
+
+## verify fails closed on a corrupt lockfile, and the ci path stops inventing registry URLs
+
+`jhol verify` answered exit 0 to a truncated `package-lock.json`: the reader collapsed "absent",
+"unreadable" and "unparseable" into one `None`, and the CLI treats that as "nothing to verify
+against". A distinct `TreeState::Corrupt { path, detail }` now names the file and the parser error,
+`prune_extraneous` refuses to delete against an unreadable authority, and three tests pin the
+distinction (absent stays `Unverified`, by design).
+
+`ci` on a project with `file:`, `workspace:*` and `git+file://` dependencies built registry tarball
+URLs for them and reported three HTTP 404s. One predicate (`lockfile::spec_is_non_registry`) now
+decides what is a registry package; both the lockfile-layout path and the `ci` resolved-spec set
+filter with it, and the spec-grammar pre-pass materialises the rest. CLI contracts 30/30.
+
+Audit harness: SIGINT/SIGTERM traps exit after cleanup (a trap that only cleans up swallows
+`timeout`), timings are milliseconds end to end, and the scorecard passes a non-empty npm argument
+array (an empty array under `set -u` is an unbound variable on bash < 4.4).
+
+Four research papers each gained a measured corrections section: retracted zero-backtracking and
+100 % runtime claims, the unsound decimation result, the reuse theorem's two missing hypotheses, and
+stale microbenchmarks against the current binary.

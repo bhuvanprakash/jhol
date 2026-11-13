@@ -9,6 +9,7 @@ const INPUTS: &[&str] = &[
     "bun.lockb",
     "pnpm-lock.yaml",
     "yarn.lock",
+    "jhol-lock.json",
     ".jholrc",
     ".npmrc",
 ];
@@ -18,12 +19,12 @@ pub fn project_identity(root: &Path) -> Option<String> {
     if !root.join("package.json").is_file() {
         return None;
     }
-    if !INPUTS[1..7].iter().any(|name| root.join(name).is_file()) {
+    if !INPUTS[1..8].iter().any(|name| root.join(name).is_file()) {
         return None;
     }
 
     let mut hash = Sha256::new();
-    hash.update(b"jhol-instant-proof-v3\0");
+    hash.update(b"jhol-instant-proof-v4\0");
     hash.update(std::env::consts::OS.as_bytes());
     hash.update([0]);
     hash.update(std::env::consts::ARCH.as_bytes());
@@ -88,8 +89,7 @@ pub fn project_identity(root: &Path) -> Option<String> {
     Some(hex(&hash.finalize()))
 }
 
-/// Validate marker identity and every installed path recorded by npm lock v2/v3.
-/// Unknown lock formats miss safely; the regular CLI handles them.
+/// Validate the prepared marker and compare the live layout against the lockfile.
 pub fn prepared_tree_is_valid(root: &Path) -> bool {
     if !shortcut_policy_allows(root) {
         return false;
@@ -141,170 +141,9 @@ fn config_requires_cli(path: &Path) -> bool {
             == Some(false)
 }
 
-/// Required npm lock paths for a project or a prepared bundle.
+/// Verify the installed layout before accepting a prepared tree or bundle.
 pub fn locked_layout_is_valid(root: &Path, node_modules: &Path) -> bool {
-    let lock = root.join("package-lock.json");
-    let lock = if lock.is_file() {
-        lock
-    } else {
-        let shrinkwrap = root.join("npm-shrinkwrap.json");
-        if !shrinkwrap.is_file() {
-            return false;
-        }
-        shrinkwrap
-    };
-    let Ok(bytes) = std::fs::read(lock) else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return false;
-    };
-    let Some(packages) = value.get("packages").and_then(serde_json::Value::as_object) else {
-        return false;
-    };
-    for (relative, entry) in packages {
-        if relative.is_empty() {
-            continue;
-        }
-        let Some(path) = safe_lock_path(relative) else {
-            return false;
-        };
-        if entry.get("link").and_then(serde_json::Value::as_bool) == Some(true) {
-            return false; // Relocating workspace links needs the regular installer.
-        }
-        if entry.get("optional").and_then(serde_json::Value::as_bool) == Some(true)
-            && optional_is_incompatible(entry)
-        {
-            continue;
-        }
-        let installed = node_modules.join(path);
-        if !installed.is_dir() || !installed.join("package.json").is_file() {
-            return false;
-        }
-        let Ok(installed_manifest) = std::fs::read(installed.join("package.json")) else {
-            return false;
-        };
-        let Ok(installed_manifest) =
-            serde_json::from_slice::<serde_json::Value>(&installed_manifest)
-        else {
-            return false;
-        };
-        let Some(expected_name) = locked_package_name(relative, entry) else {
-            return false;
-        };
-        if installed_manifest
-            .get("name")
-            .and_then(serde_json::Value::as_str)
-            != Some(expected_name.as_str())
-        {
-            return false;
-        }
-        let Some(expected_version) = entry.get("version").and_then(serde_json::Value::as_str)
-        else {
-            return false;
-        };
-        if installed_manifest
-            .get("version")
-            .and_then(serde_json::Value::as_str)
-            != Some(expected_version)
-        {
-            return false;
-        }
-        if entry.get("link").and_then(serde_json::Value::as_bool) == Some(true)
-            && !std::fs::canonicalize(installed).is_ok()
-        {
-            return false;
-        }
-    }
-    true
-}
-
-fn locked_package_name(relative: &str, entry: &serde_json::Value) -> Option<String> {
-    if let Some(name) = entry.get("name").and_then(serde_json::Value::as_str) {
-        return (!name.is_empty()).then(|| name.to_owned());
-    }
-
-    // npm aliases install under the requested path but lock the real package
-    // name in the entry. For ordinary packages, the last node_modules segment
-    // identifies the expected manifest name.
-    let tail = relative.rsplit("node_modules/").next()?;
-    let mut segments = tail.split('/');
-    let first = segments.next()?;
-    if first.starts_with('@') {
-        let second = segments.next()?;
-        if segments.next().is_some() {
-            return None;
-        }
-        Some(format!("{first}/{second}"))
-    } else if segments.next().is_none() {
-        Some(first.to_owned())
-    } else {
-        None
-    }
-}
-
-fn optional_is_incompatible(entry: &serde_json::Value) -> bool {
-    let os = match std::env::consts::OS {
-        "macos" => "darwin",
-        "windows" => "win32",
-        other => other,
-    };
-    let cpu = match std::env::consts::ARCH {
-        "aarch64" => "arm64",
-        "x86_64" => "x64",
-        "x86" => "ia32",
-        other => other,
-    };
-    let libc = if cfg!(target_env = "musl") {
-        "musl"
-    } else {
-        "glibc"
-    };
-    for (field, variables, default) in [
-        (
-            "os",
-            &["JHOL_OS", "npm_config_os", "npm_config_platform"][..],
-            os,
-        ),
-        (
-            "cpu",
-            &["JHOL_CPU", "npm_config_cpu", "npm_config_arch"][..],
-            cpu,
-        ),
-        ("libc", &["JHOL_LIBC", "npm_config_libc"][..], libc),
-    ] {
-        let Some(selector) = entry.get(field).and_then(serde_json::Value::as_array) else {
-            continue;
-        };
-        let target = variables
-            .iter()
-            .find_map(|name| {
-                std::env::var(name)
-                    .ok()
-                    .filter(|value| !value.trim().is_empty())
-            })
-            .unwrap_or_else(|| default.to_string());
-        let values: Vec<_> = selector
-            .iter()
-            .filter_map(serde_json::Value::as_str)
-            .collect();
-        let excluded = values
-            .iter()
-            .any(|value| value.strip_prefix('!') == Some(target.trim()));
-        let positives: Vec<_> = values
-            .iter()
-            .filter(|value| !value.starts_with('!'))
-            .collect();
-        if excluded
-            || (!positives.is_empty()
-                && !positives
-                    .iter()
-                    .any(|value| **value == target.trim() || **value == "any"))
-        {
-            return true;
-        }
-    }
-    false
+    jhol_treecheck::subtree_matches(root, node_modules)
 }
 
 fn safe_lock_path(raw: &str) -> Option<PathBuf> {
@@ -709,6 +548,18 @@ mod tests {
     }
 
     #[test]
+    fn jhol_lock_is_bound_to_prepared_identity() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("package.json"), r#"{"name":"root"}"#).unwrap();
+        let lock = root.join("jhol-lock.json");
+        std::fs::write(&lock, r#"{"packages":{}}"#).unwrap();
+        let identity = project_identity(root).unwrap();
+        std::fs::write(&lock, r#"{"packages":{"":{"name":"root"}}}"#).unwrap();
+        assert_ne!(project_identity(root).as_deref(), Some(identity.as_str()));
+    }
+
+    #[test]
     fn proof_binds_lockfile_and_missing_installed_paths_miss() {
         let dir = tempdir().unwrap();
         std::fs::write(
@@ -727,6 +578,10 @@ mod tests {
         let identity = project_identity(dir.path()).unwrap();
         std::fs::write(dir.path().join("node_modules/.jhol-ok"), identity).unwrap();
         assert!(prepared_tree_is_valid(dir.path()));
+        let extra = dir.path().join("node_modules/extra");
+        std::fs::create_dir(&extra).unwrap();
+        assert!(!prepared_tree_is_valid(dir.path()));
+        std::fs::remove_dir(&extra).unwrap();
         std::fs::write(
             dir.path().join("node_modules/a/package.json"),
             r#"{"name":"a","version":"9.0.0"}"#,

@@ -95,23 +95,12 @@ fn try_instant_trampoline(args: &[String]) -> bool {
         return false;
     }
 
-    // 1. Warm no-op check: valid tree exists.
-    //
-    // `prepared_tree_is_valid` reads a proof and a fingerprint. Neither can see
-    // a package.json edited inside a package, nor a directory the lockfile never
-    // authorises — both were accepted as "up to date" here, because this front
-    // door returns before jhol-bin can look. Ask the tree.
+    // The prepared proof checks marker identity and the live layout.
     if proof::prepared_tree_is_valid(Path::new(".")) {
-        let state = jhol_treecheck::reconcile_tree(Path::new("."));
-        if state.is_match() {
-            if timing {
-                eprintln!("[tramp] lane1 noop hit: {:?}", t0.elapsed());
-            }
-            return true;
-        }
         if timing {
-            eprintln!("[tramp] lane1 declined: {}", state.describe());
+            eprintln!("[tramp] lane1 noop hit: {:?}", t0.elapsed());
         }
+        return true;
     }
     let t1 = std::time::Instant::now();
 

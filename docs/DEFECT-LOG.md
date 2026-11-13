@@ -310,3 +310,34 @@ timeout, because that is the behaviour that keeps a cold install alive.
 **Lesson.** A test that re-executes itself is a small distributed system: it has a server, a
 client, timeouts and shared state. Timing assumptions in it are defects, and "flaky" is the word
 we use instead of "the fixture lies under load".
+
+## 2026-11-13 — a verifier that passed a corrupt authority
+
+**Symptom.** The production audit (`production_linux.sh`) wrote a truncated `package-lock.json`
+(`{"packages":`) and ran `jhol verify`: **exit 0**. The message said "not verified: no readable
+lockfile" — the same answer as *no lockfile at all*.
+
+**Cause.** `jhol-treecheck::read_lockfile` returned `Option<Packages>`, collapsing three different
+facts into `None`: absent, unreadable, and unparseable. `verify_tree` mapped every `None` to
+`Unverified`, and the CLI treats `Unverified` as "nothing to disagree with" (exit 0).
+
+**Fix at the source.** The reader now returns `Result<Option<Packages>, (path, detail)>` and a
+distinct `TreeState::Corrupt { path, detail }`. `verify` prints the file, the parser error and the
+two ways out, and exits 1. `prune_extraneous` refuses to delete against a lockfile it cannot read.
+Three tests pin it: truncated JSON → `Corrupt`, absent → `Unverified`, missing `packages` object →
+`Corrupt`.
+
+**Why it matters more than a wrong version.** A resolver that picks a version the ecosystem does not
+is a bug. A verifier that says "fine" about a corrupt lockfile removes the only signal a user has —
+it makes every downstream claim ("the tree matches the lockfile") untrustworthy, including the
+release gate.
+
+## 2026-11-13 — three defects in the audit harness itself
+
+1. `trap 'rm -rf "$WORKDIR"' INT TERM` cleaned up and **continued**, so `timeout` could not stop a
+   run; three smoke tests had to be killed at 600 s. INT/TERM now clean up and exit.
+2. `elapsed_ms` divided by 1000 "when the value was long", although `now_ms` already returns
+   milliseconds — every timing on bash 3.2 read `0ms`. Now a plain subtraction.
+3. `"${ARRAY[@]}"` on an **empty** array is an unbound-variable error under `set -u` on bash < 4.4:
+   the scorecard passed npm no arguments and reported all ten rows as failures. One always-non-empty
+   argument array now.

@@ -5,7 +5,7 @@
 # they were added after a parser bug survived a green 39-file corpus and only
 # showed up against real packages in node_modules.
 set -u
-cd "$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
+cd "$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)" || exit 1
 BIN=target/release/examples
 CLI=target/release/jhol
 fail=0
@@ -15,8 +15,8 @@ run() { # run <label> <expected> <actual>
 }
 
 note "== build =="
-cargo build -q --release --features jholvm 2>&1 | grep -E '^error' && exit 1
-cargo build -q -p jhol-vm --release --examples 2>&1 | grep -E '^error' && exit 1
+cargo build -q --release --features jholvm || exit 1
+cargo build -q -p jhol-vm --release --examples || exit 1
 
 note "== unit tests =="
 cargo test -q -p jhol-vm --lib -- --test-threads=1 >/dev/null 2>&1 && note "ok   unit tests" || { note "FAIL unit tests"; fail=1; }
@@ -58,7 +58,8 @@ done
 note "== real-world node_modules (parse/format/re-parse/idempotent) =="
 NM=bench_cold/node_modules
 if [ -d "$NM" ]; then
-  "$BIN/realfmt" "$NM" 2000 2>&1 | tail -1
+  out=$("$BIN/realfmt" "$NM" 2000 2>&1) || fail=1
+  printf '%s\n' "$out" | tail -n 1
 else
   note "  (no node_modules present — skipped)"
 fi

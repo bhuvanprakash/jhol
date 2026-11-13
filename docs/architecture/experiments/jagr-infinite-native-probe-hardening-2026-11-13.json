@@ -1,0 +1,56 @@
+{
+  "bitmap_intersection": {
+    "differences": [],
+    "pairs": 81
+  },
+  "conditional_dependency": {
+    "native": {
+      "flat": null,
+      "nested": {
+        "instances": [
+          [
+            "parent",
+            "parent",
+            "1.0.0"
+          ]
+        ],
+        "result": "selected"
+      }
+    },
+    "valid_witness": {
+      "parent": "1.0.0"
+    }
+  },
+  "scope": "Two pure Rust resolver APIs on synthetic metadata; no CLI, network, placement, or install timing.",
+  "two_major_control": {
+    "expected_instances": 4,
+    "native": {
+      "flat": null,
+      "nested": {
+        "instances": [
+          [
+            "child",
+            "child",
+            "1.0.0"
+          ],
+          [
+            "child",
+            "child",
+            "2.0.0"
+          ],
+          [
+            "left",
+            "left",
+            "1.0.0"
+          ],
+          [
+            "right",
+            "right",
+            "1.0.0"
+          ]
+        ],
+        "result": "selected"
+      }
+    }
+  }
+}

@@ -1,0 +1,329 @@
+{
+  "recorded_at_utc": "2026-11-12T18:20:38.559251+00:00",
+  "platform": {
+    "macOS": "27.0.1",
+    "arch": "arm64",
+    "fs": "apfs"
+  },
+  "fixture": {
+    "files": 738,
+    "bytes_per_file": 16384,
+    "tree_digest": "718492ca92bc40c22cf31164beffe70c388b14a93adcfca47daf2bbe1fd50588"
+  },
+  "rounds": 30,
+  "order_seed": 20261112,
+  "scope": "Warm synthetic directory primitives only. Slot seeding, checks and cleanup untimed. OS cache uncontrolled.",
+  "verified": "Every operation matched expected names and file bytes. Writing a clone preserved the source.",
+  "summary_ns": {
+    "clonefile": {
+      "median": 11230958.5,
+      "p95": 14221666
+    },
+    "rename": {
+      "median": 257958.5,
+      "p95": 487792
+    }
+  },
+  "samples": [
+    {
+      "round": 1,
+      "operation": "clonefile",
+      "elapsed_ns": 10077750
+    },
+    {
+      "round": 1,
+      "operation": "rename",
+      "elapsed_ns": 181375
+    },
+    {
+      "round": 2,
+      "operation": "rename",
+      "elapsed_ns": 571584
+    },
+    {
+      "round": 2,
+      "operation": "clonefile",
+      "elapsed_ns": 10349958
+    },
+    {
+      "round": 3,
+      "operation": "clonefile",
+      "elapsed_ns": 11860792
+    },
+    {
+      "round": 3,
+      "operation": "rename",
+      "elapsed_ns": 274958
+    },
+    {
+      "round": 4,
+      "operation": "rename",
+      "elapsed_ns": 328333
+    },
+    {
+      "round": 4,
+      "operation": "clonefile",
+      "elapsed_ns": 11036375
+    },
+    {
+      "round": 5,
+      "operation": "clonefile",
+      "elapsed_ns": 14762584
+    },
+    {
+      "round": 5,
+      "operation": "rename",
+      "elapsed_ns": 368500
+    },
+    {
+      "round": 6,
+      "operation": "clonefile",
+      "elapsed_ns": 11283000
+    },
+    {
+      "round": 6,
+      "operation": "rename",
+      "elapsed_ns": 236334
+    },
+    {
+      "round": 7,
+      "operation": "rename",
+      "elapsed_ns": 327875
+    },
+    {
+      "round": 7,
+      "operation": "clonefile",
+      "elapsed_ns": 13480042
+    },
+    {
+      "round": 8,
+      "operation": "rename",
+      "elapsed_ns": 296625
+    },
+    {
+      "round": 8,
+      "operation": "clonefile",
+      "elapsed_ns": 9625792
+    },
+    {
+      "round": 9,
+      "operation": "rename",
+      "elapsed_ns": 367750
+    },
+    {
+      "round": 9,
+      "operation": "clonefile",
+      "elapsed_ns": 11515625
+    },
+    {
+      "round": 10,
+      "operation": "clonefile",
+      "elapsed_ns": 9905542
+    },
+    {
+      "round": 10,
+      "operation": "rename",
+      "elapsed_ns": 311833
+    },
+    {
+      "round": 11,
+      "operation": "rename",
+      "elapsed_ns": 220250
+    },
+    {
+      "round": 11,
+      "operation": "clonefile",
+      "elapsed_ns": 11274000
+    },
+    {
+      "round": 12,
+      "operation": "clonefile",
+      "elapsed_ns": 8231792
+    },
+    {
+      "round": 12,
+      "operation": "rename",
+      "elapsed_ns": 291958
+    },
+    {
+      "round": 13,
+      "operation": "clonefile",
+      "elapsed_ns": 13487792
+    },
+    {
+      "round": 13,
+      "operation": "rename",
+      "elapsed_ns": 334791
+    },
+    {
+      "round": 14,
+      "operation": "rename",
+      "elapsed_ns": 325916
+    },
+    {
+      "round": 14,
+      "operation": "clonefile",
+      "elapsed_ns": 14128250
+    },
+    {
+      "round": 15,
+      "operation": "clonefile",
+      "elapsed_ns": 9638416
+    },
+    {
+      "round": 15,
+      "operation": "rename",
+      "elapsed_ns": 210208
+    },
+    {
+      "round": 16,
+      "operation": "rename",
+      "elapsed_ns": 487792
+    },
+    {
+      "round": 16,
+      "operation": "clonefile",
+      "elapsed_ns": 11566666
+    },
+    {
+      "round": 17,
+      "operation": "clonefile",
+      "elapsed_ns": 11050792
+    },
+    {
+      "round": 17,
+      "operation": "rename",
+      "elapsed_ns": 217417
+    },
+    {
+      "round": 18,
+      "operation": "clonefile",
+      "elapsed_ns": 9828542
+    },
+    {
+      "round": 18,
+      "operation": "rename",
+      "elapsed_ns": 168334
+    },
+    {
+      "round": 19,
+      "operation": "clonefile",
+      "elapsed_ns": 8023000
+    },
+    {
+      "round": 19,
+      "operation": "rename",
+      "elapsed_ns": 209625
+    },
+    {
+      "round": 20,
+      "operation": "rename",
+      "elapsed_ns": 385625
+    },
+    {
+      "round": 20,
+      "operation": "clonefile",
+      "elapsed_ns": 12311250
+    },
+    {
+      "round": 21,
+      "operation": "clonefile",
+      "elapsed_ns": 9610292
+    },
+    {
+      "round": 21,
+      "operation": "rename",
+      "elapsed_ns": 252917
+    },
+    {
+      "round": 22,
+      "operation": "clonefile",
+      "elapsed_ns": 11187917
+    },
+    {
+      "round": 22,
+      "operation": "rename",
+      "elapsed_ns": 207959
+    },
+    {
+      "round": 23,
+      "operation": "clonefile",
+      "elapsed_ns": 10432292
+    },
+    {
+      "round": 23,
+      "operation": "rename",
+      "elapsed_ns": 170416
+    },
+    {
+      "round": 24,
+      "operation": "clonefile",
+      "elapsed_ns": 8730542
+    },
+    {
+      "round": 24,
+      "operation": "rename",
+      "elapsed_ns": 192125
+    },
+    {
+      "round": 25,
+      "operation": "rename",
+      "elapsed_ns": 270166
+    },
+    {
+      "round": 25,
+      "operation": "clonefile",
+      "elapsed_ns": 11924833
+    },
+    {
+      "round": 26,
+      "operation": "clonefile",
+      "elapsed_ns": 13396334
+    },
+    {
+      "round": 26,
+      "operation": "rename",
+      "elapsed_ns": 263000
+    },
+    {
+      "round": 27,
+      "operation": "clonefile",
+      "elapsed_ns": 10819625
+    },
+    {
+      "round": 27,
+      "operation": "rename",
+      "elapsed_ns": 207834
+    },
+    {
+      "round": 28,
+      "operation": "clonefile",
+      "elapsed_ns": 11538166
+    },
+    {
+      "round": 28,
+      "operation": "rename",
+      "elapsed_ns": 236000
+    },
+    {
+      "round": 29,
+      "operation": "rename",
+      "elapsed_ns": 244166
+    },
+    {
+      "round": 29,
+      "operation": "clonefile",
+      "elapsed_ns": 14221666
+    },
+    {
+      "round": 30,
+      "operation": "rename",
+      "elapsed_ns": 242750
+    },
+    {
+      "round": 30,
+      "operation": "clonefile",
+      "elapsed_ns": 11751958
+    }
+  ]
+}

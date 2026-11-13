@@ -330,6 +330,13 @@ fn append_special_deps_to_lockfile(lock_path: &Path, specials: &[crate::spec_gra
                 entry.insert("link".to_string(), serde_json::json!(true));
             }
             crate::spec_grammar::SpecialKind::Alias { real, .. } => {
+                // A native alias has its own artifact and path in the plan.
+                if packages.get(&key).is_some_and(|entry| {
+                    entry.get("name").and_then(|name| name.as_str()) == Some(real.as_str())
+                        && entry.get("link").and_then(|link| link.as_bool()) != Some(true)
+                }) {
+                    continue;
+                }
                 let src = packages
                     .get(&format!("node_modules/{}", real))
                     .and_then(|v| v.as_object());
@@ -420,10 +427,19 @@ fn append_special_deps_to_lockfile(lock_path: &Path, specials: &[crate::spec_gra
 ///
 /// Runs at the *end* of the install: a registry package hoisted later (e.g. a
 /// transitive with the same name) must not clobber a local checkout.
-fn relink_special_deps(node_modules: &Path, specials: &[crate::spec_grammar::SpecialDep]) {
+fn relink_special_deps(node_modules: &Path, specials: &[crate::spec_grammar::SpecialDep], lock_path: &Path) {
+    let lock: serde_json::Value = std::fs::read(lock_path).ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
     for dep in specials {
         match &dep.kind {
             crate::spec_grammar::SpecialKind::Alias { real, .. } => {
+                let key = format!("node_modules/{}", dep.name);
+                let entry = &lock["packages"][key.as_str()];
+                if entry.get("name").and_then(|name| name.as_str()) == Some(real.as_str())
+                    && entry.get("link").and_then(|link| link.as_bool()) != Some(true)
+                {
+                    continue;
+                }
                 let real_dir = node_modules.join(real);
                 if !real_dir.exists() {
                     continue;
@@ -451,7 +467,7 @@ pub(super) fn finalize_special_deps(
     if specials.is_empty() {
         return;
     }
-    relink_special_deps(Path::new("node_modules"), specials);
+    relink_special_deps(Path::new("node_modules"), specials, lock_path);
     append_special_deps_to_lockfile(lock_path, specials);
 }
 

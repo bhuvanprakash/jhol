@@ -525,6 +525,9 @@ pub fn collect(root: &Path) -> Status {
             ("extraneous", format!("{path} is not in the lockfile"))
         }
         crate::tree_state::TreeState::Unverified { reason } => ("unverified", reason.clone()),
+        crate::tree_state::TreeState::Corrupt { path, detail } => {
+            ("corrupt", format!("{path} is corrupt: {detail}"))
+        }
     };
 
     let model_lock = crate::model_lock::ModelLock::load(root).unwrap_or_default();

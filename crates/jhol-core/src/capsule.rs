@@ -699,6 +699,28 @@ pub fn write_capsule_from_project_with_hash(
         return Ok(());
     }
 
+    let lockfile_bytes =
+        std::fs::read(&lockfile_path).map_err(|e| format!("read lockfile: {}", e))?;
+    let lockfile: serde_json::Value =
+        serde_json::from_slice(&lockfile_bytes).map_err(|e| format!("parse lockfile: {}", e))?;
+
+    let packages = match lockfile.get("packages").and_then(|p| p.as_object()) {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+
+    if packages.iter().any(|(path, entry)| {
+        path.matches("/node_modules/").next().is_some()
+            || entry.get("name").and_then(serde_json::Value::as_str)
+                .is_some_and(|name| !path.is_empty() && name != lockfile_key_to_name(path))
+            || entry.get("link").and_then(serde_json::Value::as_bool) == Some(true)
+    }) {
+        // The capsule stores one record per install name. The lockfile is
+        // required for nested placements and for alternate registry identities.
+        let _ = std::fs::remove_file(capsule_path(project_dir));
+        return Ok(());
+    }
+
     let cap_file = capsule_path(project_dir);
     if let Ok(mut f) = std::fs::File::open(&cap_file) {
         use std::io::{Read, Seek, SeekFrom};
@@ -730,16 +752,6 @@ pub fn write_capsule_from_project_with_hash(
             }
         }
     }
-    let lockfile_bytes =
-        std::fs::read(&lockfile_path).map_err(|e| format!("read lockfile: {}", e))?;
-    let lockfile: serde_json::Value =
-        serde_json::from_slice(&lockfile_bytes).map_err(|e| format!("parse lockfile: {}", e))?;
-
-    let packages = match lockfile.get("packages").and_then(|p| p.as_object()) {
-        Some(p) => p,
-        None => return Ok(()),
-    };
-
     // name → lockfile key (prefer top-level node_modules/<name>)
     let mut name_to_key: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();

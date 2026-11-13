@@ -178,12 +178,14 @@ fn main() {
                 .values()
                 .map(|id| (*id, jhol_core::jagr_infinite::chart::VersionInterval::full()))
                 .collect();
-        let chart = jhol_core::jagr_infinite::atlas::build_chart_from_constraints(
+        let chart = jhol_core::jagr_infinite::atlas::build_release_chart(
             &constraints,
             &versions,
             &version_strings,
             &dp,
             &pr,
+            &name_to_id,
+            &HashMap::new(),
         );
         let chart_us = t_chart.elapsed().as_micros();
         println!(

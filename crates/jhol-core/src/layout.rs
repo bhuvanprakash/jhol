@@ -28,21 +28,52 @@ pub fn top_level_node(name: &str) -> String {
     format!("node_modules/{}", name)
 }
 
-/// First dependency visible from a canonical node key, including intermediate
-/// ancestors. Return the nearest instance even when its version is incompatible.
-pub(crate) fn visible_dependency<'a, T: 'a>(
+/// Return the first provider in lookup order, including its canonical slot.
+pub(crate) fn visible_dependency_at<'a, T: 'a>(
     parent: &str,
     child: &str,
     mut lookup: impl FnMut(&str) -> Option<&'a T>,
-) -> Option<&'a T> {
+) -> Option<(String, &'a T)> {
     let mut ancestor = Some(parent);
     while let Some(path) = ancestor {
-        if let Some(found) = lookup(&format!("{}/node_modules/{}", path, child)) {
-            return Some(found);
+        let candidate = format!("{path}/node_modules/{child}");
+        if let Some(found) = lookup(&candidate) {
+            return Some((candidate, found));
         }
         ancestor = path.rsplit_once("/node_modules/").map(|(parent, _)| parent);
     }
-    lookup(&top_level_node(child))
+    let candidate = top_level_node(child);
+    lookup(&candidate).map(|found| (candidate, found))
+}
+
+pub(crate) fn visible_dependency<'a, T: 'a>(
+    parent: &str,
+    child: &str,
+    lookup: impl FnMut(&str) -> Option<&'a T>,
+) -> Option<&'a T> {
+    visible_dependency_at(parent, child, lookup).map(|(_, found)| found)
+}
+
+/// A peer is provided alongside a package or by an ancestor scope.
+pub(crate) fn visible_peer_at<'a, T: 'a>(
+    consumer: &str,
+    peer: &str,
+    mut lookup: impl FnMut(&str) -> Option<&'a T>,
+) -> Option<(String, &'a T)> {
+    if let Some((parent, _)) = consumer.rsplit_once("/node_modules/") {
+        visible_dependency_at(parent, peer, lookup)
+    } else {
+        let candidate = top_level_node(peer);
+        lookup(&candidate).map(|found| (candidate, found))
+    }
+}
+
+pub(crate) fn visible_peer<'a, T: 'a>(
+    consumer: &str,
+    peer: &str,
+    lookup: impl FnMut(&str) -> Option<&'a T>,
+) -> Option<&'a T> {
+    visible_peer_at(consumer, peer, lookup).map(|(_, found)| found)
 }
 
 /// Highest published version in `packument` satisfying `range`.
@@ -150,6 +181,7 @@ where
             out.insert(
                 node,
                 ResolvedPackage {
+                    registry_name: None,
                     resolved: crate::lockfile::tarball_url_from_registry(&name, &version),
                     version,
                     integrity: None,
@@ -166,6 +198,7 @@ where
             .get(&name)
             .cloned()
             .unwrap_or_else(|| ResolvedPackage {
+                registry_name: None,
                 version: version.clone(),
                 resolved: String::new(),
                 integrity: None,
@@ -317,6 +350,7 @@ mod tests {
 
     fn pkg(version: &str, deps: &[(&str, &str)]) -> ResolvedPackage {
         ResolvedPackage {
+            registry_name: None,
             version: version.to_string(),
             resolved: format!("https://registry.npmjs.org/x/-/x-{}.tgz", version),
             integrity: None,

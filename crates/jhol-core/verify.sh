@@ -5,80 +5,97 @@
 # package manager: unit tests, the adversarial tarball corpus, and a
 # real-world end-to-end offline install with tree determinism.
 set -u
-cd "$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
-fail=0
+cd "$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)" || exit 1
 note() { printf '%s\n' "$*"; }
+fail() { note "INSTALLER GATE: FAIL ($*)"; exit 1; }
 
 note "== build =="
-cargo build -q --release -p jhol-core 2>&1 | grep -E '^error' && exit 1
-cargo build -q --release --features jholvm 2>&1 | grep -E '^error' && exit 1
+cargo build -q --release -p jhol-core || fail "core build"
+cargo build -q --release --features jholvm || fail "CLI build"
 
 note "== unit tests =="
-if cargo test -q -p jhol-core --lib 2>&1 | tail -3 | grep -q 'FAILED\|error'; then
-  note "  FAIL unit tests"; fail=1
-else
-  note "  ok   unit tests"
-fi
+cargo test -q -p jhol-core --lib || fail "unit tests"
 
 note "== adversarial install corpus =="
-if cargo test -q -p jhol-core --lib adversarial 2>&1 | tail -3 | grep -q 'FAILED\|error'; then
-  note "  FAIL adversarial"; fail=1
-else
-  note "  ok   adversarial tarballs/manifests/receipts"
-fi
+cargo test -q -p jhol-core --lib adversarial || fail "adversarial tests"
 
 note "== end-to-end: offline install + determinism =="
-E2E=$(mktemp -d)
-cp -r bench_cold/package.json bench_cold/package-lock.json "$E2E/" 2>/dev/null
-WORK="$PWD"
-cd "$E2E" || exit 1
-# First install (offline, from the content store) — time it.
-T0=$(python3 -c 'import time; print(time.time())')
-"$WORK/target/release/jhol" install --offline --native-only >install1.log 2>&1
-RC1=$?
-T1=$(python3 -c 'import time; print(time.time())')
-DUR1=$(python3 -c "print(f'{$T1-$T0:.2f}')")
-if [ "$RC1" != "0" ]; then
-  note "  FAIL offline install (exit $RC1)"; head -10 install1.log; fail=1
-else
-  note "  ok   offline install (${DUR1}s, $(find node_modules -type f | wc -l | tr -d ' ') files)"
-  # Determinism: second install into a fresh tree must be byte-identical.
-  rm -rf node_modules
-  "$WORK/target/release/jhol" install --offline --native-only >install2.log 2>&1
-  H1=$(find node_modules -type f -exec sha256sum {} \; | sed 's|node_modules/||' | sort | sha256sum)
-  rm -rf node_modules
-  "$WORK/target/release/jhol" install --offline --native-only >install3.log 2>&1
-  H2=$(find node_modules -type f -exec sha256sum {} \; | sed 's|node_modules/||' | sort | sha256sum)
-  if [ "$H1" = "$H2" ]; then
-    note "  ok   deterministic tree (byte-identical across installs)"
-  else
-    note "  FAIL tree differs between installs"; fail=1
-  fi
+fixture="$PWD/bench_cold"
+jhol="$PWD/target/release/jhol"
+sandbox=$(mktemp -d) || fail "create sandbox"
+trap 'rm -rf "$sandbox"' 0
+trap 'exit 1' HUP INT TERM
+mkdir "$sandbox/project" "$sandbox/home" "$sandbox/cache" || fail "prepare sandbox"
+cp "$fixture/package.json" "$fixture/package-lock.json" "$sandbox/project/" || fail "copy fixture"
+cd "$sandbox/project" || fail "enter sandbox"
 
-  # Cache GC safety: sweeping with this lockfile must keep everything the
-  # lockfile references, so an offline install still succeeds afterwards.
-  # (A first version of cache gc deleted every cached tarball while reporting
-  # "0 reachable" — a double-prefixed SRI comparison. The unit tests pin the
-  # comparison; this pins the end-to-end consequence.)
-  BEFORE=$(du -sk "$HOME/.jhol-cache" 2>/dev/null | cut -f1)
-  "$WORK/target/release/jhol" cache gc --from package-lock.json >gc.log 2>&1
-  rm -rf node_modules
-  "$WORK/target/release/jhol" install --offline --native-only >gc_install.log 2>&1
-  RCG=$?
-  NGFILES=$(find node_modules -type f 2>/dev/null | wc -l | tr -d ' ')
-  if [ "$RCG" = "0" ] && [ "$NGFILES" -gt 100 ]; then
-    note "  ok   cache gc keeps referenced entries (offline install after gc: $NGFILES files)"
-  else
-    note "  FAIL offline install broke after cache gc (exit $RCG, $NGFILES files)"
-    head -5 gc_install.log
-    fail=1
-  fi
-  AFTER=$(du -sk "$HOME/.jhol-cache" 2>/dev/null | cut -f1)
-  note "  info cache $BEFORE KB -> $AFTER KB after gc"
+# Seed the pinned fixture in isolation so cache GC never touches the user's cache.
+HOME="$sandbox/home"
+USERPROFILE="$HOME"
+JHOL_CACHE_DIR="$sandbox/cache"
+export HOME USERPROFILE JHOL_CACHE_DIR
+install() {
+  "$jhol" install --native-only --frozen-lockfile --no-scripts "$@" >install.log 2>&1 || {
+    tail -n 12 install.log
+    fail "install $*"
+  }
+}
+
+tree_hash() {
+  python3 - <<'DIGEST'
+import hashlib
+import json
+import os
+from pathlib import Path
+
+root = Path("node_modules")
+if not root.is_dir():
+    raise SystemExit("no installed tree")
+digest = hashlib.sha256()
+files = 0
+def failed_walk(error):
+    raise error
+
+for directory, children, names in os.walk(root, onerror=failed_walk):
+    folder = Path(directory)
+    links = [name for name in children if (folder / name).is_symlink()]
+    children[:] = sorted(set(children) - set(links))
+    for name in sorted(names + links + children):
+        entry = folder / name
+        if entry.is_symlink():
+            value = ["link", os.readlink(entry)]
+        elif entry.is_dir():
+            value = ["directory"]
+        elif entry.is_file():
+            value = ["file", hashlib.sha256(entry.read_bytes()).hexdigest()]
+            files += 1
+        else:
+            raise SystemExit(f"unsupported tree entry: {entry}")
+        record = [entry.relative_to(root).as_posix(), value]
+        digest.update(json.dumps(record).encode() + b"\n")
+if files == 0:
+    raise SystemExit("installed tree is empty")
+print(digest.hexdigest())
+DIGEST
+}
+
+install
+rm -rf node_modules || fail "clear seed tree"
+install --offline
+first=$(tree_hash) || fail "hash first offline install"
+rm -rf node_modules || fail "clear first offline tree"
+install --offline
+second=$(tree_hash) || fail "hash second offline install"
+[ "$first" = "$second" ] || fail "offline trees differ"
+note "  ok   deterministic offline tree"
+
+if ! "$jhol" cache gc --from package-lock.json >gc.log 2>&1; then
+  tail -n 12 gc.log
+  fail "cache gc"
 fi
-cd "$WORK"
-rm -rf "$E2E"
-
-note ""
-if [ "$fail" = "0" ]; then note "INSTALLER GATE: PASS"; else note "INSTALLER GATE: FAIL"; fi
-exit $fail
+rm -rf node_modules || fail "clear second offline tree"
+install --offline
+after_gc=$(tree_hash) || fail "hash offline install after cache gc"
+[ "$first" = "$after_gc" ] || fail "offline tree differs after cache gc"
+note "  ok   cache gc keeps referenced entries"
+note "INSTALLER GATE: PASS"

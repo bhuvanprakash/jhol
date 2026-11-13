@@ -26,8 +26,9 @@
 //!   same instances on any machine.
 //! * **Explainable** — a conflict names the package, the range, and the chain of
 //!   dependents that demanded it, because the requirement records who asked.
-//! * **Bounded** — instance and step caps, so a pathological graph fails loudly
-//!   instead of growing without limit.
+//! * **Bounded** — instance and cumulative worklist caps, including all retries.
+//!   A known conflict can rewind to an earlier release choice. A metadata
+//!   request goes back to the provider without being classified as a conflict.
 //!
 //! ## Deliberate limits (documented, not forgotten)
 //!
@@ -37,7 +38,7 @@
 //! * Hoisting is a separate step: this produces the instance graph, not the
 //!   directory layout. `flatten_for_tree` gives the deterministic hoisting order.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::Value;
 
@@ -129,6 +130,8 @@ pub struct NestedResolution {
     /// `(dependent key, package)` → index into `instances`. The dependent key is
     /// `""` for a root requirement, or `package@version` for a dependency.
     pub edges: BTreeMap<(String, String), usize>,
+    /// Exact consumer and provider IDs. A missing consumer denotes the root.
+    pub instance_edges: BTreeMap<(Option<usize>, String), usize>,
     /// Peer requirements seen while resolving, for advisory reporting.
     pub peers: Vec<(String, String, String)>,
 }
@@ -181,7 +184,7 @@ impl NestedResolution {
 /// under the name @jest/react-is-18". Without this the resolver asks the registry
 /// for `@jest/react-is-18`, which does not exist (HTTP 404), and a real jest tree
 /// stops there.
-fn expand_alias(name: &str, spec: &str) -> (String, String) {
+pub(crate) fn expand_alias(name: &str, spec: &str) -> (String, String) {
     let Some(rest) = spec.trim().strip_prefix("npm:") else {
         return (name.to_string(), spec.to_string());
     };
@@ -200,35 +203,21 @@ fn expand_alias(name: &str, spec: &str) -> (String, String) {
     }
 }
 
-/// Newest published version satisfying `compiled`, at or before `cutoff`.
-fn newest_matching(
-    package: &str,
-    doc: &Value,
-    versions_desc: &[String],
-    published: &HashMap<&str, i64>,
-    compiled: &crate::registry::CompiledSpec,
-    options: &ResolveOptions,
-) -> Option<String> {
-    versions_desc
-        .iter()
-        .find(|v| {
-            let ok = semver::Version::parse(v)
-                .map(|p| compiled.matches(&p))
-                .unwrap_or(false);
-            if !ok {
-                return false;
-            }
-            if options.is_banned(package, v) {
-                return false;
-            }
-            let dated = match options.cutoff {
-                None => true,
-                // No date means we cannot prove it existed then; exclude.
-                Some(t) => published.get(v.as_str()).map(|p| *p <= t).unwrap_or(false),
-            };
-            dated && options.license_allows(doc, v)
-        })
-        .cloned()
+pub(crate) fn compile_registry_requirement(spec: &str, packument: &Value) -> crate::registry::CompiledSpec {
+    let spec = spec.trim();
+    let compiled = crate::registry::compile_spec(spec);
+    if !matches!(compiled, crate::registry::CompiledSpec::Unsupported) {
+        return compiled;
+    }
+    packument.get("dist-tags").and_then(|tags| tags.get(spec)).and_then(Value::as_str)
+        .and_then(|version| semver::Version::parse(version).ok())
+        .map(crate::registry::CompiledSpec::Exact)
+        .unwrap_or(crate::registry::CompiledSpec::Unsupported)
+}
+
+fn release_platform_applies(packument: &Value, version: &str) -> bool {
+    packument.get("versions").and_then(|versions| versions.get(version))
+        .is_some_and(jhol_treecheck::entry_platform_applies)
 }
 
 /// Pick a version that satisfies this demand **and** as many demands already
@@ -251,13 +240,19 @@ fn choose_version(
     published: &HashMap<&str, i64>,
     compiled: &crate::registry::CompiledSpec,
     pending: &[crate::registry::CompiledSpec],
+    rejected: Option<&HashSet<String>>,
     options: &ResolveOptions,
+    optional: bool,
 ) -> Option<String> {
     // Policy first: a version is eligible only if it satisfies the range and every
     // resolution input (`--as-of`, licences, banned versions).
     let eligible = |v: &str| -> Option<(usize, semver::Version)> {
         let parsed = semver::Version::parse(v).ok()?;
-        if !compiled.matches(&parsed) || options.is_banned(package, v) {
+        if !compiled.matches(&parsed)
+            || options.is_banned(package, v)
+            || rejected.is_some_and(|versions| versions.contains(v))
+            || (optional && !release_platform_applies(doc, v))
+        {
             return None;
         }
         let dated = match options.cutoff {
@@ -439,14 +434,13 @@ fn build_meta<'a>(doc: &'a Value) -> Option<Meta<'a>> {
             continue;
         };
         let mut d = Vec::new();
-        for (section, optional) in
-            [("dependencies", false), ("optionalDependencies", true)]
-        {
-            if let Some(map) = info.get(section).and_then(|v| v.as_object()) {
-                for (t, s) in map {
-                    // Targets that are not in the packument set are checked
-                    // when the edge is expanded, where "optional" is known.
-                    d.push((t.as_str(), s.as_str().unwrap_or("*"), optional));
+        let optional_deps = info.get("optionalDependencies").and_then(Value::as_object);
+        for (section, optional) in [("dependencies", false), ("optionalDependencies", true)] {
+            if let Some(map) = info.get(section).and_then(Value::as_object) {
+                for (target, spec) in map {
+                    if optional || optional_deps.is_none_or(|deps| !deps.contains_key(target)) {
+                        d.push((target.as_str(), spec.as_str().unwrap_or("<invalid>"), optional));
+                    }
                 }
             }
         }
@@ -455,7 +449,7 @@ fn build_meta<'a>(doc: &'a Value) -> Option<Meta<'a>> {
             peers.insert(
                 vkey.as_str(),
                 map.iter()
-                    .map(|(t, s)| (t.as_str(), s.as_str().unwrap_or("*")))
+                    .map(|(t, s)| (t.as_str(), s.as_str().unwrap_or("<invalid>")))
                     .collect(),
             );
         }
@@ -558,6 +552,89 @@ pub fn resolve_with_options(
     roots: &HashMap<String, String>,
     options: &ResolveOptions,
 ) -> Result<NestedResolution, NestConflict> {
+    resolve_with_optional_roots(packuments, roots, options, &HashSet::new())
+}
+
+pub(crate) fn resolve_with_optional_roots(
+    packuments: &HashMap<String, Value>,
+    roots: &HashMap<String, String>,
+    options: &ResolveOptions,
+    optional_roots: &HashSet<String>,
+) -> Result<NestedResolution, NestConflict> {
+    let mut search = Search::default();
+    let mut first_conflict = None;
+    loop {
+        let conflict = match resolve_branch(packuments, roots, options, optional_roots, &mut search) {
+            Ok(resolved) => return Ok(resolved),
+            Err(conflict) if conflict.failure == NestFailure::Unsatisfiable => conflict,
+            Err(incomplete) => return Err(incomplete),
+        };
+        let conflict = first_conflict.get_or_insert(conflict);
+        if !search.rewind() {
+            return Err(conflict.clone());
+        }
+    }
+}
+
+#[derive(Clone)]
+enum Pick {
+    Release(String),
+    Omit,
+}
+
+#[derive(Default)]
+struct Choice {
+    selected: Option<Pick>,
+    rejected: HashSet<String>,
+}
+
+/// A deterministic decision prefix. Replaying it rebuilds the instance
+/// graph and worklist from the fixed inputs, so a failed release cannot leave
+/// behind child demands, edges, or peer records. A successful first branch
+/// uses the normal worklist. Failed branches share one cumulative step budget.
+#[derive(Default)]
+struct Search {
+    choices: Vec<Choice>,
+    visited: usize,
+    steps: usize,
+}
+
+impl Search {
+    fn record(&mut self, selected: Pick) {
+        if let Some(choice) = self.choices.get_mut(self.visited) {
+            choice.selected = Some(selected);
+        } else {
+            self.choices.push(Choice {
+                selected: Some(selected),
+                rejected: HashSet::new(),
+            });
+        }
+        self.visited += 1;
+    }
+
+    fn rewind(&mut self) -> bool {
+        self.choices.truncate(self.visited);
+        self.visited = 0;
+        while let Some(choice) = self.choices.last_mut() {
+            match choice.selected.take() {
+                Some(Pick::Release(rejected)) => {
+                    choice.rejected.insert(rejected);
+                    return true;
+                }
+                _ => { self.choices.pop(); }
+            }
+        }
+        false
+    }
+}
+
+fn resolve_branch(
+    packuments: &HashMap<String, Value>,
+    roots: &HashMap<String, String>,
+    options: &ResolveOptions,
+    optional_roots: &HashSet<String>,
+    search: &mut Search,
+) -> Result<NestedResolution, NestConflict> {
     const MAX_INSTANCES: usize = 20_000;
     const MAX_STEPS: usize = 200_000;
 
@@ -569,22 +646,33 @@ pub fn resolve_with_options(
     let mut instances: Vec<Instance> = Vec::new();
     // package -> indices of its instances
     let mut by_package: HashMap<String, Vec<usize>> = HashMap::new();
-    let mut edges: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let mut edges: BTreeMap<(Option<usize>, String), usize> = BTreeMap::new();
     let mut peers_seen: BTreeSet<(String, String, String)> = BTreeSet::new();
 
     // Worklist of requirements, processed in a deterministic order: sorted roots,
     // then dependencies in sorted (name, spec) order per instance.
-    let mut queue: std::collections::VecDeque<(String, String, String)> =
-        std::collections::VecDeque::new();
-    for (name, spec) in roots.iter() {
-        queue.push_back((name.clone(), spec.clone(), String::new()));
+    #[derive(PartialEq, Eq, PartialOrd, Ord)]
+    struct Demand {
+        target: String,
+        spec: String,
+        consumer: Option<usize>,
+        optional: bool,
     }
-    queue.make_contiguous().sort();
 
-    let mut steps = 0usize;
-    while let Some((target, spec, dependent)) = queue.pop_front() {
-        steps += 1;
-        if steps > MAX_STEPS {
+    let mut queue: std::collections::VecDeque<_> = roots.iter().map(|(name, spec)| Demand {
+        target: name.clone(),
+        spec: spec.clone(),
+        consumer: None,
+        optional: optional_roots.contains(name),
+    }).collect();
+    queue.make_contiguous().sort();
+    while let Some(Demand { target, spec, consumer, optional }) = queue.pop_front() {
+        let dependent = consumer.map(|id| {
+            let instance = &instances[id];
+            format!("{}@{}", instance.installed_as, instance.version)
+        }).unwrap_or_default();
+        search.steps += 1;
+        if search.steps > MAX_STEPS {
             return Err(NestConflict {
                 failure: NestFailure::Bounded,
                 package: target,
@@ -595,7 +683,10 @@ pub fn resolve_with_options(
         }
         // `npm:` aliases resolve the real package under an alternate name.
         let (lookup, lookup_spec) = expand_alias(&target, &spec);
-        if lookup != target && !packuments.contains_key(&lookup) {
+        let Some(meta) = meta_for(&mut meta, packuments, &lookup) else {
+            if optional {
+                continue;
+            }
             return Err(NestConflict {
                 failure: NestFailure::MissingPackument,
                 package: lookup,
@@ -603,20 +694,10 @@ pub fn resolve_with_options(
                 required_by: dependent,
                 available: Vec::new(),
             });
-        }
-        let Some(meta) = meta_for(&mut meta, packuments, &lookup) else {
-            // No metadata for this package: the caller fetches and retries.
-            return Err(NestConflict {
-                failure: NestFailure::MissingPackument,
-                package: target,
-                spec,
-                required_by: dependent,
-                available: Vec::new(),
-            });
         };
 
         // Reuse an existing instance whose version satisfies this requirement.
-        let compiled = crate::registry::compile_spec(&lookup_spec);
+        let compiled = compile_registry_requirement(&lookup_spec, meta.doc);
         let existing = by_package.get(&lookup).and_then(|ids| {
             ids.iter().copied().find(|i| {
                 // Identity is (installed name, version), not version alone. An
@@ -627,7 +708,9 @@ pub fn resolve_with_options(
                     return false;
                 }
                 let v = &instances[*i].version;
-                if options.is_banned(&lookup, v) {
+                if options.is_banned(&lookup, v)
+                    || (optional && !release_platform_applies(meta.doc, v))
+                {
                     return false;
                 }
                 semver::Version::parse(v)
@@ -643,26 +726,43 @@ pub fn resolve_with_options(
                 // Demands for this same install name that are already waiting.
                 // Bounded: past this the worklist is large enough that the extra
                 // comparisons cost more than a duplicate copy saves.
-                let pending: Vec<crate::registry::CompiledSpec> = if queue.len() <= 4096 {
-                    queue
-                        .iter()
-                        .filter(|(t, _, _)| t == &target)
-                        .take(64)
-                        .map(|(_, spec, _)| crate::registry::compile_spec(spec))
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                let chosen = choose_version(
-                    &target,
-                    meta.doc,
-                    &meta.versions,
-                    &meta.published,
-                    &compiled,
-                    &pending,
-                    options,
-                );
+                let decision = search.choices.get(search.visited);
+                let chosen = decision.and_then(|choice| choice.selected.clone()).or_else(|| {
+                    let pending: Vec<crate::registry::CompiledSpec> = if queue.len() <= 4096 {
+                        queue
+                            .iter()
+                            .filter_map(|demand| {
+                                if demand.target != target || demand.optional {
+                                    return None;
+                                }
+                                let (package, range) = expand_alias(&demand.target, &demand.spec);
+                                (package == lookup)
+                                    .then(|| compile_registry_requirement(&range, meta.doc))
+                            })
+                            .take(64)
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    choose_version(
+                        &lookup,
+                        meta.doc,
+                        &meta.versions,
+                        &meta.published,
+                        &compiled,
+                        &pending,
+                        decision.map(|choice| &choice.rejected),
+                        options,
+                        optional,
+                    ).map(Pick::Release)
+                });
                 let Some(chosen) = chosen else {
+                    if optional {
+                        if decision.is_some() {
+                            search.record(Pick::Omit);
+                        }
+                        continue;
+                    }
                     if options.cutoff.is_some() && meta.published.is_empty() {
                         return Err(NestConflict {
                             failure: NestFailure::MissingDates,
@@ -682,6 +782,10 @@ pub fn resolve_with_options(
                         available,
                     });
                 };
+                let Pick::Release(chosen) = chosen else {
+                    search.record(Pick::Omit);
+                    continue;
+                };
                 if instances.len() >= MAX_INSTANCES {
                     return Err(NestConflict {
                         failure: NestFailure::Bounded,
@@ -691,6 +795,7 @@ pub fn resolve_with_options(
                         available: Vec::new(),
                     });
                 }
+                search.record(Pick::Release(chosen.clone()));
                 let idx = instances.len();
                 instances.push(Instance {
                     package: lookup.clone(),
@@ -714,28 +819,11 @@ pub fn resolve_with_options(
                     .unwrap_or_default();
                 child.sort();
                 for (dep_name, dep_spec, optional) in child {
-                    // Check availability under the *real* name: an `npm:` alias
-                    // points at a package that exists, under a name that does
-                    // not. Enqueue the alias name so `installed_as` is preserved.
-                    let (real, _) = expand_alias(&dep_name, &dep_spec);
-                    if !packuments.contains_key(&real) {
-                        if optional {
-                            continue; // optional edge to an unavailable package
-                        }
-                        return Err(NestConflict {
-                            failure: NestFailure::MissingPackument,
-                            package: dep_name,
-                            spec: dep_spec,
-                            required_by: key,
-                            available: Vec::new(),
-                        });
-                    }
-                    queue.push_back((dep_name, dep_spec, key.clone()));
+                    queue.push_back(Demand { target: dep_name, spec: dep_spec, consumer: Some(idx), optional });
                 }
-                // Peers: recorded, not binding (see module docs).
-                if let Some(ps) = meta.peers.get(chosen.as_str()) {
-                    for (p, s) in ps {
-                        peers_seen.insert((key.clone(), (*p).to_string(), (*s).to_string()));
+                if let Some(peers) = meta.peers.get(chosen.as_str()) {
+                    for (peer, spec) in peers {
+                        peers_seen.insert((key.clone(), (*peer).to_string(), (*spec).to_string()));
                     }
                 }
                 idx
@@ -756,7 +844,7 @@ pub fn resolve_with_options(
             instances[idx].required_by.push((demander, spec.clone()));
             instances[idx].required_by.sort();
         }
-        edges.insert((dependent, target), idx);
+        edges.insert((consumer, target), idx);
     }
 
     // Deterministic instance order for callers and for diffs.
@@ -773,14 +861,19 @@ pub fn resolve_with_options(
         remap[*old_idx] = new_idx;
     }
     let sorted_instances: Vec<Instance> = order.iter().map(|i| instances[*i].clone()).collect();
-    let edges = edges
-        .into_iter()
-        .map(|(k, v)| (k, remap[v]))
-        .collect::<BTreeMap<_, _>>();
+    let mut instance_edges = BTreeMap::new();
+    let mut printable_edges = BTreeMap::new();
+    for ((consumer, name), provider) in edges {
+        let key = consumer.map(|id| format!("{}@{}", instances[id].installed_as, instances[id].version))
+            .unwrap_or_default();
+        printable_edges.insert((key, name.clone()), remap[provider]);
+        instance_edges.insert((consumer.map(|id| remap[id]), name), remap[provider]);
+    }
 
     Ok(NestedResolution {
         instances: sorted_instances,
-        edges,
+        edges: printable_edges,
+        instance_edges,
         peers: peers_seen.into_iter().collect(),
     })
 }
@@ -947,6 +1040,44 @@ mod tests {
             );
         }
         json!({ "name": name, "versions": v })
+    }
+
+    #[test]
+    fn hardening_nested_rewinds_release_and_discards_failed_branch_edges() {
+        let world = HashMap::from([
+            ("parent".into(), pk("parent", &[("1.0.0", &[]), ("1.1.0", &[("child", "^1")])])),
+            ("child".into(), pk("child", &[("1.0.0", &[("missing-major", "^2")])])),
+            ("missing-major".into(), pk("missing-major", &[("1.0.0", &[])])),
+        ]);
+        let roots = HashMap::from([("parent".into(), "^1".into())]);
+        let plan = resolve_with_options(&world, &roots, &ResolveOptions::default()).unwrap();
+        assert_eq!(plan.instances.len(), 1);
+        assert_eq!(plan.instances[0].version, "1.0.0");
+        assert_eq!(plan.edges.len(), 1);
+        assert!(plan.peers.is_empty());
+
+        let mut incomplete = world;
+        incomplete.remove("missing-major");
+        let failure = resolve_with_options(&incomplete, &roots, &ResolveOptions::default()).unwrap_err();
+        assert_eq!(failure.failure, NestFailure::MissingPackument);
+        assert_eq!(failure.package, "missing-major");
+    }
+
+    #[test]
+    fn hardening_alias_cannot_bypass_registry_identity_policy() {
+        let world = HashMap::from([(
+            "original".into(),
+            pk("original", &[("1.0.0", &[]), ("1.1.0", &[])]),
+        )]);
+        let roots = HashMap::from([("local-name".into(), "npm:original@^1".into())]);
+        let options = ResolveOptions {
+            banned: Some([("original".into(), "1.1.0".into())].into()),
+            ..ResolveOptions::default()
+        };
+        let plan = resolve_with_options(&world, &roots, &options).unwrap();
+        assert_eq!(plan.instances[0].package, "original");
+        assert_eq!(plan.instances[0].installed_as, "local-name");
+        assert_eq!(plan.instances[0].version, "1.0.0");
     }
 
     /// `--as-of` accepts an instant or a calendar date, and refuses anything else

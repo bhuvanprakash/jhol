@@ -1,0 +1,244 @@
+{
+  "bitmap_intersection": {
+    "differences": [
+      {
+        "expected_count": 1,
+        "first_extra_ordinal": 64,
+        "left_last_ordinal": 64,
+        "observed_count": 2,
+        "right_last_ordinal": 0
+      },
+      {
+        "expected_count": 63,
+        "first_extra_ordinal": 64,
+        "left_last_ordinal": 64,
+        "observed_count": 64,
+        "right_last_ordinal": 62
+      },
+      {
+        "expected_count": 64,
+        "first_extra_ordinal": 64,
+        "left_last_ordinal": 64,
+        "observed_count": 65,
+        "right_last_ordinal": 63
+      },
+      {
+        "expected_count": 1,
+        "first_extra_ordinal": 64,
+        "left_last_ordinal": 65,
+        "observed_count": 3,
+        "right_last_ordinal": 0
+      },
+      {
+        "expected_count": 63,
+        "first_extra_ordinal": 64,
+        "left_last_ordinal": 65,
+        "observed_count": 65,
+        "right_last_ordinal": 62
+      },
+      {
+        "expected_count": 64,
+        "first_extra_ordinal": 64,
+        "left_last_ordinal": 65,
+        "observed_count": 66,
+        "right_last_ordinal": 63
+      },
+      {
+        "expected_count": 1,
+        "first_extra_ordinal": 64,
+        "left_last_ordinal": 126,
+        "observed_count": 64,
+        "right_last_ordinal": 0
+      },
+      {
+        "expected_count": 63,
+        "first_extra_ordinal": 64,
+        "left_last_ordinal": 126,
+        "observed_count": 126,
+        "right_last_ordinal": 62
+      },
+      {
+        "expected_count": 64,
+        "first_extra_ordinal": 64,
+        "left_last_ordinal": 126,
+        "observed_count": 127,
+        "right_last_ordinal": 63
+      },
+      {
+        "expected_count": 1,
+        "first_extra_ordinal": 64,
+        "left_last_ordinal": 127,
+        "observed_count": 65,
+        "right_last_ordinal": 0
+      },
+      {
+        "expected_count": 63,
+        "first_extra_ordinal": 64,
+        "left_last_ordinal": 127,
+        "observed_count": 127,
+        "right_last_ordinal": 62
+      },
+      {
+        "expected_count": 64,
+        "first_extra_ordinal": 64,
+        "left_last_ordinal": 127,
+        "observed_count": 128,
+        "right_last_ordinal": 63
+      },
+      {
+        "expected_count": 1,
+        "first_extra_ordinal": 64,
+        "left_last_ordinal": 128,
+        "observed_count": 66,
+        "right_last_ordinal": 0
+      },
+      {
+        "expected_count": 63,
+        "first_extra_ordinal": 64,
+        "left_last_ordinal": 128,
+        "observed_count": 128,
+        "right_last_ordinal": 62
+      },
+      {
+        "expected_count": 64,
+        "first_extra_ordinal": 64,
+        "left_last_ordinal": 128,
+        "observed_count": 129,
+        "right_last_ordinal": 63
+      },
+      {
+        "expected_count": 65,
+        "first_extra_ordinal": 128,
+        "left_last_ordinal": 128,
+        "observed_count": 66,
+        "right_last_ordinal": 64
+      },
+      {
+        "expected_count": 66,
+        "first_extra_ordinal": 128,
+        "left_last_ordinal": 128,
+        "observed_count": 67,
+        "right_last_ordinal": 65
+      },
+      {
+        "expected_count": 127,
+        "first_extra_ordinal": 128,
+        "left_last_ordinal": 128,
+        "observed_count": 128,
+        "right_last_ordinal": 126
+      },
+      {
+        "expected_count": 128,
+        "first_extra_ordinal": 128,
+        "left_last_ordinal": 128,
+        "observed_count": 129,
+        "right_last_ordinal": 127
+      },
+      {
+        "expected_count": 1,
+        "first_extra_ordinal": 64,
+        "left_last_ordinal": 129,
+        "observed_count": 67,
+        "right_last_ordinal": 0
+      },
+      {
+        "expected_count": 63,
+        "first_extra_ordinal": 64,
+        "left_last_ordinal": 129,
+        "observed_count": 129,
+        "right_last_ordinal": 62
+      },
+      {
+        "expected_count": 64,
+        "first_extra_ordinal": 64,
+        "left_last_ordinal": 129,
+        "observed_count": 130,
+        "right_last_ordinal": 63
+      },
+      {
+        "expected_count": 65,
+        "first_extra_ordinal": 128,
+        "left_last_ordinal": 129,
+        "observed_count": 67,
+        "right_last_ordinal": 64
+      },
+      {
+        "expected_count": 66,
+        "first_extra_ordinal": 128,
+        "left_last_ordinal": 129,
+        "observed_count": 68,
+        "right_last_ordinal": 65
+      },
+      {
+        "expected_count": 127,
+        "first_extra_ordinal": 128,
+        "left_last_ordinal": 129,
+        "observed_count": 129,
+        "right_last_ordinal": 126
+      },
+      {
+        "expected_count": 128,
+        "first_extra_ordinal": 128,
+        "left_last_ordinal": 129,
+        "observed_count": 130,
+        "right_last_ordinal": 127
+      }
+    ],
+    "pairs": 81
+  },
+  "conditional_dependency": {
+    "native": {
+      "flat": null,
+      "nested": {
+        "dependent": "parent@1.1.0",
+        "package": "child",
+        "range": "^2.0.0",
+        "result": "Unsatisfiable"
+      }
+    },
+    "valid_witness": {
+      "parent": "1.0.0"
+    }
+  },
+  "scope": "Two pure Rust resolver APIs on synthetic metadata; no CLI, network, placement, or install timing.",
+  "two_major_control": {
+    "expected_instances": 4,
+    "native": {
+      "flat": null,
+      "nested": {
+        "instances": [
+          [
+            "child",
+            "child",
+            "1.0.0"
+          ],
+          [
+            "child",
+            "child",
+            "2.0.0"
+          ],
+          [
+            "left",
+            "left",
+            "1.0.0"
+          ],
+          [
+            "right",
+            "right",
+            "1.0.0"
+          ]
+        ],
+        "result": "selected"
+      }
+    }
+  },
+  "provenance": {
+    "os": "Darwin",
+    "os_version": "27.0.1",
+    "arch": "arm64",
+    "rustc_version": "1.98.1",
+    "example_sha256": "2fdf548a251e3bbebb0bf414d6255a90c46a718907774b9d996aa5abc70556ef",
+    "command": "JHOL_NO_SELECTION_CACHE=1 cargo run --locked --offline --release -p jhol-core --features http-reqwest --example jagr_paper_iv_probe",
+    "repeat": "A direct rerun of the same binary produced byte-identical JSON."
+  }
+}

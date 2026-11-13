@@ -1813,6 +1813,7 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
                         for (spec, _version) in &tree {
                             if let Some(_name) = spec.split('@').next() {
                                 let entry = jhol_core::lockfile_write::ResolvedPackage {
+                                    registry_name: None,
                                     version: _version.clone(),
                                     resolved: String::new(),
                                     integrity: None,
@@ -4298,6 +4299,23 @@ fn run() -> Result<(), String> {
                     println!("not verified: {}", reason);
                 }
                 return Ok(());
+            }
+            jhol_core::tree_state::TreeState::Corrupt { path, detail } => {
+                // A lockfile that exists but cannot be parsed is not something `install` can
+                // "repair" silently: the authority is gone. Say which file and what is wrong,
+                // and fail.
+                if json {
+                    let v = serde_json::json!({
+                        "state": "corrupt",
+                        "path": path,
+                        "detail": detail,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+                } else if !quiet {
+                    eprintln!("NOT OK: {path} is corrupt — {detail}");
+                    eprintln!("  restore it from version control, or delete it and run `jhol install`");
+                }
+                return Err(format!("{path} is corrupt"));
             }
             other => {
                 if json {

@@ -16,7 +16,7 @@
 //! ## Format
 //!
 //! ```text
-//! magic "JHOLJAG1" (8 bytes)
+//! magic "JHOLJAG2" (8 bytes)
 //! u32 package count
 //! per package:
 //!   str name
@@ -34,7 +34,7 @@
 //! A resolver's cache key must be a function of its inputs, or "same manifest,
 //! same tree" stops being true the moment the cache is warm.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 /// One dependency or peer declaration, with the releases that declare it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,7 +61,7 @@ pub struct ResolverIndex {
     pub packages: BTreeMap<String, IndexPackage>,
 }
 
-const MAGIC: &[u8; 8] = b"JHOLJAG1";
+const MAGIC: &[u8; 8] = b"JHOLJAG2";
 
 impl ResolverIndex {
     /// Build from packuments, keeping every declared target (not just the ones
@@ -75,16 +75,7 @@ impl ResolverIndex {
         Self { packages }
     }
 
-    /// Chart inputs, in the shape `build_chart_from_constraints` expects.
-    ///
-    /// Returns `(versions, version_strings, deps, peers)` keyed by package id,
-    /// with ids assigned by sorted name so they are a function of the input set.
-    /// Chart inputs, in the shape `build_chart_from_constraints` expects.
-    ///
-    /// The index stores each edge's declaring releases, but the chart builder is
-    /// still package-level (one edge per `(target, spec)`), so declaring sets are
-    /// not passed through yet. They stay in the index because the per-version
-    /// edge work and `why-not` cores both need them.
+    /// Release-aware chart inputs, keyed by stable package identifiers.
     #[allow(clippy::type_complexity)]
     pub fn chart_inputs(
         &self,
@@ -92,8 +83,8 @@ impl ResolverIndex {
         HashMap<String, u32>,
         HashMap<u32, Vec<crate::jagr_infinite::chart::VersionOrdinal>>,
         HashMap<u32, Vec<String>>,
-        HashMap<u32, Vec<(u32, String, crate::jagr_infinite::chart::VersionInterval, bool)>>,
-        HashMap<u32, Vec<(u32, String, crate::jagr_infinite::chart::VersionInterval)>>,
+        HashMap<u32, Vec<IndexEdge>>,
+        HashMap<u32, Vec<IndexEdge>>,
     ) {
         use crate::jagr_infinite::chart::VersionOrdinal;
 
@@ -114,31 +105,15 @@ impl ResolverIndex {
             };
             versions.insert(
                 *id,
-                (0..pkg.versions.len())
-                    .map(|i| VersionOrdinal(i as u16))
-                    .collect::<Vec<_>>(),
+                if pkg.versions.len() <= usize::from(u16::MAX) + 1 {
+                    (0..pkg.versions.len()).map(|i| VersionOrdinal(i as u16)).collect()
+                } else {
+                    Vec::new()
+                },
             );
             version_strings.insert(*id, pkg.versions.clone());
-            let d: Vec<_> = pkg
-                .deps
-                .iter()
-                .filter_map(|e| {
-                    let target = *name_to_id.get(&e.target)?;
-                    let interval = crate::jagr_infinite::precompute::spec_to_interval(&e.spec)?;
-                    Some((target, e.spec.clone(), interval, e.optional))
-                })
-                .collect();
-            let p: Vec<_> = pkg
-                .peers
-                .iter()
-                .filter_map(|e| {
-                    let target = *name_to_id.get(&e.target)?;
-                    let interval = crate::jagr_infinite::precompute::spec_to_interval(&e.spec)?;
-                    Some((target, e.spec.clone(), interval))
-                })
-                .collect();
-            deps.insert(*id, d);
-            peers.insert(*id, p);
+            deps.insert(*id, pkg.deps.clone());
+            peers.insert(*id, pkg.peers.clone());
         }
         (name_to_id, versions, version_strings, deps, peers)
     }
@@ -179,20 +154,20 @@ impl ResolverIndex {
         let mut packages = BTreeMap::new();
         for _ in 0..count {
             let name = r.string()?;
-            let nv = r.u32()? as usize;
+            let nv = r.count(4)?;
             let mut versions = Vec::with_capacity(nv);
             for _ in 0..nv {
                 versions.push(r.string()?);
             }
-            let nd = r.u32()? as usize;
+            let nd = r.count(13)?;
             let mut deps = Vec::with_capacity(nd);
             for _ in 0..nd {
-                deps.push(r.edge()?);
+                deps.push(r.edge(nv)?);
             }
-            let np = r.u32()? as usize;
+            let np = r.count(13)?;
             let mut peers = Vec::with_capacity(np);
             for _ in 0..np {
-                peers.push(r.edge()?);
+                peers.push(r.edge(nv)?);
             }
             packages.insert(
                 name.clone(),
@@ -213,98 +188,59 @@ impl ResolverIndex {
     }
 }
 
-fn edge_specs(
-    versions: &serde_json::Map<String, serde_json::Value>,
-    sections: &[(&str, bool)],
-    order: &BTreeMap<String, u32>,
-) -> Vec<IndexEdge> {
-    // (target, spec, optional) -> declaring offsets
-    let mut declared: BTreeMap<(String, String, bool), BTreeSet<u32>> = BTreeMap::new();
-    for (vstr, info) in versions {
-        let Some(&idx) = order.get(vstr) else { continue };
-        for (key, optional) in sections {
-            let Some(map) = info.get(key).and_then(|v| v.as_object()) else {
-                continue;
-            };
-            for (target, spec) in map {
-                let spec = spec.as_str().unwrap_or("*").trim().to_string();
-                declared
-                    .entry((target.clone(), spec, *optional))
+pub fn package_from_packument(name: &str, packument: &serde_json::Value) -> IndexPackage {
+    type Declarations = BTreeMap<(String, String, bool), Vec<u32>>;
+
+    fn edges(declarations: Declarations) -> Vec<IndexEdge> {
+        declarations
+            .into_iter()
+            .map(|((target, spec, optional), declaring)| IndexEdge {
+                target,
+                spec,
+                optional,
+                declaring,
+            })
+            .collect()
+    }
+
+    let mut releases: Vec<_> = packument
+        .get("versions")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter_map(|(key, info)| Some((semver::Version::parse(key).ok()?, key, info)))
+        .collect();
+    releases.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
+
+    let mut deps = Declarations::new();
+    let mut peers = Declarations::new();
+    let mut versions = Vec::with_capacity(releases.len());
+    for (ordinal, (_, version, info)) in releases.into_iter().enumerate() {
+        versions.push(version.clone());
+        let optional_deps = info.get("optionalDependencies").and_then(serde_json::Value::as_object);
+        for (section, optional) in [("dependencies", false), ("optionalDependencies", true)] {
+            for (target, spec) in info.get(section).and_then(serde_json::Value::as_object).into_iter().flatten() {
+                // An optional override applies only to the release that declares it.
+                if !optional && optional_deps.is_some_and(|deps| deps.contains_key(target)) {
+                    continue;
+                }
+                deps.entry((target.clone(), spec.as_str().unwrap_or("<invalid>").trim().to_owned(), optional))
                     .or_default()
-                    .insert(idx);
+                    .push(ordinal as u32);
             }
         }
-    }
-    // A name declared as both required and optional is required (npm semantics).
-    let required_targets: BTreeSet<String> = declared
-        .keys()
-        .filter(|(_, _, optional)| !*optional)
-        .map(|(name, _, _)| name.clone())
-        .collect();
-    declared
-        .into_iter()
-        .map(|((target, spec, optional), idxs)| IndexEdge {
-            // `required` wins over `optional` for the same target, so resolve the
-            // flag before moving the name.
-            optional: optional && !required_targets.contains(&target),
-            target,
-            spec,
-            declaring: idxs.into_iter().collect(),
-        })
-        .collect()
-}
-
-pub fn package_from_packument(name: &str, packument: &serde_json::Value) -> IndexPackage {
-    let raw = packument
-        .get("versions")
-        .and_then(|v| v.as_object())
-        .cloned()
-        .unwrap_or_default();
-
-    // Sorted semver order defines ordinals; unparsable keys are dropped exactly
-    // as the chart builder drops them.
-    let mut parsed: Vec<(semver::Version, String)> = raw
-        .keys()
-        .filter_map(|k| semver::Version::parse(k).ok().map(|v| (v, k.clone())))
-        .collect();
-    parsed.sort_by(|a, b| a.0.cmp(&b.0));
-    let order: BTreeMap<String, u32> = parsed
-        .iter()
-        .enumerate()
-        .map(|(i, (_, k))| (k.clone(), i as u32))
-        .collect();
-    let versions: Vec<String> = parsed.iter().map(|(v, _)| v.to_string()).collect();
-
-    // Rebuild a version map keyed by the canonical string so indices line up.
-    let keyed: serde_json::Map<String, serde_json::Value> = parsed
-        .iter()
-        .filter_map(|(v, k)| raw.get(k).map(|val| (v.to_string(), val.clone())))
-        .collect();
-
-    let mut deps = edge_specs(
-        &keyed,
-        &[("dependencies", false), ("optionalDependencies", true)],
-        &order,
-    );
-    // required wins over optional for the same target+spec
-    let required_targets: BTreeSet<String> = deps
-        .iter()
-        .filter(|e| !e.optional)
-        .map(|e| e.target.clone())
-        .collect();
-    for e in deps.iter_mut() {
-        if e.optional && required_targets.contains(&e.target) {
-            e.optional = false;
+        for (target, spec) in info.get("peerDependencies").and_then(serde_json::Value::as_object).into_iter().flatten() {
+            let optional = info.get("peerDependenciesMeta")
+                .and_then(|meta| meta.get(target))
+                .and_then(|peer| peer.get("optional"))
+                .and_then(serde_json::Value::as_bool)
+                == Some(true);
+            peers.entry((target.clone(), spec.as_str().unwrap_or("<invalid>").trim().to_owned(), optional))
+                .or_default()
+                .push(ordinal as u32);
         }
     }
-    let peers = edge_specs(&keyed, &[("peerDependencies", false)], &order);
-
-    IndexPackage {
-        name: name.to_string(),
-        versions,
-        deps,
-        peers,
-    }
+    IndexPackage { name: name.to_owned(), versions, deps: edges(deps), peers: edges(peers) }
 }
 
 fn put_u32(out: &mut Vec<u8>, v: u32) {
@@ -347,15 +283,27 @@ impl<'a> Reader<'a> {
         String::from_utf8(slice.to_vec()).ok()
     }
 
-    fn edge(&mut self) -> Option<IndexEdge> {
+    fn count(&mut self, minimum_bytes: usize) -> Option<usize> {
+        let count = self.u32()? as usize;
+        (count <= (self.b.len() - self.pos) / minimum_bytes).then_some(count)
+    }
+
+    fn edge(&mut self, versions: usize) -> Option<IndexEdge> {
         let target = self.string()?;
         let spec = self.string()?;
         let byte = *self.b.get(self.pos)?;
         self.pos += 1;
-        let n = self.u32()? as usize;
-        let mut declaring = Vec::with_capacity(n.min(4096));
+        let n = self.count(4)?;
+        if byte > 1 || n == 0 || n > versions {
+            return None;
+        }
+        let mut declaring = Vec::with_capacity(n);
         for _ in 0..n {
-            declaring.push(self.u32()?);
+            let ordinal = self.u32()?;
+            if ordinal as usize >= versions || declaring.last().is_some_and(|last| *last >= ordinal) {
+                return None;
+            }
+            declaring.push(ordinal);
         }
         Some(IndexEdge {
             target,
@@ -374,7 +322,7 @@ impl<'a> Reader<'a> {
 /// index is stale and the caller falls back to JSON. That is the same contract
 /// the rest of the cache uses, and it fails safe: a wrong index is ignored, not
 /// trusted.
-const STORE_MAGIC: &[u8; 8] = b"JHOLIDX1";
+const STORE_MAGIC: &[u8; 8] = b"JHOLIDX2";
 
 pub fn index_path_for(packument_path: &std::path::Path) -> std::path::PathBuf {
     let mut p = packument_path.to_path_buf();
@@ -529,7 +477,7 @@ mod tests {
         let idx = ResolverIndex::build(&packuments);
         let (idx_names, versions, version_strings, deps, peers) = idx.chart_inputs();
         assert_eq!(idx_names, name_to_id);
-        let from_index = crate::jagr_infinite::atlas::build_chart_from_constraints(
+        let from_index = crate::jagr_infinite::atlas::build_release_chart(
             &(0..names.len() as u32)
                 .map(|id| (id, crate::jagr_infinite::chart::VersionInterval::full()))
                 .collect(),
@@ -537,6 +485,7 @@ mod tests {
             &version_strings,
             &deps,
             &peers,
+            &idx_names,
             &HashMap::new(),
         );
 
@@ -553,6 +502,7 @@ mod tests {
                 assert_eq!(ea.target_pkg, eb.target_pkg);
                 assert_eq!(ea.spec, eb.spec);
                 assert_eq!(ea.optional, eb.optional);
+                assert_eq!(ea.declaring, eb.declaring);
                 assert_eq!(
                     ea.required_mask.as_ref().map(|m| &m.words),
                     eb.required_mask.as_ref().map(|m| &m.words),
