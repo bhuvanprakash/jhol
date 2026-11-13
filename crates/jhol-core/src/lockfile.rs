@@ -2373,3 +2373,34 @@ mod platform_integrity_tests {
         assert!(!lockfile_integrity_complete(tmp.path()));
     }
 }
+
+/// Does this **published version** declare that it runs on this host?
+///
+/// Optional dependencies are the only packages that routinely declare `os`/`cpu`/`libc`
+/// (`fsevents` is `darwin`-only; `@esbuild/linux-x64` is `linux`+`x64`). Resolving them without
+/// this check adds foreign binaries to the tree; skipping them without it loses the ones that
+/// *do* apply — measured: `jest` on macOS had no `fsevents` at all, because transitive
+/// `optionalDependencies` were never considered.
+///
+/// npm's dialect differs from ours: `darwin` vs `macos`, `x64` vs `x86_64`. Both directions are
+/// translated here, in one place, so no caller has to remember the mapping.
+pub(crate) fn version_runs_on_host(meta: &serde_json::Value) -> bool {
+    let os = crate::utils::target_os();
+    let cpu = crate::utils::target_cpu();
+    let host_os = match os.as_str() {
+        "macos" => "darwin",
+        "windows" => "win32",
+        other => other,
+    };
+    let host_cpu = match cpu.as_str() {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        other => other,
+    };
+    field_allows_current(meta.get("os"), host_os)
+        && field_allows_current(meta.get("cpu"), host_cpu)
+        && match crate::utils::target_libc() {
+            Some(libc) => field_allows_current(meta.get("libc"), &libc),
+            None => true,
+        }
+}

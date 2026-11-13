@@ -341,3 +341,23 @@ release gate.
 3. `"${ARRAY[@]}"` on an **empty** array is an unbound-variable error under `set -u` on bash < 4.4:
    the scorecard passed npm no arguments and reported all ten rows as failures. One always-non-empty
    argument array now.
+
+## 2026-11-14 — optional dependencies of transitive packages are still missing
+
+**Symptom.** `jest@29` on macOS installs no `fsevents`; npm installs `fsevents@2.3.3`.
+`jest-haste-map@29.7.0` declares `fsevents: ^2.3.2` under `optionalDependencies`.
+
+**What was tried, and what the trace says.** `close_selection` now walks
+`dependencies + peerDependencies + optionalDependencies`, and gates an optional child on the
+**chosen version's** `os`/`cpu`/`libc` (`lockfile::version_runs_on_host`, npm dialect translated),
+so a darwin-only package is not added on Linux and `@esbuild/linux-x64` is not added on macOS.
+Measured with `JHOL_TRACE_PICK=1`: the pass runs and adds ordinary dependencies
+(`+ansi-styles@4.3.0 (from chalk@4.1.2, optional=false)`), but **no optional edge is ever reached**
+for `jest-haste-map` — the manifest the pass holds for it does not present
+`optionalDependencies`, even though the registry's abbreviated document does.
+
+**Status: located, not fixed.** The remaining question is narrow and checkable: which document is in
+`metadata_cache` for `jest-haste-map@29.7.0` at closure time, and does it carry
+`optionalDependencies`. Until that answers, the platform gate is correct but unreached, and this is
+recorded as an open defect rather than a fix. `esbuild-optional` and `sharp-native` rows still pass,
+so the gate itself is not yet exercised by the compatibility suite either.

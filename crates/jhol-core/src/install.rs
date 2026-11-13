@@ -4457,7 +4457,22 @@ fn close_selection(
         let mut changed = false;
         let snapshot: Vec<(String, String)> = selected.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         for (name, version) in snapshot {
-            let Some(meta) = metadata_cache.get(&name) else { continue };
+            // The parent's manifest must be present, or its edges are invisible. Skipping here
+            // was the hole that lost transitive optional dependencies: `jest-haste-map@29.7.0`
+            // declares `fsevents ^2.3.2`, its manifest was not in the cache, and the closure
+            // silently walked nothing — so `jest` on macOS had no `fsevents` at all.
+            let meta = match metadata_cache.get(&name) {
+                Some(m) => std::sync::Arc::clone(m),
+                None if online => match crate::registry::fetch_metadata(&name) {
+                    Ok(real) => {
+                        let real = std::sync::Arc::new(real);
+                        metadata_cache.insert(name.clone(), std::sync::Arc::clone(&real));
+                        real
+                    }
+                    Err(_) => continue,
+                },
+                None => continue,
+            };
             let Some(ver_meta) = meta.get("versions").and_then(|v| v.get(version.as_str())) else {
                 continue;
             };
@@ -4465,8 +4480,8 @@ fn close_selection(
             // (close deps, then peers, then prune) let a peer arrive after its own dependencies
             // were closed, or a peer of a version chosen during closure go missing -- the react
             // regression. One edge list cannot have that ordering hazard.
-            let mut edges: Vec<(String, String)> = Vec::new();
-            for section in ["dependencies", "peerDependencies"] {
+            let mut edges: Vec<(String, String, bool)> = Vec::new();
+            for section in ["dependencies", "peerDependencies", "optionalDependencies"] {
                 let Some(map) = ver_meta.get(section).and_then(|d| d.as_object()) else {
                     continue;
                 };
@@ -4481,10 +4496,14 @@ fn close_selection(
                     if optional_peer {
                         continue;
                     }
-                    edges.push((child.clone(), spec.as_str().unwrap_or("*").trim().to_string()));
+                    edges.push((
+                        child.clone(),
+                        spec.as_str().unwrap_or("*").trim().to_string(),
+                        section == "optionalDependencies",
+                    ));
                 }
             }
-            for (child, spec) in edges {
+            for (child, spec, optional) in edges {
                 let spec = spec.trim().to_string();
                 // Only **add** what is missing. Replacing a version here would trade one
                 // violation for another when two parents need incompatible majors (chalk wants
@@ -4514,7 +4533,22 @@ fn close_selection(
                 if let Some(chosen) =
                     crate::packument::pick_for_specs(latest, &keys, &[spec.as_str()])
                 {
+                    // An optional dependency that does not run here is not a dependency. The
+                    // check is on the *chosen version's* metadata, because that is where
+                    // `os`/`cpu`/`libc` live (fsevents: darwin-only).
+                    if optional {
+                        let runs = versions
+                            .get(&chosen)
+                            .map(crate::lockfile::version_runs_on_host)
+                            .unwrap_or(false);
+                        if !runs {
+                            continue;
+                        }
+                    }
                     if selected.get(&child) != Some(&chosen) {
+                        if std::env::var_os("JHOL_TRACE_PICK").is_some() {
+                            eprintln!("[close] +{child}@{chosen} (from {name}@{version}, optional={optional})");
+                        }
                         selected.insert(child, chosen);
                         changed = true;
                     }
