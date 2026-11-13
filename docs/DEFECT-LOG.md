@@ -372,3 +372,28 @@ missing from the graph. The next stopping point is therefore downstream of selec
 `prune_unreachable` (does its walk reach an optional-only dependency?) or the materialisation list
 that decides what to download. Both are one function each; the defect is narrowed from "we never
 see it" to "we see it and then drop it".
+
+## 2026-11-14 (resolved) — optional dependency lost to "absence is a verdict"
+
+**Root cause, measured with a 6-line probe.** `resolve_full_tree_nested` on a `jest@29` manifest
+returned 267 entries and **no `fsevents`**, although `jest-haste-map@29.7.0` declares
+`fsevents: ^2.3.2` under `optionalDependencies`. The nested resolver's `meta_for` miss branch did
+`if optional { continue; }` — so a package whose packument had not been fetched yet was silently
+treated as "does not apply" and never retried. Absence of a document was being read as a fact about
+the package.
+
+**Fix at the source.** A missing document is now a **request** (`MissingPackument`) for required and
+optional edges alike. `resolve_full_tree_nested` records names the registry does not have in
+`give_up_missing`, which it passes to the resolver; an optional edge is dropped only when the caller
+has already tried and the package is genuinely unpublished. The unit test that asserted the old
+behaviour was rewritten to assert the new contract: *report once, drop only after a failed attempt.*
+
+**Verified.** `jest@29` now installs `fsevents@2.3.3`; the full scorecard is **10/10** again;
+`jhol-core` 748 tests green. The intermediate theory ("the layout omits optional deps") was wrong and
+was disproved by the probe before any code was written against it — the layout now also carries
+optional dependencies (npm does), but that was not the cause.
+
+**Why the earlier attempts missed it.** Each layer looked correct on its own: the closure saw the
+edge, `prune_unreachable` kept the package, the layout writers had been taught to include optional
+dependencies. Only the resolver — the first layer — had already dropped it, which the probe showed in
+one line.

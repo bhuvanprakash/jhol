@@ -282,7 +282,7 @@ pub(crate) fn required_edges_satisfied<'a>(
         {
             return false;
         }
-        for (child, range) in crate::registry::get_version_required_dependencies(meta, &pkg.version)
+        for (child, range) in crate::registry::get_version_dependencies_with_optional(meta, &pkg.version)
         {
             let target = visible_dependency(node, &child, |path| layout.get(path));
             if !target.is_some_and(|p| crate::registry::version_satisfies(&range, &p.version)) {

@@ -1731,7 +1731,21 @@ fn nested_layout_from_flat_state(
         }
         let meta = meta.as_ref();
         let deps: HashMap<String, String> =
-            crate::registry::get_version_required_dependencies(meta, version)
+            {
+                // Required deps, plus the optional ones the selection already accepted. The
+                // resolver gates optional deps by platform; the layout must not re-decide that,
+                // and must not silently drop them (jest → fsevents was exactly this).
+                let mut deps =
+                    crate::registry::get_version_required_dependencies(meta, version);
+                for (child, spec) in
+                    crate::registry::get_version_optional_dependencies(meta, version)
+                {
+                    if selected.contains_key(&child) {
+                        deps.entry(child).or_insert(spec);
+                    }
+                }
+                deps
+            }
                 .into_iter()
                 .collect();
         let peers = crate::registry::get_version_peer_dependencies(meta, version);

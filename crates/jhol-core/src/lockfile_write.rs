@@ -134,7 +134,7 @@ impl RegistryProvider {
             version: version.to_string(),
             resolved: resolved_url,
             integrity,
-            dependencies: registry::get_version_required_dependencies(meta, version),
+            dependencies: registry::get_version_dependencies_with_optional(meta, version),
             peer_dependencies: registry::get_version_peer_dependencies(meta, version),
             peer_dependencies_meta: registry::get_version_peer_dependencies_meta(meta, version),
         })
@@ -822,7 +822,7 @@ fn verify_minimal_solution(
         let metadata = metadata_cache
             .get(name)
             .ok_or_else(|| format!("Missing metadata cache for {}", name))?;
-        let deps = registry::get_version_required_dependencies(metadata, &version.to_string());
+        let deps = registry::get_version_dependencies_with_optional(metadata, &version.to_string());
 
         for (dep_name, dep_spec) in deps {
             if let Some(dep_version) = solution.get(&dep_name) {
@@ -943,7 +943,7 @@ fn build_tree_from_pubgrub_solution(
 
         let (dependencies, peer_dependencies, peer_dependencies_meta) =
             if let Some(meta) = metadata_cache.get(name) {
-                let raw_deps = registry::get_version_required_dependencies(meta, &version_str);
+                let raw_deps = registry::get_version_dependencies_with_optional(meta, &version_str);
                 let deps = raw_deps
                     .into_iter()
                     .map(|(dep, spec)| {
@@ -1440,7 +1440,7 @@ fn build_jagr_domains(
                 // `candidate_versions_for_constraints` already filtered by the
                 // incoming constraints, so every version here is selectable; no
                 // further filter needed. Expanding their deps is not dead weight.
-                let deps = registry::get_version_required_dependencies(&meta, version);
+                let deps = registry::get_version_dependencies_with_optional(&meta, version);
                 let optional_deps = registry::get_version_optional_dependencies(&meta, version);
                 let peers = registry::get_version_peer_dependencies(&meta, version);
                 let peer_meta = registry::get_version_peer_dependencies_meta(&meta, version);
@@ -3094,6 +3094,7 @@ pub(crate) fn resolve_nested_roots(
     );
     let needs_full = as_of.is_some() || allowed_licenses.is_some();
     let mut options = jagr_nest::ResolveOptions {
+        give_up_missing: None,
         cutoff: as_of,
         allowed_licenses: allowed_licenses.clone(),
         allow_unknown_license,
@@ -3205,8 +3206,10 @@ pub(crate) fn resolve_nested_roots(
 
     let t_resolve = std::time::Instant::now();
     let mut solve_calls = 0usize;
+    let mut give_up: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut resolved = loop {
         solve_calls += 1;
+        options.give_up_missing = Some(give_up.clone());
         match jagr_nest::resolve_with_optional_roots(&world, &roots, &options, &optional_roots) {
             Ok(r) => break r,
             Err(e) if e.needs_fetch() => {
@@ -3250,6 +3253,10 @@ pub(crate) fn resolve_nested_roots(
                         });
                     for (name, doc) in fetched {
                         let Some(mut meta) = doc else {
+                            // The registry does not have it. An optional dependency may be
+                            // omitted; remember the attempt so the resolver can tell
+                            // "not fetched yet" from "not published" instead of asking again.
+                            give_up.insert(name);
                             continue;
                         };
                         // One prune, keeping the fields this path needs. The previous

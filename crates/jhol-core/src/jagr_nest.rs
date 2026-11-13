@@ -321,6 +321,11 @@ pub struct ResolveOptions {
     /// the user to re-run the install and hope; making it an input means the
     /// resolver *finds* a tree that avoids them.
     pub banned: Option<std::collections::HashSet<(String, String)>>,
+    /// Names whose metadata the caller has already tried and failed to fetch. An **optional**
+    /// dependency in this set is dropped; one that is merely not yet fetched is reported so the
+    /// caller can fetch it (the `jest` → `fsevents` case: absence of a document is not a verdict
+    /// about the package, but a package the registry does not have is a legitimate omission).
+    pub give_up_missing: Option<std::collections::HashSet<String>>,
 }
 
 impl ResolveOptions {
@@ -684,9 +689,15 @@ fn resolve_branch(
         // `npm:` aliases resolve the real package under an alternate name.
         let (lookup, lookup_spec) = expand_alias(&target, &spec);
         let Some(meta) = meta_for(&mut meta, packuments, &lookup) else {
-            if optional {
-                continue;
+            if optional && options.give_up_missing.as_ref().is_some_and(|g| g.contains(&lookup)) {
+                continue; // fetched before, registry does not have it: an optional dep may go
             }
+            // **Missing metadata is a request, not a verdict.** Dropping an optional dependency
+            // here because its packument had not been fetched looked like "this package does not
+            // apply" and was never retried — `jest-haste-map` -> `fsevents` vanished that way on
+            // macOS, where npm installs it. Absence of a document is not evidence about the
+            // package; report it, and let the caller fetch and retry. Only an *unsatisfiable*
+            // range may drop an optional dependency.
             return Err(NestConflict {
                 failure: NestFailure::MissingPackument,
                 package: lookup,
@@ -1360,14 +1371,32 @@ mod tests {
     }
 
     #[test]
-    fn optional_edges_to_missing_packages_are_dropped() {
+    /// An optional dependency with **no document yet** is a request, not a verdict.
+    ///
+    /// This test used to assert the opposite, and that assumption dropped `jest`'s `fsevents` on
+    /// macOS: the nested resolver treated "not fetched" as "not applicable" and never retried. The
+    /// rule now: report the need once; drop the edge only when the caller has already tried and the
+    /// registry does not have the package (`give_up_missing`).
+    fn optional_edges_to_missing_packages_are_reported_then_dropped() {
         let packuments = HashMap::from([(
             "app".to_string(),
             json!({ "name": "app", "versions": { "1.0.0": {
                 "optionalDependencies": { "not-published": "^1" } } } }),
         )]);
         let roots = HashMap::from([("app".to_string(), "*".to_string())]);
-        let resolved = resolve(&packuments, &roots).expect("optional gap is not fatal");
+
+        // First pass: the resolver asks for the missing document.
+        let err = resolve(&packuments, &roots).expect_err("missing optional metadata is a request");
+        assert!(err.needs_fetch(), "{}", err.describe());
+
+        // After the caller has tried and failed, the same edge is dropped, not fatal.
+        let mut options = ResolveOptions::default();
+        options.give_up_missing = Some(
+            ["not-published".to_string()].into_iter().collect(),
+        );
+        let resolved =
+            resolve_with_optional_roots(&packuments, &roots, &options, &HashSet::new())
+                .expect("a package the registry does not have may be omitted");
         assert_eq!(resolved.instances.len(), 1);
     }
 }

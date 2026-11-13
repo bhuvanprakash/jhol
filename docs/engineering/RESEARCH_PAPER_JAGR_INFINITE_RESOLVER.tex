@@ -632,6 +632,12 @@ abbreviated document is retained for prefetching, where a stale hint cannot deci
 cache layers share one freshness policy. \code{--as-of} keeps publish dates, without which a dated
 resolution silently produces today's tree.
 
+\textbf{Correction: absence of a document is not a verdict about a package.} An optional
+dependency whose packument had not been fetched was silently dropped (\code{if optional \{ continue \}}),
+which lost \pkg{fsevents} from a \pkg{jest} tree on macOS while npm installed it. A missing document
+is now reported as a fetch request; an optional edge is dropped only after the registry has been
+asked and does not have the package.
+
 \textbf{Status.} All ten rows match npm on macOS arm64; Linux and Windows are unexecuted, and
 lifecycle scripts are not yet part of the comparison.
 

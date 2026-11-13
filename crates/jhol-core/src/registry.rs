@@ -5006,3 +5006,19 @@ mod prune_keeping_tests {
         assert!(doc.get("time").is_none());
     }
 }
+
+/// Required **and** optional dependencies of one version — the set a layout must carry.
+///
+/// npm's lockfile records optional dependencies, marked `"optional": true`, including variants for
+/// other platforms. Resolution decides which a tree needs; a layout that omits them loses packages
+/// the resolver already accepted (`jest` → `fsevents`, invisible because no caller saw the edge).
+pub fn get_version_dependencies_with_optional(
+    meta: &serde_json::Value,
+    version: &str,
+) -> std::collections::HashMap<String, String> {
+    let mut out = get_version_required_dependencies(meta, version);
+    for (child, spec) in get_version_optional_dependencies(meta, version) {
+        out.entry(child).or_insert(spec);
+    }
+    out
+}
