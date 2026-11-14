@@ -397,3 +397,31 @@ optional dependencies (npm does), but that was not the cause.
 edge, `prune_unreachable` kept the package, the layout writers had been taught to include optional
 dependencies. Only the resolver — the first layer — had already dropped it, which the probe showed in
 one line.
+
+## 2026-11-14 — peer installation: three attempts, three measurements, no ship
+
+`react-peers`: the tree has `@types/react-dom` but not its peer `@types/react` (and therefore not
+`@types/prop-types`, `csstype`). The warning is already correct — *"requires peer @types/react
+^18.0.0, got absent"* — so detection works and installation does not. Three attempts, each measured,
+each reverted:
+
+1. **Post-pass over resolved instances** (`install_missing_peers`): appended the peer to
+   `NestedResolution.instances` *after* the edges and ordering were built. Result unchanged — an
+   instance that no edge refers to never reaches the layout. Post-processing cannot add a node.
+2. **Queue peers as demands at instance creation** (unguarded): correct in principle, but every
+   consumer re-queued every peer and `jest` resolved to **6268 manifests** (npm: 4317 files, ~300
+   packages). Unbounded.
+3. **Same, guarded** (queue only when nothing provides the peer yet): `jest` fell to **306
+   entries** and then failed closed — `verify_nested_layout: node_modules/@swc/wasm is missing
+   (layout_mismatch)`. The peer instances reached the *plan* but not the *tree*, because they were
+   queued as `optional: true` and the materialiser treats optional instances as skippable.
+
+**The fix this establishes, in two parts, before any code:**
+(a) an instance needs two independent bits — *may be dropped when unsatisfiable* (peers, optional
+deps) and *must be installed when resolved* (current `optional` conflates them); and
+(b) the materialiser must install every plan entry that carries the first bit set and the second
+unset.
+
+Until then `react-peers` stays red, and the three measurements above are the reason a fourth patch is
+not the answer. Also observed once during these runs: `lattice_reopens_domain_after_exact_pin`
+failed under full-suite parallelism (the known harness flake), passing immediately afterwards.
