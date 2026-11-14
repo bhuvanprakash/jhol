@@ -1584,6 +1584,11 @@ pub fn read_npm_lock_install_entries(path: &Path) -> Option<Vec<LockfileInstallE
     read_npm_lock_install_entries_from_str(&s)
 }
 
+/// Version of the rules that decide what a lockfile entry *means*. Part of the cache key
+/// for parsed entries, so changing a rule can never be masked by a cache written under an
+/// older one.
+pub const LOCKFILE_ENTRY_RULES_VERSION: u32 = 4;
+
 pub fn read_lockfile_install_entries_from_dir(dir: &Path) -> Option<Vec<LockfileInstallEntry>> {
     let path = lockfile_path(dir)?;
     let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
@@ -1603,8 +1608,13 @@ pub fn read_lockfile_install_entries_from_dir(dir: &Path) -> Option<Vec<Lockfile
         digest.update([0]);
         digest.update(axis.as_bytes());
     }
+    // **The key carries the rule version, not only the input.** A parsed-entries cache
+    // keyed by lockfile content and platform alone returned entries produced by an older
+    // decision procedure: after the platform rule changed from name-tokens to declared
+    // fields, the stale file still said "skip @swc/wasm", so the fix looked inert. Bump
+    // this constant whenever the meaning of an entry changes.
     let bin_path = PathBuf::from(crate::utils::get_cache_dir()).join("lockfiles")
-        .join(format!("v3-{}.bin", hex::encode(digest.finalize())));
+        .join(format!("v{}-{}.bin", LOCKFILE_ENTRY_RULES_VERSION, hex::encode(digest.finalize())));
     if let Ok(bin_data) = std::fs::read(&bin_path) {
         if let Ok(entries) = bincode::deserialize::<Vec<LockfileInstallEntry>>(&bin_data) {
             if let Ok(mut guard) = cache.write() {
