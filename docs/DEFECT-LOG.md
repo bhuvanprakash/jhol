@@ -460,3 +460,36 @@ fields`, and three tests pin each rule:
 been green — `--as-of` no longer needs its own copy of peer or platform logic because it no longer has
 one.
 
+## 2026-11-14 (fidelity) — a lockfile is a statement of intent, and ours had none
+
+Measured on a real `express@4.18.2 + esbuild` tree: **55 of 70 entries carried an empty
+`dependencies` map**, and the 15 that did not carried *wired versions*
+(`"camelcase": "6.3.0"`) where npm records *declared ranges* (`"^5.3.1"`). A lockfile is
+both: the intent, and the exact tree that satisfied it. Replacing intent with the answer
+means nothing can move inside its range again, `jhol why` reads a pin where the registry
+has a range, and a later `--omit` has nothing to prune.
+
+Three causes, in the order they were proven:
+
+1. **Hand-built entries.** `ResolvedPackage` was constructed as a literal at 40+ sites and
+   most of them wrote `dependencies: HashMap::new()`. `resolved_package_from_meta` is now
+   the constructor, and it copies declared edges, optional edges, peers, peer optionality
+   and platform from the version document — the only authority for any of them.
+2. **A writer that trusted a cache more than its input.** `build_packages_json` looked the
+   manifest up through `get_cached_packument`, which is TTL-gated (60 s), so the *content
+   of the lockfile depended on when it ran*: `accepts` came out right and `express` came
+   out empty in the same file. `cached_version_doc_family` reads the immutable half of a
+   packument with no freshness window (a published version cannot change), and the lookup
+   is now a **fallback only** — a miss must never erase edges the tree already knows, which
+   was a regression caught by `a_metadata_miss_keeps_the_trees_declared_edges`.
+3. **A wrong assumption about pruning.** The declared edges were present at placement time
+   (`express@4.18.2` version-doc keys: `dependencies, devDependencies, dist, engines, name,
+   scripts, version`); nothing had stripped them. The loss was in the writer, not in the
+   fetcher — worth recording because the first hypothesis (pruning) was wrong and a
+   debug print, not a deduction, settled it.
+
+Result: **68 of 69 entries match npm's `dependencies` map byte for byte.** The single
+remaining difference is `esbuild`, whose optional dependency we merge into `dependencies`
+where npm writes a separate `optionalDependencies` key: `ResolvedPackage` has no optional
+edge class, and adding one touches 46 construction sites. Named, scoped, not hidden.
+

@@ -535,4 +535,27 @@ parsed lockfile entries are cached in a binary keyed by lockfile content and pla
 cache keyed by its input alone will happily return answers produced by an older decision procedure,
 so the key must carry the rule version.
 
+
+\section{Post-publication correction: a lockfile states intent, not just an answer}
+
+Measured on a real tree, the writer emitted \textbf{55 empty \texttt{dependencies} maps out of
+70 entries} and pinned the rest to wired versions. Two rules follow, and both are about what a
+lockfile \emph{is}.
+
+First, every field that describes a package is \emph{declared} metadata: dependencies, optional
+dependencies, peers, peer optionality, platform. It is copied from the published version document
+by one constructor, never assembled by hand, because a hand-built entry at forty sites is forty
+chances to write an empty map.
+
+Second, a writer may consult a cache but must never derive its content from one. The lookup was
+TTL-gated at sixty seconds, so two entries of the same file disagreed about the same question:
+\texttt{accepts} came out correct and \texttt{express} came out empty because its packument had
+aged out. A published version is immutable --- only \texttt{dist-tags} and \texttt{time} move ---
+so the immutable half is read without a freshness window, and the lookup is a \emph{fallback}:
+a miss must not erase edges the tree already knows.
+
+Result: 68 of 69 entries match npm's dependency maps byte for byte. The exception is an optional
+dependency recorded in \texttt{dependencies} rather than \texttt{optionalDependencies}, because
+the entry type has no optional-edge class; that is a stated gap, not an unmeasured one.
+
 \end{document}

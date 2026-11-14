@@ -129,3 +129,12 @@ Recorded so they are not mistaken for "no problem":
 
 First results and the verified root cause of the `express` divergence:
 `docs/scorecard/NOTES-2026-11-12.md`.
+
+### Lockfile fidelity (measured 2026-11-14)
+
+`express@4.18.2` + `esbuild@0.21.5`, our lockfile against npm's: **68 of 69 common entries
+have an identical `dependencies` map**, and every entry records declared ranges rather than
+the versions we wired (`"accepts": "~1.3.8"`, not `"1.3.8"`). The one difference is
+`esbuild`'s optional dependency, which we place in `dependencies` where npm uses
+`optionalDependencies`; `ResolvedPackage` has no optional-edge class yet.
+

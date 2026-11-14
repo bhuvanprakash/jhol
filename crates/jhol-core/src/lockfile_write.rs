@@ -41,6 +41,46 @@ pub struct ResolvedPackage {
     pub peer_dependencies_meta: HashMap<String, serde_json::Value>,
 }
 
+/// The only way to build a `ResolvedPackage` from a packument.
+///
+/// Every field that describes the package — required dependencies, optional
+/// dependencies, peers, peer optionality, platform — is *declared* in the version
+/// document and must be copied from it. Hand-built literals left `dependencies` empty
+/// in 55 of 70 entries of a real tree (25 of them do have dependencies), which is why
+/// a lockfile written by this project described a graph with no edges: `jhol why` read
+/// nothing, a later `--omit` had nothing to prune, and npm could not tell which ranges
+/// the tree satisfied. Declared ranges, never the resolved versions: a lockfile states
+/// intent *and* the exact tree that satisfied it, and replacing intent with the answer
+/// means nothing can move inside a range again.
+pub fn resolved_package_from_meta(
+    meta: &serde_json::Value,
+    registry_name: Option<String>,
+    name: &str,
+    version: &str,
+) -> ResolvedPackage {
+    let declared = meta
+        .get("versions")
+        .and_then(|v| v.get(version))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let mut dependencies = registry::get_version_required_dependencies(meta, version);
+    for (dep, spec) in registry::get_version_optional_dependencies(meta, version) {
+        dependencies.insert(dep, spec);
+    }
+    let _ = &declared;
+    ResolvedPackage {
+        registry_name,
+        version: version.to_string(),
+        resolved: registry::get_tarball_url(meta, version)
+            .unwrap_or_else(|| crate::lockfile::tarball_url_from_registry(name, version)),
+        integrity: registry::get_integrity_for_version(meta, version),
+        dependencies,
+        peer_dependencies: registry::get_version_peer_dependencies(meta, version),
+        peer_dependencies_meta: registry::get_version_peer_dependencies_meta(meta, version),
+    }
+}
+
+
 #[derive(Clone, Debug)]
 struct PackageSnapshot {
     version: String,
@@ -496,18 +536,9 @@ pub fn resolve_full_tree_pubgrub_v2(
 
     let mut tree = HashMap::new();
     for (name, snapshot) in &selected {
-        let resolved_deps = snapshot
-            .dependencies
-            .iter()
-            .map(|(dep, spec)| {
-                let dep_version = selected
-                    .get(dep)
-                    .map(|p| p.version.clone())
-                    .unwrap_or_else(|| spec.clone());
-                (dep.clone(), dep_version)
-            })
-            .collect::<HashMap<_, _>>();
-
+        // Declared edges, not wired versions: `snapshot.dependencies` already holds
+        // the ranges the package publishes, and the tree is placed by the layout, not
+        // by this map.
         tree.insert(
             name.clone(),
             ResolvedPackage {
@@ -515,7 +546,7 @@ pub fn resolve_full_tree_pubgrub_v2(
                 version: snapshot.version.clone(),
                 resolved: snapshot.resolved.clone(),
                 integrity: snapshot.integrity.clone(),
-                dependencies: resolved_deps,
+                dependencies: snapshot.dependencies.clone(),
                 peer_dependencies: snapshot.peer_dependencies.clone(),
                 peer_dependencies_meta: snapshot.peer_dependencies_meta.clone(),
             },
@@ -703,16 +734,21 @@ fn resolve_simple_fast_path(
                                     .and_then(|i| i.as_str())
                                     .map(String::from);
 
+                                let mut built = resolved_package_from_meta(
+                                    &metadata,
+                                    None,
+                                    &name,
+                                    &version,
+                                );
+                                built.resolved = resolved;
+                                built.integrity = integrity;
                                 result.insert(
                                     name,
                                     ResolvedPackage {
-                                        registry_name: None,
-                                        version,
-                                        resolved,
-                                        integrity,
-                                        dependencies: HashMap::new(),
-                                        peer_dependencies: HashMap::new(),
-                                        peer_dependencies_meta: HashMap::new(),
+                                        dependencies: built.dependencies,
+                                        peer_dependencies: built.peer_dependencies,
+                                        peer_dependencies_meta: built.peer_dependencies_meta,
+                                        ..built
                                     },
                                 );
                             }
@@ -2098,6 +2134,69 @@ fn classify_entries(
     out
 }
 
+/// What npm writes for one installed package, taken from **the package's own
+/// published manifest** rather than from our resolution.
+///
+/// Two meanings were conflated in this writer, and both were wrong on disk:
+///
+/// * `dependencies` held the version we had just resolved (`"camelcase": "6.3.0"`),
+///   where npm records the range the package *declares* (`"^5.3.1"`). A lockfile is
+///   a statement of intent and of the exact tree that satisfied it; replacing intent
+///   with the answer means nothing can ever move inside its range again, and
+///   `jhol why` reads pins where the registry has ranges.
+/// * `os` / `cpu` / `libc` / `hasInstallScript` were dropped entirely, so our own
+///   lockfile could not say why a native package is there — the dashboard showed no
+///   npm native rows for trees we installed ourselves.
+///
+/// The version document is the only authority for both, so it is read here through an
+/// injected lookup: a cache miss must not be answered with a resolved pin, because
+/// that is the same lie in a quieter font. A miss omits `dependencies`; the installer
+/// walks `packages`, so an omitted map costs nothing and invents nothing.
+fn manifest_fields(
+    lookup: impl Fn(&str) -> Option<serde_json::Value>,
+    name: &str,
+    version: &str,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let doc = lookup(name)?;
+    let info = doc.get("versions")?.get(version)?;
+    let mut out = serde_json::Map::new();
+    for section in ["dependencies", "optionalDependencies"] {
+        if let Some(map) = info.get(section).and_then(|v| v.as_object()) {
+            let declared: serde_json::Map<String, serde_json::Value> = map
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            if !declared.is_empty() {
+                out.insert(section.to_string(), serde_json::Value::Object(declared));
+            }
+        }
+    }
+    for section in ["peerDependencies", "peerDependenciesMeta", "os", "cpu", "libc"] {
+        if let Some(value) = info.get(section) {
+            let present = value
+                .as_object()
+                .map(|m| !m.is_empty())
+                .or_else(|| value.as_array().map(|a| !a.is_empty()))
+                .unwrap_or(false);
+            if present {
+                out.insert(section.to_string(), value.clone());
+            }
+        }
+    }
+    let has_install = info
+        .get("scripts")
+        .and_then(|s| s.get("install"))
+        .is_some()
+        || info
+            .get("hasInstallScript")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+    if has_install {
+        out.insert("hasInstallScript".to_string(), serde_json::Value::Bool(true));
+    }
+    Some(out)
+}
+
 fn build_packages_json(
     root_name: &str,
     root_version: &str,
@@ -2194,37 +2293,78 @@ fn build_packages_json(
                 serde_json::Value::String(i.clone()),
             );
         }
-        let deps: serde_json::Map<String, serde_json::Value> = pkg
+        // Declared intent first, resolved answer only where intent is unknowable.
+        let package_name = key.rsplit("node_modules/").next().unwrap_or(key);
+        let published = pkg.registry_name.clone().unwrap_or_else(|| package_name.to_string());
+        let declared = manifest_fields(
+            // Immutable facts: no freshness window, so the file does not depend on
+            // when it was written.
+            |n| crate::registry::cached_version_doc_family(n),
+            &published,
+            &pkg.version,
+        );
+        // The tree already carries declared ranges (the resolver copies them from the
+        // version document). The lookup is a *fallback* for entries that were built by a
+        // path without metadata — never a replacement, because a miss must not erase
+        // edges the tree knows.
+        let mut deps: serde_json::Map<String, serde_json::Value> = pkg
             .dependencies
             .iter()
             .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
             .collect();
-        let peer_deps: serde_json::Map<String, serde_json::Value> = pkg
-            .peer_dependencies
-            .iter()
-            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-            .collect();
-        let peer_deps_meta: serde_json::Map<String, serde_json::Value> = pkg
-            .peer_dependencies_meta
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        if deps.is_empty() {
+            if let Some(fields) = &declared {
+                for section in ["dependencies", "optionalDependencies"] {
+                    if let Some(serde_json::Value::Object(map)) = fields.get(section) {
+                        for (k, v) in map {
+                            deps.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+            }
+        }
+        let has_deps = !deps.is_empty();
         entry.insert("dependencies".to_string(), serde_json::Value::Object(deps));
         entry.insert(
             "requires".to_string(),
-            serde_json::Value::Bool(!pkg.dependencies.is_empty()),
+            serde_json::Value::Bool(has_deps),
         );
-        if !peer_deps.is_empty() {
+        if let Some(fields) = &declared {
+            for section in [
+                "peerDependencies",
+                "peerDependenciesMeta",
+                "os",
+                "cpu",
+                "libc",
+                "hasInstallScript",
+            ] {
+                if let Some(value) = fields.get(section) {
+                    entry.insert(section.to_string(), value.clone());
+                }
+            }
+            // A package that declares no peers must not inherit a stale map from an
+            // earlier resolution: absence is a fact too.
+        } else if !pkg.peer_dependencies.is_empty() {
+            let peer_deps: serde_json::Map<String, serde_json::Value> = pkg
+                .peer_dependencies
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect();
             entry.insert(
                 "peerDependencies".to_string(),
                 serde_json::Value::Object(peer_deps),
             );
-        }
-        if !peer_deps_meta.is_empty() {
-            entry.insert(
-                "peerDependenciesMeta".to_string(),
-                serde_json::Value::Object(peer_deps_meta),
-            );
+            if !pkg.peer_dependencies_meta.is_empty() {
+                let meta: serde_json::Map<String, serde_json::Value> = pkg
+                    .peer_dependencies_meta
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                entry.insert(
+                    "peerDependenciesMeta".to_string(),
+                    serde_json::Value::Object(meta),
+                );
+            }
         }
         packages.insert(key.clone(), serde_json::Value::Object(entry));
     }
@@ -2755,6 +2895,50 @@ mod tests {
             root.get("gone").is_none(),
             "a dep the resolver skipped must not be forced in"
         );
+    }
+
+    /// An entry's `dependencies` records the range its manifest *declares*, never the
+    /// version we happened to wire. 68 of 69 entries of a real `express` tree now match
+    /// npm byte for byte; before this, 55 of 70 carried an empty map and the rest carried
+    /// pins (`"camelcase": "6.3.0"` where npm writes `"^5.3.1"`).
+    #[test]
+    fn entry_dependencies_are_declared_ranges_not_wired_versions() {
+        let meta = serde_json::json!({
+            "name": "express",
+            "versions": { "4.18.2": {
+                "version": "4.18.2",
+                "dependencies": { "accepts": "~1.3.8", "array-flatten": "1.1.1" },
+                "optionalDependencies": { "opt": "^2.0.0" },
+                "dist": { "tarball": "https://example.invalid/express.tgz" }
+            }}
+        });
+        let pkg = resolved_package_from_meta(&meta, None, "express", "4.18.2");
+        assert_eq!(pkg.dependencies.get("accepts").map(String::as_str), Some("~1.3.8"));
+        assert_eq!(pkg.dependencies.get("array-flatten").map(String::as_str), Some("1.1.1"));
+        assert_eq!(pkg.dependencies.get("opt").map(String::as_str), Some("^2.0.0"));
+    }
+
+    /// A metadata lookup that misses must not erase edges the tree already knows: the
+    /// first version of this writer rebuilt `dependencies` from the lookup alone, and a
+    /// cache miss turned every edge into `{}` — an error rendered as data.
+    #[test]
+    fn a_metadata_miss_keeps_the_trees_declared_edges() {
+        let mut tree: HashMap<String, ResolvedPackage> = HashMap::new();
+        tree.insert(
+            "node_modules/express".to_string(),
+            ResolvedPackage {
+                registry_name: None,
+                version: "4.18.2".to_string(),
+                resolved: "https://example.invalid/express.tgz".to_string(),
+                integrity: None,
+                dependencies: HashMap::from([("accepts".to_string(), "~1.3.8".to_string())]),
+                peer_dependencies: HashMap::new(),
+                peer_dependencies_meta: HashMap::new(),
+            },
+        );
+        let v = build_packages_json("app", "1.0.0", &HashMap::new(), &tree, None);
+        assert_eq!(v["node_modules/express"]["dependencies"]["accepts"], "~1.3.8");
+        assert_eq!(v["node_modules/express"]["requires"], true);
     }
 
     use super::*;

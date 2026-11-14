@@ -238,6 +238,36 @@ fn get_cached_packument_with_identity(
     get_cached_packument_for_key(&metadata_cache_key_with_identity(package, identity))
 }
 
+/// Whole-packument lookup with no freshness window, for callers that read only
+/// immutable version documents. Returns the packument so the caller can pick a version;
+/// `cached_version_doc` is the precise form when the version is known.
+pub fn cached_version_doc_family(name: &str) -> Option<serde_json::Value> {
+    let key = metadata_cache_key_with_identity(name, &RegistryIdentity::for_package(name));
+    let mut cache = get_metadata_cache().lock().ok()?;
+    let entry = cache.get(&key)?;
+    entry.get_pruned().map(|arc| (*arc).clone())
+}
+
+/// The published document for one exact version, read **without a freshness window**.
+///
+/// This is the immutable half of a packument: once `1.2.3` is published its
+/// `dependencies`, `peerDependenciesMeta`, `os`, `cpu` and `hasInstallScript` cannot
+/// change, so expiring them would trade a certainty for a round trip. Only `dist-tags`
+/// and `time` are mutable, and neither is read here.
+///
+/// It exists because the lockfile writer needed declared intent and was reaching for
+/// the TTL-gated cache, which made the *content of a lockfile* depend on the wall
+/// clock: `express@4.18.2`'s entry came out with an empty `dependencies` map simply
+/// because its packument had passed the 60 s window, while `accepts` came out correct.
+/// A writer whose output depends on when it ran is not reproducible.
+pub fn cached_version_doc(name: &str, version: &str) -> Option<serde_json::Value> {
+    let key = metadata_cache_key_with_identity(name, &RegistryIdentity::for_package(name));
+    let mut cache = get_metadata_cache().lock().ok()?;
+    let entry = cache.get(&key)?;
+    let doc = entry.get_pruned()?;
+    doc.get("versions")?.get(version).cloned()
+}
+
 fn get_cached_packument_for_key(key: &str) -> Option<serde_json::Value> {
     let mut cache = get_metadata_cache().lock().ok()?;
     let entry = cache.get(key)?;
