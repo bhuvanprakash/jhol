@@ -258,15 +258,26 @@ pub(crate) fn extract_platform_tokens_from_name(name: &str) -> (Vec<String>, Vec
     (found_os, found_cpu)
 }
 
+/// May this entry be materialised on this host?
+///
+/// **Platform applicability is declared metadata, never a name.** The rule used to
+/// start with a name-token check, and `@swc/wasm` — a real package, installed on
+/// every platform, whose *name* happens to contain the token `wasm` — was silently
+/// dropped from the tree. The lockfile listed it, the layout never fetched it, and
+/// `verify` failed with `node_modules/@swc/wasm is missing`: the tree disagreed with
+/// its own plan. The asymmetry is what settles the design: skipping a loadable
+/// package breaks a tree, installing an unloadable one wastes bytes. So an entry
+/// with no `os`/`cpu`/`libc` fields is installable, and only declared fields may
+/// exclude it — the same rule npm applies, which is why npm writes those fields.
 fn skip_lockfile_materialization(name: &str, val: &serde_json::Value) -> bool {
-    if !package_name_matches_current_platform(name) {
-        return true;
-    }
     let optional = val
         .get("optional")
         .and_then(|o| o.as_bool())
         .unwrap_or(false);
-    if optional && !package_supported_on_current_platform(val) {
+    let declares_platform = ["os", "cpu", "libc"]
+        .iter()
+        .any(|field| val.get(*field).is_some());
+    if declares_platform && !package_supported_on_current_platform(val) {
         return true;
     }
     // `--omit`: the lockfile records `dev: true` on dev-only entries (npm does
@@ -1964,11 +1975,26 @@ mod platform_filter_tests {
         // `lockfile_patch::platform_token_tests`.
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         {
-            let skip = skip_lockfile_materialization(
+            // A name is not metadata. With no `os`/`cpu`/`libc` fields the entry is
+            // installable even when its name looks like another platform — the rule that
+            // dropped `@swc/wasm` (token `wasm`) from a tree npm installed happily.
+            assert!(!skip_lockfile_materialization(
                 "@next/swc-linux-arm64-gnu",
                 &serde_json::json!({ "optional": true }),
-            );
-            assert!(skip);
+            ));
+            assert!(!skip_lockfile_materialization(
+                "@swc/wasm",
+                &serde_json::json!({ "version": "1.16.22" }),
+            ));
+            // Declared fields decide, exactly as npm decides.
+            assert!(skip_lockfile_materialization(
+                "@next/swc-linux-arm64-gnu",
+                &serde_json::json!({ "optional": true, "os": ["linux"], "cpu": ["arm64"] }),
+            ));
+            assert!(skip_lockfile_materialization(
+                "@img/sharp-wasm32",
+                &serde_json::json!({ "optional": true, "cpu": ["wasm32"] }),
+            ));
         }
     }
 }

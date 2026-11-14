@@ -425,3 +425,38 @@ unset.
 Until then `react-peers` stays red, and the three measurements above are the reason a fourth patch is
 not the answer. Also observed once during these runs: `lattice_reopens_domain_after_exact_pin`
 failed under full-suite parallelism (the known harness flake), passing immediately afterwards.
+
+## 2026-11-14 (later) — peer installation, fixed at the source: three causes, one class
+
+All three scorecard rows are green again, pinned and unpinned, and the fix is structural rather than
+local. The chain, in the order the measurements found it:
+
+1. **Post-pass could not work** (`install_missing_peers` appending to `NestedResolution.instances`):
+   an instance no edge refers to never reaches the layout. Reverted.
+2. **Peers queued as demands, unguarded**: `jest` → 6268 manifests. Bounded by a provider check.
+3. **Guarded queue still failed**: `verify_nested_layout: node_modules/@swc/wasm is missing`. The
+   peer instances reached the plan and not the tree, because they were queued as `optional: true`
+   and the materialiser treats optional instances as skippable.
+4. **Why `@swc/wasm` was a peer at all**: `ts-node` declares `@swc/core` and `@swc/wasm` under
+   `peerDependenciesMeta: { optional: true }`. Optional peers are *not* packages to install. The
+   resolver now reads `peerDependenciesMeta` when it builds packet metadata and never queues an
+   optional peer — while still reporting it, so `jhol why` keeps its answer.
+5. **Why dropping it still failed**: `skip_lockfile_materialization` began with
+   `package_name_matches_current_platform(name)`, and the name `@swc/wasm` tokenises to cpu
+   `wasm32`. **A name is not metadata.** Only declared `os`/`cpu`/`libc` fields may exclude an entry;
+   with no fields the entry is installable, because skipping a loadable package breaks a tree while
+   installing an unloadable one only wastes bytes.
+6. **Why the fix appeared not to work at first**: parsed lockfile entries are cached in
+   `~/.jhol-cache/lockfiles/v3-<digest>.bin` keyed by lockfile content and platform, not by the rule
+   that produced the entries. The stale file answered with the old decision. A cache key must carry
+   the version of the procedure, not only its input.
+
+Final state: `non-optional peer → demand`, `optional peer → report only`, `platform → declared
+fields`, and three tests pin each rule:
+`non_optional_peers_are_resolved_like_dependencies`,
+`optional_peers_are_reported_but_not_installed`, and the rewritten
+`native_package_name_encodes_the_target`. `jhol-core` **751 passed**; scorecard **10/10 unpinned and
+10/10 pinned** (`SCORECARD_AS_OF=2026-11-09T00:00:00Z`), which is the first time the pinned mode has
+been green — `--as-of` no longer needs its own copy of peer or platform logic because it no longer has
+one.
+

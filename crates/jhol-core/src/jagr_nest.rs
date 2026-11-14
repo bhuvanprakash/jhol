@@ -416,7 +416,7 @@ struct Meta<'a> {
     /// Publish time per version, when the packument is a full one.
     published: HashMap<&'a str, i64>,
     deps: HashMap<&'a str, Vec<(&'a str, &'a str, bool)>>,
-    peers: HashMap<&'a str, Vec<(&'a str, &'a str)>>,
+    peers: HashMap<&'a str, Vec<(&'a str, &'a str, bool)>>,
 }
 
 /// Read one packument into the shape resolution wants.
@@ -431,7 +431,7 @@ fn build_meta<'a>(doc: &'a Value) -> Option<Meta<'a>> {
         .collect();
     sorted.sort_by(|a, b| b.0.cmp(&a.0)); // newest first
     let mut deps: HashMap<&str, Vec<(&str, &str, bool)>> = HashMap::new();
-    let mut peers: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
+    let mut peers: HashMap<&str, Vec<(&str, &str, bool)>> = HashMap::new();
     for (_parsed, ver) in &sorted {
         // Borrow the key from the packument, not from `sorted`, so the maps
         // outlive this loop.
@@ -451,10 +451,24 @@ fn build_meta<'a>(doc: &'a Value) -> Option<Meta<'a>> {
         }
         deps.insert(vkey.as_str(), d);
         if let Some(map) = info.get("peerDependencies").and_then(|v| v.as_object()) {
+            let peer_meta = info.get("peerDependenciesMeta").and_then(|v| v.as_object());
             peers.insert(
                 vkey.as_str(),
                 map.iter()
-                    .map(|(t, s)| (t.as_str(), s.as_str().unwrap_or("<invalid>")))
+                    .map(|(t, s)| {
+                        // An *optional peer* is not a package to install: `ts-node`
+                        // declares `@swc/core` and `@swc/wasm` this way, and queueing
+                        // them as demands put `@swc/wasm` in the lockfile while the
+                        // layout refused it as a WebAssembly build — the tree then
+                        // disagreed with its own plan. npm installs optional peers
+                        // only when they are already there.
+                        let optional = peer_meta
+                            .and_then(|m| m.get(t.as_str()))
+                            .and_then(|m| m.get("optional"))
+                            .and_then(|b| b.as_bool())
+                            .unwrap_or(false);
+                        (t.as_str(), s.as_str().unwrap_or("<invalid>"), optional)
+                    })
                     .collect(),
             );
         }
@@ -833,8 +847,26 @@ fn resolve_branch(
                     queue.push_back(Demand { target: dep_name, spec: dep_spec, consumer: Some(idx), optional });
                 }
                 if let Some(peers) = meta.peers.get(chosen.as_str()) {
-                    for (peer, spec) in peers {
+                    for (peer, spec, peer_optional) in peers {
                         peers_seen.insert((key.clone(), (*peer).to_string(), (*spec).to_string()));
+                        if *peer_optional {
+                            continue;
+                        }
+                        // Peers are demands: queued like dependencies so the normal edge
+                        // bookkeeping places them (an instance appended after the loop has no
+                        // edge and is dropped by the layout). `optional` keeps them droppable;
+                        // guarded so a peer is not re-queued by every consumer.
+                        let provided = instances
+                            .iter()
+                            .any(|i| i.installed_as == *peer || i.package == *peer);
+                        if !provided {
+                            queue.push_back(Demand {
+                                target: (*peer).to_string(),
+                                spec: (*spec).to_string(),
+                                consumer: Some(idx),
+                                optional: true,
+                            });
+                        }
                     }
                 }
                 idx
@@ -857,6 +889,8 @@ fn resolve_branch(
         }
         edges.insert((consumer, target), idx);
     }
+
+
 
     // Deterministic instance order for callers and for diffs.
     let mut order: Vec<usize> = (0..instances.len()).collect();
@@ -1439,6 +1473,62 @@ mod bounded_frontier_tests {
 
     /// Peers must not be followed: they are advisory and were what made the
     /// frontier unclosable.
+    #[test]
+    /// A non-optional peer is part of the resolved graph: `@types/react-dom` requires
+    /// `@types/react`, and a tree without it is a tree npm would never produce.
+    #[test]
+    fn non_optional_peers_are_resolved_like_dependencies() {
+        let packuments = HashMap::from([
+            (
+                "app".to_string(),
+                json!({ "name": "app", "versions": { "1.0.0": {
+                    "dependencies": { "types-dom": "^18" } } } }),
+            ),
+            (
+                "types-dom".to_string(),
+                json!({ "name": "types-dom", "versions": { "18.3.7": {
+                    "peerDependencies": { "types-react": "^18" } } } }),
+            ),
+            (
+                "types-react".to_string(),
+                json!({ "name": "types-react", "versions": { "18.3.31": {} } }),
+            ),
+        ]);
+        let roots = HashMap::from([("app".to_string(), "1.0.0".to_string())]);
+        let resolved = resolve(&packuments, &roots).expect("resolves");
+        let names: Vec<&str> = resolved.instances.iter().map(|i| i.package.as_str()).collect();
+        assert!(names.contains(&"types-react"), "peer must be installed: {names:?}");
+    }
+
+    /// An *optional* peer is not: `ts-node` declares `@swc/core` and `@swc/wasm`
+    /// optional, and installing them put `@swc/wasm` in a lockfile whose layout then
+    /// refused it as a WebAssembly build — the tree disagreed with its own plan.
+    #[test]
+    fn optional_peers_are_reported_but_not_installed() {
+        let packuments = HashMap::from([
+            (
+                "app".to_string(),
+                json!({ "name": "app", "versions": { "1.0.0": {
+                    "dependencies": { "ts-node": "^10" } } } }),
+            ),
+            (
+                "ts-node".to_string(),
+                json!({ "name": "ts-node", "versions": { "10.9.2": {
+                    "peerDependencies": { "swc-wasm": ">=1.2.50" },
+                    "peerDependenciesMeta": { "swc-wasm": { "optional": true } } } } }),
+            ),
+            (
+                "swc-wasm".to_string(),
+                json!({ "name": "swc-wasm", "versions": { "1.16.22": {} } }),
+            ),
+        ]);
+        let roots = HashMap::from([("app".to_string(), "1.0.0".to_string())]);
+        let resolved = resolve(&packuments, &roots).expect("resolves");
+        let names: Vec<&str> = resolved.instances.iter().map(|i| i.package.as_str()).collect();
+        assert!(!names.contains(&"swc-wasm"), "optional peer must not be installed: {names:?}");
+        assert!(resolved.peers.iter().any(|(_, t, _)| t == "swc-wasm"), "but it is still reported");
+    }
+
     #[test]
     fn peer_dependencies_are_not_followed() {
         let w: HashMap<String, Value> = HashMap::from([(

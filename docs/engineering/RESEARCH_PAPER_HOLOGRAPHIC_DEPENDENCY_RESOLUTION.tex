@@ -503,4 +503,36 @@ mapped \code{arguments}) and its corpus is 55 node-exact programs, not the ecosy
 (\pkg{express}, \pkg{jest}, \pkg{esbuild}, \pkg{sharp}, \pkg{react} peers, ESM-only, workspaces,
 \pkg{overrides}, bins, \pkg{@babel}). Linux and Windows have never executed the harness.
 
+
+\section{Post-publication corrections: peer edges and platform identity (measured)}
+
+Three defects shared one cause: \emph{a tree fact inferred from the wrong evidence}. Each is recorded
+with the measurement that found it, because in every case the tree looked correct while its own plan
+disagreed.
+
+\begin{enumerate}
+\item \textbf{Peer edges were advisory, not structural.} Installing \texttt{@testing-library/react\@14}
+left \texttt{@types/react-dom} in the tree without its peer \texttt{@types/react}. The resolver
+detected the requirement and printed ``got absent'' --- so the graph knew and the layout did not. A
+post-pass over resolved instances cannot repair this: an instance that no edge refers to never
+reaches the layout. The correction is that peers are \emph{demands}, queued at the same point as
+dependencies so the ordinary edge bookkeeping places them.
+\item \textbf{Optional peers are not demands.} Queueing every peer made \texttt{ts-node}'s optional
+peers \texttt{@swc/core} and \texttt{@swc/wasm} real packages. The lockfile then listed
+\texttt{@swc/wasm}, the layout refused it as a WebAssembly build, and \texttt{verify} failed with
+\texttt{node_modules/@swc/wasm is missing} --- the tree contradicting its own plan. Optionality is
+\texttt{peerDependenciesMeta}, and it must be read before the demand is queued, not after.
+\item \textbf{Platform identity is declared metadata, never a name.} The materialisation filter
+rejected packages by tokenising their names, and \texttt{@swc/wasm} contains the token \texttt{wasm}.
+The package is real, is installed on every platform, and was silently dropped from trees that listed
+it. The asymmetry settles the rule: skipping a loadable package breaks a tree, installing an
+unloadable one wastes bytes. Only \texttt{os}/\texttt{cpu}/\texttt{libc} fields may exclude an entry,
+which is why npm writes them. Name-token inference survives only where no fields exist at all.
+\end{enumerate}
+
+One measurement worth keeping: the first run after the metadata fix still dropped the entry, because
+parsed lockfile entries are cached in a binary keyed by lockfile content and platform \emph{only}. A
+cache keyed by its input alone will happily return answers produced by an older decision procedure,
+so the key must carry the rule version.
+
 \end{document}
