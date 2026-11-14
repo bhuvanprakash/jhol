@@ -2547,6 +2547,29 @@ fn build_packages_json(
     serde_json::Value::Object(packages)
 }
 
+/// The one way a lockfile reaches disk.
+///
+/// Before this, three call sites each did their own dance — one wrote the file directly
+/// with `fs::write` (no atomicity at all), two wrote a `.tmp` then renamed without ever
+/// flushing. A crash or a full disk could therefore leave a truncated or zero-length
+/// `package-lock.json`, which every later command reports as corrupt: our own writer was
+/// the source of the corruption we then complained about.
+///
+/// The bytes are also npm's shape — pretty-printed, two spaces, trailing newline — because
+/// a lockfile is read in code review and diffed in every dependency PR, and a file that
+/// changes shape on every tool that touches it is a file nobody trusts.
+pub(crate) fn write_lockfile_bytes(lock_path: &Path, bytes: &[u8]) -> Result<(), String> {
+    crate::origin::write_file_atomically(lock_path, bytes)
+        .map_err(|e| format!("write {}: {e}", lock_path.display()))
+}
+
+fn write_lockfile_json(lock_path: &Path, content: &serde_json::Value) -> Result<(), String> {
+    let mut json = serde_json::to_string_pretty(content)
+        .map_err(|e| format!("serialise lockfile {}: {e}", lock_path.display()))?;
+    json.push('\n');
+    write_lockfile_bytes(lock_path, json.as_bytes())
+}
+
 /// Lockfile cache for incremental updates
 #[derive(Debug)]
 struct LockfileCache {
@@ -2769,11 +2792,7 @@ impl IncrementalLockfileUpdater {
             "packages": packages,
         });
 
-        // Use atomic write to prevent corruption
-        let temp_path = lock_path.with_extension("tmp");
-        let json = serde_json::to_string(&lockfile_content).map_err(|e| e.to_string())?;
-        std::fs::write(&temp_path, json).map_err(|e| e.to_string())?;
-        std::fs::rename(temp_path, lock_path).map_err(|e| e.to_string())?;
+        write_lockfile_json(lock_path, &lockfile_content)?;
 
         // Update cache
         self.update_cache(lock_path, tree);
@@ -2801,11 +2820,7 @@ impl IncrementalLockfileUpdater {
             "packages": packages,
         });
 
-        // Use atomic write to prevent corruption
-        let temp_path = lock_path.with_extension("tmp");
-        let json = serde_json::to_string(&lockfile_content).map_err(|e| e.to_string())?;
-        std::fs::write(&temp_path, json).map_err(|e| e.to_string())?;
-        std::fs::rename(temp_path, lock_path).map_err(|e| e.to_string())?;
+        write_lockfile_json(lock_path, &lockfile_content)?;
 
         // Update cache
         self.update_cache(lock_path, tree);
@@ -2872,11 +2887,7 @@ pub async fn write_package_lock_async(
         "packages": packages,
     });
 
-    let json = serde_json::to_string(&lockfile_content).map_err(|e| e.to_string())?;
-
-    // Use async I/O for better performance
-    std::fs::write(lock_path, json).map_err(|e| e.to_string())?;
-    Ok(())
+    write_lockfile_json(lock_path, &lockfile_content)
 }
 
 /// Write a .jhol.capsule from a resolved package tree.
@@ -3072,6 +3083,46 @@ mod tests {
             root.get("gone").is_none(),
             "a dep the resolver skipped must not be forced in"
         );
+    }
+
+    /// A write that cannot happen must say so. The old writer answered every error with
+    /// `return;`, so a full disk or a read-only directory produced an install that
+    /// reported success with the previous lockfile still in place.
+    #[test]
+    fn a_lockfile_write_that_fails_is_reported_with_its_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let read_only = dir.path().join("ro");
+        std::fs::create_dir(&read_only).unwrap();
+        let mut perms = std::fs::metadata(&read_only).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&read_only, perms).unwrap();
+        let target = read_only.join("package-lock.json");
+        let err = crate::lockfile_write::write_lockfile_bytes(&target, b"{}")
+            .expect_err("a read-only directory must not report success");
+        assert!(err.contains("package-lock.json"), "the path must be named: {err}");
+        let mut restore = std::fs::metadata(&read_only).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        restore.set_readonly(false);
+        std::fs::set_permissions(&read_only, restore).unwrap();
+    }
+
+    /// npm pretty-prints its lockfile; a file that changes shape on every tool that
+    /// touches it is a file nobody reads in review.
+    #[test]
+    fn lockfile_shape_is_pretty_and_newline_terminated() {
+        let meta = serde_json::json!({ "name": "ms", "versions": { "2.1.3": {
+            "version": "2.1.3", "dist": { "tarball": "https://example.invalid/ms.tgz" } } } });
+        let mut tree = HashMap::new();
+        tree.insert("node_modules/ms".to_string(), resolved_package_from_meta(&meta, None, "ms", "2.1.3"));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("package-lock.json");
+        let pj = dir.path().join("package.json");
+        std::fs::write(&pj, r#"{"name":"app","version":"1.0.0","dependencies":{"ms":"2.1.3"}}"#).unwrap();
+        crate::lockfile_write::write_package_lock(&path, &pj, &tree).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.ends_with('\n'), "trailing newline");
+        assert!(text.contains("\n  \"packages\": {"), "two-space indent: {}", &text[..80]);
+        assert!(serde_json::from_str::<serde_json::Value>(&text).is_ok());
     }
 
     /// An entry's `dependencies` records the range its manifest *declares*, never the

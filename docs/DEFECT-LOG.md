@@ -520,3 +520,29 @@ Also: the 40+ hand-written `ResolvedPackage` literals were migrated by way of th
 (`missing field \`manifest\`` positions), not by hand, because a hand edit at forty sites is forty
 chances to be wrong about one of them.
 
+## 2026-11-14 (durability) — our writer was a source of the corruption we then reported
+
+Three lockfile write sites, three different behaviours: one `fs::write` (no atomicity), two
+`.tmp` + `rename` without ever flushing the file. The atomic helper itself answered every error
+with `return;`, so a full disk or a read-only directory produced an install that printed success
+while the old lockfile stayed on disk. Every later command then reads that file, and the newly
+strict `read_lockfile` calls it corrupt — the tool blaming the user for damage it caused.
+
+One writer now, `write_lockfile_json` → `write_lockfile_bytes` → `write_file_atomically`:
+
+* `File::create` + `write_all` + **`sync_all`** before the rename, and `sync_all` on the parent
+  directory after it. A rename is atomic in name only: without the file flush the new inode can
+  carry nothing, and without the directory flush the rename itself may not survive a power loss.
+* **Failure is returned, with the path.** `a_lockfile_write_that_fails_is_reported_with_its_path`
+  writes into a read-only directory and requires an error naming the file.
+* npm's shape: pretty-printed, two spaces, trailing newline — a lockfile is read in review.
+
+Two things worth keeping from the process:
+
+1. The first version rejected a bare relative path (`package-lock.json` has an empty parent) and
+   every install failed with "path has no parent". Caught by running one install, not by reading
+   the code.
+2. Key order still differs from npm's, because `serde_json` sorts object keys without
+   `preserve_order`. Content parity is 69/69; byte parity is a cosmetic follow-up, stated rather
+   than claimed.
+

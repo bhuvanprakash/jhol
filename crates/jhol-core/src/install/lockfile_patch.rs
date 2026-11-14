@@ -288,8 +288,14 @@ pub(super) fn append_optional_variants_to_lockfile(lock_path: &Path, variants: &
         changed = true;
     }
     if changed {
-        if let Ok(s) = serde_json::to_string(&lock) {
-            let _ = std::fs::write(lock_path, s);
+        if let Ok(mut s) = serde_json::to_string_pretty(&lock) {
+            // Same writer as every other lockfile write: atomic, flushed, and a failure
+            // is reported rather than dropped — a patch that silently did not land leaves
+            // the tree and the lockfile disagreeing with nothing to point at.
+            s.push('\n');
+            if let Err(e) = crate::lockfile_write::write_lockfile_bytes(lock_path, s.as_bytes()) {
+                crate::utils::log(&format!("warning: {e}"));
+            }
         }
     }
 }
@@ -417,8 +423,14 @@ fn append_special_deps_to_lockfile(lock_path: &Path, specials: &[crate::spec_gra
         }
     }
     if changed {
-        if let Ok(s) = serde_json::to_string(&lock) {
-            let _ = std::fs::write(lock_path, s);
+        if let Ok(mut s) = serde_json::to_string_pretty(&lock) {
+            // Same writer as every other lockfile write: atomic, flushed, and a failure
+            // is reported rather than dropped — a patch that silently did not land leaves
+            // the tree and the lockfile disagreeing with nothing to point at.
+            s.push('\n');
+            if let Err(e) = crate::lockfile_write::write_lockfile_bytes(lock_path, s.as_bytes()) {
+                crate::utils::log(&format!("warning: {e}"));
+            }
         }
     }
 }

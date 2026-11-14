@@ -554,4 +554,18 @@ Second, \textbf{optionality is a class, not a merge}: optional edges belong unde
 \texttt{optionalDependencies} and must not be copied into the required set, which is precisely what
 made the last entry differ.
 
+
+\section{Post-publication correction: durability of the lockfile}
+
+The lockfile is the artifact every other guarantee rests on, and three writers produced it three
+ways: one direct \texttt{fs::write}, two \texttt{.tmp}-and-rename without a flush. The atomic helper
+answered every error with \texttt{return}, so a full disk yielded an install that reported success
+while the previous lockfile remained on disk --- and the strict reader then called that file corrupt.
+
+The correction is a single path: create, write, \textbf{\texttt{sync\_all}}, rename, then
+\texttt{sync\_all} the parent directory. The rename is atomic in name only; without the file flush
+the new inode may carry nothing, and without the directory flush the rename may not survive a power
+loss. Failure is returned with the path, which is what makes it actionable, and the bytes are
+written in npm's shape because a lockfile is read in code review.
+
 \end{document}

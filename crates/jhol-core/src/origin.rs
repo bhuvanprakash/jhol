@@ -232,13 +232,30 @@ pub(crate) fn harvest_packument_into_with_identity(
 
 /// Write `bytes` to `dst` atomically (temp sibling + rename) so a
 /// concurrent reader can never observe a half-written packument.
-pub(crate) fn write_file_atomically(dst: &Path, bytes: &[u8]) {
-    let Some(parent) = dst.parent() else {
-        return;
+/// Replace `dst` with `bytes`, durably, and **report failure**.
+///
+/// Two properties, both learned the hard way:
+///
+/// * **Failure is returned, never swallowed.** The previous version answered every error
+///   with `return;`, so a full disk or a read-only directory produced an install that
+///   reported success while the lockfile on disk was the old one — an error rendered as
+///   data. `install` now fails with the path and the OS error, which is a fact a user can
+///   act on.
+/// * **The bytes are flushed before the rename, and the directory after it.** A rename is
+///   atomic in name only: without `sync_all` on the file the new inode may carry nothing,
+///   and without `sync_all` on the directory the rename itself may not survive a crash.
+///   That is how a machine that loses power mid-install ends up with a zero-length
+///   `package-lock.json` — and every later command then reports it as corrupt.
+pub(crate) fn write_file_atomically(dst: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    // A bare relative name (`package-lock.json`) has an empty parent, which means `.`.
+    // Rejecting it made every install in a project whose lock path was relative fail with
+    // "path has no parent" — found by running one, not by reading the code.
+    let parent = match dst.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
     };
-    if std::fs::create_dir_all(parent).is_err() {
-        return;
-    }
+    std::fs::create_dir_all(parent)?;
     let tmp = parent.join(format!(
         ".{}.tmp{}",
         dst.file_name()
@@ -246,10 +263,23 @@ pub(crate) fn write_file_atomically(dst: &Path, bytes: &[u8]) {
             .unwrap_or("packument"),
         std::process::id()
     ));
-    if std::fs::write(&tmp, bytes).is_ok() {
-        let _ = std::fs::rename(&tmp, dst);
-    } else {
-        let _ = std::fs::remove_file(&tmp);
+    let write = || -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        std::fs::rename(&tmp, dst)?;
+        // Directory sync: on APFS/ext4 the rename is not durable without it.
+        if let Ok(dir) = std::fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+        Ok(())
+    };
+    match write() {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
     }
 }
 

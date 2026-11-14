@@ -98,3 +98,11 @@ git tag -a vX.Y.Z -m "jhol X.Y.Z"
 - The number of surviving knobs.
 
 A release that lists its own gaps is worth more than one that hides them.
+
+## Durability
+
+- [x] One lockfile writer; atomic replace; file and directory flushed (`sync_all`).
+- [x] A write that fails is reported with its path, never swallowed.
+- [x] Output shape matches npm's (pretty, two-space, trailing newline).
+- [ ] Byte-for-byte key order (`serde_json` sorts keys without `preserve_order`).
+
