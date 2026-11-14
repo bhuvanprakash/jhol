@@ -362,6 +362,7 @@ mod tests {
                 .collect(),
             peer_dependencies: HashMap::new(),
             peer_dependencies_meta: HashMap::new(),
+        manifest: Default::default(),
         }
     }
 

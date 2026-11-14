@@ -7017,6 +7017,7 @@ mod tests {
             dependencies: HashMap::new(),
             peer_dependencies: HashMap::new(),
             peer_dependencies_meta: HashMap::new(),
+        manifest: Default::default(),
         }
     }
 
@@ -8208,6 +8209,7 @@ mod jres_bug_proof {
                 )]
                 .into_iter()
                 .collect(),
+            manifest: Default::default(),
             },
         );
         m
@@ -8249,6 +8251,7 @@ mod jres_codec_tests {
                 )]
                 .into_iter()
                 .collect(),
+            manifest: Default::default(),
             },
         );
         m

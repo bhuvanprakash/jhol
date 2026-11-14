@@ -3059,6 +3059,7 @@ mod tests {
                 dependencies: HashMap::new(),
                 peer_dependencies: HashMap::new(),
                 peer_dependencies_meta: HashMap::new(),
+            manifest: Default::default(),
             },
         );
 
@@ -3164,6 +3165,7 @@ mod tests {
                 dependencies: HashMap::from([("accepts".to_string(), "~1.3.8".to_string())]),
                 peer_dependencies: HashMap::new(),
                 peer_dependencies_meta: HashMap::new(),
+            manifest: Default::default(),
             },
         );
         let v = build_packages_json("app", "1.0.0", &HashMap::new(), &tree, None);
@@ -3233,6 +3235,7 @@ mod pubgrub_fallback_tests {
                         dependencies: HashMap::new(),
                         peer_dependencies: HashMap::new(),
                         peer_dependencies_meta: HashMap::new(),
+                    manifest: Default::default(),
                     },
                 )
             })
