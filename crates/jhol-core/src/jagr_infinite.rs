@@ -5635,6 +5635,7 @@ fn try_lockfile_fast_path_with_policy(
                 dependencies,
                 peer_dependencies,
                 peer_dependencies_meta,
+            manifest: Default::default(),
             },
         );
     }
@@ -5790,6 +5791,7 @@ fn selection_to_resolved(
                 dependencies,
                 peer_dependencies,
                 peer_dependencies_meta,
+            manifest: Default::default(),
             },
         );
     }

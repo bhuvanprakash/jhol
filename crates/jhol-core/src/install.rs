@@ -1774,6 +1774,7 @@ fn nested_layout_from_flat_state(
                 dependencies: deps,
                 peer_dependencies: peers,
                 peer_dependencies_meta: peer_meta,
+            manifest: Default::default(),
             },
         );
     }
@@ -3255,6 +3256,7 @@ fn load_installed_package(
             dependencies: HashMap::new(),
             peer_dependencies,
             peer_dependencies_meta,
+        manifest: Default::default(),
         },
     ))
 }
@@ -8319,6 +8321,7 @@ fn install_package_inner(packages: &[&str], options: &InstallOptions) -> Result<
                                             peer_dependencies: std::collections::HashMap::new(),
                                             peer_dependencies_meta: std::collections::HashMap::new(
                                             ),
+                                        manifest: Default::default(),
                                         }
                                     });
                                 }

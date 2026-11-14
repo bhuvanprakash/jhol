@@ -378,6 +378,10 @@ fn prune_packument_inner(v: &mut serde_json::Value, keep_top: &[&str], keep_vers
         "devDependencies",
         "engines",
         "deprecated",
+        // A licence policy and the lockfile writer both read this, and it is a fact of
+        // the *version*, so pruning it away forced every entry of a real tree to differ
+        // from npm's by exactly one missing key.
+        "license",
     ];
     let Some(obj) = v.as_object_mut() else { return };
     // Only packuments (they carry a `versions` object) are pruned.

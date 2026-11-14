@@ -493,3 +493,30 @@ remaining difference is `esbuild`, whose optional dependency we merge into `depe
 where npm writes a separate `optionalDependencies` key: `ResolvedPackage` has no optional
 edge class, and adding one touches 46 construction sites. Named, scoped, not hidden.
 
+## 2026-11-14 (parity) — lockfile entries now match npm field for field
+
+Continuing the fidelity work: after `dependencies` became declared ranges, entry *shape* still
+differed. Measured field-for-field against npm's lockfile for `express@4.18.2 + esbuild@0.21.5`
+(dependencies, optionalDependencies, peerDependencies, peerDependenciesMeta, os, cpu, libc, bin,
+engines, license, hasInstallScript):
+
+| round | identical entries | what changed |
+|---|---|---|
+| start | 0 / 69 | empty `dependencies` maps and a missing `license` on every entry |
+| 1 | 48 / 69 | `DeclaredFacts` carried on the entry; empty maps no longer written |
+| 2 | 68 / 69 | `license` added to the retained version keys — pruning had been eating it |
+| 3 | **69 / 69** | `hasInstallScript` now checks `preinstall`/`install`/`postinstall` |
+
+Two design facts, both earned:
+
+* **Facts travel with the entry.** `DeclaredFacts` is copied from the published version document by
+  `resolved_package_from_meta` and carried on `ResolvedPackage`. Deriving the same answers at write
+  time from an ambient cache is what produced a file whose entries disagreed with each other.
+* **Optionality is a class, not a merge.** `optionalDependencies` is its own key, and required edges
+  are no longer copied into it (or from it). `esbuild` was the last entry to differ for exactly this
+  reason.
+
+Also: the 40+ hand-written `ResolvedPackage` literals were migrated by way of the compiler
+(`missing field \`manifest\`` positions), not by hand, because a hand edit at forty sites is forty
+chances to be wrong about one of them.
+

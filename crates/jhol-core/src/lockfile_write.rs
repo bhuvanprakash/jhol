@@ -39,8 +39,113 @@ pub struct ResolvedPackage {
     pub dependencies: HashMap<String, String>,
     pub peer_dependencies: HashMap<String, String>,
     pub peer_dependencies_meta: HashMap<String, serde_json::Value>,
+    /// What the package declares, carried on the entry so the writer never has to ask
+    /// a cache what a published version said.
+    #[serde(default, skip_serializing_if = "DeclaredFacts::is_empty")]
+    pub manifest: DeclaredFacts,
 }
 
+
+/// Everything a package *declares* about itself, copied from its published version
+/// document and carried on the entry.
+///
+/// It exists because a lockfile entry must be able to answer "what did this package
+/// ask for?" without a registry, a cache, or a clock. Deriving those answers at write
+/// time from ambient state produced two proven defects: an empty `dependencies` map on
+/// 55 of 70 entries of a real tree, and a single file whose entries disagreed because one
+/// packument had aged past a 60 s window. Facts travel with the entry.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeclaredFacts {
+    pub dependencies: std::collections::HashMap<String, String>,
+    pub optional_dependencies: std::collections::HashMap<String, String>,
+    pub peer_dependencies: std::collections::HashMap<String, String>,
+    pub peer_dependencies_meta: std::collections::HashMap<String, serde_json::Value>,
+    pub os: Vec<String>,
+    pub cpu: Vec<String>,
+    pub libc: Vec<String>,
+    pub bin: Option<serde_json::Value>,
+    pub engines: Option<serde_json::Value>,
+    pub license: Option<String>,
+    pub has_install_script: bool,
+}
+
+impl DeclaredFacts {
+    pub fn is_empty(&self) -> bool {
+        self.dependencies.is_empty()
+            && self.optional_dependencies.is_empty()
+            && self.peer_dependencies.is_empty()
+            && self.os.is_empty()
+            && self.cpu.is_empty()
+            && self.libc.is_empty()
+            && self.bin.is_none()
+            && self.engines.is_none()
+            && self.license.is_none()
+            && !self.has_install_script
+    }
+
+    /// Read one published version document. Absent sections stay absent — an empty map
+    /// and "the package declares nothing" are different statements, and only the second
+    /// may be written as nothing.
+    pub fn from_version_doc(meta: &serde_json::Value, version: &str) -> Self {
+        let info = match meta.get("versions").and_then(|v| v.get(version)) {
+            Some(info) => info,
+            None => return Self::default(),
+        };
+        let strings = |value: Option<&serde_json::Value>| -> Vec<String> {
+            value
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .unwrap_or_default()
+        };
+        let map = |section: &str| -> std::collections::HashMap<String, String> {
+            info.get(section)
+                .and_then(|v| v.as_object())
+                .map(|m| {
+                    m.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let meta_map = |section: &str| -> std::collections::HashMap<String, serde_json::Value> {
+            info.get(section)
+                .and_then(|v| v.as_object())
+                .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                .unwrap_or_default()
+        };
+        DeclaredFacts {
+            dependencies: map("dependencies"),
+            optional_dependencies: map("optionalDependencies"),
+            peer_dependencies: map("peerDependencies"),
+            peer_dependencies_meta: meta_map("peerDependenciesMeta"),
+            os: strings(info.get("os")),
+            cpu: strings(info.get("cpu")),
+            libc: strings(info.get("libc")),
+            bin: info.get("bin").cloned(),
+            engines: info.get("engines").cloned(),
+            license: info
+                .get("license")
+                .and_then(|l| l.as_str())
+                .or_else(|| {
+                    info.get("licenses")
+                        .and_then(|l| l.get(0))
+                        .and_then(|l| l.get("type"))
+                        .and_then(|t| t.as_str())
+                })
+                .map(String::from),
+            // npm marks `hasInstallScript` for any of the three lifecycle hooks, not
+            // only `install`: `esbuild` runs its work in `postinstall`, and checking one
+            // hook left that entry as the single difference from npm in a 69-entry tree.
+            has_install_script: ["preinstall", "install", "postinstall"]
+                .iter()
+                .any(|hook| info.get("scripts").and_then(|s| s.get(*hook)).is_some())
+                || info
+                    .get("hasInstallScript")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+        }
+    }
+}
 /// The only way to build a `ResolvedPackage` from a packument.
 ///
 /// Every field that describes the package — required dependencies, optional
@@ -68,6 +173,7 @@ pub fn resolved_package_from_meta(
         dependencies.insert(dep, spec);
     }
     let _ = &declared;
+    let manifest = DeclaredFacts::from_version_doc(meta, version);
     ResolvedPackage {
         registry_name,
         version: version.to_string(),
@@ -77,6 +183,7 @@ pub fn resolved_package_from_meta(
         dependencies,
         peer_dependencies: registry::get_version_peer_dependencies(meta, version),
         peer_dependencies_meta: registry::get_version_peer_dependencies_meta(meta, version),
+        manifest,
     }
 }
 
@@ -549,6 +656,7 @@ pub fn resolve_full_tree_pubgrub_v2(
                 dependencies: snapshot.dependencies.clone(),
                 peer_dependencies: snapshot.peer_dependencies.clone(),
                 peer_dependencies_meta: snapshot.peer_dependencies_meta.clone(),
+            manifest: Default::default(),
             },
         );
     }
@@ -949,6 +1057,7 @@ fn build_tree_from_versions(
                 dependencies: HashMap::new(),
                 peer_dependencies: HashMap::new(),
                 peer_dependencies_meta: HashMap::new(),
+            manifest: Default::default(),
             },
         );
     }
@@ -1007,6 +1116,7 @@ fn build_tree_from_pubgrub_solution(
                 dependencies,
                 peer_dependencies,
                 peer_dependencies_meta,
+            manifest: Default::default(),
             },
         );
     }
@@ -1119,6 +1229,7 @@ pub fn build_tree_from_lockfile_if_valid(
                 dependencies: resolved_deps,
                 peer_dependencies: e.peer_dependencies.clone(),
                 peer_dependencies_meta: e.peer_dependencies_meta.clone(),
+            manifest: Default::default(),
             },
         );
     }
@@ -1674,6 +1785,7 @@ fn build_tree_from_assignment(
                 dependencies: resolved_deps,
                 peer_dependencies: peer_deps,
                 peer_dependencies_meta: peer_deps_meta,
+            manifest: Default::default(),
             },
         );
     }
@@ -1748,6 +1860,7 @@ pub fn build_tree_from_jagr_selection(
                 dependencies: resolved_deps,
                 peer_dependencies: peer_deps,
                 peer_dependencies_meta: peer_deps_meta,
+            manifest: Default::default(),
             },
         );
     }
@@ -1906,6 +2019,7 @@ fn resolve_full_tree_legacy(
                 dependencies: resolved_deps,
                 peer_dependencies: peer_deps,
                 peer_dependencies_meta: peer_deps_meta,
+            manifest: Default::default(),
             },
         );
     }
@@ -2307,11 +2421,19 @@ fn build_packages_json(
         // version document). The lookup is a *fallback* for entries that were built by a
         // path without metadata — never a replacement, because a miss must not erase
         // edges the tree knows.
-        let mut deps: serde_json::Map<String, serde_json::Value> = pkg
-            .dependencies
-            .iter()
-            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-            .collect();
+        let facts = &pkg.manifest;
+        let mut deps: serde_json::Map<String, serde_json::Value> = if facts.is_empty() {
+            pkg.dependencies
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect()
+        } else {
+            facts
+                .dependencies
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect()
+        };
         if deps.is_empty() {
             if let Some(fields) = &declared {
                 for section in ["dependencies", "optionalDependencies"] {
@@ -2323,13 +2445,66 @@ fn build_packages_json(
                 }
             }
         }
+        // npm omits `dependencies` entirely when a package declares none; writing an
+        // empty map is a different statement, and it made every entry differ from npm's
+        // by one key across a whole tree.
         let has_deps = !deps.is_empty();
-        entry.insert("dependencies".to_string(), serde_json::Value::Object(deps));
+        if has_deps {
+            entry.insert("dependencies".to_string(), serde_json::Value::Object(deps));
+        }
         entry.insert(
             "requires".to_string(),
             serde_json::Value::Bool(has_deps),
         );
-        if let Some(fields) = &declared {
+        if !facts.is_empty() {
+            let as_obj = |map: &std::collections::HashMap<String, String>| {
+                serde_json::Value::Object(
+                    map.iter()
+                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                        .collect(),
+                )
+            };
+            if !facts.optional_dependencies.is_empty() {
+                entry.insert("optionalDependencies".into(), as_obj(&facts.optional_dependencies));
+            }
+            if !facts.peer_dependencies.is_empty() {
+                entry.insert("peerDependencies".into(), as_obj(&facts.peer_dependencies));
+            }
+            if !facts.peer_dependencies_meta.is_empty() {
+                entry.insert(
+                    "peerDependenciesMeta".into(),
+                    serde_json::Value::Object(
+                        facts
+                            .peer_dependencies_meta
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
+                    ),
+                );
+            }
+            let strings = |values: &[String]| {
+                serde_json::Value::Array(
+                    values.iter().map(|s| serde_json::Value::String(s.clone())).collect(),
+                )
+            };
+            for (key, values) in [("os", &facts.os), ("cpu", &facts.cpu), ("libc", &facts.libc)] {
+                if !values.is_empty() {
+                    entry.insert(key.into(), strings(values));
+                }
+            }
+            if let Some(bin) = &facts.bin {
+                entry.insert("bin".into(), bin.clone());
+            }
+            if let Some(engines) = &facts.engines {
+                entry.insert("engines".into(), engines.clone());
+            }
+            if let Some(license) = &facts.license {
+                entry.insert("license".into(), serde_json::Value::String(license.clone()));
+            }
+            if facts.has_install_script {
+                entry.insert("hasInstallScript".into(), serde_json::Value::Bool(true));
+            }
+        } else if let Some(fields) = &declared {
             for section in [
                 "peerDependencies",
                 "peerDependenciesMeta",
@@ -2523,6 +2698,7 @@ impl IncrementalLockfileUpdater {
                     dependencies,
                     peer_dependencies,
                     peer_dependencies_meta,
+                manifest: Default::default(),
                 },
             );
         }
@@ -2918,6 +3094,60 @@ mod tests {
         assert_eq!(pkg.dependencies.get("opt").map(String::as_str), Some("^2.0.0"));
     }
 
+    /// The shape npm writes, field by field: declared ranges in `dependencies`, optional
+    /// edges as their own class, `license`, `bin`, `engines`, platform, and
+    /// `hasInstallScript` when *any* lifecycle hook exists — `esbuild` does its work in
+    /// `postinstall`, and checking only `install` left one entry differing in an
+    /// otherwise byte-identical 69-entry tree.
+    #[test]
+    fn entry_shape_matches_npm_for_every_declared_field() {
+        let meta = serde_json::json!({
+            "name": "esbuild",
+            "versions": { "0.21.5": {
+                "version": "0.21.5",
+                "dependencies": { "keep": "^1.0.0" },
+                "optionalDependencies": { "@esbuild/darwin-arm64": "0.21.5" },
+                "scripts": { "postinstall": "node install.js" },
+                "license": "MIT",
+                "bin": { "esbuild": "bin/esbuild" },
+                "engines": { "node": ">=12" },
+                "os": ["darwin"],
+                "cpu": ["arm64"],
+                "dist": { "tarball": "https://example.invalid/esbuild.tgz" }
+            }, "0.21.6": { "version": "0.21.6" } }
+        });
+        let pkg = resolved_package_from_meta(&meta, None, "esbuild", "0.21.5");
+        let mut tree = HashMap::new();
+        tree.insert("node_modules/esbuild".to_string(), pkg);
+        let v = build_packages_json("app", "1.0.0", &HashMap::new(), &tree, None);
+        let e = &v["node_modules/esbuild"];
+        assert_eq!(e["dependencies"]["keep"], "^1.0.0");
+        assert_eq!(e["optionalDependencies"]["@esbuild/darwin-arm64"], "0.21.5");
+        assert_eq!(e["license"], "MIT");
+        assert_eq!(e["bin"]["esbuild"], "bin/esbuild");
+        assert_eq!(e["engines"]["node"], ">=12");
+        assert_eq!(e["os"][0], "darwin");
+        assert_eq!(e["cpu"][0], "arm64");
+        assert_eq!(e["hasInstallScript"], true, "postinstall counts");
+    }
+
+    /// A package with no dependencies must not gain an empty map: npm omits the key, and
+    /// writing `{}` made every entry of a whole tree differ by that one key.
+    #[test]
+    fn a_package_without_dependencies_omits_the_key() {
+        let meta = serde_json::json!({ "name": "ms", "versions": { "2.1.3": {
+            "version": "2.1.3", "license": "MIT",
+            "dist": { "tarball": "https://example.invalid/ms.tgz" } } } });
+        let mut tree = HashMap::new();
+        tree.insert(
+            "node_modules/ms".to_string(),
+            resolved_package_from_meta(&meta, None, "ms", "2.1.3"),
+        );
+        let v = build_packages_json("app", "1.0.0", &HashMap::new(), &tree, None);
+        assert!(v["node_modules/ms"].get("dependencies").is_none(), "no empty map");
+        assert_eq!(v["node_modules/ms"]["requires"], false);
+    }
+
     /// A metadata lookup that misses must not erase edges the tree already knows: the
     /// first version of this writer rebuilt `dependencies` from the lookup alone, and a
     /// cache miss turned every edge into `{}` — an error rendered as data.
@@ -3178,13 +3408,12 @@ fn place_nested_instances(
         if metadata.get("versions").and_then(|v| v.get(version)).and_then(|v| v.as_object()).is_none() {
             return Err(format!("missing release metadata for {name}@{version}"));
         }
-        let mut dependencies = registry::get_version_required_dependencies(metadata, version);
+        // Required edges only: an optional dependency is a *class*, not a second copy
+        // of the same edge. npm records it under `optionalDependencies`, and a merge
+        // here is what made `esbuild`'s entry differ from npm's in the one place the
+        // tree was otherwise byte-identical.
+        let dependencies = registry::get_version_required_dependencies(metadata, version);
         let optional_dependencies = registry::get_version_optional_dependencies(metadata, version);
-        for &(target, _) in &outgoing[id] {
-            if let Some(spec) = optional_dependencies.get(target) {
-                dependencies.insert(target.clone(), spec.clone());
-            }
-        }
         for (target, spec) in &dependencies {
             let provider = crate::layout::visible_dependency(path, target, |key| placements.get(key));
             if !provider.is_some_and(|&id| satisfies(target, spec, id)) {
@@ -3216,6 +3445,7 @@ fn place_nested_instances(
             dependencies,
             peer_dependencies,
             peer_dependencies_meta,
+            manifest: DeclaredFacts::from_version_doc(metadata, version),
         });
     }
     if !peer_conflicts.is_empty() {
@@ -3352,10 +3582,13 @@ pub(crate) fn resolve_nested_roots(
                 for (name, doc) in results {
                     fetched_total += 1;
                     if let Some(mut doc) = doc {
+                        // `license` is kept unconditionally: a licence policy and the
+                        // lockfile writer both read it, and dropping it made every entry
+                        // of a real tree differ from npm's by the same missing key.
                         let keep: &[&str] = if needs_full {
                             &["time", "license"]
                         } else {
-                            &[]
+                            &["license"]
                         };
                         crate::registry::prune_packument_in_place_keeping(&mut doc, keep);
                         world.insert(name, doc);

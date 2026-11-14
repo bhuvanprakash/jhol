@@ -132,9 +132,10 @@ First results and the verified root cause of the `express` divergence:
 
 ### Lockfile fidelity (measured 2026-11-14)
 
-`express@4.18.2` + `esbuild@0.21.5`, our lockfile against npm's: **68 of 69 common entries
-have an identical `dependencies` map**, and every entry records declared ranges rather than
-the versions we wired (`"accepts": "~1.3.8"`, not `"1.3.8"`). The one difference is
-`esbuild`'s optional dependency, which we place in `dependencies` where npm uses
-`optionalDependencies`; `ResolvedPackage` has no optional-edge class yet.
+`express@4.18.2` + `esbuild@0.21.5`, our lockfile against npm's: **69 of 69 common entries are
+identical across eleven fields** — `dependencies`, `optionalDependencies`,
+`peerDependencies`, `peerDependenciesMeta`, `os`, `cpu`, `libc`, `bin`, `engines`, `license`,
+`hasInstallScript`. Every entry records declared ranges (`"accepts": "~1.3.8"`), optional edges
+as their own class, and install-script presence from any of the three lifecycle hooks.
+
 

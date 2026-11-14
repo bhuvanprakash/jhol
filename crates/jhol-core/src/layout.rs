@@ -188,6 +188,7 @@ where
                     dependencies: HashMap::new(),
                     peer_dependencies: HashMap::new(),
                     peer_dependencies_meta: HashMap::new(),
+                manifest: Default::default(),
                 },
             );
             continue;
@@ -205,6 +206,7 @@ where
                 dependencies: HashMap::new(),
                 peer_dependencies: HashMap::new(),
                 peer_dependencies_meta: HashMap::new(),
+                               manifest: Default::default(),
             });
         // Ensure the node reports its own version (a nested copy differs from
         // the hoisted `resolved` entry).

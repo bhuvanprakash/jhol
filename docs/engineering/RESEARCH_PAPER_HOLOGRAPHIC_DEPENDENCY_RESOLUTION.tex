@@ -558,4 +558,27 @@ Result: 68 of 69 entries match npm's dependency maps byte for byte. The exceptio
 dependency recorded in \texttt{dependencies} rather than \texttt{optionalDependencies}, because
 the entry type has no optional-edge class; that is a stated gap, not an unmeasured one.
 
+
+\section{Post-publication correction: what a lockfile entry must contain}
+
+After `dependencies` became declared ranges, the entry \emph{shape} still disagreed with npm. The
+measurement was done field for field on a real tree, and it took three rounds:
+
+\begin{center}
+\begin{tabular}{lcl}
+identical entries & change & why \\
+\hline
+0 / 69 & -- & empty \texttt{dependencies} maps, no \texttt{license} \\
+48 / 69 & facts carried on the entry & a writer must not derive facts from a cache \\
+68 / 69 & \texttt{license} retained by pruning & a version fact that the prune removed \\
+69 / 69 & install-script checks all three hooks & \texttt{esbuild} works in \texttt{postinstall} \\
+\end{tabular}
+\end{center}
+
+Two principles follow. First, \textbf{facts travel with the entry}: every declared field is copied
+from the published version document once, at construction, and read from the entry afterwards.
+Second, \textbf{optionality is a class, not a merge}: optional edges belong under
+\texttt{optionalDependencies} and must not be copied into the required set, which is precisely what
+made the last entry differ.
+
 \end{document}

@@ -1820,6 +1820,7 @@ fn daemon_handle_one(mut stream: std::os::unix::net::UnixStream) -> Result<(), S
                                     dependencies: std::collections::HashMap::new(),
                                     peer_dependencies: std::collections::HashMap::new(),
                                     peer_dependencies_meta: std::collections::HashMap::new(),
+                                            manifest: Default::default(),
                                 };
                                 resolved.insert(spec.clone(), entry);
                             }
