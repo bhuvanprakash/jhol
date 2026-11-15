@@ -31,7 +31,7 @@ jhol install
 
 | | |
 |---|---|
-| Native install, doctor, audit | No Node, Bun, or npm on the hot path |
+| Native install, doctor, audit | No Node or npm on the hot path |
 | Content-addressed store | A package is unpacked once, then linked |
 | `--offline` | Install from the store when the network is gone |
 | `--frozen` / `jhol ci` | The locked tree, reproduced |
@@ -51,23 +51,23 @@ unauthorised directory and a deleted file are all the same question.
 
 Interleaved runs, fresh cache and fresh `HOME` for each tool, and every run had to produce a loadable tree.
 
-| Scenario | jhol | Bun 1.3.14 | What happened |
-|---|---:|---:|---|
-| Cold, bundled path, 6 deps | **250 ms** | 291 ms | jhol won 5 of 5 rounds |
-| Cold, 20 deps, ~70 packages | 2931 ms | 2793 ms | Split 2–2 |
-| Warm re-install, 74 packages | **8–9 ms** | ~6 ms | Store links, no re-download |
-| Daemon cold install | **239 ms** | — | Was 30,206 ms before the accept-loop fix |
+| Scenario | jhol | What happened |
+|---|---:|---|
+| Cold, bundled path, 6 deps | **250 ms** | fresh cache, loadable tree |
+| Cold, 20 deps, ~70 packages | 2931 ms | fresh cache, loadable tree |
+| Warm re-install, 74 packages | **8–9 ms** | store links, no re-download |
+| Daemon cold install | **239 ms** | was 30,206 ms before the accept-loop fix |
 
-Real npm projects, isolated cache and fresh `HOME` per tool, interleaved:
+Real npm projects, isolated cache and fresh `HOME`:
 
-| Project | jhol | Bun | |
-|---|---:|---:|---|
-| express@4 — 71 packages | **646 ms** | 1417 ms | 2.2× ahead |
-| webpack@5 — 57 packages | **1974 ms** | 4738 ms | 2.4× ahead |
-| eslint@9 — 87 packages | **1652 ms** | 1732 ms | parity |
-| jest@29 — 266 packages | **4961 ms** | 33082 ms | 6.7× ahead |
-| express@4, `node_modules` wiped | **8–10 ms** | 26–32 ms | **~3× ahead** (restored tree snapshot) |
-| jest tree, nothing to do | **18 ms** | — | verify, then stop |
+| Project | jhol | |
+|---|---:|---|
+| express@4 — 71 packages | **646 ms** | cold install |
+| webpack@5 — 57 packages | **1974 ms** | cold install |
+| eslint@9 — 87 packages | **1652 ms** | cold install |
+| jest@29 — 266 packages | **4961 ms** | cold install |
+| express@4, `node_modules` wiped | **8–10 ms** | restored tree snapshot |
+| jest tree, nothing to do | **18 ms** | verify, then stop |
 
 Warm rebuilds restore a verified tree snapshot by `rename`, then refill the consumed slot
 from its sibling in a detached child, so the restore is instant and no clone races a wipe.
@@ -288,7 +288,6 @@ In CI, `jhol cache key` is the cache key. `jhol ci` skips resolution and packume
 | [Store v3](./docs/design/JAGRS_STORE_V3_BREAKTHROUGH_RECORD.md) | `.jagrs` layout |
 | [Instance model](./docs/plans/e145-instance-model.md) | Nested versions |
 | [Innovation log](./docs/internal/INNOVATION_LOG.md) | What was kept, and what was measured and dropped |
-| [How We Won](./HOW-WE-WON.md) | 11/11 vs Bun: standings, method, caught bugs |
 | [Technical report](./docs/REPORT-2026-11-07.md) | The session end to end, with every measurement |
 | [The warm path](./docs/REPORT-2026-11-10.md) | Install, daemon, fmt, engine — anatomy, guards, negative results |
 | [Resolver](./docs/RESOLVER-JAGR.md) | Bitmaps, bases, masks, instances, index, policy, obligations |
@@ -304,24 +303,12 @@ In CI, `jhol cache key` is the cache key. `jhol ci` skips resolution and packume
 
 ## Benchmarks
 
-### JholVM engine vs Bun — 11/11
+### JholVM
 
-The JS engine inside `jhol run` beats Bun on **all 11** engine benchmarks in
-a simultaneous same-seconds A/B: **suite 390 ms vs 552 ms (1.42x ahead)**,
-with wins up to 2.7x (`gc_stress`). Correctness is pinned byte-for-byte
-against node: **55/55 corpus** (JIT on and off), **127/127 unit tests**, both
-quality gates PASS. `Promise` and a microtask queue landed most recently, and
-their ordering is compared line for line with node — sync logs, `.then`
-chains, a throw inside `then`, `queueMicrotask`, `setTimeout(0)` and a
-thenable all interleave identically. The full record — method, per-fix
-measurements, the bugs the gate caught, and the honest open items — is
-**[HOW-WE-WON.md](./HOW-WE-WON.md)**.
+Correctness is pinned byte-for-byte against node: **55/55 corpus** (JIT on and off), **127/127 unit tests**, both quality gates PASS. `Promise` and a microtask queue landed most recently, and their ordering is compared line for line with node — sync logs, `.then` chains, a throw inside `then`, `queueMicrotask`, `setTimeout(0)` and a thenable all interleave identically.
 
 ```sh
 cargo build --release --features jholvm
-crates/jhol-vm/bench/run_bench.sh --jholvm --bun --runs 5
-
-# or run the whole suite in one process (each script gets a fresh engine):
 JHOL_RUNTIME_ENGINE=jholvm jhol run crates/jhol-vm/bench/*.js
 ```
 
@@ -361,7 +348,7 @@ python3 scripts/bench/guardrails.py collect \
   --out baseline-report.json
 ```
 
-`scripts/bench/guardrails.py` is the live checker (`regression`, `collect`, `fallback-trend`, `clean-artifacts`). Older generators sit in `archive/scripts/`.
+`scripts/bench/guardrails.py` is the live checker (`regression`, `collect`, `fallback-trend`, `clean-artifacts`).
 
 ---
 
@@ -374,7 +361,7 @@ typescript, rollup — pass install, verify, idempotent re-install and `ci`+veri
 - Linux and Windows have not been run on this machine.
 - Some complex peer graphs can still differ from npm; peers are advisory by default.
 - The flat expander and the JAGR law layer are still two code paths.
-- **Warm installs are ~2.5× behind Bun** — materialisation, not resolution. Measured, cause known, not yet fixed.
+- Warm installs are still the slow part: materialisation, not resolution. Measured, cause known, not yet fixed.
 - **Engine gaps, named:** no `BigInt`, no regex lookaround/backrefs, no `eval`. `async`/`await`, the full Promise surface, microtasks, symbols, TDZ, destructuring and per-key enumerability are done and pinned to node (55 corpus pairs).
 - Python install has no console-script rewriting and no uninstall; `pysolve` is resolution only.
 - Pruning is opt-in (`JHOL_PRUNE_EXTRANEOUS=1`) because a lockfile can be an incomplete record.
